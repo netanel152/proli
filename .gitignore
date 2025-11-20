@@ -1,0 +1,24 @@
+# --- Security (NEVER COMMIT THESE) ---
+.env
+.env.local
+secrets.json
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.class
+*.so
+
+# --- Virtual Environment ---
+venv/
+.venv/
+env/
+
+# --- IDE / Editor ---
+.vscode/
+.idea/
+*.swp
+
+# --- OS Files ---
+.DS_Store
+Thumbs.db
