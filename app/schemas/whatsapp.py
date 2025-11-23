@@ -4,8 +4,15 @@ from typing import Optional, Any
 class TextMessageData(BaseModel):
     textMessage: str
 
+# --- תמיכה בהודעות מורחבות (כמו Reply או לינקים) ---
+class ExtendedTextMessageData(BaseModel):
+    text: Optional[str] = None
+    description: Optional[str] = None
+    previewType: Optional[str] = None
+
 class MessageData(BaseModel):
     textMessageData: Optional[TextMessageData] = None
+    extendedTextMessageData: Optional[ExtendedTextMessageData] = None
 
 class SenderData(BaseModel):
     chatId: str
