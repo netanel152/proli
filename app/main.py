@@ -12,42 +12,51 @@ def health_check():
 
 @app.post("/webhook")
 async def handle_incoming_message(payload: WebhookPayload, background_tasks: BackgroundTasks):
-    """Main webhook handler"""
-    
-    # 1. Filter: מטפלים רק בהודעות נכנסות (מלקוחות) או יוצאות (לבדיקות עצמיות)
+    # 1. סינון: רק הודעות נכנסות
     if payload.typeWebhook not in ["incomingMessageReceived", "outgoingMessageReceived"]:
-        # נדפיס לוג אפור כדי שתדע שהשרת חי אבל מסנן רעשים
-        # console.print(f"[dim]💤 Ignored event: {payload.typeWebhook}[/dim]")
         return {"status": "ignored"}
     
-    # 2. חילוץ טקסט חכם (Smart Extraction)
     user_text = None
-    
-    # בדיקה א': האם זה טקסט רגיל?
-    if payload.messageData and payload.messageData.textMessageData:
-        user_text = payload.messageData.textMessageData.textMessage
-        
-    # בדיקה ב': האם זה טקסט מורחב? (התיקון לבעיית ה"פעמיים")
-    elif payload.messageData and payload.messageData.extendedTextMessageData:
-        user_text = payload.messageData.extendedTextMessageData.text
+    media_url = None
+    msg = payload.messageData
 
-    # אם עדיין אין טקסט - נדלג
-    if not user_text:
-        console.print("[yellow]⚠️  Received message but no text found (Photo? Sticker?)[/yellow]")
-        return {"status": "no_text"}
+    if not msg: return {"status": "no_data"}
+
+    # 2. זיהוי סוג ההודעה לפי Green API
+    msg_type = msg.typeMessage
+    
+    # א. טקסט רגיל
+    if msg_type == "textMessage" and msg.textMessageData:
+        user_text = msg.textMessageData.textMessage
+        
+    # ב. טקסט מורחב (Reply/Link)
+    elif msg_type == "extendedTextMessage" and msg.extendedTextMessageData:
+        user_text = msg.extendedTextMessageData.text
+        
+    # ג. תמונה (Image)
+    elif msg_type == "imageMessage" and msg.fileMessageData:
+        media_url = msg.fileMessageData.downloadUrl
+        user_text = msg.fileMessageData.caption # הטקסט שמתחת לתמונה
+        console.print("[magenta]📷 Image Received![/magenta]")
+        
+    # ד. הודעה קולית (Voice Note)
+    elif msg_type == "audioMessage" and msg.fileMessageData:
+        media_url = msg.fileMessageData.downloadUrl
+        console.print("[magenta]🎤 Voice Note Received![/magenta]")
+
+    # בדיקה סופית שיש לנו משהו לעבוד איתו
+    if not user_text and not media_url:
+        console.print(f"[yellow]⚠️ Received unknown message type: {msg_type}[/yellow]")
+        return {"status": "unknown_type"}
         
     chat_id = payload.senderData.chatId
-    
-    # לוג ברור של ההודעה שהתקבלה
-    console.print(f"[bold blue]📨 New Message from {chat_id}:[/bold blue] {user_text}")
+    log_text = user_text or "[Media File]"
+    console.print(f"[bold blue]📨 New Message from {chat_id}:[/bold blue] {log_text}")
 
-    # 3. שליחה לעיבוד ברקע
-    background_tasks.add_task(process_message, chat_id, user_text)
-    
+    # 3. שליחה ללוגיקה
+    background_tasks.add_task(process_message, chat_id, user_text, media_url)
     return {"status": "processing"}
 
-async def process_message(chat_id: str, user_text: str):
-    """Full processing flow"""
-    # שים לב: הוספנו פה את chat_id לקריאה ל-AI כדי שהזיכרון יעבוד
-    ai_reply = await ask_fixi_ai(user_text, chat_id)
+async def process_message(chat_id: str, user_text: str, media_url: str = None):
+    ai_reply = await ask_fixi_ai(user_text, chat_id, media_url)
     await send_whatsapp(chat_id, ai_reply)
