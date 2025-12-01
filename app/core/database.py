@@ -9,6 +9,7 @@ db = client.fixi_db
 users_collection = db.users
 messages_collection = db.messages
 leads_collection = db.leads
+slots_collection = db.slots
 
 def check_db_connection():
     try:
