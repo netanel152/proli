@@ -113,13 +113,14 @@ async def analyze_pro_intent(text: str):
     1. BLOCK: "busy at 4", "block 16:00", "hasom 10", "taken", "ain li makom".
     2. FREE: "done", "finished", "available", "hitpaneti", "shahrrer", "sayamti".
     3. SHOW: "my schedule", "yoman", "matay panuy", "torim", "luz".
-    4. UNKNOWN: regular chat.
+    4. FINISH_JOB: "finished", "sayamti", "job done", "close ticket", "done with client".
+    5. UNKNOWN: regular chat.
 
     **Logic:**
     - If hour requested (e.g. 10) is smaller than current hour ({current_hour}) -> Assume TOMORROW.
     - "4" usually means 16:00 (4 PM) if said in the afternoon, but prefer 24h format.
     
-    Output JSON: {{ "intent": "BLOCK"|"FREE"|"SHOW"|"UNKNOWN", "hour": int, "day": "TODAY"|"TOMORROW" }}
+    Output JSON: {{ "intent": "BLOCK"|"FREE"|"SHOW"|"FINISH_JOB"|"UNKNOWN", "hour": int, "day": "TODAY"|"TOMORROW" }}
     """
     try:
         model = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
@@ -128,12 +129,20 @@ async def analyze_pro_intent(text: str):
     except: return {"intent": "UNKNOWN"}
 
 async def handle_pro_command(chat_id: str, text: str):
-    clean_phone = chat_id.replace("@c.us", "")
-    pro = users_collection.find_one({"phone_number": clean_phone})
+    # ניקוי אגרסיבי של המספר כדי למנוע אי-התאמות
+    clean_phone = chat_id.replace("@c.us", "").replace("+", "").replace("-", "")
+    
+    # חיפוש גמיש ב-DB (גם אם המספר שמור עם/בלי 972)
+    # נחפש מספר שמסתיים ב-9 הספרות האחרונות
+    short_phone = clean_phone[-9:] 
+    
+    pro = users_collection.find_one({
+        "phone_number": {"$regex": short_phone} 
+    })
     
     if not pro: return None
 
-    console.print(f"[info]👨‍🔧 Pro Command Check: {text}[/info]")
+    console.print(f"[info]👨‍🔧 Pro Command Check: {text} (User: {pro['business_name']})[/info]")
     
     parsed = await analyze_pro_intent(text)
     intent = parsed.get("intent")
@@ -183,8 +192,84 @@ async def handle_pro_command(chat_id: str, text: str):
     elif intent == "SHOW":
         slots = get_available_slots(pro["_id"])
         return f"📅 היומן שלך:\n{slots}"
-
+    
+    elif intent == "FINISH_JOB":
+        # שיפור: מחפשים ליד אחרון שהוא 'new' או 'חדש'
+        last_lead = leads_collection.find_one({
+            "pro_id": pro["_id"],
+            "status": {"$in": ["new", "חדש"]}
+        }, sort=[("created_at", -1)])
+        
+        if not last_lead:
+            return "לא מצאתי עבודה פתוחה לסגור. אולי כבר סגרת אותה?"
+        
+        # עדכון הליד
+        leads_collection.update_one(
+            {"_id": last_lead["_id"]},
+            {"$set": {"status": "completed" or "נסגר", "completed_at": datetime.utcnow(), "waiting_for_rating": True}}
+        )
+        
+        # שליחת בקשת דירוג ללקוח
+        client_chat_id = last_lead["chat_id"]
+        # שליחת הודעה ללקוח (מנקה את ה-c.us אם צריך)
+        # כאן אנחנו משתמשים בפונקציית העזר שלנו
+        feedback_msg = (
+            f"היי! 👋 שמחנו לתת לך שירות עם {pro['business_name']}.\n"
+            f"איך היה? נשמח לדירוג מהיר מ-1 (גרוע) עד 5 (מצוין).\n"
+            f"פשוט השב עם המספר כאן 👇"
+        )
+        # שים לב: אנחנו קוראים לפונקציה לשליחת הודעה, לא מחזירים סטרינג
+        await send_whatsapp_message(client_chat_id, feedback_msg)        
+        return f"✅ העבודה סומנה כהושלמה! שלחתי בקשת דירוג ללקוח."
     return None
+
+# ---  פונקציה לטיפול בדירוג מהלקוח  ---
+async def handle_customer_rating(chat_id: str, text: str):
+    """בודק אם הלקוח שלח מספר ומעדכן דירוג"""
+    text = text.strip()
+    if text not in ["1", "2", "3", "4", "5"]:
+        return None # זה לא דירוג
+        
+    rating = int(text)
+    
+    # מחפש ליד שמחכה לדירוג מהלקוח הזה
+    lead = leads_collection.find_one({
+        "chat_id": chat_id,
+        "waiting_for_rating": True
+    })
+    
+    if not lead:
+        return None # הלקוח סתם כתב מספר
+        
+    # עדכון ה-DB
+    pro_id = lead["pro_id"]
+    pro = users_collection.find_one({"_id": pro_id})
+    
+    # חישוב ממוצע חדש (פשוט)
+    current_rating = pro.get("social_proof", {}).get("rating", 5.0)
+    count = pro.get("social_proof", {}).get("review_count", 0)
+    
+    # נוסחה: (ישן * כמות + חדש) / (כמות + 1)
+    # בגלל שהנתונים הראשוניים הם פיקטיביים, ניתן משקל נמוך יותר לחדש בהתחלה
+    new_rating = round(((current_rating * 10) + rating) / 11, 1) 
+    
+    users_collection.update_one(
+        {"_id": pro_id},
+        {
+            "$set": {
+                "social_proof.rating": new_rating,
+                "social_proof.review_count": count + 1
+            }
+        }
+    )
+    
+    leads_collection.update_one(
+        {"_id": lead["_id"]},
+        {"$set": {"waiting_for_rating": False, "rating_given": rating}}
+    )
+    
+    console.print(f"[success]⭐ Rating {rating} saved for {pro['business_name']}[/success]")
+    return "תודה רבה על הדירוג! ⭐ שמחנו לעזור."
 
 # --- Media Handler ---
 async def download_media(url: str) -> str:
@@ -217,7 +302,7 @@ async def handle_new_lead(chat_id: str, details: str, pro_data: dict, media_url:
     console.print(f"[success]💰 NEW LEAD! {details}[/success]")
     leads_collection.insert_one({
         "chat_id": chat_id, "pro_id": pro_data["_id"], "details": details, 
-        "status": "booked", "created_at": datetime.utcnow(), "media_url": media_url
+        "status": "new", "created_at": datetime.utcnow(), "media_url": media_url
     })
     
     if pro_data.get("phone_number"):
@@ -230,14 +315,21 @@ async def handle_new_lead(chat_id: str, details: str, pro_data: dict, media_url:
             
 # --- Main Logic ---
 async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> str:
-    # --- 🛑 תוספת: בדיקת פקודת איש מקצוע ---
+
+    # 1. קודם כל: האם זה דירוג מלקוח? (כדי שאיש מקצוע לא יחסום לעצמו יומן עם "5")
+    rating_resp = await handle_customer_rating(chat_id, user_text or "")
+    if rating_resp: 
+        console.print(f"[ai]🤖 Rating Reply: {rating_resp}[/ai]")
+        return rating_resp
+
+    # --- בדיקת פקודת איש מקצוע ---
     pro_response = await handle_pro_command(chat_id, user_text or "")
     if pro_response:
         # אם זו הייתה פקודה, מחזירים את התשובה ויוצאים (לא ממשיכים לבוט הרגיל)
         console.print(f"[ai]🤖 Pro Command Reply: {pro_response}[/ai]")
         return pro_response 
-    # --------------------------------------
-    
+        
+    # --- לוגיקת הבוט הראשית --- 
     try:
         history, last_pro_id = get_chat_history(chat_id)
         safe_text = user_text or ""
@@ -281,9 +373,14 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         deal_match = re.search(r"\[DEAL:(.*?)\]", reply_text)
         if deal_match:
             lead_details = deal_match.group(1).strip()
-            # מעבירים גם את media_url ל-CRM
             await handle_new_lead(chat_id, lead_details, current_pro, media_url)
+            
+            # ניקוי הפקודה מהטקסט
             reply_text = reply_text.replace(deal_match.group(0), "").strip()
+            
+            # 🔥 התיקון: אם הטקסט נשאר ריק, נכניס הודעת אישור גנרית
+            if not reply_text:
+                reply_text = "✅ מעולה! התור נקבע בהצלחה ושלחתי את הפרטים לאיש המקצוע."
 
         save_message(chat_id, "model", reply_text, current_pro["_id"])
         console.print(f"[ai]🤖 Bot Reply ({current_pro['business_name']}):[/ai] {reply_text}")
