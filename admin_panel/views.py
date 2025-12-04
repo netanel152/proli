@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 from bson.objectid import ObjectId
 from datetime import datetime
-# ייבוא ישיר (ללא נקודות)
 from utils import users_collection, leads_collection, messages_collection, create_initial_schedule, generate_system_prompt
 from components import render_chat_bubble
 
