@@ -89,168 +89,198 @@ def view_dashboard(T):
 def view_schedule(T):
     st.title(T["title_schedule"])
     
-    # 1. בחירת איש מקצוע
+    # 1. Select Pro
     pros = list(users_collection.find())
     pro_map = {p["business_name"]: p for p in pros}
     selected_pro_name = st.selectbox(T["sch_select_pro"], list(pro_map.keys()))
     
     if selected_pro_name:
         pro = pro_map[selected_pro_name]
+        tz = pytz.timezone('Asia/Jerusalem')
         
-        # --- GENERATOR SECTION ---
-        with st.expander(T["sch_config_title"]):
-            c1, c2 = st.columns(2)
-            with c1:
-                # Default: Tomorrow
-                start_date = st.date_input(T["sch_start_date"], value=datetime.now().date() + timedelta(days=1))
-                start_hour = st.number_input(T["sch_start_hour"], 0, 23, 8)
-                duration = st.number_input(T["sch_duration"], 15, 120, 60, step=15)
-            with c2:
-                # Default: Next week
-                end_date = st.date_input(T["sch_end_date"], value=datetime.now().date() + timedelta(days=7))
-                end_hour = st.number_input(T["sch_end_hour"], 0, 23, 18)
+        tab_daily, tab_bulk = st.tabs([T["tab_daily"], T["tab_bulk"]])
+        
+        # --- TAB 1: DAILY EDITOR ---
+        with tab_daily:
+            st.markdown("### " + T["tab_daily"])
             
-            # Day selection (0=Mon, 6=Sun)
-            # Map python weekday to translation key: 0->day_1 (Mon), 6->day_0 (Sun)
-            weekdays_opts = [6, 0, 1, 2, 3, 4, 5] # Ordered Sun-Sat for display
-            selected_days = st.multiselect(
-                T["sch_workdays"], 
-                weekdays_opts, 
-                default=[6, 0, 1, 2, 3], # Sun-Thu default
-                format_func=lambda x: T[f"day_{(x + 1) % 7}"]
-            )
+            # Select Date
+            selected_date = st.date_input(T["sch_date"], value=datetime.now().date())
             
-            c_gen, c_clear = st.columns([1, 1])
-            with c_gen:
-                if st.button(T["sch_gen_btn"], type="primary"):
-                    new_slots = []
-                    tz = pytz.timezone('Asia/Jerusalem')
-                    curr_d = start_date
-                    
-                    while curr_d <= end_date:
-                        if curr_d.weekday() in selected_days:
-                            # Localize start/end times for the day
-                            try:
-                                day_start = tz.localize(datetime.combine(curr_d, time(start_hour, 0)))
-                                day_end = tz.localize(datetime.combine(curr_d, time(end_hour, 0)))
-                            except:
-                                # Fallback if time conversion fails
-                                curr_d += timedelta(days=1)
-                                continue
-
-                            curr_slot = day_start
-                            while curr_slot + timedelta(minutes=duration) <= day_end:
-                                slot_end = curr_slot + timedelta(minutes=duration)
-                                # Convert to UTC for storage
-                                new_slots.append({
-                                    "pro_id": pro["_id"],
-                                    "start_time": curr_slot.astimezone(pytz.utc),
-                                    "end_time": slot_end.astimezone(pytz.utc),
-                                    "is_taken": False
-                                })
-                                curr_slot = slot_end
-                        
-                        curr_d += timedelta(days=1)
-                    
-                    if new_slots:
-                        slots_collection.insert_many(new_slots)
-                        st.success(f"{T['sch_msg_generated']} ({len(new_slots)})")
-                        st.rerun()
-                    else:
-                        st.warning("No slots generated (check dates/hours).")
-
-            with c_clear:
-                if st.button(T["sch_clear_btn"]):
-                     # Delete future slots
-                     slots_collection.delete_many({
-                         "pro_id": pro["_id"], 
-                         "start_time": {"$gt": datetime.utcnow()}
-                     })
-                     st.success(T["sch_msg_cleared"])
-                     st.rerun()
-        
-        st.markdown("---")
-
-        # 2. פילטר תאריך (אופציונלי)
-        filter_date = st.date_input(T["sch_filter_date"], value=None)
-        
-        # 3. שליפת סלוטים
-        query = {"pro_id": pro["_id"]}
-        
-        if filter_date:
-            # סינון ליום ספציפי (UTC מול מקומי זה טריקי, נעשה סינון פשוט בזיכרון או טווח)
-            # לצורך הפשטות: נשלוף הכל (לשבוע הקרוב זה מעט) ונסנן בפייתון
-            pass
+            # Fetch existing slots for this day (in UTC)
+            # We need to query a range covering the whole day in UTC
+            # Local Start of Day -> UTC
+            day_start_local = tz.localize(datetime.combine(selected_date, time.min))
+            day_end_local = tz.localize(datetime.combine(selected_date, time.max))
             
-        # שליפת סלוטים עתידיים בלבד
-        slots = list(slots_collection.find(
-            {"pro_id": pro["_id"], "start_time": {"$gt": datetime.utcnow()}}
-        ).sort("start_time", 1))
-        
-        if slots:
-            # הכנת דאטה לטבלה עריכה
-            data = []
-            for s in slots:
-                # המרה לשעון מקומי לתצוגה
-                local_time = s['start_time'].replace(tzinfo=pytz.utc).astimezone(pytz.timezone('Asia/Jerusalem'))
+            day_start_utc = day_start_local.astimezone(pytz.utc)
+            day_end_utc = day_end_local.astimezone(pytz.utc)
+            
+            slots_cursor = slots_collection.find({
+                "pro_id": pro["_id"],
+                "start_time": {"$gte": day_start_utc, "$lte": day_end_utc}
+            }).sort("start_time", 1)
+            
+            original_slots = list(slots_cursor)
+            original_ids = {str(s["_id"]) for s in original_slots}
+            
+            # Prepare data for editor
+            editor_data = []
+            for s in original_slots:
+                # Convert UTC to Local for display
+                local_start = s["start_time"].replace(tzinfo=pytz.utc).astimezone(tz)
+                local_end = s["end_time"].replace(tzinfo=pytz.utc).astimezone(tz)
                 
-                # סינון תאריך אם נבחר
-                if filter_date and local_time.date() != filter_date:
-                    continue
-                    
-                data.append({
-                    "id": str(s["_id"]),
-                    T["sch_date"]: local_time.strftime("%d/%m/%Y"),
-                    T["sch_time"]: local_time.strftime("%H:%M"),
-                    T["sch_taken"]: s["is_taken"]
+                editor_data.append({
+                    "_id": str(s["_id"]),
+                    "start_time": local_start.time(),
+                    "end_time": local_end.time(),
+                    "is_taken": s["is_taken"]
                 })
             
-            if not data:
-                st.info(T["no_slots"])
-            else:
-                df = pd.DataFrame(data)
+            # Create DataFrame
+            df = pd.DataFrame(editor_data)
+            if df.empty:
+                # Initialize empty DF with correct columns if no slots
+                df = pd.DataFrame(columns=["_id", "start_time", "end_time", "is_taken"])
+            
+            # Show Data Editor
+            edited_df = st.data_editor(
+                df,
+                column_config={
+                    "_id": None, # Hide ID
+                    "start_time": st.column_config.TimeColumn(T["sch_start_time"], format="HH:mm", step=60),
+                    "end_time": st.column_config.TimeColumn(T["sch_end_time"], format="HH:mm", step=60),
+                    "is_taken": st.column_config.CheckboxColumn(T["sch_taken"], default=False)
+                },
+                num_rows="dynamic",
+                use_container_width=True,
+                key=f"editor_{pro['_id']}_{selected_date}" # Unique key per day
+            )
+            
+            if st.button(T["sch_save"], type="primary"):
+                # --- PROCESSING CHANGES ---
                 
-                # --- טבלה עריכה (Data Editor) ---
-                edited_df = st.data_editor(
-                    df,
-                    column_config={
-                        "id": None, # מוסתר
-                        T["sch_date"]: st.column_config.TextColumn(disabled=True),
-                        T["sch_time"]: st.column_config.TextColumn(disabled=True),
-                        T["sch_taken"]: st.column_config.CheckboxColumn(
-                            label=T["sch_taken"],
-                            help=T["slot_help"],
-                            default=False,
+                # 1. Identify Deletions
+                # IDs present in original but missing in edited_df (rows deleted by user)
+                current_ids = set(edited_df["_id"].dropna().astype(str))
+                ids_to_delete = original_ids - current_ids
+                
+                if ids_to_delete:
+                    slots_collection.delete_many({"_id": {"$in": [ObjectId(oid) for oid in ids_to_delete]}})
+                
+                # 2. Identify Updates & Inserts
+                new_slots = []
+                updates_count = 0
+                
+                for index, row in edited_df.iterrows():
+                    # Parse Times
+                    s_time = row["start_time"]
+                    e_time = row["end_time"]
+                    
+                    if not s_time or not e_time: continue # Skip invalid rows
+                    
+                    # Combine with Date -> Local -> UTC
+                    try:
+                        dt_start = tz.localize(datetime.combine(selected_date, s_time)).astimezone(pytz.utc)
+                        dt_end = tz.localize(datetime.combine(selected_date, e_time)).astimezone(pytz.utc)
+                    except Exception:
+                        continue # Skip if time is invalid
+                        
+                    slot_data = {
+                        "pro_id": pro["_id"],
+                        "start_time": dt_start,
+                        "end_time": dt_end,
+                        "is_taken": row["is_taken"]
+                    }
+                    
+                    row_id = row.get("_id")
+                    
+                    if row_id and isinstance(row_id, str) and row_id in original_ids:
+                        # Update existing
+                        slots_collection.update_one(
+                            {"_id": ObjectId(row_id)},
+                            {"$set": slot_data}
                         )
-                    },
-                    hide_index=True,
-                    use_container_width=True,
-                    key="schedule_editor" # מפתח ייחודי
+                        updates_count += 1
+                    else:
+                        # Insert new (ID is NaN or None or new)
+                        new_slots.append(slot_data)
+                
+                if new_slots:
+                    slots_collection.insert_many(new_slots)
+                
+                st.success(f"{T['sch_success']}")
+                st.rerun()
+
+        # --- TAB 2: BULK GENERATOR ---
+        with tab_bulk:
+            st.markdown("### " + T["sch_config_title"])
+            with st.container(border=True):
+                c1, c2 = st.columns(2)
+                with c1:
+                    # Default: Tomorrow
+                    start_date = st.date_input(T["sch_start_date"], value=datetime.now().date() + timedelta(days=1))
+                    start_hour = st.number_input(T["sch_start_hour"], 0, 23, 8)
+                    duration = st.number_input(T["sch_duration"], 15, 120, 60, step=15)
+                with c2:
+                    # Default: Next week
+                    end_date = st.date_input(T["sch_end_date"], value=datetime.now().date() + timedelta(days=7))
+                    end_hour = st.number_input(T["sch_end_hour"], 0, 23, 18)
+                
+                weekdays_opts = [6, 0, 1, 2, 3, 4, 5] 
+                selected_days = st.multiselect(
+                    T["sch_workdays"], 
+                    weekdays_opts, 
+                    default=[6, 0, 1, 2, 3], 
+                    format_func=lambda x: T[f"day_{(x + 1) % 7}"]
                 )
                 
-                # כפתור שמירה
-                if st.button(T["sch_save"], type="primary"):
-                    # מעבר על השורות ומציאת שינויים
-                    updates_count = 0
-                    for index, row in edited_df.iterrows():
-                        slot_id = row["id"]
-                        new_status = row[T["sch_taken"]]
+                st.markdown("---")
+                c_gen, c_clear = st.columns([1, 1])
+                
+                with c_gen:
+                    if st.button(T["sch_gen_btn"], type="primary"):
+                        new_slots = []
+                        curr_d = start_date
                         
-                        # עדכון ב-DB
-                        res = slots_collection.update_one(
-                            {"_id": ObjectId(slot_id)},
-                            {"$set": {"is_taken": new_status}}
-                        )
-                        if res.modified_count > 0:
-                            updates_count += 1
-                    
-                    if updates_count > 0:
-                        st.success(f"{T['sch_success']} ({updates_count} {T['msg_changes']})")
-                        st.rerun()
-                    else:
-                        st.info(T["no_changes"])
-        else:
-            st.warning(T["schedule_empty"])
+                        while curr_d <= end_date:
+                            if curr_d.weekday() in selected_days:
+                                try:
+                                    day_start = tz.localize(datetime.combine(curr_d, time(start_hour, 0)))
+                                    day_end = tz.localize(datetime.combine(curr_d, time(end_hour, 0)))
+                                except:
+                                    curr_d += timedelta(days=1)
+                                    continue
+
+                                curr_slot = day_start
+                                while curr_slot + timedelta(minutes=duration) <= day_end:
+                                    slot_end = curr_slot + timedelta(minutes=duration)
+                                    new_slots.append({
+                                        "pro_id": pro["_id"],
+                                        "start_time": curr_slot.astimezone(pytz.utc),
+                                        "end_time": slot_end.astimezone(pytz.utc),
+                                        "is_taken": False
+                                    })
+                                    curr_slot = slot_end
+                            
+                            curr_d += timedelta(days=1)
+                        
+                        if new_slots:
+                            slots_collection.insert_many(new_slots)
+                            st.success(f"{T['sch_msg_generated']} ({len(new_slots)})")
+                            st.rerun()
+                        else:
+                            st.warning("No slots generated.")
+
+                with c_clear:
+                    if st.button(T["sch_clear_btn"]):
+                         slots_collection.delete_many({
+                             "pro_id": pro["_id"], 
+                             "start_time": {"$gt": datetime.utcnow()}
+                         })
+                         st.success(T["sch_msg_cleared"])
+                         st.rerun()
 
 def view_add_pro(T):
     st.title(T["add_pro_title"])
