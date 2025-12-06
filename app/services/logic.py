@@ -13,6 +13,7 @@ import os
 import tempfile
 import json
 import pytz
+from datetime import datetime, timedelta, timezone
 import traceback
 
 custom_theme = Theme({"info": "cyan", "warning": "yellow", "error": "bold red", "success": "bold green", "ai": "bold purple"})
@@ -105,8 +106,16 @@ def get_available_slots(pro_id):
     lines = []
     for s in slots:
         # המרה לתצוגה בשעון ישראל
-        local_time = s['start_time'].replace(tzinfo=pytz.utc).astimezone(IL_TZ)
-        fmt_time = local_time.strftime("%d/%m בשעה %H:%M")
+        local_start = s['start_time'].replace(tzinfo=pytz.utc).astimezone(IL_TZ)
+        
+        # Check if end_time exists (for backward compatibility)
+        if 'end_time' in s and s['end_time']:
+            local_end = s['end_time'].replace(tzinfo=pytz.utc).astimezone(IL_TZ)
+            fmt_time = f"{local_start.strftime('%d/%m')} בשעות {local_start.strftime('%H:%M')}-{local_end.strftime('%H:%M')}"
+        else:
+            # Fallback for old slots (assume 60 mins or just show start)
+            fmt_time = local_start.strftime("%d/%m בשעה %H:%M")
+            
         lines.append(f"- {fmt_time}")
     return "\n".join(lines)
 
@@ -171,20 +180,32 @@ async def handle_pro_command(chat_id: str, text: str):
         if parsed.get("day") == "TOMORROW":
             target_date += timedelta(days=1)
             
-        # יצירת זמן ישראל המבוקש
+        # יצירת זמן ישראל המבוקש (שעת התחלה של הבלוק)
         target_time_il = target_date.replace(hour=hour, minute=0, second=0, microsecond=0)
         
         # המרה ל-UTC לחיפוש ב-DB
         search_utc = target_time_il.astimezone(pytz.utc)
         
-        # טווח חיפוש
+        # לוגיקה משופרת: חיפוש סלוט שמתחיל בדיוק בשעה הזו, או שהשעה הזו נופלת בתוכו
+        # נחפש סלוט שהתחיל לפני (או ב) השעה המבוקשת, ונגמר אחרי השעה המבוקשת
         result = slots_collection.update_one(
             {
-                "pro_id": pro["_id"], "is_taken": False,
-                "start_time": {
-                    "$gte": search_utc - timedelta(minutes=30),
-                    "$lte": search_utc + timedelta(minutes=30)
-                }
+                "pro_id": pro["_id"], 
+                "is_taken": False,
+                "$or": [
+                    # אופציה 1: התאמה מדויקת לשעת התחלה (טווח של דקה)
+                    {
+                        "start_time": {
+                            "$gte": search_utc - timedelta(minutes=1),
+                            "$lte": search_utc + timedelta(minutes=1)
+                        }
+                    },
+                    # אופציה 2: השעה המבוקשת נמצאת בתוך סלוט קיים
+                    {
+                        "start_time": {"$lte": search_utc},
+                        "end_time": {"$gt": search_utc}
+                    }
+                ]
             },
             {"$set": {"is_taken": True}}
         )
@@ -209,7 +230,7 @@ async def handle_pro_command(chat_id: str, text: str):
         # שיפור: מחפשים ליד אחרון שהוא 'new' או 'חדש'
         last_lead = leads_collection.find_one({
             "pro_id": pro["_id"],
-            "status": {"$in": ["new", "חדש"]}
+            "status": {"$in": ["New (Waiting)", "חדש (ממתין)"]}
         }, sort=[("created_at", -1)])
         
         if not last_lead:
@@ -218,7 +239,7 @@ async def handle_pro_command(chat_id: str, text: str):
         # עדכון הליד
         leads_collection.update_one(
             {"_id": last_lead["_id"]},
-            {"$set": {"status": "completed" or "נסגר", "completed_at": datetime.utcnow(), "waiting_for_rating": True}}
+            {"$set": {"status": "completed" or "נסגר", "completed_at": datetime.now(timezone.utc), "waiting_for_rating": True}}
         )
         
         # שליחת בקשת דירוג ללקוח
@@ -339,7 +360,7 @@ async def handle_new_lead(chat_id: str, details: str, pro_data: dict, media_url:
     console.print(f"[success]💰 NEW LEAD! {details}[/success]")
     leads_collection.insert_one({
         "chat_id": chat_id, "pro_id": pro_data["_id"], "details": details, 
-        "status": "new", "created_at": datetime.utcnow(), "media_url": media_url
+        "status": "new", "created_at": datetime.now(timezone.utc), "media_url": media_url
     })
     
     if pro_data.get("phone_number"):
