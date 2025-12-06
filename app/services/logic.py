@@ -5,16 +5,28 @@ from app.core.database import users_collection, messages_collection, leads_colle
 from rich.console import Console
 from rich.theme import Theme
 from datetime import datetime, timedelta
+from tenacity import retry, stop_after_attempt, wait_fixed
+import cloudinary
+import cloudinary.uploader
 import re
 import os
 import tempfile
 import json
 import pytz
+import traceback
 
 custom_theme = Theme({"info": "cyan", "warning": "yellow", "error": "bold red", "success": "bold green", "ai": "bold purple"})
 console = Console(theme=custom_theme)
 
 genai.configure(api_key=settings.GEMINI_API_KEY)
+
+# Configure Cloudinary
+cloudinary.config(
+    cloud_name=settings.CLOUDINARY_CLOUD_NAME,
+    api_key=settings.CLOUDINARY_API_KEY,
+    api_secret=settings.CLOUDINARY_API_SECRET
+)
+
 IL_TZ = pytz.timezone('Asia/Jerusalem')
 
 # --- Helpers ---
@@ -118,7 +130,7 @@ async def analyze_pro_intent(text: str):
 
     **Logic:**
     - If hour requested (e.g. 10) is smaller than current hour ({current_hour}) -> Assume TOMORROW.
-    - "4" usually means 16:00 (4 PM) if said in the afternoon, but prefer 24h format.
+    - "4" usually means 16:00 (4 PM) if said in the afternoon, but prefer 24h format. 
     
     Output JSON: {{ "intent": "BLOCK"|"FREE"|"SHOW"|"FINISH_JOB"|"UNKNOWN", "hour": int, "day": "TODAY"|"TOMORROW" }}
     """
@@ -272,19 +284,44 @@ async def handle_customer_rating(chat_id: str, text: str):
     return "תודה רבה על הדירוג! ⭐ שמחנו לעזור."
 
 # --- Media Handler ---
-async def download_media(url: str) -> str:
+async def download_and_store_media(url: str):
+    """
+    Downloads media from WhatsApp URL, uploads to Cloudinary,
+    and returns tuple (local_temp_path,cloudinary_secure_url).
+    """
     console.print(f"[info]📥 Downloading media...[/info]")
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(url)
-        suffix = ".tmp"
-        content_type = resp.headers.get("content-type", "")
-        if "image" in content_type: suffix = ".jpg"
-        elif "audio" in content_type: suffix = ".ogg"
-        elif "video" in content_type: suffix = ".mp4"
+    temp_path = None
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            
+            suffix = ".tmp"
+            content_type = resp.headers.get("content-type", "")
+            if "image" in content_type: suffix = ".jpg"
+            elif "audio" in content_type: suffix = ".ogg"
+            elif "video" in content_type: suffix = ".mp4"
+            
+            # Create local temp file for Gemini
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(resp.content)
+                temp_path = tmp.name
         
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(resp.content)
-            return tmp.name
+        # Upload to Cloudinary for persistence - Try/Except block specifically for upload
+        secure_url = None
+        try:
+            console.print(f"[info]☁️ Uploading to Cloudinary...[/info]")
+            upload_result = cloudinary.uploader.upload(temp_path, resource_type="auto")
+            secure_url = upload_result.get("secure_url")
+        except Exception as cloud_err:
+            console.print(f"[warning]☁️ Cloudinary Upload Failed: {cloud_err}[/warning]")
+            # Continue without secure_url, but we have temp_path for Gemini
+            
+        return temp_path, secure_url
+            
+    except Exception as e:
+        console.print(f"[error]Media Processing Error: {traceback.format_exc()}[/error]")
+        return None, None
 
 # --- CRM Logic ---
 async def handle_new_lead(chat_id: str, details: str, pro_data: dict, media_url: str = None):
@@ -308,10 +345,13 @@ async def handle_new_lead(chat_id: str, details: str, pro_data: dict, media_url:
     if pro_data.get("phone_number"):
         pro_chat = f"{pro_data['phone_number']}@c.us" if not pro_data['phone_number'].endswith("@c.us") else pro_data['phone_number']
         msg = f"🔔 *ליד חדש!*\nפרטים: {details}\nלקוח: https://wa.me/{chat_id.replace('@c.us','')}"
+        
+        # Always send the text details first to ensure they are seen
+        await send_whatsapp_message(pro_chat, msg)
+        
         if media_url:
-            await send_whatsapp_file(pro_chat, media_url, caption=msg)
-        else:
-            await send_whatsapp_message(pro_chat, msg)
+             # Then send the media
+            await send_whatsapp_file(pro_chat, media_url, caption="מדיה מצורפת מהלקוח")
             
 # --- Main Logic ---
 async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> str:
@@ -329,7 +369,7 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         console.print(f"[ai]🤖 Pro Command Reply: {pro_response}[/ai]")
         return pro_response 
         
-    # --- לוגיקת הבוט הראשית --- 
+    # --- לוגיקת הבוט הראשית ---
     try:
         history, last_pro_id = get_chat_history(chat_id)
         safe_text = user_text or ""
@@ -338,21 +378,27 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         if not current_pro:
             return "שגיאה: לא נמצא איש שירות פעיל במערכת."
 
+        # --- Handle Media Upload & Persistence ---
+        temp_path = None
+        cloudinary_url = None
+        
+        if media_url:
+            temp_path, cloudinary_url = await download_and_store_media(media_url)
+            # temp_path might be valid even if cloudinary_url is None (upload failed)
+
         # שמירת הודעת משתמש
         log_text = user_text or "[Media Message]"
-        if media_url: log_text += f" (URL)"
+        if cloudinary_url: log_text += f" (URL: {cloudinary_url})"
         save_message(chat_id, "user", log_text, current_pro["_id"])
         
         model = genai.GenerativeModel('gemini-2.0-flash', system_instruction=get_dynamic_prompt(current_pro))
         chat = model.start_chat(history=history)
         
         content_parts = []
-        temp_path = None
         
-        # טיפול במדיה נכנסת
-        if media_url:
+        # טיפול במדיה נכנסת עבור Gemini
+        if temp_path and os.path.exists(temp_path):
             try:
-                temp_path = await download_media(media_url)
                 uploaded_file = genai.upload_file(temp_path)
                 content_parts.append(uploaded_file)
                 if temp_path.endswith(".ogg"):
@@ -360,20 +406,28 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
                 else:
                     content_parts.append("המשתמש שלח תמונה. נתח אותה.")
             except Exception as e:
-                console.print(f"[error]Media Error: {e}[/error]")
+                console.print(f"[error]Gemini Upload Error: {e}[/error]")
 
         if user_text: content_parts.append(user_text)
+
+        if not content_parts:
+             return "סליחה, הייתה בעיה בקבלת הקובץ ששלחת. אנא נסה שוב או כתוב לי הודעה."
 
         response = await chat.send_message_async(content_parts)
         reply_text = response.text.strip()
         
+        # Clean up temp file
         if temp_path and os.path.exists(temp_path): os.remove(temp_path)
 
         # זיהוי סגירה והפעלת ה-CRM
         deal_match = re.search(r"\[DEAL:(.*?)\]", reply_text)
         if deal_match:
             lead_details = deal_match.group(1).strip()
-            await handle_new_lead(chat_id, lead_details, current_pro, media_url)
+            
+            # Use Cloudinary URL if available, otherwise fallback to original WhatsApp URL
+            final_media_url = cloudinary_url if cloudinary_url else media_url
+            
+            await handle_new_lead(chat_id, lead_details, current_pro, media_url=final_media_url)
             
             # ניקוי הפקודה מהטקסט
             reply_text = reply_text.replace(deal_match.group(0), "").strip()
@@ -388,16 +442,18 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         return reply_text
 
     except Exception as e:
-        console.print(f"[error]❌ AI Error: {e}[/error]")
+        console.print(f"[error]❌ AI Error: {traceback.format_exc()}[/error]")
         return "סליחה, נתקעתי. נסה שוב."
 
 # --- Whatsapp Logic ---
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 async def send_whatsapp_message(to_chat_id: str, text: str):
     url = f"https://api.green-api.com/waInstance{settings.GREEN_API_ID}/sendMessage/{settings.GREEN_API_TOKEN}"
     payload = {"chatId": to_chat_id, "message": text}
     async with httpx.AsyncClient() as client:
         await client.post(url, json=payload)
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 async def send_whatsapp_file(to_chat_id: str, file_url: str, caption: str = ""):
     """שליחת קובץ (תמונה/הקלטה) דרך ה-API"""
     url = f"https://api.green-api.com/waInstance{settings.GREEN_API_ID}/sendFileByUrl/{settings.GREEN_API_TOKEN}"
