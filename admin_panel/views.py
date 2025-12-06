@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from bson.objectid import ObjectId
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, timezone
 from utils import users_collection, leads_collection, messages_collection, slots_collection, create_initial_schedule, generate_system_prompt
 from components import render_chat_bubble
 import pytz
@@ -53,7 +53,12 @@ def view_dashboard(T):
             if selected_id:
                 curr_lead = next(item for item in data if item["id"] == selected_id)
                 
-                # Use raw status for logic, translated for display
+                # --- EDIT DETAILS ---
+                st.markdown(f"**{T['edit_details']}**")
+                new_details = st.text_area(T["edit_details"], value=curr_lead[T["col_details"]], height=100, label_visibility="collapsed")
+
+                # --- EDIT STATUS ---
+                st.markdown(f"**{T['select_status']}**")
                 status_opts = ["new", "contacted", "booked", "closed", "cancelled"]
                 curr_st_raw = curr_lead["raw_status"]
                 
@@ -63,13 +68,28 @@ def view_dashboard(T):
                     T["select_status"], 
                     status_opts, 
                     index=status_opts.index(curr_st_raw),
-                    format_func=lambda x: T.get(x, x)
+                    format_func=lambda x: T.get(x, x),
+                    label_visibility="collapsed"
                 )
                 
-                if st.button(T["btn_update"], type="primary"):
-                    leads_collection.update_one({"_id": ObjectId(selected_id)}, {"$set": {"status": new_status}})
-                    st.success(T["success_update"])
-                    st.rerun()
+                c_update, c_delete = st.columns([2, 1])
+                with c_update:
+                    if st.button(T["btn_update"], type="primary", use_container_width=True):
+                        leads_collection.update_one(
+                            {"_id": ObjectId(selected_id)}, 
+                            {"$set": {"status": new_status, "details": new_details}}
+                        )
+                        st.success(T["success_update"])
+                        st.rerun()
+                
+                with c_delete:
+                    if st.button(T["btn_delete"], type="secondary", use_container_width=True):
+                        # Confirmation logic is tricky in pure streamlit without rerun, 
+                        # but using a simple key-based approach or immediate action for now.
+                        # Ideally, we use session state for confirmation, but for simplicity:
+                        leads_collection.delete_one({"_id": ObjectId(selected_id)})
+                        st.success(T["success_delete"])
+                        st.rerun()
 
         with c_right:
             if selected_id:
@@ -277,7 +297,7 @@ def view_schedule(T):
                     if st.button(T["sch_clear_btn"]):
                          slots_collection.delete_many({
                              "pro_id": pro["_id"], 
-                             "start_time": {"$gt": datetime.utcnow()}
+                             "start_time": {"$gt": datetime.now(timezone.utc)}
                          })
                          st.success(T["sch_msg_cleared"])
                          st.rerun()
@@ -299,7 +319,7 @@ def view_add_pro(T):
                 prompt, keywords = generate_system_prompt(name, ptype, areas, prices)
                 new_pro = {
                     "business_name": name, "phone_number": phone, "is_active": True, "plan": "basic",
-                    "created_at": datetime.utcnow(), "service_areas": [x.strip() for x in areas.split(",")],
+                    "created_at": datetime.now(timezone.utc), "service_areas": [x.strip() for x in areas.split(",")],
                     "keywords": keywords, "system_prompt": prompt, "social_proof": {"rating": 5.0}, "is_verified": True
                 }
                 res = users_collection.insert_one(new_pro)
