@@ -4,6 +4,7 @@ import time
 import extra_streamlit_components as stx
 from datetime import datetime, timedelta
 import hashlib
+from config import TRANS
 
 # --- פונקציית עזר להצפנה (Hashing) ---
 def make_hash(password):
@@ -25,6 +26,11 @@ def check_password():
     
     # קריאת כל הקוקיות
     cookies = cookie_manager.get_all()
+    
+    # קביעת שפה לפי קוקי (או ברירת מחדל HE)
+    saved_lang = cookies.get("fixi_lang", "HE")
+    T_auth = TRANS.get(saved_lang, TRANS["HE"])
+
     cookie_token = cookies.get("fixi_auth_token")
     
     real_password = os.getenv("ADMIN_PASSWORD", "admin123")
@@ -45,12 +51,12 @@ def check_password():
     with col2:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.title("🔐 Fixi Admin")
-        st.markdown("### ברוך הבא למרכז השליטה")
+        st.markdown(f"### {T_auth['welcome_message']}")
         
         with st.form("login_form"):
-            password = st.text_input("סיסמת מנהל", type="password", placeholder="הכנס סיסמה כאן...")
-            remember_me = st.checkbox("זכור אותי (Keep me logged in)")
-            submitted = st.form_submit_button("כניסה למערכת", type="primary")
+            password = st.text_input(T_auth["admin_password_label"], type="password", placeholder=T_auth["admin_password_placeholder"])
+            remember_me = st.checkbox(T_auth["remember_me"])
+            submitted = st.form_submit_button(T_auth["login_button"], type="primary")
             
             if submitted:
                 if password == real_password:
@@ -65,19 +71,18 @@ def check_password():
                     time.sleep(1)
                     st.rerun()
                 else:
-                    st.error("❌ סיסמה שגויה. נסה שוב.")
+                    st.error(T_auth["wrong_password"])
 
     return False
 
-def logout():
+def logout(cookie_manager, T):
     """כפתור התנתקות"""
-    if st.sidebar.button("🔒 התנתק"):
+    if st.sidebar.button(T["disconnect"]):
         st.toast("מתנתק...", icon="👋")
 
         st.session_state["authenticated"] = False
         
         try:
-            cookie_manager = get_manager()
             cookie_manager.delete("fixi_auth_token")
         except KeyError:
             pass # הקוקי כבר לא שם, הכל טוב
@@ -86,4 +91,4 @@ def logout():
 
         time.sleep(0.5)
         st.rerun()
-        st.experimental_set_query_params(page="login")
+        st.query_params.clear()
