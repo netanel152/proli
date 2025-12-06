@@ -10,6 +10,7 @@ users_collection = db.users
 messages_collection = db.messages
 leads_collection = db.leads
 slots_collection = db.slots
+settings_collection = db.settings  # New collection for system config
 
 def check_db_connection():
     try:

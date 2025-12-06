@@ -23,6 +23,7 @@ users_collection = db.users
 leads_collection = db.leads
 messages_collection = db.messages
 slots_collection = db.slots
+settings_collection = db.settings
 
 # עזרי לוגיקה
 def generate_system_prompt(name, profession, areas, prices):

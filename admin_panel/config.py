@@ -16,7 +16,7 @@ TRANS = {
         "pros_title": "צוות אנשי המקצוע", "phone": "טלפון", "active": "פעיל במערכת?", "areas": "אזורי שירות (ערים)", "keywords": "מילות מפתח לזיהוי", "prompt_title": "הנחיות אישיות לבוט (System Prompt)", "prompt_desc": "כאן מגדירים את האישיות והידע של הבוט עבור איש המקצוע",
         "rating": "דירוג לקוחות", "role_user": "לקוח", "role_bot": "נציג דיגיטלי",
         "status_active": "זמין", "status_inactive": "לא זמין", "no_leads_found": "לא נמצאו לידים במערכת.",
-        "status": "סטטוס נוכחי", "new": "חדש (ממתין)", "contacted": "בטיפול", "closed": "נסגר בהצלחה", "cancelled": "בוטל/לא רלוונטי", "booked": "נקבעה פגישה",
+        "status": "סטטוס נוכחי", "new": "חדש", "contacted": "בטיפול", "closed": "נסגר בהצלחה", "cancelled": "בוטל/לא רלוונטי", "booked": "נקבעה פגישה",
         "add_pro_title": "הוספת איש מקצוע חדש", "new_name": "שם העסק / איש המקצוע", "new_phone": "מספר טלפון (פורמט בינלאומי 972)",
         "new_type": "תחום עיסוק", "type_plumber": "אינסטלציה", "type_electrician": "חשמל",
         "new_areas": "ערים (מופרד בפסיקים)", "new_prices": "מחירון בסיס (טקסט חופשי)",
@@ -36,7 +36,9 @@ TRANS = {
         "msg_changes": "שינויים נשמרו", "no_changes": "לא בוצעו שינויים לשמירה.",
         "schedule_empty": "היומן ריק כרגע. ניתן להשתמש ב'מחולל האוטומטי' כדי להגדיר שעות עבודה.",
         "disconnect": "🔒 יציאה מהמערכת",
-        "btn_delete": "מחק ליד", "confirm_delete": "האם למחוק ליד זה לצמיתות?", "success_delete": "הליד נמחק בהצלחה", "edit_details": "עריכת פרטים"
+        "btn_delete": "מחק ליד", "confirm_delete": "האם למחוק ליד זה לצמיתות?", "success_delete": "הליד נמחק בהצלחה", "edit_details": "עריכת פרטים", "edit_schedule": "שינוי מועד עבודה",
+        "scheduler_title": "⏰ הגדרות תזמון אוטומטי", "sch_active": "פעיל?", "sch_run_time": "שעת ריצה יומית",
+        "sch_run_now": "הפעל כעת 🚀", "sch_triggered": "הפקודה נשלחה לתזמון!", "sch_save_config": "שמור הגדרות תזמון"
     },
 "EN": {
         "dir": "ltr", "align": "left",
@@ -53,7 +55,7 @@ TRANS = {
         "settings_title": "System & AI Settings", "select_pro": "Select Profile", "edit_title": "Edit Profile", "save_btn": "Save Changes", "success_save": "Settings saved successfully!",
         "pros_title": "Professional Team", "phone": "Phone Number", "active": "Active Status", "areas": "Service Areas", "keywords": "Keywords", "prompt_title": "System Prompt", "prompt_desc": "Define bot personality and knowledge", "rating": "Client Rating", "role_user": "Client", "role_bot": "Digital Agent",
         "status_active": "Online", "status_inactive": "Offline", "no_leads_found": "No leads found.",
-        "status": "Current Status", "new": "New (Waiting)", "contacted": "In Progress", "closed": "Completed", "cancelled": "Cancelled", "booked": "Booked",
+        "status": "Current Status", "new": "New", "contacted": "In Progress", "closed": "Completed", "cancelled": "Cancelled", "booked": "Booked",
         "add_pro_title": "Add New Professional", "new_name": "Business / Name", "new_phone": "Phone (Intl Format 972...)",
         "new_type": "Profession", "type_plumber": "Plumber", "type_electrician": "Electrician",
         "new_areas": "Cities (comma separated)", "new_prices": "Base Pricing (Free text)",
@@ -73,6 +75,8 @@ TRANS = {
         "msg_changes": "changes saved", "no_changes": "No changes to save.",
         "schedule_empty": "Schedule is empty. Use the Bulk Generator to create slots.",
         "disconnect": "🔒 Logout",
-        "btn_delete": "Delete Lead", "confirm_delete": "Permanently delete this lead?", "success_delete": "Lead deleted successfully", "edit_details": "Edit Details"
+        "btn_delete": "Delete Lead", "confirm_delete": "Permanently delete this lead?", "success_delete": "Lead deleted successfully", "edit_details": "Edit Details", "edit_schedule": "Reschedule Job",
+        "scheduler_title": "⏰ Auto-Scheduler Settings", "sch_active": "Active?", "sch_run_time": "Daily Run Time",
+        "sch_run_now": "Run Now 🚀", "sch_triggered": "Command sent to scheduler!", "sch_save_config": "Save Configuration"
     }
 }

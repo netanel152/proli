@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from bson.objectid import ObjectId
 from datetime import datetime, timedelta, time, timezone
-from utils import users_collection, leads_collection, messages_collection, slots_collection, create_initial_schedule, generate_system_prompt
+from utils import users_collection, leads_collection, messages_collection, slots_collection, settings_collection, create_initial_schedule, generate_system_prompt
 from components import render_chat_bubble
 import pytz
 
@@ -72,21 +72,47 @@ def view_dashboard(T):
                     label_visibility="collapsed"
                 )
                 
+                # --- SCHEDULE JOB (Only for 'new') ---
+                # We'll use created_at as the 'scheduled_time' for simplicity in this MVP,
+                # or we could add a new field. Let's stick to created_at or add a dedicated picker.
+                # Ideally, booking sets a slot. Here we just manually edit the timestamp for record keeping.
+                st.markdown(f"**{T.get('edit_schedule', 'Edit Schedule Time')}**")
+                
+                # Get current time or existing scheduled time
+                # In logic.py we used created_at for booking time. Let's edit that.
+                current_dt = datetime.strptime(curr_lead[T["col_date"]], "%d/%m %H:%M").replace(year=datetime.now().year)
+                
+                c_date, c_time = st.columns(2)
+                new_date = c_date.date_input("Date", value=current_dt.date())
+                new_time = c_time.time_input("Time", value=current_dt.time())
+                
+                
                 c_update, c_delete = st.columns([2, 1])
                 with c_update:
                     if st.button(T["btn_update"], type="primary", use_container_width=True):
+                        # Combine date and time
+                        new_dt = datetime.combine(new_date, new_time)
+                        # Convert to UTC for storage
+                        new_dt_utc = new_dt.astimezone(timezone.utc) if new_dt.tzinfo is None else new_dt.astimezone(timezone.utc)
+                        # If naive, assume local (Israel) then to UTC? 
+                        # Simplest: Assume input is local time (Israel), convert to UTC
+                        local_tz = pytz.timezone('Asia/Jerusalem')
+                        local_dt = local_tz.localize(datetime.combine(new_date, new_time))
+                        utc_dt = local_dt.astimezone(pytz.utc)
+
                         leads_collection.update_one(
                             {"_id": ObjectId(selected_id)}, 
-                            {"$set": {"status": new_status, "details": new_details}}
+                            {"$set": {
+                                "status": new_status, 
+                                "details": new_details,
+                                "created_at": utc_dt # Update the timestamp effectively rescheduling it
+                            }}
                         )
                         st.success(T["success_update"])
                         st.rerun()
                 
                 with c_delete:
                     if st.button(T["btn_delete"], type="secondary", use_container_width=True):
-                        # Confirmation logic is tricky in pure streamlit without rerun, 
-                        # but using a simple key-based approach or immediate action for now.
-                        # Ideally, we use session state for confirmation, but for simplicity:
                         leads_collection.delete_one({"_id": ObjectId(selected_id)})
                         st.success(T["success_delete"])
                         st.rerun()
@@ -329,6 +355,8 @@ def view_add_pro(T):
 
 def view_settings(T):
     st.title(T["settings_title"])
+    
+    # --- 1. Profile Settings ---
     pros = list(users_collection.find())
     pro_map = {p["business_name"]: p for p in pros}
     selected = st.selectbox(T["select_pro"], list(pro_map.keys()))
@@ -353,6 +381,53 @@ def view_settings(T):
                     "system_prompt": prompt
                 }})
                 st.success(T["success_save"])
+
+    # --- 2. Scheduler Settings ---
+    st.markdown("---")
+    st.header(T.get("scheduler_title", "⏰ Auto-Scheduler"))
+    
+    # Load or create config
+    config = settings_collection.find_one({"_id": "scheduler_config"})
+    if not config:
+        config = {"_id": "scheduler_config", "run_time": "08:00", "is_active": True}
+        settings_collection.insert_one(config)
+        
+    with st.container(border=True):
+        c1, c2, c3 = st.columns(3)
+        
+        # Active Toggle
+        is_active = c1.checkbox(T.get("sch_active", "Active"), value=config.get("is_active", True))
+        
+        # Last Run Display
+        last_run = config.get("last_run_date", "Never")
+        c1.caption(f"Last Run: {last_run}")
+        
+        # Time Picker
+        try:
+            t_obj = datetime.strptime(config.get("run_time", "08:00"), "%H:%M").time()
+        except:
+            t_obj = time(8, 0)
+            
+        new_time = c2.time_input(T.get("sch_run_time", "Run Time"), value=t_obj)
+        
+        # Manual Trigger
+        if c3.button(T.get("sch_run_now", "Run Now")):
+            settings_collection.update_one(
+                {"_id": "scheduler_config"},
+                {"$set": {"trigger_now": True}}
+            )
+            st.toast(T.get("sch_triggered", "Triggered!"))
+            
+        # Save Button
+        if st.button(T.get("sch_save_config", "Save Config")):
+             settings_collection.update_one(
+                {"_id": "scheduler_config"},
+                {"$set": {
+                    "is_active": is_active,
+                    "run_time": new_time.strftime("%H:%M")
+                }}
+            )
+             st.success(T["success_save"])
 
 def view_pros(T):
     st.title(T["pros_title"])

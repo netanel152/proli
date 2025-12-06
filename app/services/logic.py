@@ -223,14 +223,43 @@ async def handle_pro_command(chat_id: str, text: str):
         return "👍 מעולה. סימנתי שסיימת ואתה פנוי."
 
     elif intent == "SHOW":
-        slots = get_available_slots(pro["_id"])
-        return f"📅 היומן שלך:\n{slots}"
+        # שליפת עבודות מוזמנות (New) להיום ומחר
+        now = datetime.now(IL_TZ)
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow_end = (today_start + timedelta(days=2)).replace(microsecond=0)
+        
+        # המרה ל-UTC עבור השאילתה
+        start_utc = today_start.astimezone(pytz.utc)
+        end_utc = tomorrow_end.astimezone(pytz.utc)
+        
+        booked_leads = list(leads_collection.find({
+            "pro_id": pro["_id"],
+            "status": "New",
+            "created_at": {"$gte": start_utc, "$lt": end_utc} # הנחה: created_at משמש כזמן העבודה כרגע
+        }).sort("created_at", 1))
+        
+        if not booked_leads:
+            return "📅 אין לך עבודות סגורות להיום או מחר."
+            
+        response = "📅 **תוכנית עבודה (היום ומחר):**\n"
+        for lead in booked_leads:
+            # המרה חזרה לשעון ישראל לתצוגה
+            lead_time = lead["created_at"].replace(tzinfo=pytz.utc).astimezone(IL_TZ)
+            time_str = lead_time.strftime("%d/%m %H:%M")
+            client_phone = lead["chat_id"].replace("@c.us", "")
+            details = lead.get("details", "ללא פרטים")
+            # קיצור פרטים אם ארוכים מדי
+            short_details = (details[:30] + '..') if len(details) > 30 else details
+            
+            response += f"\n🔹 {time_str} - {short_details}\n   📞 לקוח: {client_phone}"
+            
+        return response
     
     elif intent == "FINISH_JOB":
         # שיפור: מחפשים ליד אחרון שהוא 'new' או 'חדש'
         last_lead = leads_collection.find_one({
             "pro_id": pro["_id"],
-            "status": {"$in": ["New (Waiting)", "חדש (ממתין)"]}
+            "status": {"$in": ["New", "חדש"]}
         }, sort=[("created_at", -1)])
         
         if not last_lead:
@@ -360,7 +389,7 @@ async def handle_new_lead(chat_id: str, details: str, pro_data: dict, media_url:
     console.print(f"[success]💰 NEW LEAD! {details}[/success]")
     leads_collection.insert_one({
         "chat_id": chat_id, "pro_id": pro_data["_id"], "details": details, 
-        "status": "new", "created_at": datetime.now(timezone.utc), "media_url": media_url
+        "status": "New", "created_at": datetime.now(timezone.utc), "media_url": media_url
     })
     
     if pro_data.get("phone_number"):
