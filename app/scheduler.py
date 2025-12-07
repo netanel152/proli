@@ -4,11 +4,11 @@ from app.core.database import users_collection, leads_collection, settings_colle
 from app.services.logic import send_whatsapp_message
 from datetime import datetime, timedelta
 import pytz
+import asyncio
 
 IL_TZ = pytz.timezone('Asia/Jerusalem')
 
 async def send_daily_reminders():
-    """Logic to send daily reminders to pros."""
     print(f"⏰ [Scheduler] Starting daily reminders check at {datetime.now(IL_TZ)}")
     
     # Query users_collection for active pros
@@ -49,10 +49,11 @@ async def send_daily_reminders():
                 except Exception as e:
                     print(f"❌ Failed to send to {pro['business_name']}: {e}")
 
-async def scheduler_watchdog():
+async def scheduler_manager():
     """
-    Runs every minute to check if it's time to run the daily job
-    or if a manual trigger was requested.
+    Smart manager that checks DB config every minute to handle:
+    1. 'Run Now' triggers.
+    2. Daily scheduled runs (dynamic time).
     """
     try:
         config = settings_collection.find_one({"_id": "scheduler_config"})
@@ -62,7 +63,7 @@ async def scheduler_watchdog():
             settings_collection.insert_one(config)
             print("⚠️ [Scheduler] Created default config.")
 
-        # 1. Manual Trigger Check
+        # Manual Trigger Check
         if config.get("trigger_now", False):
             print("🚀 [Scheduler] Manual trigger detected!")
             await send_daily_reminders()
@@ -85,6 +86,7 @@ async def scheduler_watchdog():
         last_run = config.get("last_run_date")
 
         # If we haven't run today AND current time >= target time
+        # (Using >= handles cases where the scheduler might miss the exact minute slightly)
         if last_run != today_str and current_time_str >= target_time:
             print(f"⏰ [Scheduler] Time to run! ({current_time_str} >= {target_time})")
             await send_daily_reminders()
@@ -95,16 +97,16 @@ async def scheduler_watchdog():
             )
 
     except Exception as e:
-        print(f"❌ [Scheduler Watchdog Error] {e}")
+        print(f"❌ [Scheduler Manager Error] {e}")
 
 def start_scheduler():
     scheduler = AsyncIOScheduler()
-    # Run watchdog every 60 seconds
+    # Run the manager every 60 seconds
     scheduler.add_job(
-        scheduler_watchdog,
+        scheduler_manager,
         IntervalTrigger(seconds=60),
-        id="scheduler_watchdog",
+        id="scheduler_manager",
         replace_existing=True
     )
     scheduler.start()
-    print("🚀 APScheduler Started (Watchdog Mode)!")
+    print("🚀 APScheduler Started (Dynamic Manager Mode)!")
