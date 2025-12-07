@@ -327,11 +327,7 @@ async def handle_customer_rating(chat_id: str, text: str):
     # חישוב ממוצע חדש (פשוט)
     current_rating = pro.get("social_proof", {}).get("rating", 5.0)
     count = pro.get("social_proof", {}).get("review_count", 0)
-    
-    # נוסחה: (ישן * כמות + חדש) / (כמות + 1)
-    # בגלל שהנתונים הראשוניים הם פיקטיביים, ניתן משקל נמוך יותר לחדש בהתחלה
     new_rating = round(((current_rating * 10) + rating) / 11, 1) 
-    
     users_collection.update_one(
         {"_id": pro_id},
         {
