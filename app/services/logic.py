@@ -35,8 +35,8 @@ IL_TZ = pytz.timezone('Asia/Jerusalem')
 # --- Helpers ---
 @retry(
     retry=retry_if_exception_type(ResourceExhausted),
-    wait=wait_exponential(multiplier=2, min=2, max=60),
-    stop=stop_after_attempt(5)
+    wait=wait_exponential(multiplier=2, min=5, max=120),
+    stop=stop_after_attempt(10)
 )
 async def _generate_with_retry(chat_session, content_parts):
     """
@@ -158,9 +158,6 @@ async def analyze_pro_intent(text: str):
     Output JSON: {{ "intent": "BLOCK"|"FREE"|"SHOW"|"FINISH_JOB"|"UNKNOWN", "hour": int, "day": "TODAY"|"TOMORROW" }}
     """
     try:
-        # Use a fresh model instance for analysis to avoid context pollution,
-        # but consider extracting this to use _generate_with_retry if it also hits limits.
-        # For now, keeping it simple as this is less frequent.
         model = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
         response = await model.generate_content_async(prompt)
         return json.loads(response.text)
@@ -277,7 +274,7 @@ async def handle_pro_command(chat_id: str, text: str):
         last_lead = leads_collection.find_one({
             "pro_id": pro["_id"],
             "status": {"$in": ["New", "booked", "חדש"]}
-        }, sort=[("created_at", -1)])
+        }, sort=["created_at", -1])
         
         if not last_lead:
             return "לא מצאתי עבודה פתוחה לסגור. אולי כבר סגרת אותה?"
@@ -327,7 +324,11 @@ async def handle_customer_rating(chat_id: str, text: str):
     # חישוב ממוצע חדש (פשוט)
     current_rating = pro.get("social_proof", {}).get("rating", 5.0)
     count = pro.get("social_proof", {}).get("review_count", 0)
+    
+    # נוסחה: (ישן * כמות + חדש) / (כמות + 1)
+    # בגלל שהנתונים הראשוניים הם פיקטיביים, ניתן משקל נמוך יותר לחדש בהתחלה
     new_rating = round(((current_rating * 10) + rating) / 11, 1) 
+    
     users_collection.update_one(
         {"_id": pro_id},
         {
@@ -407,7 +408,9 @@ async def handle_new_lead(chat_id: str, details: str, pro_data: dict, media_url:
     
     if pro_data.get("phone_number"):
         pro_chat = f"{pro_data['phone_number']}@c.us" if not pro_data['phone_number'].endswith("@c.us") else pro_data['phone_number']
-        msg = f"🔔 *ליד חדש!*\nפרטים: {details}\nלקוח: https://wa.me/{chat_id.replace('@c.us','')}"
+        msg = f"""🔔 *ליד חדש!*
+פרטים: {details}
+לקוח: https://wa.me/{chat_id.replace('@c.us','')}"""
         
         # Always send the text details first to ensure they are seen
         await send_whatsapp_message(pro_chat, msg)
@@ -484,7 +487,7 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         if temp_path and os.path.exists(temp_path): os.remove(temp_path)
 
         # זיהוי סגירה והפעלת ה-CRM
-        deal_match = re.search(r"\[DEAL:(.*?)\]", reply_text)
+        deal_match = re.search(r"\[DEAL:(.*?)\"""", reply_text)
         if deal_match:
             lead_details = deal_match.group(1).strip()
             

@@ -37,6 +37,7 @@ def view_dashboard(T):
             })
         df = pd.DataFrame(data)
         
+        # FIXED: use_container_width=True, remove width=None
         st.dataframe(
             df[[T["col_date"], T["col_client"], T["col_pro"], T["col_details"], T["col_status"]]], 
             use_container_width=True,
@@ -73,29 +74,20 @@ def view_dashboard(T):
                 )
                 
                 # --- SCHEDULE JOB (Only for 'new') ---
-                # We'll use created_at as the 'scheduled_time' for simplicity in this MVP,
-                # or we could add a new field. Let's stick to created_at or add a dedicated picker.
-                # Ideally, booking sets a slot. Here we just manually edit the timestamp for record keeping.
                 st.markdown(f"**{T.get('edit_schedule', 'Edit Schedule Time')}**")
                 
-                # Get current time or existing scheduled time
-                # In logic.py we used created_at for booking time. Let's edit that.
-                current_dt = datetime.strptime(curr_lead[T["col_date"]], "%d/%m %H:%M").replace(year=datetime.now().year)
-                
+                try:
+                    current_dt = datetime.strptime(curr_lead[T["col_date"]], "%d/%m %H:%M").replace(year=datetime.now().year)
+                except:
+                    current_dt = datetime.now()
+
                 c_date, c_time = st.columns(2)
                 new_date = c_date.date_input("Date", value=current_dt.date())
                 new_time = c_time.time_input("Time", value=current_dt.time())
                 
-                
                 c_update, c_delete = st.columns([2, 1])
                 with c_update:
                     if st.button(T["btn_update"], type="primary", use_container_width=True):
-                        # Combine date and time
-                        new_dt = datetime.combine(new_date, new_time)
-                        # Convert to UTC for storage
-                        new_dt_utc = new_dt.astimezone(timezone.utc) if new_dt.tzinfo is None else new_dt.astimezone(timezone.utc)
-                        # If naive, assume local (Israel) then to UTC? 
-                        # Simplest: Assume input is local time (Israel), convert to UTC
                         local_tz = pytz.timezone('Asia/Jerusalem')
                         local_dt = local_tz.localize(datetime.combine(new_date, new_time))
                         utc_dt = local_dt.astimezone(pytz.utc)
@@ -105,7 +97,7 @@ def view_dashboard(T):
                             {"$set": {
                                 "status": new_status, 
                                 "details": new_details,
-                                "created_at": utc_dt # Update the timestamp effectively rescheduling it
+                                "created_at": utc_dt
                             }}
                         )
                         st.success(T["success_update"])
@@ -154,8 +146,6 @@ def view_schedule(T):
             selected_date = st.date_input(T["sch_date"], value=datetime.now().date())
             
             # Fetch existing slots for this day (in UTC)
-            # We need to query a range covering the whole day in UTC
-            # Local Start of Day -> UTC
             day_start_local = tz.localize(datetime.combine(selected_date, time.min))
             day_end_local = tz.localize(datetime.combine(selected_date, time.max))
             
@@ -187,7 +177,6 @@ def view_schedule(T):
             # Create DataFrame
             df = pd.DataFrame(editor_data)
             if df.empty:
-                # Initialize empty DF with correct columns if no slots
                 df = pd.DataFrame(columns=["_id", "start_time", "end_time", "is_taken"])
             
             # Show Data Editor
@@ -201,14 +190,13 @@ def view_schedule(T):
                 },
                 num_rows="dynamic",
                 use_container_width=True,
-                key=f"editor_{pro['_id']}_{selected_date}" # Unique key per day
+                key=f"editor_{pro['_id']}_{selected_date}"
             )
             
             if st.button(T["sch_save"], type="primary"):
                 # --- PROCESSING CHANGES ---
                 
                 # 1. Identify Deletions
-                # IDs present in original but missing in edited_df (rows deleted by user)
                 current_ids = set(edited_df["_id"].dropna().astype(str))
                 ids_to_delete = original_ids - current_ids
                 
@@ -220,18 +208,16 @@ def view_schedule(T):
                 updates_count = 0
                 
                 for index, row in edited_df.iterrows():
-                    # Parse Times
                     s_time = row["start_time"]
                     e_time = row["end_time"]
                     
-                    if not s_time or not e_time: continue # Skip invalid rows
+                    if not s_time or not e_time: continue
                     
-                    # Combine with Date -> Local -> UTC
                     try:
                         dt_start = tz.localize(datetime.combine(selected_date, s_time)).astimezone(pytz.utc)
                         dt_end = tz.localize(datetime.combine(selected_date, e_time)).astimezone(pytz.utc)
                     except Exception:
-                        continue # Skip if time is invalid
+                        continue
                         
                     slot_data = {
                         "pro_id": pro["_id"],
@@ -243,14 +229,12 @@ def view_schedule(T):
                     row_id = row.get("_id")
                     
                     if row_id and isinstance(row_id, str) and row_id in original_ids:
-                        # Update existing
                         slots_collection.update_one(
                             {"_id": ObjectId(row_id)},
                             {"$set": slot_data}
                         )
                         updates_count += 1
                     else:
-                        # Insert new (ID is NaN or None or new)
                         new_slots.append(slot_data)
                 
                 if new_slots:
@@ -265,12 +249,10 @@ def view_schedule(T):
             with st.container(border=True):
                 c1, c2 = st.columns(2)
                 with c1:
-                    # Default: Tomorrow
                     start_date = st.date_input(T["sch_start_date"], value=datetime.now().date() + timedelta(days=1))
                     start_hour = st.number_input(T["sch_start_hour"], 0, 23, 8)
                     duration = st.number_input(T["sch_duration"], 15, 120, 60, step=15)
                 with c2:
-                    # Default: Next week
                     end_date = st.date_input(T["sch_end_date"], value=datetime.now().date() + timedelta(days=7))
                     end_hour = st.number_input(T["sch_end_hour"], 0, 23, 18)
                 
