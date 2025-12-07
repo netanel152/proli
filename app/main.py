@@ -1,10 +1,18 @@
 from fastapi import FastAPI, BackgroundTasks
 from app.schemas.whatsapp import WebhookPayload
 from app.services.logic import ask_fixi_ai, send_whatsapp
+from app.scheduler import start_scheduler
+from contextlib import asynccontextmanager
 from rich.console import Console
 
-app = FastAPI(title="Fixi Bot Server")
 console = Console()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler()
+    yield
+
+app = FastAPI(title="Fixi Bot Server", lifespan=lifespan)
 
 @app.get("/")
 def health_check():

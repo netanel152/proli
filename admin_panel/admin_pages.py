@@ -39,7 +39,7 @@ def view_dashboard(T):
         
         st.dataframe(
             df[[T["col_date"], T["col_client"], T["col_pro"], T["col_details"], T["col_status"]]], 
-            width="stretch",
+            use_container_width=True,
             hide_index=True
         )
         

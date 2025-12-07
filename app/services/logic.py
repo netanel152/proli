@@ -5,7 +5,9 @@ from app.core.database import users_collection, messages_collection, leads_colle
 from rich.console import Console
 from rich.theme import Theme
 from datetime import datetime, timedelta
-from tenacity import retry, stop_after_attempt, wait_fixed
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type
+import tenacity
+from google.api_core.exceptions import ResourceExhausted
 import cloudinary
 import cloudinary.uploader
 import re
@@ -31,6 +33,18 @@ cloudinary.config(
 IL_TZ = pytz.timezone('Asia/Jerusalem')
 
 # --- Helpers ---
+@retry(
+    retry=retry_if_exception_type(ResourceExhausted),
+    wait=wait_exponential(multiplier=2, min=2, max=60),
+    stop=stop_after_attempt(5)
+)
+async def _generate_with_retry(chat_session, content_parts):
+    """
+    Wraps the Gemini generation call with a retry mechanism specifically for
+    ResourceExhausted (429) errors.
+    """
+    return await chat_session.send_message_async(content_parts)
+
 def save_message(chat_id: str, role: str, text: str, pro_id: str = None):
     msg_doc = {"chat_id": chat_id, "role": role, "text": text, "timestamp": datetime.now()}
     if pro_id: msg_doc["pro_id"] = pro_id
@@ -144,6 +158,9 @@ async def analyze_pro_intent(text: str):
     Output JSON: {{ "intent": "BLOCK"|"FREE"|"SHOW"|"FINISH_JOB"|"UNKNOWN", "hour": int, "day": "TODAY"|"TOMORROW" }}
     """
     try:
+        # Use a fresh model instance for analysis to avoid context pollution,
+        # but consider extracting this to use _generate_with_retry if it also hits limits.
+        # For now, keeping it simple as this is less frequent.
         model = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
         response = await model.generate_content_async(prompt)
         return json.loads(response.text)
@@ -223,7 +240,7 @@ async def handle_pro_command(chat_id: str, text: str):
         return "👍 מעולה. סימנתי שסיימת ואתה פנוי."
 
     elif intent == "SHOW":
-        # שליפת עבודות מוזמנות (New) להיום ומחר
+        # שליפת עבודות מוזמנות (booked) להיום ומחר
         now = datetime.now(IL_TZ)
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow_end = (today_start + timedelta(days=2)).replace(microsecond=0)
@@ -234,12 +251,12 @@ async def handle_pro_command(chat_id: str, text: str):
         
         booked_leads = list(leads_collection.find({
             "pro_id": pro["_id"],
-            "status": "New",
+            "status": "booked",
             "created_at": {"$gte": start_utc, "$lt": end_utc} # הנחה: created_at משמש כזמן העבודה כרגע
         }).sort("created_at", 1))
         
         if not booked_leads:
-            return "📅 אין לך עבודות סגורות להיום או מחר."
+            return "📅 אין לך עבודות סגורות (Booked) להיום או מחר."
             
         response = "📅 **תוכנית עבודה (היום ומחר):**\n"
         for lead in booked_leads:
@@ -256,10 +273,10 @@ async def handle_pro_command(chat_id: str, text: str):
         return response
     
     elif intent == "FINISH_JOB":
-        # שיפור: מחפשים ליד אחרון שהוא 'new' או 'חדש'
+        # שיפור: מחפשים ליד אחרון שהוא 'new' או 'booked' או 'חדש'
         last_lead = leads_collection.find_one({
             "pro_id": pro["_id"],
-            "status": {"$in": ["New", "חדש"]}
+            "status": {"$in": ["New", "booked", "חדש"]}
         }, sort=[("created_at", -1)])
         
         if not last_lead:
@@ -268,7 +285,7 @@ async def handle_pro_command(chat_id: str, text: str):
         # עדכון הליד
         leads_collection.update_one(
             {"_id": last_lead["_id"]},
-            {"$set": {"status": "completed" or "נסגר", "completed_at": datetime.now(timezone.utc), "waiting_for_rating": True}}
+            {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc), "waiting_for_rating": True}}
         )
         
         # שליחת בקשת דירוג ללקוח
@@ -461,9 +478,10 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         if user_text: content_parts.append(user_text)
 
         if not content_parts:
-             return "סליחה, הייתה בעיה בקבלת הקובץ ששלחת. אנא נסה שוב או כתוב לי הודעה."
+            return "סליחה, הייתה בעיה בקבלת הקובץ ששלחת. אנא נסה שוב או כתוב לי הודעה."
 
-        response = await chat.send_message_async(content_parts)
+        # Use the helper with retry logic
+        response = await _generate_with_retry(chat, content_parts)
         reply_text = response.text.strip()
         
         # Clean up temp file
@@ -490,6 +508,10 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         console.print(f"[ai]🤖 Bot Reply ({current_pro['business_name']}):[/ai] {reply_text}")
         
         return reply_text
+    
+    except tenacity.RetryError:
+        console.print(f"[warning]⚠️ AI Rate Limit Reached (after retries)[/warning]")
+        return "המערכת עמוסה כרגע בפניות רבות. אנא נסה שוב בעוד דקה. 🙏"
 
     except Exception as e:
         console.print(f"[error]❌ AI Error: {traceback.format_exc()}[/error]")
