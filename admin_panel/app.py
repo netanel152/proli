@@ -4,6 +4,7 @@ from config import TRANS
 from components import load_css
 from admin_pages import view_dashboard, view_add_pro, view_settings, view_pros, view_schedule 
 from auth import check_password, logout, get_manager
+
 # --- הגדרות עמוד ---
 st.set_page_config(
     page_title="Fixi Admin",

@@ -487,7 +487,7 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         if temp_path and os.path.exists(temp_path): os.remove(temp_path)
 
         # זיהוי סגירה והפעלת ה-CRM
-        deal_match = re.search(r"\[DEAL:(.*?)\"""", reply_text)
+        deal_match = re.search(r"\[DEAL:(.*?)\]", reply_text)
         if deal_match:
             lead_details = deal_match.group(1).strip()
             
