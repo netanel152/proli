@@ -145,7 +145,7 @@ async def analyze_pro_intent(text: str):
     2. FREE: "done", "finished", "available", "hitpaneti", "shahrrer", "sayamti".
     3. SHOW: "my schedule", "yoman", "matay panuy", "torim", "luz".
     4. FINISH_JOB: "finished", "sayamti", "job done", "close ticket", "done with client".
-    5. GET_WORK: "get work", "avoda", "lead", "give me job", "avoda hadasha".
+    5. GET_WORK: "get work", "tavi avoda","avoda", "lead", "give me job", "avoda hadasha".
     6. UNKNOWN: regular chat.
 
     **Logic:**
