@@ -127,7 +127,7 @@ def view_dashboard(T):
 def view_schedule(T):
     st.title(T["title_schedule"])
     
-    # 1. Select Pro
+    # Select Pro
     pros = list(users_collection.find())
     pro_map = {p["business_name"]: p for p in pros}
     selected_pro_name = st.selectbox(T["sch_select_pro"], list(pro_map.keys()))
@@ -303,12 +303,12 @@ def view_schedule(T):
 
                 with c_clear:
                     if st.button(T["sch_clear_btn"]):
-                         slots_collection.delete_many({
-                             "pro_id": pro["_id"], 
-                             "start_time": {"$gt": datetime.now(timezone.utc)}
-                         })
-                         st.success(T["sch_msg_cleared"])
-                         st.rerun()
+                        slots_collection.delete_many({
+                            "pro_id": pro["_id"], 
+                            "start_time": {"$gt": datetime.now(timezone.utc)}
+                        })
+                        st.success(T["sch_msg_cleared"])
+                        st.rerun()
 
 def view_add_pro(T):
     st.title(T["add_pro_title"])
@@ -337,35 +337,8 @@ def view_add_pro(T):
 
 def view_settings(T):
     st.title(T["settings_title"])
-    
-    # --- 1. Profile Settings ---
-    pros = list(users_collection.find())
-    pro_map = {p["business_name"]: p for p in pros}
-    selected = st.selectbox(T["select_pro"], list(pro_map.keys()))
-    if selected:
-        p = pro_map[selected]
-        with st.form("settings"):
-            st.subheader(f"{T['edit_title']}: {selected}")
-            c1, c2 = st.columns(2)
-            with c1:
-                phone = st.text_input(T["phone"], p.get("phone_number"))
-                areas = st.text_area(T["areas"], ", ".join(p.get("service_areas", [])))
-            with c2:
-                active = st.checkbox(T["active"], p.get("is_active", True))
-                keywords = st.text_input(T["keywords"], ", ".join(p.get("keywords", [])))
-            prompt = st.text_area(T["prompt_title"], p.get("system_prompt", ""), height=300)
-            
-            if st.form_submit_button(T["save_btn"]):
-                users_collection.update_one({"_id": p["_id"]}, {"$set": {
-                    "phone_number": phone, "is_active": active,
-                    "service_areas": [x.strip() for x in areas.split(",")],
-                    "keywords": [x.strip() for x in keywords.split(",")],
-                    "system_prompt": prompt
-                }})
-                st.success(T["success_save"])
 
-    # --- 2. Scheduler Settings ---
-    st.markdown("---")
+    # --- Scheduler Settings ---
     st.header(T.get("scheduler_title", "⏰ Auto-Scheduler"))
     
     # Load or create config
@@ -402,14 +375,42 @@ def view_settings(T):
             
         # Save Button
         if st.button(T.get("sch_save_config", "Save Config")):
-             settings_collection.update_one(
+            settings_collection.update_one(
                 {"_id": "scheduler_config"},
                 {"$set": {
                     "is_active": is_active,
                     "run_time": new_time.strftime("%H:%M")
                 }}
             )
-             st.success(T["success_save"])
+            st.success(T["success_save"])
+    
+    st.markdown("---")
+
+    # --- Profile Settings ---
+    pros = list(users_collection.find())
+    pro_map = {p["business_name"]: p for p in pros}
+    selected = st.selectbox(T["select_pro"], list(pro_map.keys()))
+    if selected:
+        p = pro_map[selected]
+        with st.form("settings"):
+            st.subheader(f"{T['edit_title']}: {selected}")
+            c1, c2 = st.columns(2)
+            with c1:
+                phone = st.text_input(T["phone"], p.get("phone_number"))
+                areas = st.text_area(T["areas"], ", ".join(p.get("service_areas", [])))
+            with c2:
+                active = st.checkbox(T["active"], p.get("is_active", True))
+                keywords = st.text_input(T["keywords"], ", ".join(p.get("keywords", [])))
+            prompt = st.text_area(T["prompt_title"], p.get("system_prompt", ""), height=300)
+            
+            if st.form_submit_button(T["save_btn"]):
+                users_collection.update_one({"_id": p["_id"]}, {"$set": {
+                    "phone_number": phone, "is_active": active,
+                    "service_areas": [x.strip() for x in areas.split(",")],
+                    "keywords": [x.strip() for x in keywords.split(",")],
+                    "system_prompt": prompt
+                }})
+                st.success(T["success_save"])
 
 def view_pros(T):
     st.title(T["pros_title"])
@@ -424,15 +425,46 @@ def view_pros(T):
     
     for p in pros:
         is_active = p.get('is_active', True)
-        status_label = T["status_active"] if is_active else T["status_inactive"]
-        status_color = "green" if is_active else "red"
         
-        with st.expander(f" {p['business_name']}", expanded=True):
-            c1, c2 = st.columns([3, 1])
-            with c1:
+        # Determine expander label color based on status
+        status_icon = "🟢" if is_active else "🔴"
+        
+        with st.expander(f"{status_icon} {p['business_name']}", expanded=False):
+            # Split into Info and Actions columns
+            c_info, c_actions = st.columns([3, 1])
+            
+            with c_info:
                 st.write(f"📍 **{T['areas']}:** {', '.join(p.get('service_areas', []))}")
                 st.write(f"🏷️ **{T['keywords']}:** {', '.join(p.get('keywords', [])[:5])}...")
-            with c2:
                 st.write(f"📞 {p.get('phone_number')}")
                 st.write(f"⭐ {p.get('social_proof', {}).get('rating', 'N/A')}")
-                st.markdown(f":{status_color}[**{status_label}**]")
+
+            with c_actions:
+                # Active Toggle
+                new_active = st.toggle(T["active"], value=is_active, key=f"active_{p['_id']}")
+                if new_active != is_active:
+                    users_collection.update_one({"_id": p["_id"]}, {"$set": {"is_active": new_active}})
+                    st.rerun()
+                
+                st.divider()
+
+                # Delete Button
+                if st.button("🗑️", key=f"del_{p['_id']}", help="Delete Professional"):
+                    st.session_state[f"confirm_del_{p['_id']}"] = True
+
+                if st.session_state.get(f"confirm_del_{p['_id']}", False):
+                    st.warning("Are you sure?")
+                    c_yes, c_no = st.columns(2)
+                    if c_yes.button("Yes", key=f"yes_{p['_id']}"):
+                        # 1. Delete Schedule
+                        slots_collection.delete_many({"pro_id": p["_id"]})
+                        # 2. Delete User
+                        users_collection.delete_one({"_id": p["_id"]})
+                        
+                        st.success("Deleted!")
+                        del st.session_state[f"confirm_del_{p['_id']}"]
+                        st.rerun()
+                        
+                    if c_no.button("No", key=f"no_{p['_id']}"):
+                        del st.session_state[f"confirm_del_{p['_id']}"]
+                        st.rerun()
