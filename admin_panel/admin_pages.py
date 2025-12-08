@@ -8,13 +8,18 @@ import pytz
 
 def view_dashboard(T):
     st.title(T["title_dashboard"])
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c_ref = st.columns([2, 2, 2, 1])
     c1.metric(T["metric_total"], leads_collection.count_documents({}))
     c2.metric(T["metric_new"], leads_collection.count_documents({"status": "new"}), delta_color="inverse")
     c3.metric(T["metric_pros"], users_collection.count_documents({"is_active": True}))
     st.markdown("---")
     
-    st.subheader(T["table_title"])
+    # Header with Refresh Button
+    c_head, c_ref = st.columns([5, 1])
+    c_head.subheader(T["table_title"])
+    if c_ref.button(T.get("refresh_btn", "Refresh Leads"), icon=":material/refresh:", use_container_width=True, key="refresh_leads_button"):
+        st.rerun()
+
     leads = list(leads_collection.find().sort("created_at", -1).limit(50))
     
     if leads:

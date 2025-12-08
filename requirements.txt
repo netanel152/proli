@@ -34,17 +34,21 @@ httpcore==1.0.9
 httplib2==0.31.0
 httpx==0.28.1
 idna==3.11
+iniconfig==2.3.0
 Jinja2==3.1.6
 jsonschema==4.25.1
 jsonschema-specifications==2025.9.1
+loguru==0.7.3
 markdown-it-py==4.0.0
 MarkupSafe==3.0.3
 mdurl==0.1.2
+mongomock==4.3.0
 narwhals==2.12.0
 numpy==2.3.5
 packaging==25.0
 pandas==2.3.3
 pillow==12.0.0
+pluggy==1.6.0
 proto-plus==1.26.1
 protobuf==5.29.5
 pyarrow==21.0.0
@@ -59,6 +63,8 @@ Pygments==2.19.2
 PyJWT==2.10.1
 pymongo==4.15.4
 pyparsing==3.2.5
+pytest==9.0.2
+pytest-asyncio==1.3.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.1
 pytz==2025.2
@@ -69,6 +75,7 @@ rich==14.2.0
 rpds-py==0.29.0
 rsa==4.9.1
 schedule==1.2.2
+sentinels==1.1.1
 six==1.17.0
 smmap==5.0.2
 sniffio==1.3.1
@@ -87,3 +94,4 @@ uritemplate==4.2.0
 urllib3==2.5.0
 uvicorn==0.38.0
 watchdog==6.0.0
+win32_setctime==1.2.0

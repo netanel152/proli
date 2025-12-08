@@ -38,7 +38,8 @@ TRANS = {
         "disconnect": "🔒 יציאה מהמערכת",
         "btn_delete": "מחק ליד", "confirm_delete": "האם למחוק ליד זה לצמיתות?", "success_delete": "הליד נמחק בהצלחה", "edit_details": "עריכת פרטים", "edit_schedule": "שינוי מועד עבודה",
         "scheduler_title": "⏰ הגדרות תזמון אוטומטי", "sch_active": "פעיל?", "sch_run_time": "שעת ריצה יומית",
-        "sch_run_now": "הפעל כעת 🚀", "sch_triggered": "הפקודה נשלחה לתזמון!", "sch_save_config": "שמור הגדרות תזמון"
+        "sch_run_now": "הפעל כעת 🚀", "sch_triggered": "הפקודה נשלחה לתזמון!", "sch_save_config": "שמור הגדרות תזמון",
+        "refresh_btn": "רענן לידים"
     },
 "EN": {
         "dir": "ltr", "align": "left",
@@ -77,6 +78,7 @@ TRANS = {
         "disconnect": "🔒 Logout",
         "btn_delete": "Delete Lead", "confirm_delete": "Permanently delete this lead?", "success_delete": "Lead deleted successfully", "edit_details": "Edit Details", "edit_schedule": "Reschedule Job",
         "scheduler_title": "⏰ Auto-Scheduler Settings", "sch_active": "Active?", "sch_run_time": "Daily Run Time",
-        "sch_run_now": "Run Now 🚀", "sch_triggered": "Command sent to scheduler!", "sch_save_config": "Save Configuration"
+        "sch_run_now": "Run Now 🚀", "sch_triggered": "Command sent to scheduler!", "sch_save_config": "Save Configuration",
+        "refresh_btn": "Refresh Leads"
     }
 }

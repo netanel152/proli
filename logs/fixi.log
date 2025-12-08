@@ -1,0 +1,62 @@
+2025-12-09 00:13:22.360 | INFO     | app.services.logic:determine_current_pro:73 - 📍 Location Switch: Tel Aviv -> Yossi Plumber
+2025-12-09 00:13:22.360 | INFO     | app.services.logic:ask_fixi_ai:536 - 🤖 Bot Reply (Yossi Plumber): Hello from Yossi
+2025-12-09 00:13:22.375 | SUCCESS  | app.services.logic:handle_new_lead:432 - 💰 NEW LEAD! [DEAL: Fix leak tomorrow 10:00]
+2025-12-09 00:13:22.375 | INFO     | app.services.logic:ask_fixi_ai:536 - 🤖 Bot Reply (Yossi Plumber): Great, I booked you.
+2025-12-09 00:15:33.387 | INFO     | app.services.logic:determine_current_pro:73 - 📍 Location Switch: Tel Aviv -> Yossi Plumber
+2025-12-09 00:15:33.388 | INFO     | app.services.logic:ask_fixi_ai:536 - 🤖 Bot Reply (Yossi Plumber): Hello from Yossi
+2025-12-09 00:15:33.389 | SUCCESS  | app.services.logic:handle_new_lead:432 - 💰 NEW LEAD! Fix leak tomorrow 10:00
+2025-12-09 00:15:33.390 | INFO     | app.services.logic:ask_fixi_ai:536 - 🤖 Bot Reply (Yossi Plumber): Great, I booked you.
+2025-12-09 00:15:33.391 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: get work (User: Yossi Plumber)
+2025-12-09 00:15:33.394 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'GET_WORK'}
+2025-12-09 00:15:33.395 | INFO     | app.services.logic:ask_fixi_ai:464 - 🤖 Pro Command Reply: 🚀 **קיבלת עבודה חדשה!**
+📅 09/12 00:15
+📝 Fix leak tomorrow 10:00
+📞 לקוח: 972559999999
+
+העבודה סומנה אצלך כ-Booked. בהצלחה!
+2025-12-09 00:15:33.396 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: Job done (User: Yossi Plumber)
+2025-12-09 00:15:33.396 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'FINISH_JOB'}
+2025-12-09 00:16:16.980 | INFO     | app.services.logic:determine_current_pro:73 - 📍 Location Switch: Tel Aviv -> Yossi Plumber
+2025-12-09 00:16:16.982 | INFO     | app.services.logic:ask_fixi_ai:536 - 🤖 Bot Reply (Yossi Plumber): Hello from Yossi
+2025-12-09 00:16:16.983 | SUCCESS  | app.services.logic:handle_new_lead:432 - 💰 NEW LEAD! Fix leak tomorrow 10:00
+2025-12-09 00:16:16.985 | INFO     | app.services.logic:ask_fixi_ai:536 - 🤖 Bot Reply (Yossi Plumber): Great, I booked you.
+2025-12-09 00:16:16.985 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: get work (User: Yossi Plumber)
+2025-12-09 00:16:16.985 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'GET_WORK'}
+2025-12-09 00:16:16.985 | INFO     | app.services.logic:ask_fixi_ai:464 - 🤖 Pro Command Reply: 🚀 **קיבלת עבודה חדשה!**
+📅 09/12 00:16
+📝 Fix leak tomorrow 10:00
+📞 לקוח: 972559999999
+
+העבודה סומנה אצלך כ-Booked. בהצלחה!
+2025-12-09 00:16:16.985 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: Job done (User: Yossi Plumber)
+2025-12-09 00:16:16.985 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'FINISH_JOB'}
+2025-12-09 00:16:16.989 | INFO     | app.services.logic:ask_fixi_ai:464 - 🤖 Pro Command Reply: ✅ העבודה סומנה כהושלמה! שלחתי בקשת דירוג ללקוח.
+2025-12-09 00:16:16.989 | SUCCESS  | app.services.logic:handle_customer_rating:376 - ⭐ Rating 5 saved for Yossi Plumber
+2025-12-09 00:16:16.989 | INFO     | app.services.logic:ask_fixi_ai:457 - 🤖 Rating Reply: תודה רבה על הדירוג! ⭐ שמחנו לעזור.
+2025-12-09 00:28:58.842 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: Plumber in Tel Aviv (User: יוסי אינסטלציה)
+2025-12-09 00:28:58.843 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'UNKNOWN'}
+2025-12-09 00:28:58.844 | INFO     | app.services.logic:determine_current_pro:73 - 📍 Location Switch: Tel Aviv -> יוסי אינסטלציה
+2025-12-09 00:28:58.846 | INFO     | app.services.logic:ask_fixi_ai:536 - 🤖 Bot Reply (יוסי אינסטלציה): Hello from Yossi
+2025-12-09 00:28:58.846 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: I need help tomorrow at 10:00 (User: יוסי אינסטלציה)
+2025-12-09 00:28:58.848 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'UNKNOWN'}
+2025-12-09 00:28:58.853 | SUCCESS  | app.services.logic:handle_new_lead:432 - 💰 NEW LEAD! Fix leak tomorrow 10:00
+2025-12-09 00:28:58.854 | INFO     | app.services.logic:ask_fixi_ai:536 - 🤖 Bot Reply (יוסי אינסטלציה): Great, I booked you.
+2025-12-09 00:28:58.855 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: get work (User: יוסי אינסטלציה)
+2025-12-09 00:28:58.855 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'GET_WORK'}
+2025-12-09 00:28:58.856 | INFO     | app.services.logic:ask_fixi_ai:464 - 🤖 Pro Command Reply: 🚀 **קיבלת עבודה חדשה!**
+📅 09/12 00:28
+📝 Fix leak tomorrow 10:00
+📞 לקוח: 972524828796
+
+העבודה סומנה אצלך כ-Booked. בהצלחה!
+2025-12-09 00:28:58.856 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: Job done (User: יוסי אינסטלציה)
+2025-12-09 00:28:58.856 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'FINISH_JOB'}
+2025-12-09 00:28:58.856 | INFO     | app.services.logic:ask_fixi_ai:464 - 🤖 Pro Command Reply: ✅ העבודה סומנה כהושלמה! שלחתי בקשת דירוג ללקוח.
+2025-12-09 00:28:58.856 | SUCCESS  | app.services.logic:handle_customer_rating:376 - ⭐ Rating 5 saved for יוסי אינסטלציה
+2025-12-09 00:28:58.856 | INFO     | app.services.logic:ask_fixi_ai:457 - 🤖 Rating Reply: תודה רבה על הדירוג! ⭐ שמחנו לעזור.
+2025-12-09 00:39:22.868 | WARNING  | app.services.logic:ask_fixi_ai:541 - ⚠️ AI Rate Limit Reached (after retries)
+2025-12-09 00:39:23.693 | WARNING  | app.services.logic:ask_fixi_ai:541 - ⚠️ AI Rate Limit Reached (after retries)
+2025-12-09 00:39:24.404 | WARNING  | app.services.logic:ask_fixi_ai:541 - ⚠️ AI Rate Limit Reached (after retries)
+2025-12-09 00:39:24.967 | WARNING  | app.services.logic:ask_fixi_ai:541 - ⚠️ AI Rate Limit Reached (after retries)
+2025-12-09 00:39:25.425 | WARNING  | app.services.logic:ask_fixi_ai:541 - ⚠️ AI Rate Limit Reached (after retries)
+2025-12-09 00:39:25.920 | WARNING  | app.services.logic:ask_fixi_ai:541 - ⚠️ AI Rate Limit Reached (after retries)
