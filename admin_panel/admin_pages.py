@@ -40,7 +40,7 @@ def view_dashboard(T):
         # FIXED: use_container_width=True, remove width=None
         st.dataframe(
             df[[T["col_date"], T["col_client"], T["col_pro"], T["col_details"], T["col_status"]]], 
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
         
@@ -189,7 +189,7 @@ def view_schedule(T):
                     "is_taken": st.column_config.CheckboxColumn(T["sch_taken"], default=False)
                 },
                 num_rows="dynamic",
-                use_container_width=True,
+                width="stretch",
                 key=f"editor_{pro['_id']}_{selected_date}"
             )
             
@@ -434,10 +434,10 @@ def view_pros(T):
             c_info, c_actions = st.columns([3, 1])
             
             with c_info:
-                st.write(f"📍 **{T['areas']}:** {', '.join(p.get('service_areas', []))}")
-                st.write(f"🏷️ **{T['keywords']}:** {', '.join(p.get('keywords', [])[:5])}...")
-                st.write(f"📞 {p.get('phone_number')}")
-                st.write(f"⭐ {p.get('social_proof', {}).get('rating', 'N/A')}")
+                st.write(f":material/location_on: **{T['areas']}:** {', '.join(p.get('service_areas', []))}")
+                st.write(f":material/label: **{T['keywords']}:** {', '.join(p.get('keywords', [])[:5])}...")
+                st.write(f":material/phone: {p.get('phone_number')}")
+                st.write(f":material/star: {p.get('social_proof', {}).get('rating', 'N/A')}")
 
             with c_actions:
                 # Active Toggle
@@ -449,7 +449,7 @@ def view_pros(T):
                 st.divider()
 
                 # Delete Button
-                if st.button("🗑️", key=f"del_{p['_id']}", help="Delete Professional"):
+                if st.button("", icon=":material/delete:", key=f"del_{p['_id']}", help="Delete Professional"):
                     st.session_state[f"confirm_del_{p['_id']}"] = True
 
                 if st.session_state.get(f"confirm_del_{p['_id']}", False):
