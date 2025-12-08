@@ -69,8 +69,7 @@ async def scheduler_manager():
             await send_daily_reminders()
             settings_collection.update_one(
                 {"_id": "scheduler_config"},
-                {"$set": {"trigger_now": False, "last_run_date": datetime.now(IL_TZ).strftime("%Y-%m-%d")}}
-            )
+                {"$set": {"trigger_now": False, "last_run_date": datetime.now(IL_TZ).strftime("%Y-%m-%d")}})
             return
 
         # Active Check
@@ -93,8 +92,7 @@ async def scheduler_manager():
             
             settings_collection.update_one(
                 {"_id": "scheduler_config"},
-                {"$set": {"last_run_date": today_str}}
-            )
+                {"$set": {"last_run_date": today_str}})
 
     except Exception as e:
         print(f"❌ [Scheduler Manager Error] {e}")
