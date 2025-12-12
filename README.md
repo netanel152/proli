@@ -66,7 +66,7 @@
 
 ---
 
-## 📂 Project Structure | מבנה הפרויקט
+## 📂 Project Structure
 
 ```text
 D:\Projects\fixi-backend\
