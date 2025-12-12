@@ -3,51 +3,61 @@ import os
 import time
 import extra_streamlit_components as stx
 from datetime import datetime, timedelta
-import hashlib
+import bcrypt
 from config import TRANS
 
-# --- פונקציית עזר להצפנה (Hashing) ---
+# --- Security: Bcrypt Hash ---
 def make_hash(password):
-    """מייצר טביעת אצבע ייחודית לסיסמה (SHA-256)"""
-    return hashlib.sha256(password.encode()).hexdigest()
+    """Generates a salted bcrypt hash"""
+    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
-# --- מנהל הקוקיות (Singleton מתוקן) ---
+def check_hash(password, hashed):
+    """Verifies a password against a bcrypt hash"""
+    try:
+        return bcrypt.checkpw(password.encode(), hashed.encode())
+    except ValueError:
+        return False
+
+# --- Cookie Manager ---
 def get_manager():
-    # בדיקה אם המנהל כבר קיים בזיכרון כדי למנוע שגיאת מפתח כפול
     if "cookie_manager" not in st.session_state:
         st.session_state.cookie_manager = stx.CookieManager(key="fixi_auth_manager")
     return st.session_state.cookie_manager
 
 def check_password():
-    """
-    מנהל את תהליך ההתחברות בצורה מאובטחת.
-    """
     cookie_manager = get_manager()
-    
-    # קריאת כל הקוקיות
     cookies = cookie_manager.get_all()
     
-    # קביעת שפה לפי קוקי (או ברירת מחדל HE)
     saved_lang = cookies.get("fixi_lang", "HE")
     T_auth = TRANS.get(saved_lang, TRANS["HE"])
 
     cookie_token = cookies.get("fixi_auth_token")
     
+    # In production, ADMIN_PASSWORD should ideally be a stored hash.
+    # Here we treat the Env var as the 'Source of Truth'.
     real_password = os.getenv("ADMIN_PASSWORD", "admin123")
-    real_password_hash = make_hash(real_password)
     
-    # 1. בדיקה בזיכרון הרגעי (Session)
-    if st.session_state.get("authenticated", False):
-        return True
+    # Check if we are in the process of logging out
+    if st.session_state.get("logout_pending"):
+        # Explicitly skip cookie check this run to show the login form
+        # We perform the cleanup here to ensure next run acts normally
+        del st.session_state["logout_pending"]
+        
+        # Ensure session authentication is false
+        st.session_state["authenticated"] = False
+    else:
+        # 1. Session Cache Check
+        if st.session_state.get("authenticated", False):
+            return True
 
-    # 2. בדיקה בקוקי (מוצפן!)
-    if cookie_token == real_password_hash:
-        st.session_state["authenticated"] = True
-        return True
+        # 2. Cookie Check (Secure)
+        # The cookie contains a salted hash of the real password.
+        if cookie_token and check_hash(real_password, cookie_token):
+            st.session_state["authenticated"] = True
+            return True
 
-    # --- מסך התחברות ---
+    # --- Login Screen ---
     col1, col2, col3 = st.columns([1, 2, 1])
-    
     with col2:
         st.markdown("<br><br>", unsafe_allow_html=True)
         st.title("🔐 Fixi Admin")
@@ -59,15 +69,17 @@ def check_password():
             submitted = st.form_submit_button(T_auth["login_button"], type="primary")
             
             if submitted:
+                # Direct comparison since Env is plain text
                 if password == real_password:
                     st.session_state["authenticated"] = True
                     
                     if remember_me:
-                        # שמירת ה-HASH
+                        # Store a secure salted hash in the cookie
+                        secure_token = make_hash(real_password)
                         expires = datetime.now() + timedelta(days=7)
-                        cookie_manager.set("fixi_auth_token", real_password_hash, expires_at=expires)
+                        cookie_manager.set("fixi_auth_token", secure_token, expires_at=expires)
                     
-                    st.success("התחברת בהצלחה! טוען...")
+                    st.success("Connected!")
                     time.sleep(1)
                     st.rerun()
                 else:
@@ -76,19 +88,17 @@ def check_password():
     return False
 
 def logout(cookie_manager, T):
-    """כפתור התנתקות"""
     if st.sidebar.button(T["disconnect"]):
-        st.toast("מתנתק...", icon="👋")
-
+        st.toast("Disconnecting...", icon="👋")
+        
+        # Set flags to force logout state on next run
         st.session_state["authenticated"] = False
+        st.session_state["logout_pending"] = True
         
         try:
+            # Send command to frontend to delete cookie
             cookie_manager.delete("fixi_auth_token")
-        except KeyError:
-            pass # הקוקי כבר לא שם, הכל טוב
-        except Exception as e:
-            print(f"Error deleting cookie: {e}")
-
+        except: pass
+        
         time.sleep(0.5)
         st.rerun()
-        st.query_params.clear()
