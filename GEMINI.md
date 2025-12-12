@@ -1,99 +1,138 @@
-# Fixi Backend & Admin Panel - Context & Documentation
+# Fixi Backend & Admin Panel - AI Developer Context
 
 ## 1. Project Overview
-**Fixi** is an AI-powered CRM and scheduling automation platform for service professionals. It uses a dual-interface approach:
-1.  **WhatsApp Bot (User Facing):** Users interact via WhatsApp. The bot (powered by Google Gemini) handles inquiries, qualifies leads, and schedules appointments.
-2.  **Admin Panel (Manager Facing):** A web-based dashboard (Streamlit) for business owners to manage leads, professionals, and schedules.
+**Fixi** is an AI-powered CRM and scheduling automation platform designed for service professionals (e.g., plumbers, electricians). It facilitates interaction through two primary interfaces:
 
-## 2. Technical Architecture
+1.  **WhatsApp Bot (User Facing):**
+    *   **Interface:** Users chat via WhatsApp.
+    *   **Intelligence:** Powered by **Google Gemini** (Generative AI).
+    *   **Functionality:** Handles natural language inquiries, qualifies leads, identifies user intent (e.g., "I have a leak"), and autonomously schedules appointments based on real-time availability.
+    *   **Media:** Processes images and audio using Gemini's multimodal capabilities.
 
-### Tech Stack
-*   **Backend:** FastAPI (Python 3.10+)
-*   **Admin UI:** Streamlit
-*   **Database:** MongoDB (Atlas)
-*   **AI:** Google Gemini (Generative AI) via `google-generativeai`
-*   **Messaging:** WhatsApp via Green API
-*   **Scheduling:** APScheduler (Async)
+2.  **Admin Panel (Manager Facing):**
+    *   **Interface:** Web-based dashboard built with **Streamlit**.
+    *   **Functionality:** Allows business owners to view leads, manage service professionals' profiles, edit schedules (slots), and oversee system settings.
+    *   **Localization:** Supports Hebrew (RTL) and English.
+
+## 2. Technical Architecture & Tech Stack
+
+### Core Technologies
+*   **Language:** Python 3.10+
+*   **Web Framework:** **FastAPI** (Async, handling Webhooks)
+*   **Admin UI:** **Streamlit** (Rapid data app development)
+*   **Database:** **MongoDB** (Atlas) - using `pymongo` (sync) and `motor` (if applicable, currently `pymongo` appears primary).
+*   **AI Engine:** **Google Gemini** (`google-generativeai` SDK).
+*   **Messaging Provider:** **Green API** (WhatsApp wrapper).
+*   **Scheduling:** **APScheduler** (Background tasks, reminders).
+*   **Media Storage:** **Cloudinary** (Image/Audio hosting).
+*   **Logging:** **Loguru** (Structured logging).
+*   **Validation:** **Pydantic** (Data validation & settings).
 
 ### Data Flow
-1.  **Incoming Message:** WhatsApp Webhook -> `POST /webhook` (FastAPI)
-2.  **Processing:**
-    *   Background Task -> `process_message`
-    *   AI Logic -> `app.services.logic.ask_fixi_ai` (Gemini)
-    *   DB Interaction -> Check availability/leads in MongoDB
-3.  **Response:** Send reply via Green API
-4.  **Admin View:** Data updates in real-time on Streamlit dashboard
+1.  **Inbound:** WhatsApp Webhook -> `POST /webhook` (FastAPI `app/main.py`).
+2.  **Filtering:** Ignores group messages unless specified.
+3.  **Processing (Background):**
+    *   Message content is passed to `app.services.logic.ask_fixi_ai`.
+    *   **Context Assembly:** AI retrieves conversation history (`messages` collection) and relevant context (availability, pro details).
+    *   **LLM Call:** Gemini processes text/media and determines the response or tool call (e.g., `book_appointment`).
+4.  **Action:**
+    *   **Database:** Updates `leads`, `slots`, or `messages`.
+    *   **Response:** Sends text/media back via Green API.
+5.  **Visualization:** Admin Panel (`admin_panel/app.py`) reflects changes immediately by querying MongoDB.
 
 ## 3. Project Structure
 
 ```text
 D:\Projects\fixi-backend\
-├── app/                        # FastAPI Backend
-│   ├── main.py                 # Entry point, Webhook handler, Health check
-│   ├── scheduler.py            # APScheduler setup for daily reminders
+├── app/                            # FastAPI Backend Core
+│   ├── main.py                     # Entry point: Webhook endpoint, startup events
+│   ├── scheduler.py            # APScheduler configuration (Daily reminders)
 │   ├── core/
-│   │   ├── config.py           # Settings management (pydantic)
-│   │   └── database.py         # MongoDB connection & collections
+│   │   ├── config.py               # Pydantic Settings (Env vars)
+│   │   ├── database.py             # MongoDB connection, collection definitions
+│   │   └── logger.py               # Loguru configuration
 │   ├── services/
-│   │   └── logic.py            # Core AI logic & WhatsApp integration
+│   │   └── logic.py                # THE BRAIN: Gemini integration, prompt engineering, tool calls
 │   └── schemas/
-│       └── whatsapp.py         # Pydantic models for incoming webhooks
-├── admin_panel/                # Streamlit Admin Dashboard
-│   ├── app.py                  # Entry point (Sidebar, Lang, Auth)
-│   ├── pages.py                # UI Views (Dashboard, Schedule, Settings)
-│   ├── auth.py                 # Simple password-based auth
-│   └── components.py           # UI helpers (CSS, Chat bubbles)
-├── scripts/                    # Utility scripts (Seeding, Webhook Sim)
-├── requirements.txt            # Dependencies
-└── .env                        # Environment Variables (Required)
+│       └── whatsapp.py             # Pydantic models for Green API webhooks
+├── admin_panel/                    # Streamlit Admin Dashboard
+│   ├── app.py                      # Admin Entry point (Navigation, Auth check)
+│   ├── auth.py                     # Simple authentication logic
+│   ├── components.py               # UI widgets (Chat bubbles, styling)
+│   ├── config.py                   # Admin-specific config (Translations)
+│   ├── pages.py                    # Page Renderers: Dashboard, Schedule, Pros, Settings
+│   └── utils.py                    # Admin helper functions
+├── scripts/                        # Operational Scripts
+│   ├── check_models.py             # Verify Gemini models availability
+│   ├── clear_history.py            # Utility to wipe chat history
+│   ├── seed_db.py                  # CRITICAL: Populates DB with initial Pros/Slots for testing
+│   ├── simulate_webhook.py         # Test bot logic without real WhatsApp messages
+│   └── test_connection.py          # Connectivity check (Mongo, etc.)
+├── tests/                          # Pytest Suite
+│   ├── conftest.py                 # Fixtures (Mock DB, etc.)
+│   └── test_full_flow.py           # End-to-end flow testing
+├── .env                            # Environment Variables (Secrets)
+├── requirements.txt            # Python Dependencies
+└── Procfile                        # Deployment command (e.g., for Heroku)
 ```
 
-## 4. Key Components
+## 4. Setup & Development
 
-### Backend (`app/`)
-*   **`main.py`**: Initializes FastAPI. Handles `POST /webhook`. It filters group messages (`@g.us`) and dispatches processing to background tasks to prevent timeouts.
-*   **`services/logic.py`**: The "Brain". Contains `ask_fixi_ai` which builds the prompt for Gemini and handles the tool calls (function calling) for booking slots.
+### Environment Variables (`.env`)
+Create a `.env` file in the root directory with the following keys:
+```env
+# Database
+MONGO_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/?retryWrites=true&w=majority
 
-### Admin Panel (`admin_panel/`)
-*   **`app.py`**: Handles layout, sidebar navigation, and language switching (HE/EN). Checks authentication.
-*   **`pages.py`**: Contains the render functions for each page:
-    *   `view_dashboard`: Lead metrics and management.
-    *   `view_schedule`: Daily slot editor and bulk generator.
-    *   `view_pros`: CRUD for service professionals.
+# AI
+GEMINI_API_KEY=AIzaSy...
 
-### Database (MongoDB)
-Collections defined in `app/core/database.py`:
-*   `users`: Service professionals (store prompt, business info).
-*   `leads`: Potential clients generated from WhatsApp.
-*   `slots`: Calendar availability (Time slots).
-*   `messages`: Chat history.
-*   `settings`: System config (e.g., Scheduler run time).
+# WhatsApp (Green API)
+GREEN_API_ID=...
+GREEN_API_TOKEN=...
 
-## 5. Development & Running
+# Media (Cloudinary)
+CLOUDINARY_CLOUD_NAME=...
+CLOUDINARY_API_KEY=...
+CLOUDINARY_API_SECRET=...
 
-### Prerequisites
-*   Python 3.10+
-*   MongoDB Instance
-*   `.env` file with: `MONGO_URI`, `GEMINI_API_KEY`, `GREEN_API_ID`, `GREEN_API_TOKEN`
+# Security
+ADMIN_PASSWORD=...
+```
 
-### Running the System
-The system requires **two** concurrent processes:
+### Running the Application (Local)
+This system requires two concurrent processes:
 
-1.  **Backend Server:**
-    ```bash
+1.  **Backend (FastAPI):**
+    ```powershell
     uvicorn app.main:app --reload --port 8000
     ```
+    *Access API docs at: http://127.0.0.1:8000/docs*
 
-2.  **Admin Panel:**
-    ```bash
+2.  **Admin Panel (Streamlit):**
+    ```powershell
     streamlit run admin_panel/app.py
     ```
+    *Access UI at: http://localhost:8501*
 
-### Common Commands
-*   **Simulate Webhook:** `python scripts/simulate_webhook.py` (Great for testing without sending real WhatsApp messages)
-*   **Seed DB:** `python scripts/seed_db.py` (Populates initial data)
+### Testing & Verification
+*   **Run Tests:**
+    ```powershell
+    python -m pytest tests/
+    ```
+*   **Simulate Message:**
+    ```powershell
+    python scripts/simulate_webhook.py
+    ```
+    *Useful for debugging logic without sending real WhatsApp messages.*
+*   **Seed Database:**
+    ```powershell
+    python scripts/seed_db.py
+    ```
+    *Resets the database with test professionals and slots.*
 
-## 6. Conventions
-*   **Dates:** Store as UTC in Database. Convert to 'Asia/Jerusalem' for Display.
-*   **Async:** The backend is fully async (`async def`). Database calls use synchronous `pymongo` (watch out for blocking if load increases).
-*   **Localization:** Admin panel supports HE/EN via `config.TRANS`.
+## 5. Key Conventions & Rules
+*   **Date/Time:** Store all datetimes in **UTC**. Convert to **Asia/Jerusalem** only for display in the Admin Panel or WhatsApp messages.
+*   **Async/Sync:** FastAPI is async. MongoDB calls via `pymongo` are synchronous (be mindful of blocking). Streamlit is synchronous.
+*   **Localization:** The Admin Panel is bilingual. Text strings should use the mapping in `admin_panel/config.py`.
+*   **Logging:** Use `loguru` (`from loguru import logger`) instead of standard `logging`.
