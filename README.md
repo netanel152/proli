@@ -11,49 +11,58 @@
 ### 🚀 Core Features
 
 #### 🤖 AI WhatsApp Bot (User Facing)
-*   **Smart Routing:** Automatically routes conversations to the correct professional based on the user's location and keywords (powered by Google Gemini).
-*   **Availability Management:** Checks real-time calendar availability in MongoDB and books appointments autonomously.
-*   **Media Analysis:** Processes images and voice notes (e.g., a picture of a leak) using Gemini Vision & Audio capabilities.
-*   **Natural Conversation:** Handles inquiries, scheduling, and job completion commands naturally.
+
+- **Smart Routing:** Automatically routes conversations to the correct professional based on the user's location and keywords (powered by Google Gemini).
+- **Availability Management:** Checks real-time calendar availability in MongoDB and books appointments autonomously.
+- **Media Analysis:** Processes images and voice notes (e.g., a picture of a leak) using Gemini Vision & Audio capabilities.
+- **Natural Conversation:** Handles inquiries, scheduling, and job completion commands naturally.
 
 #### 📊 Admin Panel (Manager Facing)
-*   **Live Dashboard:** Real-time metrics on leads, active professionals, and revenue.
-*   **Lead Management:** Full CRUD capabilities for leads (status tracking, editing details).
-*   **Smart Schedule:**
-    *   **Daily Editor:** Granular control over specific time slots.
-    *   **Bulk Generator:** Auto-generate schedules for days/weeks with one click.
-*   **Professional Profiles:** Manage system prompts, pricing, service areas, and license details for each pro.
+
+- **Live Dashboard:** Real-time metrics on leads, active professionals, and revenue.
+- **Lead Management:** Full CRUD capabilities for leads (status tracking, editing details).
+- **Smart Schedule:**
+  - **Daily Editor:** Granular control over specific time slots.
+  - **Bulk Generator:** Auto-generate schedules for days/weeks with one click.
+- **Professional Profiles:** Manage system prompts, pricing, service areas, and license details for each pro.
 
 ### 🛠️ Tech Stack
-*   **Backend:** Python 3.12+, FastAPI
-*   **Frontend (Admin):** Streamlit
-*   **AI Engine:** Google Gemini (Generative AI)
-*   **Database:** MongoDB Atlas
-*   **Messaging:** WhatsApp (via Green API)
-*   **Media Storage:** Cloudinary
-*   **Deployment:** Docker / Heroku ready (Procfile included)
+
+- **Backend:** Python 3.12+, FastAPI
+- **Frontend (Admin):** Streamlit
+- **AI Engine:** Google Gemini (Generative AI)
+- **Database:** MongoDB Atlas
+- **Messaging:** WhatsApp (via Green API)
+- **Media Storage:** Cloudinary
+- **Deployment:** Docker / Heroku ready (Procfile included)
 
 ---
 
 <a name="hebrew"></a>
+
+<div dir="rtl">
 
 **Fixi** היא פלטפורמת אוטומציה וניהול יומן חכמה המיועדת לבעלי מקצוע (אינסטלטורים, חשמלאים, טכנאים). המערכת משלבת בוט וואטסאפ חכם לשיחה עם לקוחות יחד עם פאנל ניהול מתקדם לבעל העסק.
 
 ### 🚀 פיצ'רים מרכזיים
 
 #### 🤖 בוט וואטסאפ חכם (מול הלקוח)
-*   **ניתוב חכם:** מזהה אוטומטית את מיקום הלקוח וסוג התקלה ומעביר לבעל המקצוע המתאים (מבוסס Gemini AI).
-*   **ניהול יומן:** בודק זמינות בזמן אמת בבסיס הנתונים וקובע תורים באופן עצמאי מול הלקוח.
-*   **ניתוח מדיה:** יודע "לראות" תמונות (למשל נזילה) ו"לשמוע" הודעות קוליות כדי להבין את הבעיה.
-*   **שיחה טבעית:** מתנהל כמו עוזר אישי אנושי, מנומס ומקצועי.
+
+- **ניתוב חכם:** מזהה אוטומטית את מיקום הלקוח וסוג התקלה ומעביר לבעל המקצוע המתאים (מבוסס Gemini AI).
+- **ניהול יומן:** בודק זמינות בזמן אמת בבסיס הנתונים וקובע תורים באופן עצמאי מול הלקוח.
+- **ניתוח מדיה:** יודע "לראות" תמונות (למשל נזילה) ו"לשמוע" הודעות קוליות כדי להבין את הבעיה.
+- **שיחה טבעית:** מתנהל כמו עוזר אישי אנושי, מנומס ומקצועי.
 
 #### 📊 פאנל ניהול (מול המנהל)
-*   **דשבורד בזמן אמת:** צפייה בלידים חדשים, סטטוס טיפול וגרפים.
-*   **ניהול לידים:** עריכה, עדכון סטטוסים ומעקב אחר פניות.
-*   **ניהול יומן:**
-    *   **עורך יומי:** שליטה מלאה על כל שעה ביום.
-    *   **מחולל אוטומטי:** יצירת יומן עבודה לשבוע שלם בלחיצת כפתור.
-*   **פרופילים:** הגדרת מחירים, אזורי שירות והנחיות מיוחדות לכל בעל מקצוע.
+
+- **דשבורד בזמן אמת:** צפייה בלידים חדשים, סטטוס טיפול וגרפים.
+- **ניהול לידים:** עריכה, עדכון סטטוסים ומעקב אחר פניות.
+- **ניהול יומן:**
+  - **עורך יומי:** שליטה מלאה על כל שעה ביום.
+  - **מחולל אוטומטי:** יצירת יומן עבודה לשבוע שלם בלחיצת כפתור.
+- **פרופילים:** הגדרת מחירים, אזורי שירות והנחיות מיוחדות לכל בעל מקצוע.
+
+</div>
 
 ---
 
@@ -81,6 +90,7 @@ D:\Projects\fixi-backend\
 ## ⚙️ Installation & Setup
 
 1.  **Clone & Environment:**
+
     ```bash
     git clone <url>
     cd fixi-backend
@@ -91,6 +101,7 @@ D:\Projects\fixi-backend\
 
 2.  **Configuration (`.env`):**
     Create a `.env` file with the following:
+
     ```env
     MONGO_URI=mongodb+srv://...
     GEMINI_API_KEY=...
@@ -113,20 +124,25 @@ D:\Projects\fixi-backend\
 You need to run **two** separate terminals:
 
 **1. Backend Server (FastAPI):**
+
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
-*   Listens for WhatsApp Webhooks at `/webhook`.
+
+- Listens for WhatsApp Webhooks at `/webhook`.
 
 **2. Admin Panel (Streamlit):**
+
 ```bash
 streamlit run admin_panel/app.py
 ```
-*   Opens the UI in your browser (usually `http://localhost:8501`).
+
+- Opens the UI in your browser (usually `http://localhost:8501`).
 
 ## 🧪 Testing
 
 Run the full automated test suite to verify routing, booking, and logic:
+
 ```bash
 python -m pytest tests/test_full_flow.py
 ```
