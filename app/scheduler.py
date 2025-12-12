@@ -11,10 +11,8 @@ IL_TZ = pytz.timezone('Asia/Jerusalem')
 async def send_daily_reminders():
     print(f"⏰ [Scheduler] Starting daily reminders check at {datetime.now(IL_TZ)}")
     
-    # Query users_collection for active pros
-    active_pros = list(users_collection.find({"is_active": True}))
+    active_pros = await users_collection.find({"is_active": True}).to_list(length=None)
     
-    # Define Today
     now_il = datetime.now(IL_TZ)
     today_start = now_il.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
@@ -23,12 +21,13 @@ async def send_daily_reminders():
     end_utc = today_end.astimezone(pytz.utc)
     
     for pro in active_pros:
-        # Find leads with status='booked' scheduled for Today
-        booked_jobs = list(leads_collection.find({
+        booked_jobs_cursor = leads_collection.find({
             "pro_id": pro["_id"],
             "status": "booked",
             "created_at": {"$gte": start_utc, "$lt": end_utc}
-        }).sort("created_at", 1))
+        }).sort("created_at", 1)
+        
+        booked_jobs = await booked_jobs_cursor.to_list(length=None)
         
         if booked_jobs:
             msg = f"☀️ *בוקר טוב {pro['business_name']}!* \nהנה העבודות שלך להיום ({today_start.strftime('%d/%m')}):"
@@ -51,55 +50,58 @@ async def send_daily_reminders():
 
 async def scheduler_manager():
     """
-    Smart manager that checks DB config every minute to handle:
-    1. 'Run Now' triggers.
-    2. Daily scheduled runs (dynamic time).
+    Race-Condition Free Manager:
+    Uses atomic 'find_one_and_update' to check availability and lock the run in one step.
     """
     try:
-        config = settings_collection.find_one({"_id": "scheduler_config"})
-        if not config:
-            # Create default config if missing
-            config = {"_id": "scheduler_config", "run_time": "08:00", "is_active": True, "last_run_date": None}
-            settings_collection.insert_one(config)
-            print("⚠️ [Scheduler] Created default config.")
+        # 1. Ensure Config Exists (Upsert)
+        await settings_collection.update_one(
+            {"_id": "scheduler_config"},
+            {"$setOnInsert": {"run_time": "08:00", "is_active": True, "last_run_date": None}},
+            upsert=True
+        )
 
-        # Manual Trigger Check
-        if config.get("trigger_now", False):
-            print("🚀 [Scheduler] Manual trigger detected!")
+        # 2. Check for Manual Trigger (Atomic)
+        # If trigger_now is True, set it to False and return the doc.
+        manual_trigger = await settings_collection.find_one_and_update(
+            {"_id": "scheduler_config", "trigger_now": True},
+            {"$set": {"trigger_now": False, "last_run_date": datetime.now(IL_TZ).strftime("%Y-%m-%d")}})
+        
+        if manual_trigger:
+            print("🚀 [Scheduler] Manual trigger locked & executing!")
             await send_daily_reminders()
-            settings_collection.update_one(
-                {"_id": "scheduler_config"},
-                {"$set": {"trigger_now": False, "last_run_date": datetime.now(IL_TZ).strftime("%Y-%m-%d")}})
             return
 
-        # Active Check
-        if not config.get("is_active", True):
-            return
-
-        # Schedule Check
+        # 3. Scheduled Run (Atomic Check-and-Lock)
         now_il = datetime.now(IL_TZ)
         current_time_str = now_il.strftime("%H:%M")
         today_str = now_il.strftime("%Y-%m-%d")
-        
-        target_time = config.get("run_time", "08:00")
-        last_run = config.get("last_run_date")
 
-        # If we haven't run today AND current time >= target time
-        # (Using >= handles cases where the scheduler might miss the exact minute slightly)
-        if last_run != today_str and current_time_str >= target_time:
-            print(f"⏰ [Scheduler] Time to run! ({current_time_str} >= {target_time})")
+        # Atomic Query:
+        # Find config WHERE:
+        # - Active is True
+        # - Last Run is NOT today
+        # - Current Time >= Run Time
+        # AND Update: Set last_run to today.
+        
+        result = await settings_collection.find_one_and_update(
+            {
+                "_id": "scheduler_config",
+                "is_active": True,
+                "last_run_date": {"$ne": today_str},
+                "run_time": {"$lte": current_time_str}
+            },
+            {"$set": {"last_run_date": today_str}})
+
+        if result:
+            print(f"⏰ [Scheduler] Time to run! Locked job for {today_str}.")
             await send_daily_reminders()
-            
-            settings_collection.update_one(
-                {"_id": "scheduler_config"},
-                {"$set": {"last_run_date": today_str}})
 
     except Exception as e:
         print(f"❌ [Scheduler Manager Error] {e}")
 
 def start_scheduler():
     scheduler = AsyncIOScheduler()
-    # Run the manager every 60 seconds
     scheduler.add_job(
         scheduler_manager,
         IntervalTrigger(seconds=60),
@@ -107,4 +109,4 @@ def start_scheduler():
         replace_existing=True
     )
     scheduler.start()
-    print("🚀 APScheduler Started (Dynamic Manager Mode)!")
+    print("🚀 APScheduler Started (Async Motor Mode)!")
