@@ -5,7 +5,6 @@
 ---
 
 <a name="english"></a>
-## 🇬🇧 English
 
 **Fixi** is a smart CRM and scheduling automation platform designed for service professionals (plumbers, electricians, technicians). It seamlessly combines a **WhatsApp AI Bot** for customer interaction with a robust **Admin Panel** for business management.
 
@@ -37,7 +36,6 @@
 ---
 
 <a name="hebrew"></a>
-## 🇮🇱 עברית
 
 **Fixi** היא פלטפורמת אוטומציה וניהול יומן חכמה המיועדת לבעלי מקצוע (אינסטלטורים, חשמלאים, טכנאים). המערכת משלבת בוט וואטסאפ חכם לשיחה עם לקוחות יחד עם פאנל ניהול מתקדם לבעל העסק.
 
