@@ -1,8 +1,5 @@
 import streamlit as st
-from pymongo import MongoClient
-import os
-import sys
-from datetime import datetime, timedelta
+from app.core.database import sync_db
 from dotenv import load_dotenv
 import pytz
 
@@ -12,18 +9,12 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 load_dotenv(os.path.join(parent_dir, ".env"))
 
-# חיבור ל-DB
-@st.cache_resource
-def init_connection():
-    return MongoClient(os.getenv("MONGO_URI"))
-
-client = init_connection()
-db = client.fixi_db
-users_collection = db.users
-leads_collection = db.leads
-messages_collection = db.messages
-slots_collection = db.slots
-settings_collection = db.settings
+# חיבור ל-DB - שימוש בחיבור הסינכרוני המרכזי
+users_collection = sync_db.users
+leads_collection = sync_db.leads
+messages_collection = sync_db.messages
+slots_collection = sync_db.slots
+settings_collection = sync_db.settings
 
 # עזרי לוגיקה
 def generate_system_prompt(name, profession, areas, prices):

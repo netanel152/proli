@@ -34,8 +34,8 @@ async def test_full_lifecycle(mock_db, monkeypatch):
         "keywords": ["plumber", "water"],
         "system_prompt": "You are Yossi."
     }
-    mock_db.users.insert_one(pro_data)
-    pro = mock_db.users.find_one({"business_name": "יוסי אינסטלציה"})
+    await mock_db.users.insert_one(pro_data)
+    pro = await mock_db.users.find_one({"business_name": "יוסי אינסטלציה"})
     pro_id_str = str(pro["_id"])
     pro_chat_id = "972524828796@c.us"
     user_chat_id = "972501234567@c.us"
@@ -48,7 +48,8 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     resp1 = await ask_fixi_ai("I need a plumber in Tel Aviv", user_chat_id)
     
     # Assert correct pro assigned in message history
-    last_msg = list(mock_db.messages.find({"chat_id": user_chat_id}))[-1]
+    messages = await mock_db.messages.find({"chat_id": user_chat_id}).to_list(length=None)
+    last_msg = messages[-1]
     assert last_msg["pro_id"] == pro["_id"]
     assert "Yossi" in resp1
 
@@ -59,7 +60,7 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     resp2 = await ask_fixi_ai("Book me for tomorrow 10:00", user_chat_id)
     
     # Assert Lead Created
-    lead = mock_db.leads.find_one({"chat_id": user_chat_id, "status": "New"})
+    lead = await mock_db.leads.find_one({"chat_id": user_chat_id, "status": "New"})
     assert lead is not None
     assert "Fix leak" in lead["details"]
 
@@ -70,7 +71,7 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     resp3 = await ask_fixi_ai("get work", pro_chat_id)
     
     assert "קיבלת עבודה חדשה" in resp3
-    updated_lead = mock_db.leads.find_one({"_id": lead["_id"]})
+    updated_lead = await mock_db.leads.find_one({"_id": lead["_id"]})
     assert updated_lead["status"] == "booked"
     assert updated_lead["pro_id"] == pro["_id"]
 
@@ -80,17 +81,17 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     
     # Insert some slots to block
     tomorrow = datetime.now(pytz.utc) + timedelta(days=1)
-    mock_db.slots.insert_one({
+    await mock_db.slots.insert_one({
         "pro_id": pro["_id"],
         "start_time": tomorrow,
         "is_taken": False
     })
     
     resp4 = await ask_fixi_ai("I am on vacation tomorrow", pro_chat_id)
-    assert "blocked your schedule" in resp4
+    assert "חסמתי לך" in resp4
     
     # Verify slots blocked
-    slot = mock_db.slots.find_one({"pro_id": pro["_id"]})
+    slot = await mock_db.slots.find_one({"pro_id": pro["_id"]})
     assert slot["is_taken"] is True
 
     # 6. PRO: "Finish Job" (Completion)
@@ -98,9 +99,9 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_5))
     
     resp5 = await ask_fixi_ai("Job done", pro_chat_id)
-    assert "סומנה כהושלמה" in resp5
+    assert "העבודה הושלמה" in resp5
     
-    completed_lead = mock_db.leads.find_one({"_id": lead["_id"]})
+    completed_lead = await mock_db.leads.find_one({"_id": lead["_id"]})
     assert completed_lead["status"] == "completed"
     assert completed_lead["waiting_for_rating"] is True
 
@@ -109,13 +110,14 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     assert "תודה" in resp6
     
     # Verify Rating
-    pro_updated = mock_db.users.find_one({"_id": pro["_id"]})
+    pro_updated = await mock_db.users.find_one({"_id": pro["_id"]})
     assert pro_updated["social_proof"]["review_count"] == 1
 
 @pytest.mark.asyncio
 async def test_pro_block_command(mock_db, monkeypatch):
     # Setup Pro
-    pro_id = mock_db.users.insert_one({"phone_number": "123456", "business_name": "TestPro"}).inserted_id
+    result = await mock_db.users.insert_one({"phone_number": "123456", "business_name": "TestPro"})
+    pro_id = result.inserted_id
     chat_id = "123456@c.us"
     
     # Create Slot at 16:00 UTC
@@ -123,7 +125,7 @@ async def test_pro_block_command(mock_db, monkeypatch):
     target_time_il = now.replace(hour=16, minute=0, second=0, microsecond=0)
     target_time_utc = target_time_il.astimezone(pytz.utc)
     
-    mock_db.slots.insert_one({
+    await mock_db.slots.insert_one({
         "pro_id": pro_id,
         "start_time": target_time_utc,
         "is_taken": False
@@ -138,13 +140,14 @@ async def test_pro_block_command(mock_db, monkeypatch):
     resp = await ask_fixi_ai("block 16:00", chat_id)
     
     assert "חסמתי לך" in resp
-    slot = mock_db.slots.find_one({"pro_id": pro_id})
+    slot = await mock_db.slots.find_one({"pro_id": pro_id})
     assert slot["is_taken"] is True
 
 @pytest.mark.asyncio
 async def test_pro_show_schedule(mock_db, monkeypatch):
     # Setup Pro
-    pro_id = mock_db.users.insert_one({"phone_number": "123456", "business_name": "TestPro"}).inserted_id
+    result = await mock_db.users.insert_one({"phone_number": "123456", "business_name": "TestPro"})
+    pro_id = result.inserted_id
     chat_id = "123456@c.us"
     
     # Mock the leads_collection.find logic to avoid mongomock datetime query issues
@@ -164,12 +167,11 @@ async def test_pro_show_schedule(mock_db, monkeypatch):
     # The code calls: leads_collection.find(...).sort(...)
     # So we need to mock the chain
     mock_cursor = MagicMock()
-    mock_cursor.__iter__.return_value = [mock_lead] # Iteration returns the list
+    mock_cursor.to_list = AsyncMock(return_value=[mock_lead]) # to_list is async
     
-    # find() returns the cursor (which is also the sort result in this chain usually, 
-    # but in pymongo find() returns Cursor, Cursor.sort() returns Cursor)
+    # find() returns the cursor, sort() returns the cursor
     mock_leads_collection.find.return_value = mock_cursor
-    mock_cursor.sort.return_value = [mock_lead] # sort() returns list/cursor. We return list for simplicity if iterated.
+    mock_cursor.sort.return_value = mock_cursor
     
     # Patch it in app.services.logic
     monkeypatch.setattr("app.services.logic.leads_collection", mock_leads_collection)

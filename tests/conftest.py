@@ -1,5 +1,5 @@
 import pytest
-import mongomock
+from mongomock_motor import AsyncMongoMockClient
 from unittest.mock import AsyncMock, MagicMock
 import os
 import sys
@@ -9,7 +9,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 @pytest.fixture(scope="module")
 def mock_db():
-    return mongomock.MongoClient().fixi_db
+    return AsyncMongoMockClient().fixi_db
 
 @pytest.fixture(autouse=True)
 def patch_dependencies(monkeypatch, mock_db):
