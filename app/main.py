@@ -22,8 +22,8 @@ def health_check():
 
 @app.post("/webhook")
 async def handle_incoming_message(payload: WebhookPayload, background_tasks: BackgroundTasks):
-    # 1. סינון ראשוני: רק הודעות נכנסות
-    if payload.typeWebhook != "incomingMessageReceived":
+    # 1. סינון ראשוני: רק הודעות נכנסות או יוצאות
+    if payload.typeWebhook not in ["incomingMessageReceived", "outgoingMessageReceived"]:
         return {"status": "ignored"}
     
     if not payload.senderData:

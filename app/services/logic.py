@@ -408,7 +408,7 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         await save_message(chat_id, "user", log_text, current_pro["_id"])
         
         sys_prompt = await get_dynamic_prompt(current_pro)
-        model = genai.GenerativeModel('gemini-2.0-flash', system_instruction=sys_prompt)
+        model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=sys_prompt)
         chat = model.start_chat(history=history)
         
         content_parts = []
