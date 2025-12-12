@@ -70,3 +70,8 @@
 2025-12-09 01:40:07.247 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'UNKNOWN'}
 2025-12-09 01:40:23.054 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: עבודה (User: יוסי אינסטלציה)
 2025-12-09 01:40:23.162 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'UNKNOWN'}
+2025-12-09 01:48:18.912 | WARNING  | app.services.logic:ask_fixi_ai:541 - ⚠️ AI Rate Limit Reached (after retries)
+2025-12-09 01:48:34.766 | WARNING  | app.services.logic:ask_fixi_ai:541 - ⚠️ AI Rate Limit Reached (after retries)
+2025-12-09 01:49:05.083 | INFO     | app.services.logic:handle_pro_command:177 - 👨‍🔧 Pro Command Check: avoda (User: יוסי אינסטלציה)
+2025-12-09 01:49:05.556 | INFO     | app.services.logic:handle_pro_command:181 - 🧠 AI Decoded: {'intent': 'UNKNOWN'}
+2025-12-09 01:57:17.098 | WARNING  | app.services.logic:ask_fixi_ai:541 - ⚠️ AI Rate Limit Reached (after retries)

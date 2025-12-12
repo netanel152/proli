@@ -146,13 +146,14 @@ async def analyze_pro_intent(text: str):
     3. SHOW: "my schedule", "yoman", "matay panuy", "torim", "luz".
     4. FINISH_JOB: "finished", "sayamti", "job done", "close ticket", "done with client".
     5. GET_WORK: "get work", "tavi avoda","avoda", "lead", "give me job", "avoda hadasha".
-    6. UNKNOWN: regular chat.
+    6. VACATION: "vacation", "hofesh", "holidays", "off until".
+    7. UNKNOWN: regular chat.
 
     **Logic:**
     - If hour requested (e.g. 10) is smaller than current hour ({current_hour}) -> Assume TOMORROW.
     - "4" usually means 16:00 (4 PM) if said in the afternoon, but prefer 24h format. 
     
-    Output JSON: {{ "intent": "BLOCK"|"FREE"|"SHOW"|"FINISH_JOB"|"GET_WORK"|"UNKNOWN", "hour": int, "day": "TODAY"|"TOMORROW" }}
+    Output JSON: {{ "intent": "BLOCK"|"FREE"|"SHOW"|"FINISH_JOB"|"GET_WORK"|"VACATION"|"UNKNOWN", "hour": int, "day": "TODAY"|"TOMORROW" }}
     """
     try:
         model = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
@@ -325,6 +326,30 @@ async def handle_pro_command(chat_id: str, text: str):
             f"העבודה סומנה אצלך כ-Booked. בהצלחה!"
         )
         return msg
+
+    elif intent == "VACATION":
+        now_il = datetime.now(IL_TZ)
+        target_date = now_il
+        
+        if parsed.get("day") == "TOMORROW":
+            target_date += timedelta(days=1)
+            
+        day_start = target_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1)
+        
+        start_utc = day_start.astimezone(pytz.utc)
+        end_utc = day_end.astimezone(pytz.utc)
+        
+        slots_collection.update_many(
+            {
+                "pro_id": pro["_id"],
+                "start_time": {"$gte": start_utc, "$lt": end_utc}
+            },
+            {"$set": {"is_taken": True}}
+        )
+        
+        display_date = day_start.strftime("%d/%m")
+        return f"🏝️ Have fun! I blocked your schedule for {display_date}."
 
     return None
 
