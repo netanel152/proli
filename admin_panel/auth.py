@@ -35,7 +35,11 @@ def check_password():
     
     # In production, ADMIN_PASSWORD should ideally be a stored hash.
     # Here we treat the Env var as the 'Source of Truth'.
-    real_password = os.getenv("ADMIN_PASSWORD", "admin123")
+    real_password = os.getenv("ADMIN_PASSWORD")
+
+    if not real_password:
+        st.error("FATAL: ADMIN_PASSWORD environment variable is not set. Application cannot start.")
+        st.stop()
     
     # Check if we are in the process of logging out
     if st.session_state.get("logout_pending"):
