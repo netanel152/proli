@@ -1,20 +1,27 @@
 import streamlit as st
-from app.core.database import sync_db
+from pymongo import MongoClient
+import os
+import sys  # <--- התיקון: הוספנו את זה
+import certifi # למניעת קריסות SSL
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import pytz
 
-# טעינת סביבה
+# Load environment variables
 current_dir = os.path.dirname(os.path.abspath(__file__))
 parent_dir = os.path.dirname(current_dir)
 sys.path.append(parent_dir)
 load_dotenv(os.path.join(parent_dir, ".env"))
 
-# חיבור ל-DB - שימוש בחיבור הסינכרוני המרכזי
-users_collection = sync_db.users
-leads_collection = sync_db.leads
-messages_collection = sync_db.messages
-slots_collection = sync_db.slots
-settings_collection = sync_db.settings
+# Standalone MongoDB Connection for Admin Panel
+client = MongoClient(os.getenv("MONGO_URI"), tlsCAFile=certifi.where())
+db = client.fixi_db # Assuming 'fixi_db' is your database name
+
+users_collection = db.users
+leads_collection = db.leads
+messages_collection = db.messages
+slots_collection = db.slots
+settings_collection = db.settings
 
 # עזרי לוגיקה
 def generate_system_prompt(name, profession, areas, prices):
