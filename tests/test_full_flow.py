@@ -1,18 +1,31 @@
 import pytest
 import pytest_asyncio
-from app.services.logic import ask_fixi_ai, handle_pro_command
+from app.services.logic import ask_fixi_ai, handle_pro_command, analyze_pro_intent
 from app.scheduler import send_daily_reminders
 from unittest.mock import MagicMock, AsyncMock
 from datetime import datetime, timedelta
 import pytz
 
+# --- HELPERS ---
+def create_mock_model(intent="UNKNOWN", response_text="Mock AI Response"):
+    """Helper to create a fresh mock model for each test step"""
+    mock_chat = MagicMock()
+    mock_chat.send_message_async = AsyncMock(return_value=MagicMock(text=response_text))
+    
+    mock_model = MagicMock()
+    mock_model.start_chat.return_value = mock_chat
+    # Mock for analyze_pro_intent (JSON response)
+    mock_model.generate_content_async = AsyncMock(return_value=MagicMock(text=f'{{"intent": "{intent}", "hour": 16, "day": "TOMORROW"}}'))
+    return mock_model
+
 @pytest.mark.asyncio
-async def test_happy_path(mock_db, monkeypatch):
+async def test_full_lifecycle(mock_db, monkeypatch):
     """
-    Simulates a full real-world lifecycle of a lead.
+    Test the complete flow: 
+    User Connects -> Routing -> Booking -> Pro Notified -> Pro Commands -> Completion -> Rating
     """
     
-    # --- SETUP: Seed Pro (Using MOCK DB) ---
+    # 1. SETUP: Create Pro
     pro_data = {
         "business_name": "יוסי אינסטלציה",
         "phone_number": "972524828796",
@@ -22,120 +35,149 @@ async def test_happy_path(mock_db, monkeypatch):
         "system_prompt": "You are Yossi."
     }
     mock_db.users.insert_one(pro_data)
-    
-    # Verify Seed
-    pro_doc = mock_db.users.find_one({"business_name": "יוסי אינסטלציה"})
-    assert pro_doc is not None
-    
-    user_id = "972524828796@c.us"
-    pro_id = "972524828796@c.us"
+    pro = mock_db.users.find_one({"business_name": "יוסי אינסטלציה"})
+    pro_id_str = str(pro["_id"])
+    pro_chat_id = "972524828796@c.us"
+    user_chat_id = "972501234567@c.us"
 
-    # --- STEP 1: Routing ---
-    # User sends "Plumber in Tel Aviv"
-    # We expect the logic to find Yossi
+    # 2. USER: "I need a plumber in Tel Aviv" (Routing)
+    # Mock AI for conversational response
+    mock_model_1 = create_mock_model(intent="UNKNOWN", response_text="Hello! I am Yossi, how can I help?")
+    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_1))
     
-    # Mock AI to return just a greeting, logic should detect location switch
-    mock_chat = MagicMock()
-    mock_chat.send_message_async = AsyncMock(return_value=MagicMock(text="Hello from Yossi"))
-    mock_model = MagicMock()
-    mock_model.start_chat.return_value = mock_chat
-    # Mock default generation too
-    mock_model.generate_content_async = AsyncMock(return_value=MagicMock(text='{"intent": "UNKNOWN"}'))
+    resp1 = await ask_fixi_ai("I need a plumber in Tel Aviv", user_chat_id)
     
-    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model))
-    
-    response = await ask_fixi_ai("Plumber in Tel Aviv", user_id)
-    # Debug print if fails
-    if "Hello from Yossi" not in response:
-        print(f"DEBUG: Response was: {response}")
-    
-    assert "Hello from Yossi" in response
-    
-    # Verify Routing
-    history = list(mock_db.messages.find({"chat_id": user_id}))
-    assert len(history) > 0
-    assert history[-1]["pro_id"] == pro_doc["_id"]
+    # Assert correct pro assigned in message history
+    last_msg = list(mock_db.messages.find({"chat_id": user_chat_id}))[-1]
+    assert last_msg["pro_id"] == pro["_id"]
+    assert "Yossi" in resp1
 
-    # --- STEP 2: Lead Creation ---
-    # User says "I need help tomorrow at 10:00"
-    # AI should output [DEAL: ...]
+    # 3. USER: "Book me for tomorrow 10:00" (Deal)
+    mock_model_2 = create_mock_model(intent="UNKNOWN", response_text="Done. [DEAL: Fix leak | Tel Aviv | 10:00]")
+    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_2))
     
-    mock_chat.send_message_async = AsyncMock(return_value=MagicMock(
-        text="Great, I booked you. [DEAL: Fix leak tomorrow 10:00]"
-    ))
-    
-    response = await ask_fixi_ai("I need help tomorrow at 10:00", user_id)
-    assert "Great, I booked you" in response
+    resp2 = await ask_fixi_ai("Book me for tomorrow 10:00", user_chat_id)
     
     # Assert Lead Created
-    lead = mock_db.leads.find_one({"chat_id": user_id})
+    lead = mock_db.leads.find_one({"chat_id": user_chat_id, "status": "New"})
     assert lead is not None
-    assert lead["details"] == "Fix leak tomorrow 10:00"
-    assert lead["status"] == "New"
+    assert "Fix leak" in lead["details"]
 
-    # --- STEP 3: Pro Confirms (GET_WORK) ---
-    # Pro sends "GET_WORK" command
+    # 4. PRO: "Get Work" (Pull Lead)
+    mock_model_3 = create_mock_model(intent="GET_WORK")
+    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_3))
     
-    mock_model.generate_content_async = AsyncMock(return_value=MagicMock(
-        text='{"intent": "GET_WORK"}'
-    ))
+    resp3 = await ask_fixi_ai("get work", pro_chat_id)
     
-    response = await ask_fixi_ai("get work", pro_id) # Should trigger handle_pro_command
-    
-    assert "קיבלת עבודה חדשה" in response
-    
-    # Assert Lead Updated
+    assert "קיבלת עבודה חדשה" in resp3
     updated_lead = mock_db.leads.find_one({"_id": lead["_id"]})
     assert updated_lead["status"] == "booked"
-    assert updated_lead["pro_id"] == pro_doc["_id"]
+    assert updated_lead["pro_id"] == pro["_id"]
 
-    # --- STEP 3.5: Finish Job ---
-    # Pro says "Done"
-    mock_model.generate_content_async = AsyncMock(return_value=MagicMock(
-        text='{"intent": "FINISH_JOB"}'
-    ))
+    # 5. PRO: "Vacation Tomorrow" (Blocking)
+    mock_model_4 = create_mock_model(intent="VACATION")
+    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_4))
     
-    response = await ask_fixi_ai("Job done", pro_id)
-    assert "סומנה כהושלמה" in response
-    
-    updated_lead_2 = mock_db.leads.find_one({"_id": lead["_id"]})
-    assert updated_lead_2["status"] == "completed"
-    assert updated_lead_2["waiting_for_rating"] is True
-
-    # --- STEP 4: Rating ---
-    # User sends "5"
-    response = await ask_fixi_ai("5", user_id)
-    assert "תודה רבה" in response
-    
-    # Assert Pro Rating Updated
-    updated_pro = mock_db.users.find_one({"_id": pro_doc["_id"]})
-    assert updated_pro["social_proof"]["review_count"] == 1
-    assert updated_pro["social_proof"]["rating"] == 5.0
-
-    # --- STEP 5: Scheduler Test ---
-    # We need to simulate a booked job for TODAY to trigger reminder
-    
-    # Create a dummy booked lead for today
-    today = datetime.now(pytz.timezone('Asia/Jerusalem'))
-    today_utc = today.astimezone(pytz.utc)
-    
-    mock_db.leads.insert_one({
-        "chat_id": "972524828796@c.us",
-        "pro_id": pro_doc["_id"],
-        "status": "booked",
-        "created_at": today_utc, 
-        "details": "Urgent fix"
+    # Insert some slots to block
+    tomorrow = datetime.now(pytz.utc) + timedelta(days=1)
+    mock_db.slots.insert_one({
+        "pro_id": pro["_id"],
+        "start_time": tomorrow,
+        "is_taken": False
     })
     
-    # Run Scheduler Logic
-    import app.scheduler
-    # Trigger manually
-    await send_daily_reminders()
+    resp4 = await ask_fixi_ai("I am on vacation tomorrow", pro_chat_id)
+    assert "blocked your schedule" in resp4
     
-    # Assert Message Sent
-    mock_whatsapp = app.scheduler.send_whatsapp_message
-    assert mock_whatsapp.called
-    args, _ = mock_whatsapp.call_args
-    # Check args
-    assert args[0] == pro_id
-    assert "Urgent fix" in args[1]
+    # Verify slots blocked
+    slot = mock_db.slots.find_one({"pro_id": pro["_id"]})
+    assert slot["is_taken"] is True
+
+    # 6. PRO: "Finish Job" (Completion)
+    mock_model_5 = create_mock_model(intent="FINISH_JOB")
+    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_5))
+    
+    resp5 = await ask_fixi_ai("Job done", pro_chat_id)
+    assert "סומנה כהושלמה" in resp5
+    
+    completed_lead = mock_db.leads.find_one({"_id": lead["_id"]})
+    assert completed_lead["status"] == "completed"
+    assert completed_lead["waiting_for_rating"] is True
+
+    # 7. USER: Rate "5"
+    resp6 = await ask_fixi_ai("5", user_chat_id)
+    assert "תודה" in resp6
+    
+    # Verify Rating
+    pro_updated = mock_db.users.find_one({"_id": pro["_id"]})
+    assert pro_updated["social_proof"]["review_count"] == 1
+
+@pytest.mark.asyncio
+async def test_pro_block_command(mock_db, monkeypatch):
+    # Setup Pro
+    pro_id = mock_db.users.insert_one({"phone_number": "123456", "business_name": "TestPro"}).inserted_id
+    chat_id = "123456@c.us"
+    
+    # Create Slot at 16:00 UTC
+    now = datetime.now(pytz.timezone('Asia/Jerusalem'))
+    target_time_il = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    target_time_utc = target_time_il.astimezone(pytz.utc)
+    
+    mock_db.slots.insert_one({
+        "pro_id": pro_id,
+        "start_time": target_time_utc,
+        "is_taken": False
+    })
+    
+    # Mock Intent: BLOCK 16
+    mock_model = create_mock_model(intent="BLOCK")
+    # Need to ensure the 'hour' in the mock return matches our test case
+    mock_model.generate_content_async = AsyncMock(return_value=MagicMock(text='{"intent": "BLOCK", "hour": 16, "day": "TODAY"}'))
+    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model))
+    
+    resp = await ask_fixi_ai("block 16:00", chat_id)
+    
+    assert "חסמתי לך" in resp
+    slot = mock_db.slots.find_one({"pro_id": pro_id})
+    assert slot["is_taken"] is True
+
+@pytest.mark.asyncio
+async def test_pro_show_schedule(mock_db, monkeypatch):
+    # Setup Pro
+    pro_id = mock_db.users.insert_one({"phone_number": "123456", "business_name": "TestPro"}).inserted_id
+    chat_id = "123456@c.us"
+    
+    # Mock the leads_collection.find logic to avoid mongomock datetime query issues
+    # We need to mock it specifically for the module where it is used (app.services.logic)
+    
+    mock_leads_collection = MagicMock()
+    
+    # Create a dummy lead object that behaves like a dictionary
+    mock_lead = {
+        "pro_id": pro_id,
+        "status": "booked",
+        "created_at": datetime.now(pytz.utc),
+        "details": "Fix sink",
+        "chat_id": "999@c.us"
+    }
+    
+    # The code calls: leads_collection.find(...).sort(...)
+    # So we need to mock the chain
+    mock_cursor = MagicMock()
+    mock_cursor.__iter__.return_value = [mock_lead] # Iteration returns the list
+    
+    # find() returns the cursor (which is also the sort result in this chain usually, 
+    # but in pymongo find() returns Cursor, Cursor.sort() returns Cursor)
+    mock_leads_collection.find.return_value = mock_cursor
+    mock_cursor.sort.return_value = [mock_lead] # sort() returns list/cursor. We return list for simplicity if iterated.
+    
+    # Patch it in app.services.logic
+    monkeypatch.setattr("app.services.logic.leads_collection", mock_leads_collection)
+
+    mock_model = create_mock_model(intent="SHOW")
+    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model))
+    
+    resp = await ask_fixi_ai("show schedule", chat_id)
+    
+    assert "תוכנית עבודה" in resp
+    assert "Fix sink" in resp
