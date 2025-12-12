@@ -4,9 +4,9 @@ def load_css(lang_code, T):
     direction = T["dir"]
     align = T["align"]
     
-    # Import Google Fonts (Heebo) and Material Symbols Rounded
+    # Import Google Fonts (Rubik + Heebo) and Material Symbols Rounded
     st.markdown("""
-        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap">
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@300;400;500;600;700&family=Heebo:wght@300;400;500;600;700;800&display=swap">
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,1,0" />
     """, unsafe_allow_html=True)
     
@@ -70,9 +70,13 @@ def load_css(lang_code, T):
 
         /* --- Global Reset & Typography --- */
         html, body, [class*="css"] {{
-            font-family: 'Heebo', sans-serif;
+            font-family: 'Rubik', 'Heebo', sans-serif !important;
             color: var(--text-main);
             background-color: var(--bg-app);
+            font-size: 18px !important; /* Base Font Size */
+            line-height: 1.6;
+            direction: {direction} !important;
+            text-align: {align} !important;
         }}
         
         .stApp {{
@@ -81,22 +85,39 @@ def load_css(lang_code, T):
 
         h1, h2, h3, h4, h5, h6 {{
             color: var(--text-main) !important;
-            font-weight: 800 !important;
+            font-family: 'Rubik', sans-serif !important;
+            font-weight: 700 !important;
             letter-spacing: -0.5px;
+            text-align: {align} !important;
         }}
         
         h1 {{ font-size: 2.2rem !important; margin-bottom: 1rem !important; }}
-        h2 {{ font-size: 1.5rem !important; margin-top: 1.5rem !important; }}
-        h3 {{ font-size: 1.2rem !important; color: var(--text-secondary) !important; }}
-        p, div, span, label {{ color: var(--text-main); }}
+        h2 {{ font-size: 1.6rem !important; margin-top: 1.4rem !important; }}
+        h3 {{ font-size: 1.3rem !important; color: var(--text-secondary) !important; }}
+        
+        /* Body Text */
+        p, div, span, label, li {{ 
+            color: var(--text-main);
+            font-size: 1rem;
+            text-align: {align};
+        }}
+        
+        /* Form Labels */
+        label {{
+            font-weight: 500 !important;
+            opacity: 0.9;
+            display: block !important;
+            text-align: {align} !important;
+            direction: {direction} !important;
+        }}
 
-        /* --- Main Container Layout (Responsive Stretch) --- */
+        /* --- Main Container Layout --- */
         .block-container {{
-            padding-top: 3rem !important;
-            padding-bottom: 5rem !important;
+            padding-top: 2.5rem !important;
+            padding-bottom: 4rem !important;
             max-width: 100% !important;
-            padding-left: 2rem !important;
-            padding-right: 2rem !important;
+            padding-left: 1.5rem !important;
+            padding-right: 1.5rem !important;
         }}
 
         /* --- Sidebar Styling --- */
@@ -107,17 +128,21 @@ def load_css(lang_code, T):
         }}
         
         section[data-testid="stSidebar"] .block-container {{
-            padding-top: 2rem;
-            padding-left: 1rem !important;
-            padding-right: 1rem !important;
+            padding-top: 1.5rem;
+            padding-left: 0.8rem !important;
+            padding-right: 0.8rem !important;
+            direction: {direction} !important;
+            text-align: {align} !important;
+        }}
+        
+        /* Force Sidebar Elements Alignment */
+        section[data-testid="stSidebar"] .stRadio div,
+        section[data-testid="stSidebar"] .stSelectbox div {{
+            direction: {direction};
+            text-align: {align};
         }}
 
-        /* --- Hide Sidebar Collapse Button --- */
-        button[data-testid="collapsed-sidebar-button"] {{
-            display: none !important;
-        }}
-
-        /* --- Metrics Cards (Flex Layout) --- */
+        /* --- Metrics Cards --- */
         div[data-testid="stMetric"] {{
             background-color: var(--bg-card);
             border: 1px solid var(--border-color);
@@ -129,33 +154,44 @@ def load_css(lang_code, T):
             display: flex;
             flex-direction: column;
             justify-content: center;
+            direction: {direction};
+            text-align: {align};
         }}
         
-        div[data-testid="stMetric"]:hover {{
-            box-shadow: var(--shadow-md);
-            transform: translateY(-2px);
-            border-color: var(--primary);
+        div[data-testid="stMetricLabel"] {{
+            width: 100%;
+            text-align: {align} !important;
         }}
         
-        div[data-testid="stMetricLabel"] p {{ color: var(--text-secondary) !important; font-size: 0.9rem !important; font-weight: 600 !important; }}
-        div[data-testid="stMetricValue"] div {{ color: var(--primary) !important; font-size: 2.2rem !important; font-weight: 800 !important; }}
+        div[data-testid="stMetricValue"] {{
+            width: 100%;
+            text-align: {align} !important;
+        }}
 
-        /* --- Expanders (Professional Cards) --- */
+        /* --- Expanders --- */
         .streamlit-expanderHeader {{
             background-color: var(--bg-card) !important;
             border: 1px solid var(--border-color) !important;
             border-radius: var(--radius-md);
             color: var(--text-main) !important;
-            font-weight: 600;
-            font-size: 1.1rem;
+            font-family: 'Rubik', sans-serif !important;
+            font-weight: 500;
+            font-size: 1.2rem;
             padding: 1rem;
             margin-bottom: 0.5rem;
             transition: all 0.2s;
+            direction: {direction} !important;
+            text-align: {align} !important;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }}
         
-        .streamlit-expanderHeader:hover {{
-            border-color: var(--primary) !important;
-            color: var(--primary) !important;
+        /* RTL Fix for Expander Arrow */
+        .streamlit-expanderHeader p {{
+            margin: 0 !important;
+            flex-grow: 1;
+            text-align: {align} !important;
         }}
         
         .streamlit-expanderContent {{
@@ -169,121 +205,84 @@ def load_css(lang_code, T):
             margin-bottom: 1rem;
             box-shadow: var(--shadow-sm);
             color: var(--text-main) !important;
+            direction: {direction} !important;
+            text-align: {align} !important;
         }}
         
         /* --- Buttons --- */
         .stButton button {{
             border-radius: 10px;
-            font-weight: 600;
-            padding: 0.5rem 1.2rem;
+            font-family: 'Rubik', sans-serif !important;
+            font-weight: 500;
+            padding: 0.6rem 1.4rem;
+            font-size: 1.1rem !important;
             transition: all 0.2s;
             border: 1px solid transparent;
             width: 100%;
         }}
-        
-        /* Primary Button Override */
-        .stButton button[kind="primary"] {{
-            background: var(--primary) !important;
-            color: var(--text-inverse) !important;
-            border: none !important;
-        }}
-        
-        .stButton button[kind="primary"]:hover {{
-            background: var(--primary-hover) !important;
-            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.2);
-            transform: translateY(-1px);
-        }}
 
-        /* Secondary Button */
-        .stButton button[kind="secondary"] {{
-            background-color: var(--bg-card) !important;
-            border: 1px solid var(--border-color) !important;
-            color: var(--text-main) !important;
-        }}
-        
-        .stButton button[kind="secondary"]:hover {{
-            border-color: var(--text-secondary) !important;
-            background-color: var(--bg-secondary) !important;
-        }}
-
-        /* --- Tables (DataFrames) --- */
+        /* --- Tables --- */
         div[data-testid="stDataFrame"] {{
             border: 1px solid var(--border-color);
             border-radius: var(--radius-md);
             overflow: hidden;
             box-shadow: var(--shadow-sm);
             background-color: var(--bg-card);
+            direction: {direction} !important;
         }}
         
         thead tr th {{
             background-color: var(--bg-secondary) !important;
             color: var(--text-secondary) !important;
             font-weight: 600 !important;
-            font-size: 0.95rem !important;
-            padding: 12px !important;
+            font-size: 1.05rem !important;
+            padding: 14px !important;
+            text-align: {align} !important;
         }}
         
         tbody tr td {{
-            font-size: 0.95rem !important;
+            font-size: 1.05rem !important;
             color: var(--text-main) !important;
-            padding: 12px !important;
+            padding: 14px !important;
             background-color: var(--bg-card) !important;
+            text-align: {align} !important;
         }}
 
-        /* --- Form Inputs (Text, Number, Date, Time) --- */
+        /* --- Form Inputs --- */
         .stTextInput input, .stNumberInput input, .stTextArea textarea, .stDateInput input, .stTimeInput input {{
             background-color: var(--bg-card) !important;
             border: 1px solid var(--border-color) !important;
             border-radius: 10px;
             color: var(--text-main) !important;
-            padding: 8px 12px;
-            font-size: 1rem;
-        }}
-        
-        .stTextInput input:focus, .stTextArea textarea:focus {{
-            border-color: var(--primary) !important;
-            box-shadow: 0 0 0 1px var(--primary);
+            padding: 10px 14px;
+            font-size: 1.05rem;
+            font-family: 'Rubik', sans-serif !important;
+            direction: {direction} !important;
+            text-align: {align} !important;
         }}
 
-        /* --- Selectbox / Dropdown Fixes --- */
-        
-        /* Target the main box */
+        /* --- Selectbox Fixes --- */
         div[data-baseweb="select"] > div {{
             background-color: var(--bg-card) !important;
             border-color: var(--border-color) !important;
             color: var(--text-main) !important;
             border-radius: 10px !important;
+            direction: {direction} !important;
         }}
         
-        /* Text inside the select box */
         div[data-baseweb="select"] span {{
             color: var(--text-main) !important;
-        }}
-        
-        /* Dropdown Menu Container */
-        ul[data-testid="stSelectboxVirtualDropdown"] {{
-            background-color: var(--bg-card) !important;
-            border: 1px solid var(--border-color) !important;
+            font-size: 1.05rem;
+            font-family: 'Rubik', sans-serif !important;
+            text-align: {align} !important;
         }}
         
         /* Dropdown Options */
         li[role="option"] {{
-            color: var(--text-main) !important;
-            background-color: var(--bg-card) !important;
+            direction: {direction} !important;
+            text-align: {align} !important;
         }}
         
-        /* Hovered/Selected Option */
-        li[role="option"][aria-selected="true"], li[role="option"]:hover {{
-            background-color: var(--bg-secondary) !important;
-            color: var(--primary) !important;
-            font-weight: 600;
-        }}
-        
-        /* Fix SVG Icon Color */
-        div[data-baseweb="select"] svg {{
-            fill: var(--text-secondary) !important;
-        }}
-
         /* --- Chat Bubbles (Custom HTML) --- */
         .chat-container {{
             display: flex;
@@ -295,50 +294,59 @@ def load_css(lang_code, T):
             max-height: 500px;
             overflow-y: auto;
             border: 1px solid var(--border-color);
+            direction: {direction};
         }}
         
         .chat-bubble {{
-            padding: 12px 18px;
+            padding: 14px 20px;
             border-radius: 18px;
             max-width: 80%;
             font-size: 1rem;
-            line-height: 1.5;
+            line-height: 1.6;
             position: relative;
             box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+            font-family: 'Rubik', sans-serif !important;
+            display: inline-block;
+            text-align: {align};
         }}
         
+        /* User Message (Right in RTL, Left in LTR) */
         .user-msg {{
             background-color: var(--chat-user-bg);
             color: var(--chat-user-text);
             align-self: {'flex-start' if direction == 'rtl' else 'flex-end'};
             border-bottom-{'right' if direction == 'rtl' else 'left'}-radius: 4px;
+            margin-{'right' if direction == 'rtl' else 'left'}: auto;
         }}
         
+        /* Bot Message (Left in RTL, Right in LTR) */
         .bot-msg {{
             background-color: var(--chat-bot-bg);
             color: var(--chat-bot-text);
             align-self: {'flex-end' if direction == 'rtl' else 'flex-start'};
             border-bottom-{'left' if direction == 'rtl' else 'right'}-radius: 4px;
+            margin-{'left' if direction == 'rtl' else 'right'}: auto;
         }}
         
         .chat-meta {{
-            font-size: 0.75rem;
+            font-size: 0.8rem;
             font-weight: 600;
             margin-bottom: 4px;
-            display: block;
+            display: flex;
+            align-items: center;
             opacity: 0.7;
+            flex-direction: {'row' if direction == 'ltr' else 'row-reverse'};
+            gap: 4px;
         }}
         
         .material-symbols-rounded {{
-            vertical-align: middle;
             font-size: 1.2em;
-            margin-{'left' if direction == 'rtl' else 'right'}: 4px;
         }}
 
-        /* --- RTL/LTR Direction Overrides --- */
+        /* Global RTL Overrides for Streamlit Widgets */
         .stMarkdown, p, span, div, input, textarea {{
-            direction: {direction};
-            text-align: {align};
+            direction: {direction} !important;
+            text-align: {align} !important;
         }}
         
     </style>
@@ -354,4 +362,8 @@ def render_chat_bubble(text, role, timestamp, T):
     icon_html = f'<span class="material-symbols-rounded">{icon_name}</span>'
     
     time_str = timestamp.strftime("%H:%M")
+    
+    # In RTL, we might want the icon on the right for user, left for bot? 
+    # Or just consistent. Let's keep it simple: Icon Name Time
+    
     return f"<div class='chat-bubble {cls}'><span class='chat-meta'>{icon_html} {name} • {time_str}</span>{text}</div>"
