@@ -4,6 +4,8 @@ from app.services.logic import ask_fixi_ai, send_whatsapp
 from app.scheduler import start_scheduler
 from contextlib import asynccontextmanager
 from rich.console import Console
+from app.core.logger import logger
+import traceback
 
 console = Console()
 
@@ -21,8 +23,11 @@ def health_check():
 @app.post("/webhook")
 async def handle_incoming_message(payload: WebhookPayload, background_tasks: BackgroundTasks):
     # 1. סינון ראשוני: רק הודעות נכנסות
-    if payload.typeWebhook not in ["incomingMessageReceived", "outgoingMessageReceived"]:
+    if payload.typeWebhook != "incomingMessageReceived":
         return {"status": "ignored"}
+    
+    if not payload.senderData:
+        return {"status": "ignored_no_sender"}
     
     # שליפת Chat ID
     chat_id = payload.senderData.chatId
@@ -69,5 +74,11 @@ async def handle_incoming_message(payload: WebhookPayload, background_tasks: Bac
 
 async def process_message(chat_id: str, user_text: str, media_url: str = None):
     # כאן הבוט עונה
-    ai_reply = await ask_fixi_ai(user_text, chat_id, media_url)
-    await send_whatsapp(chat_id, ai_reply)
+    try:
+        logger.info(f"Processing message for {chat_id}")
+        ai_reply = await ask_fixi_ai(user_text, chat_id, media_url)
+        await send_whatsapp(chat_id, ai_reply)
+        logger.info(f"Message sent to {chat_id}")
+    except Exception as e:
+        logger.error(f"Error in process_message: {e}")
+        logger.error(traceback.format_exc())

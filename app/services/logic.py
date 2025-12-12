@@ -32,8 +32,8 @@ IL_TZ = pytz.timezone('Asia/Jerusalem')
 # --- Helpers ---
 @retry(
     retry=retry_if_exception_type(ResourceExhausted),
-    wait=wait_random_exponential(multiplier=2, min=5, max=300),
-    stop=stop_after_attempt(10)
+    wait=wait_random_exponential(multiplier=1, min=2, max=30),
+    stop=stop_after_attempt(3)
 )
 async def _generate_with_retry(chat_session, content_parts):
     return await chat_session.send_message_async(content_parts)
@@ -147,7 +147,7 @@ async def analyze_pro_intent(text: str):
     Output JSON: {{ "intent": "...", "hour": int, "day": "TODAY"|"TOMORROW" }}
     """
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
+        model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
         response = await model.generate_content_async(prompt)
         return json.loads(response.text)
     except Exception as e:
@@ -366,9 +366,7 @@ async def download_and_store_media(url: str):
         return None, None
 
 async def handle_new_lead(chat_id: str, details: str, pro_data: dict, media_url: str = None):
-    try:
-        time_match = re.search(r"(\d{1,2}:\d{2})", details)
-    except: pass
+    time_match = re.search(r"(\d{1,2}:\d{2})", details)
 
     logger.success(f"💰 NEW LEAD! {details}")
     await leads_collection.insert_one({
@@ -431,7 +429,7 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         
         if temp_path and os.path.exists(temp_path): os.remove(temp_path)
 
-        deal_match = re.search(r"\[DEAL:(.*?)", reply_text)
+        deal_match = re.search(r"\[DEAL:(.*?)\]", reply_text)
         if deal_match:
             lead_details = deal_match.group(1).strip()
             final_media_url = cloudinary_url if cloudinary_url else media_url
