@@ -4,7 +4,7 @@ from app.core.config import settings
 from app.core.database import users_collection, messages_collection, leads_collection, slots_collection
 from app.core.logger import logger
 from datetime import datetime, timedelta
-from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_exponential, retry_if_exception_type, wait_random_exponential
 import tenacity
 from google.api_core.exceptions import ResourceExhausted
 import cloudinary
@@ -31,7 +31,7 @@ IL_TZ = pytz.timezone('Asia/Jerusalem')
 # --- Helpers ---
 @retry(
     retry=retry_if_exception_type(ResourceExhausted),
-    wait=wait_exponential(multiplier=2, min=5, max=120),
+    wait=wait_random_exponential(multiplier=2, min=5, max=300), # Increased max wait to 5 minutes with jitter
     stop=stop_after_attempt(10)
 )
 async def _generate_with_retry(chat_session, content_parts):
