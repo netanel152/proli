@@ -1,3 +1,4 @@
+import urllib.parse
 import httpx
 import google.generativeai as genai
 from app.core.config import settings
@@ -86,7 +87,7 @@ async def determine_current_pro(user_text: str, last_pro_id: str = None):
                 return pro
 
     # 5. Default
-    return await users_collection.find_one({"business_name": "יוסי אינסטלציה"})
+    return None
 
 async def get_dynamic_prompt(pro_data):
     if not pro_data: return "You are a general assistant."
@@ -142,12 +143,13 @@ async def analyze_pro_intent(text: str):
     5. GET_WORK: "get work", "tavi avoda","avoda", "lead".
     6. VACATION: "vacation", "hofesh".
     7. UNKNOWN: regular chat.
-    
+    8. CONFIRM: "confirm", "approve", "ok", "measher", "מאשר", "סגור", "לקחתי".
+
     Logic: If hour < current hour, assume TOMORROW.
     Output JSON: {{ "intent": "...", "hour": int, "day": "TODAY"|"TOMORROW" }}
     """
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash', generation_config={"response_mime_type": "application/json"})
+        model = genai.GenerativeModel('gemini-2.5-flash-lite', generation_config={"response_mime_type": "application/json"})
         response = await model.generate_content_async(prompt)
         return json.loads(response.text)
     except Exception as e:
@@ -254,24 +256,58 @@ async def handle_pro_command(chat_id: str, text: str):
         return f"✅ העבודה הושלמה! שלחתי בקשת דירוג ללקוח."
 
     elif intent == "GET_WORK":
-        lead = await leads_collection.find_one({"status": "New"}, sort=[("created_at", 1)])
+        all_new_leads = await leads_collection.find({"status": "New"}).sort("created_at", 1).to_list()
         
-        if not lead:
-            return "📭 אין עבודות חדשות כרגע."
+        selected_lead = None
+        my_areas = [area.strip().lower() for area in pro.get("service_areas", [])]
+
+        if not my_areas:
+            return "❌ לא הוגדרו אזורי שירות עבורך. לא ניתן למצוא עבודות."
+
+        for lead in all_new_leads:
+            # בדיקה 1: האם הליד כבר שויך אליי ספציפית? (חזק יותר ממיקום)
+            if lead.get("pro_id") == pro["_id"]:
+                selected_lead = lead
+                break
             
+            # בדיקה 2: האם יש התאמה של עיר בטקסט (עבור לידים ללא שיוך)
+            lead_details_lower = lead.get("details", "").lower()
+            if any(area in lead_details_lower for area in my_areas):
+                selected_lead = lead
+                break
+        
+        if not selected_lead:
+            areas_str = ", ".join(pro.get("service_areas", []))
+            return f"📭 אין עבודות חדשות כרגע באזורים שלך ({areas_str})."
+
+        # 3. עדכון הסטטוס (תפיסת העבודה)
         await leads_collection.update_one(
-            {"_id": lead["_id"]},
+            {"_id": selected_lead["_id"]},
             {"$set": {"status": "booked", "pro_id": pro["_id"]}}
         )
         
-        lead_time = lead["created_at"].replace(tzinfo=pytz.utc).astimezone(IL_TZ)
-        time_str = lead_time.strftime("%d/%m %H:%M")
-        details = lead.get("details", "ללא פרטים")
-        client_phone = lead["chat_id"].replace("@c.us", "")
+        # 4. הכנת ההודעה המפורטת
+        details = selected_lead.get("details", "")
+        client_phone = selected_lead['chat_id'].replace('@c.us', '')
         
-        msg = f"🚀 **קיבלת עבודה חדשה!**\n📅 {time_str}\n📝 {details}\n📞 לקוח: {client_phone}"
+        # יצירת לינק ל-Waze
+        waze_url = f"https://waze.com/ul?q={urllib.parse.quote(details)}"
+        
+        msg = (
+            f"🚀 *מצאתי עבודה באזור שלך!*\\n"
+            f"📝 *תיאור:* {details}\\n"
+            f"📞 *לקוח:* {client_phone}\\n"
+            f"📍 *אזור:* תואם לאזורי השירות שלך\\n"
+            f"🚗 *ניווט:* {waze_url}\\n\\n"
+            f"בהצלחה! סמן 'סיימתי' כשתסיים."
+        )
+        
+        # 5. שליחת תמונה אם קיימת
+        if selected_lead.get("media_url"):
+            await send_whatsapp_file(chat_id, selected_lead["media_url"], caption="📷 תמונה מצורפת מהלקוח")
+            
         return msg
-
+    
     elif intent == "VACATION":
         now_il = datetime.now(IL_TZ)
         target_date = now_il
@@ -293,6 +329,9 @@ async def handle_pro_command(chat_id: str, text: str):
         
         display_date = day_start.strftime("%d/%m")
         return f"🏝️ חסמתי לך את כל היום ב-{display_date}."
+    
+    elif intent == "CONFIRM":
+        return "👍 מעולה! העבודה אצלך. שלחתי פרטים ללקוח."
 
     return None
 
@@ -394,22 +433,38 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
         
     try:
         history, last_pro_id = await get_chat_history(chat_id)
-        current_pro = await determine_current_pro(user_text or "", last_pro_id)
         
-        if not current_pro: return "שגיאה: לא נמצא איש שירות פעיל."
-
         temp_path = None
         cloudinary_url = None
         if media_url:
             temp_path, cloudinary_url = await download_and_store_media(media_url)
 
+        current_pro = await determine_current_pro(user_text or "", last_pro_id)
+        
+        
+        generic_sys_prompt = """Role: Service Dispatcher. Name: Fixi.
+Goal: Ask for Location and Problem briefly to find the right professional.
+Tone: Human, direct, efficient. Hebrew language.
+Example response: 'היי, באיזו עיר אתם נמצאים ומה התקלה?'"""
+
+        sys_prompt = ""
+        pro_id_for_message = None
+
+        if not current_pro:
+            sys_prompt = generic_sys_prompt
+            model = genai.GenerativeModel('gemini-2.5-flash-lite', system_instruction=sys_prompt)
+            chat = model.start_chat(history=history)
+            pro_id_for_message = None # No professional assigned yet
+        else:
+            sys_prompt = await get_dynamic_prompt(current_pro)
+            model = genai.GenerativeModel('gemini-2.5-flash-lite', system_instruction=sys_prompt)
+            chat = model.start_chat(history=history)
+            pro_id_for_message = current_pro["_id"]
+
         log_text = user_text or "[Media Message]"
         if cloudinary_url: log_text += f" (URL: {cloudinary_url})"
-        await save_message(chat_id, "user", log_text, current_pro["_id"])
+        await save_message(chat_id, "user", log_text, pro_id_for_message)
         
-        sys_prompt = await get_dynamic_prompt(current_pro)
-        model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=sys_prompt)
-        chat = model.start_chat(history=history)
         
         content_parts = []
         if temp_path and os.path.exists(temp_path):
@@ -437,7 +492,7 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
             reply_text = reply_text.replace(deal_match.group(0), "").strip()
             if not reply_text: reply_text = "✅ מעולה! התור נקבע בהצלחה."
 
-        await save_message(chat_id, "model", reply_text, current_pro["_id"])
+        await save_message(chat_id, "model", reply_text, pro_id_for_message)
         return reply_text
     
     except tenacity.RetryError:
