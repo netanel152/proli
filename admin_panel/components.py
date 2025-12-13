@@ -220,6 +220,25 @@ def load_css(lang_code, T):
             border: 1px solid transparent;
             width: 100%;
         }}
+        
+        /* Custom Button Colors */
+        .stButton button[kind="primary"] {{
+            background-color: #28a745; /* Green */
+            color: white;
+            border-color: #28a745;
+        }}
+        .stButton button[kind="primary"]:hover {{
+            background-color: #218838;
+            border-color: #1e7e34;
+        }}
+        
+        .stButton button[kind="secondary"] {{
+            border-color: #ccc;
+        }}
+        .stButton button[kind="secondary"]:hover {{
+            border-color: #999;
+        }}
+        
 
         /* --- Tables --- */
         div[data-testid="stDataFrame"] {{
