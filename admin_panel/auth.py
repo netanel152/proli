@@ -24,9 +24,8 @@ def get_manager():
         st.session_state.cookie_manager = stx.CookieManager(key="fixi_auth_manager")
     return st.session_state.cookie_manager
 
-def check_password():
+def check_password(cookies):
     cookie_manager = get_manager()
-    cookies = cookie_manager.get_all()
     
     saved_lang = cookies.get("fixi_lang", "HE")
     T_auth = TRANS.get(saved_lang, TRANS["HE"])

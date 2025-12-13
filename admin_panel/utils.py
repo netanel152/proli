@@ -1,17 +1,13 @@
 import streamlit as st
 from pymongo import MongoClient
 import os
-import sys  # <--- התיקון: הוספנו את זה
 import certifi # למניעת קריסות SSL
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import pytz
 
 # Load environment variables
-current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(current_dir)
-sys.path.append(parent_dir)
-load_dotenv(os.path.join(parent_dir, ".env"))
+load_dotenv()
 
 # Standalone MongoDB Connection for Admin Panel
 client = MongoClient(os.getenv("MONGO_URI"), tlsCAFile=certifi.where())
