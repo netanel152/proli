@@ -50,6 +50,16 @@ def view_leads_dashboard(T):
 
     leads_df = get_leads_data()
 
+    if not leads_df.empty:
+        csv = leads_df.to_csv(index=False).encode('utf-8-sig')
+        st.download_button(
+            label="📥 Export Leads to CSV",
+            data=csv,
+            file_name=f'fixi_leads_{datetime.now().strftime("%Y-%m-%d")}.csv',
+            mime='text/csv',
+            key="export_leads_csv"
+        )
+    
     if leads_df.empty:
         st.info(T["no_leads_found"])
         st.stop()
