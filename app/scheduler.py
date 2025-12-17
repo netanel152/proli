@@ -1,10 +1,11 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from app.core.database import users_collection, leads_collection, settings_collection
-from app.services.logic import send_whatsapp_message
+from app.services.logic import send_whatsapp_message, send_pro_reminder, send_customer_completion_check
 from datetime import datetime, timedelta
 import pytz
 import asyncio
+from app.core.logger import logger
 
 IL_TZ = pytz.timezone('Asia/Jerusalem')
 
@@ -48,9 +49,55 @@ async def send_daily_reminders():
                 except Exception as e:
                     print(f"❌ Failed to send to {pro['business_name']}: {e}")
 
+async def monitor_unfinished_jobs():
+    """
+    Monitors 'booked' leads and takes action based on their age.
+    - 4-6 hours: Remind pro.
+    - 6-24 hours: Check with customer.
+    - >24 hours: Flag for admin.
+    """
+    now_il = datetime.now(IL_TZ)
+    if not (8 <= now_il.hour < 21):
+        return  # Safety: Only run during business hours
+
+    print(f"🕵️ [Scheduler] Running Stale Job Monitor at {now_il.strftime('%H:%M')}...")
+    now_utc = datetime.now(pytz.utc)
+
+    # Tier 1: 4-6 hours old -> Remind Pro
+    t1_start = now_utc - timedelta(hours=6)
+    t1_end = now_utc - timedelta(hours=4)
+    t1_leads_cursor = leads_collection.find({
+        "status": "booked",
+        "created_at": {"$gte": t1_start, "$lt": t1_end}
+    })
+    async for lead in t1_leads_cursor:
+        print(f"[Monitor] T1: Sending pro reminder for lead {lead['_id']}")
+        await send_pro_reminder(str(lead["id"]))
+
+    # Tier 2: 6-24 hours old -> Check with Customer
+    t2_start = now_utc - timedelta(hours=24)
+    t2_end = now_utc - timedelta(hours=6)
+    t2_leads_cursor = leads_collection.find({
+        "status": "booked",
+        "created_at": {"$gte": t2_start, "$lt": t2_end}
+    })
+    async for lead in t2_leads_cursor:
+        print(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")
+        await send_customer_completion_check(str(lead["id"]))
+
+    # Tier 3: >24 hours old -> Flag for Admin
+    t3_end = now_utc - timedelta(hours=24)
+    update_result = await leads_collection.update_many(
+        {"status": "booked", "created_at": {"$lt": t3_end}, "flag": {"$ne": "requires_admin"}},
+        {"$set": {"flag": "requires_admin"}}
+    )
+    if update_result.modified_count > 0:
+        print(f"[Monitor] T3: Flagged {update_result.modified_count} leads for admin review.")
+
+
 async def scheduler_manager():
     """
-    Race-Condition Free Manager:
+    Race-Condition Free Manager for daily reminders.
     Uses atomic 'find_one_and_update' to check availability and lock the run in one step.
     """
     try:
@@ -62,13 +109,12 @@ async def scheduler_manager():
         )
 
         # 2. Check for Manual Trigger (Atomic)
-        # If trigger_now is True, set it to False and return the doc.
         manual_trigger = await settings_collection.find_one_and_update(
             {"_id": "scheduler_config", "trigger_now": True},
             {"$set": {"trigger_now": False, "last_run_date": datetime.now(IL_TZ).strftime("%Y-%m-%d")}})
         
         if manual_trigger:
-            print("🚀 [Scheduler] Manual trigger locked & executing!")
+            print("🚀 [Scheduler] Manual trigger locked & executing daily reminders!")
             await send_daily_reminders()
             return
 
@@ -76,13 +122,6 @@ async def scheduler_manager():
         now_il = datetime.now(IL_TZ)
         current_time_str = now_il.strftime("%H:%M")
         today_str = now_il.strftime("%Y-%m-%d")
-
-        # Atomic Query:
-        # Find config WHERE:
-        # - Active is True
-        # - Last Run is NOT today
-        # - Current Time >= Run Time
-        # AND Update: Set last_run to today.
         
         result = await settings_collection.find_one_and_update(
             {
@@ -94,19 +133,30 @@ async def scheduler_manager():
             {"$set": {"last_run_date": today_str}})
 
         if result:
-            print(f"⏰ [Scheduler] Time to run! Locked job for {today_str}.")
+            print(f"⏰ [Scheduler] Time to run daily reminders! Locked job for {today_str}.")
             await send_daily_reminders()
 
     except Exception as e:
         print(f"❌ [Scheduler Manager Error] {e}")
 
 def start_scheduler():
-    scheduler = AsyncIOScheduler()
+    scheduler = AsyncIOScheduler(timezone=IL_TZ)
+    
+    # Job 1: Daily "Good Morning" Reminders
     scheduler.add_job(
         scheduler_manager,
         IntervalTrigger(seconds=60),
         id="scheduler_manager",
         replace_existing=True
     )
+
+    # Job 2: Stale Job Monitor
+    scheduler.add_job(
+        monitor_unfinished_jobs,
+        IntervalTrigger(minutes=30), # Run every 30 minutes
+        id="stale_job_monitor",
+        replace_existing=True
+    )
+
     scheduler.start()
-    print("🚀 APScheduler Started (Async Motor Mode)!")
+    print("🚀 APScheduler Started with all jobs!")

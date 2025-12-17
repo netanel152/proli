@@ -1,4 +1,5 @@
 import urllib.parse
+from bson import ObjectId
 import httpx
 import google.generativeai as genai
 from app.core.config import settings
@@ -97,15 +98,21 @@ async def get_dynamic_prompt(pro_data):
     slots_str = await get_available_slots(pro_data["_id"])
     base += f"\n\n*** יומן זמינות בזמן אמת ***\nהצע ללקוח אך ורק את השעות האלו:\n{slots_str}"
     
-    base += """
+    instructions = """
+*** הנחיות שפה וטון (Persona) ***
+1. היה קצר ותמציתי (עד 2 משפטים). בלי הקדמות. השתמש באימוג'י אחד בלבד. 🛠️
+2. טון: ישראלי, "דוגרי", יעיל ואדיב.
 
-*** הנחיות קריטיות למחיר (Pricing Policy) ***
-אם הלקוח שואל "כמה זה עולה?":
-1. ציין מיד את עלות הביקור (כפי שמופיעה במחירון למעלה).
-2. הוסף משפט הרגעה: "במידה ומבצעים את התיקון, עלות הביקור לרוב מתקזזת ממחיר העבודה."
-3. סייג משפטי: "המחיר המדויק לתיקון ייקבע רק בשטח לאחר אבחון התקלה."
-4. אל תיתן מחיר סופי בטלפון ללא תמונה או בדיקה.
+*** מדיניות מחירים והגנה משפטית ***
+1. מחיר: ציין עלות ביקור והדגש שהיא מתקזזת בתיקון. 
+2. הסתייגות: הבהר שכל מחיר הוא הערכה בלבד והמחיר המחייב ייקבע רק ע"י איש המקצוע בשטח.
+3. תיווך: ציין ש-Fixi היא פלטפורמת תיווך והאחריות על העבודה היא על איש המקצוע בלבד.
+
+*** חילוץ פרטי עסקה [DEAL] ***
+פורמט חובה: [DEAL: <יום ושעה> | <עיר/מיקום הלקוח> | <תיאור>]
+- תיאור: אם נשלחה מדיה (תמונה/הקלטה), כלול כאן סיכום קצר של מה שראית/שמעת (למשל: 'תיקון דוד - סיכום הקלטה: אין מים חמים').
 """
+    base += instructions
     return base
 
 # --- Availability & Pro Command Logic ---
@@ -148,7 +155,7 @@ async def analyze_pro_intent(text: str):
     1. BLOCK: "busy at 4", "block 16:00", "hasom 10", "taken".
     2. FREE: "done", "finished", "available", "hitpaneti".
     3. SHOW: "my schedule", "yoman", "matay panuy", "torim".
-    4. FINISH_JOB: "finished", "sayamti", "job done", "close ticket".
+    4. FINISH_JOB: "finished", "sayamti", "job done", "close ticket", "🏁 סיימתי".
     5. GET_WORK: "get work", "tavi avoda","avoda", "lead".
     6. VACATION: "vacation", "hofesh".
     7. UNKNOWN: regular chat.
@@ -344,6 +351,48 @@ async def handle_pro_command(chat_id: str, text: str):
 
     return None
 
+async def handle_customer_completion_response(chat_id: str, text: str):
+    text = text.strip()
+    if "כן, הסתיים" not in text:
+        return None
+
+    # Find the last 'booked' lead for this customer that is not yet completed.
+    lead = await leads_collection.find_one({
+        "chat_id": chat_id,
+        "status": "booked"
+    }, sort=[("created_at", -1)])
+
+    if not lead:
+        return None # No active job to close.
+
+    pro = await users_collection.find_one({"_id": lead["pro_id"]})
+    if not pro:
+        logger.warning(f"Could not find pro for lead {lead['_id']} during customer completion confirmation.")
+        return "תודה על העדכון, אבל היתה בעיה בעדכון המערכת."
+
+    # 1. Update Lead to 'completed'
+    await leads_collection.update_one(
+        {"_id": lead["_id"]},
+        {
+            "$set": {
+                "status": "completed",
+                "completed_at": datetime.now(timezone.utc),
+                "waiting_for_rating": True
+            }
+        }
+    )
+    logger.success(f"✅ Lead {lead['_id']} marked as COMPLETED by customer.")
+
+    # 2. Notify Pro
+    if pro.get("phone_number"):
+        pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
+        await send_whatsapp_message(pro_chat_id, "👍 הלקוח דיווח שהעבודה הסתיימה. הסטטוס עודכן.")
+
+    # 3. Trigger Rating Flow by sending the rating question to the customer
+    feedback_msg = f"מעולה! שמחים לשמוע. איך היה השירות עם {pro.get('business_name', 'המקצוען')}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מעולה)."
+    return feedback_msg
+
+
 async def handle_customer_rating(chat_id: str, text: str):
     text = text.strip()
     if text not in ["1", "2", "3", "4", "5"]:
@@ -434,6 +483,9 @@ async def handle_new_lead(chat_id: str, details: str, pro_data: dict, media_url:
             await send_whatsapp_file(pro_chat, media_url, caption="מדיה מצורפת")
 
 async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> str:
+    completion_resp = await handle_customer_completion_response(chat_id, user_text or "")
+    if completion_resp: return completion_resp
+
     rating_resp = await handle_customer_rating(chat_id, user_text or "")
     if rating_resp: return rating_resp
 
@@ -474,6 +526,8 @@ Example response: 'היי, באיזו עיר אתם נמצאים ומה התקל
         if cloudinary_url: log_text += f" (URL: {cloudinary_url})"
         await save_message(chat_id, "user", log_text, pro_id_for_message)
         
+        # Define legal welcome message
+        legal_welcome = "היי! אני פיקסי. 👋 חשוב שתדעו: פיקסי היא פלטפורמת תיווך בלבד. האחריות על ביצוע העבודה והתשלום היא בינך לבין איש המקצוע. בהמשך השיחה אתה מאשר את תנאי השימוש שלנו. \n\nבאיזו עיר אתם ומה התקלה? 🔧"
         
         content_parts = []
         if temp_path and os.path.exists(temp_path):
@@ -492,6 +546,9 @@ Example response: 'היי, באיזו עיר אתם נמצאים ומה התקל
         reply_text = response.text.strip()
         
         if temp_path and os.path.exists(temp_path): os.remove(temp_path)
+
+        if len(history) == 0:
+            reply_text = legal_welcome + "\n\n" + reply_text
 
         deal_match = re.search(r"\[DEAL:(.*?)\]", reply_text)
         if deal_match:
@@ -525,5 +582,67 @@ async def send_whatsapp_file(to_chat_id: str, file_url: str, caption: str = ""):
     async with httpx.AsyncClient() as client:
         await client.post(url, json=payload)    
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+async def send_whatsapp_buttons(to_chat_id: str, text: str, buttons: list):
+    """
+    Sends interactive buttons via Green API.
+    'buttons' should be a list of dicts: [{"buttonId": "1", "buttonText": "Text"}]
+    """
+    url = f"https://api.green-api.com/waInstance{settings.GREEN_API_ID}/sendButtons/{settings.GREEN_API_TOKEN}"
+    payload = {
+        "chatId": to_chat_id,
+        "message": text,
+        "buttons": buttons
+    }
+    async with httpx.AsyncClient() as client:
+        await client.post(url, json=payload)
+
 async def send_whatsapp(chat_id: str, text: str):
     await send_whatsapp_message(chat_id, text)
+
+async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
+    """Sends a reminder to the pro to mark a job as finished."""
+    try:
+        lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
+        if not lead or lead.get("status") != "booked":
+            logger.warning(f"send_pro_reminder called for invalid/non-booked lead: {lead_id}")
+            return
+
+        pro = await users_collection.find_one({"_id": lead["pro_id"]})
+        if not pro or not pro.get("phone_number"):
+            logger.error(f"Could not find pro or pro phone for lead {lead_id}")
+            return
+
+        pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
+        message = "👋 היי, רק מוודא לגבי העבודה האחרונה. האם סיימת?"
+        buttons = [
+            {"buttonId": f"finish_job_confirm_{lead_id}", "buttonText": "🏁 סיימתי"},
+            {"buttonId": f"finish_job_deny_{lead_id}", "buttonText": "⏳ עדיין עובד"}
+        ]
+        await send_whatsapp_buttons(pro_chat_id, message, buttons)
+        logger.success(f"Sent pro reminder for lead {lead_id} (Trigger: {triggered_by})")
+    except Exception as e:
+        logger.error(f"Error in send_pro_reminder for lead {lead_id}: {e}")
+
+async def send_customer_completion_check(lead_id: str, triggered_by: str = "auto"):
+    """Asks the customer if the job has been completed."""
+    try:
+        lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
+        if not lead or lead.get("status") != "booked":
+            logger.warning(f"send_customer_completion_check called for invalid/non-booked lead: {lead_id}")
+            return
+
+        customer_chat_id = lead["chat_id"]
+        pro = await users_collection.find_one({"_id": lead["pro_id"]})
+        pro_name = pro.get("business_name", "איש המקצוע") if pro else "איש המקצוע"
+
+        message = f"היי! 👋 אנחנו ב-Fixi רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. האם העבודה הסתיימה לשביעות רצונך?"
+        buttons = [
+            {"buttonId": f"customer_confirm_completion_{lead_id}", "buttonText": "✅ כן, הסתיים"},
+            {"buttonId": f"customer_deny_completion_{lead_id}", "buttonText": "❌ עדיין לא"}
+        ]
+        await send_whatsapp_buttons(customer_chat_id, message, buttons)
+        logger.success(f"Sent customer completion check for lead {lead_id} (Trigger: {triggered_by})")
+    except Exception as e:
+        logger.error(f"Error in send_customer_completion_check for lead {lead_id}: {e}")
+
