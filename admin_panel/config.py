@@ -32,6 +32,7 @@ TRANS = {
         "btn_update": "עדכן סטטוס",
         "success_update": "הסטטוס עודכן בהצלחה!",
         "refresh_btn": "רענן לידים",
+        "no_leads_found": "לא נמצאו לידים להצגה.",
 
         "pros_title": "צוות אנשי המקצוע",
         "page_desc_professionals": "נהל את רשימת אנשי המקצוע, הוסף חדשים, ערוך את פרטיהם והגדר את זמינותם.",
@@ -181,6 +182,7 @@ TRANS = {
         "btn_update": "Update Status",
         "success_update": "Status updated successfully!",
         "refresh_btn": "Refresh Leads",
+        "no_leads_found": "No leads found to display.",
 
         "pros_title": "Professional Team",
         "page_desc_professionals": "Manage the list of professionals, add new ones, edit their details, and set their availability.",
