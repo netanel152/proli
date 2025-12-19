@@ -110,7 +110,7 @@ async def get_dynamic_prompt(pro_data):
 
 *** חילוץ פרטי עסקה [DEAL] ***
 פורמט חובה: [DEAL: <יום ושעה> | <עיר/מיקום הלקוח> | <תיאור>]
-- תיאור: אם נשלחה מדיה (תמונה/הקלטה), כלול כאן סיכום קצר של מה שראית/שמעת (למשל: 'תיקון דוד - סיכום הקלטה: אין מים חמים').
+- תיאור: אם נשלחה מדיה (תמונה/הקלטה), כלול כאן סיכום קצר של מה שראית/שמעת. במקרה של הקלטת אודיו, הוסף גם 'תמלול מלא:' ואחריו את התמלול המלא של השיחה (למשל: 'תיקון דוד - סיכום: אין מים חמים. תמלול מלא: ...').
 """
     base += instructions
     return base
@@ -347,6 +347,69 @@ async def handle_pro_command(chat_id: str, text: str):
         return f"🏝️ חסמתי לך את כל היום ב-{display_date}."
     
     elif intent == "CONFIRM":
+        # Find the latest lead for this pro that is pending confirmation
+        last_new_lead = await leads_collection.find_one(
+            {"pro_id": pro["_id"], "status": "New"},
+            sort=[("created_at", -1)]
+        )
+
+        if not last_new_lead:
+            # Fallback: check if the last job was already booked, to provide a better message.
+            last_booked_lead = await leads_collection.find_one(
+                {"pro_id": pro["_id"], "status": "booked"},
+                sort=[("created_at", -1)]
+            )
+            if last_booked_lead:
+                 return "👍 העבודה כבר אצלך במערכת."
+            return "🤔 לא מצאתי עבודה חדשה לאישור."
+
+        # Mark lead as booked
+        await leads_collection.update_one(
+            {"_id": last_new_lead["_id"]},
+            {"$set": {"status": "booked"}}
+        )
+
+        # Try to find and block the corresponding slot
+        lead_details = last_new_lead.get("details", "")
+        time_match = re.search(r"(\d{1,2}:\d{2})", lead_details)
+        date_match = re.search(r"(\d{1,2})/(\d{1,2})", lead_details)
+
+        if time_match and date_match:
+            try:
+                hour_minute_str = time_match.group(1)
+                day_str, month_str = date_match.group(1), date_match.group(2)
+                
+                hour, minute = map(int, hour_minute_str.split(':'))
+                day, month = int(day_str), int(month_str)
+                
+                now_il = datetime.now(IL_TZ)
+                target_time_il = now_il.replace(month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
+                
+                # Handle year-end crossover (e.g., booking from Dec to Jan)
+                if target_time_il < now_il and now_il.month == 12 and target_time_il.month == 1:
+                    target_time_il = target_time_il.replace(year=now_il.year + 1)
+
+                search_utc = target_time_il.astimezone(pytz.utc)
+
+                # Atomically find and update the slot to prevent race conditions
+                slot_update_result = await slots_collection.update_one(
+                    {
+                        "pro_id": pro["_id"], 
+                        "is_taken": False,
+                        # Find slot that contains the appointment time
+                        "start_time": {"$lte": search_utc}, 
+                        "end_time": {"$gt": search_utc}
+                    },
+                    {"$set": {"is_taken": True}}
+                )
+                if slot_update_result.modified_count > 0:
+                    logger.info(f"Slot at {target_time_il.strftime('%Y-%m-%d %H:%M')} taken for lead {last_new_lead['_id']}")
+                else:
+                    logger.warning(f"No available slot found to block for lead {last_new_lead['_id']} at {target_time_il}")
+
+            except Exception as e:
+                logger.error(f"Error blocking slot for lead {last_new_lead['_id']}: {e}")
+
         return "👍 מעולה! העבודה אצלך. שלחתי פרטים ללקוח."
 
     return None

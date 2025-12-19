@@ -72,7 +72,7 @@ async def monitor_unfinished_jobs():
     })
     async for lead in t1_leads_cursor:
         print(f"[Monitor] T1: Sending pro reminder for lead {lead['_id']}")
-        await send_pro_reminder(str(lead["id"]))
+        await send_pro_reminder(str(lead["_id"]))
 
     # Tier 2: 6-24 hours old -> Check with Customer
     t2_start = now_utc - timedelta(hours=24)
@@ -83,7 +83,7 @@ async def monitor_unfinished_jobs():
     })
     async for lead in t2_leads_cursor:
         print(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")
-        await send_customer_completion_check(str(lead["id"]))
+        await send_customer_completion_check(str(lead["_id"]))
 
     # Tier 3: >24 hours old -> Flag for Admin
     t3_end = now_utc - timedelta(hours=24)
