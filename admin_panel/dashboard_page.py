@@ -5,14 +5,13 @@ from datetime import datetime
 from admin_panel.utils import users_collection, leads_collection, messages_collection
 from admin_panel.components import render_chat_bubble
 import pytz
+import asyncio
+import os
+import sys
 
-import streamlit as st
-import pandas as pd
-from bson.objectid import ObjectId
-from datetime import datetime
-from admin_panel.utils import users_collection, leads_collection, messages_collection
-from admin_panel.components import render_chat_bubble
-import pytz
+# Allow imports from the root directory to access the 'app' module
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from app.services.logic import send_customer_completion_check
 
 def view_leads_dashboard(T):
     st.title(T["title_dashboard"])
@@ -137,6 +136,15 @@ def view_leads_dashboard(T):
             # Delete Action
             if st.button(f"🗑️ {T.get('delete_btn', 'Delete Lead')}", key=f"delete_{selected_lead['id']}", width='stretch'):
                  st.session_state[f"confirm_delete_{selected_lead['id']}"] = True
+
+            # Manual Customer Check Action
+            if st.button("📱 בדיקה מול לקוח", key=f"check_{selected_lead['id']}", help="Send a WhatsApp message to the customer to verify job completion.", width='stretch'):
+                try:
+                    # Running async function from sync Streamlit context
+                    asyncio.run(send_customer_completion_check(selected_lead['id'], triggered_by="admin"))
+                    st.success("✅ Sent completion check to customer!")
+                except Exception as e:
+                    st.error(f"Failed to send check: {e}")
 
             if st.session_state.get(f"confirm_delete_{selected_lead['id']}"):
                 st.warning(T.get("confirm_delete", "Are you sure?"))
