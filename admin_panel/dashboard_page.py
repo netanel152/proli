@@ -36,15 +36,39 @@ def view_leads_dashboard(T):
         
         pro_cache = {p["_id"]: p["business_name"] for p in users_collection.find()}
 
-        data = [{
-            "id": str(l["_id"]),
-            "date": l["created_at"].astimezone(pytz.timezone('Asia/Jerusalem')),
-            "client": l["chat_id"].replace("@c.us", ""),
-            "professional": pro_cache.get(l.get("pro_id"), T["unknown_pro"]),
-            "details": l["details"],
-            "status": l.get("status", "N/A"),
-            "_chat_id": l["chat_id"] # Hidden column for actions
-        } for l in leads]
+        data = []
+        for l in leads:
+            # Format Details Summary
+            issue = l.get("issue_type", l.get("details", ""))
+            time = l.get("appointment_time", "?")
+            addr = l.get("full_address", "?")
+            
+            # Smart parsing fallback if enriched fields are missing but [DEAL] tag exists in details
+            if not l.get("issue_type") and "[DEAL:" in str(l.get("details", "")):
+                 try:
+                     parts = l["details"].split("[DEAL:")[1].split("]")[0].split("|")
+                     if len(parts) >= 3:
+                         time = parts[0].strip()
+                         addr = parts[1].strip()
+                         issue = parts[2].strip()
+                 except:
+                     pass
+            
+            # Fallback if enrichment failed
+            if not l.get("issue_type") and not issue:
+                display_details = l["details"]
+            else:
+                display_details = f"🔧 {issue} | 🕒 {time} | 📍 {addr}"
+
+            data.append({
+                "id": str(l["_id"]),
+                "date": l["created_at"].astimezone(pytz.timezone('Asia/Jerusalem')),
+                "client": l["chat_id"].replace("@c.us", ""),
+                "professional": pro_cache.get(l.get("pro_id"), T["unknown_pro"]),
+                "details_summary": display_details,
+                "status": l.get("status", "N/A"),
+                "_chat_id": l["chat_id"] 
+            })
         return pd.DataFrame(data)
 
     leads_df = get_leads_data()
@@ -76,8 +100,8 @@ def view_leads_dashboard(T):
         leads_df,
         key="leads_editor",
         column_config={
-            "id": None, # Hide ID column
-            "_chat_id": None, # Hide chat_id helper column
+            "id": None, 
+            "_chat_id": None, 
             "date": st.column_config.DatetimeColumn(
                 T["col_date"],
                 format="D MMM YYYY, h:mm a",
@@ -85,16 +109,17 @@ def view_leads_dashboard(T):
             ),
             "client": st.column_config.TextColumn(T["col_client"], width="small"),
             "professional": st.column_config.TextColumn(T["col_pro"], width="small"),
-            "details": st.column_config.TextColumn(T["col_details"], width="large"),
+            "details_summary": st.column_config.TextColumn(T["col_details"], width="large", help="Summary of the request"),
             "status": st.column_config.SelectboxColumn(
                 T["col_status"],
                 options=status_options,
                 width="small",
+                required=True
             )
         },
         width='stretch',
         hide_index=True,
-        num_rows="dynamic" # Allows additions/deletions, though we handle them manually
+        num_rows="dynamic"
     )
 
     # --- Actions for Edited and Selected Data ---
@@ -109,15 +134,17 @@ def view_leads_dashboard(T):
             for row_idx, changed_data in changes.items():
                 lead_id = st.session_state.original_leads_df.iloc[row_idx]["id"]
                 
-                # Sanitize changed data to only include valid fields
-                update_payload = {k: v for k, v in changed_data.items() if k in ["details", "status"]}
+                # Sanitize changed data
+                update_payload = {}
+                if "status" in changed_data:
+                    update_payload["status"] = changed_data["status"]
                 
                 if update_payload:
                     leads_collection.update_one({"_id": ObjectId(lead_id)}, {"$set": update_payload})
                     updated_count += 1
             
             st.success(f"{updated_count} leads updated successfully!")
-            st.cache_data.clear() # Clear data cache to force reload
+            st.cache_data.clear() 
             st.rerun()
 
     st.markdown("---")
@@ -125,7 +152,7 @@ def view_leads_dashboard(T):
     # 2. Actions on Selected Row
     selected_rows = st.session_state.leads_editor.get("selection", {}).get("rows", [])
     if selected_rows:
-        selected_row_index = selected_rows[0] # Get the first selected row
+        selected_row_index = selected_rows[0]
         selected_lead = edited_df.iloc[selected_row_index]
         
         st.subheader(f"{T['action_update']}: {selected_lead['client']}")
@@ -140,7 +167,6 @@ def view_leads_dashboard(T):
             # Manual Customer Check Action
             if st.button("📱 בדיקה מול לקוח", key=f"check_{selected_lead['id']}", help="Send a WhatsApp message to the customer to verify job completion.", width='stretch'):
                 try:
-                    # Running async function from sync Streamlit context
                     asyncio.run(send_customer_completion_check(selected_lead['id'], triggered_by="admin"))
                     st.success("✅ Sent completion check to customer!")
                 except Exception as e:
@@ -162,11 +188,14 @@ def view_leads_dashboard(T):
         with c2:
             # Chat History Action
             chat_id = selected_lead["_chat_id"]
+            # Use messages_collection to fetch history
             msgs = list(messages_collection.find({"chat_id": chat_id}).sort("timestamp", 1))
-            with st.expander(f"💬 {T['chat_history']} ({len(msgs)})"):
+            
+            with st.expander(f"💬 {T['chat_history']} ({len(msgs)})", expanded=True):
                 if msgs:
+                    # Scrollable container for chat bubbles
                     with st.container(height=400, border=False):
-                        html_chat = "".join(render_chat_bubble(m['text'], m['role'], m['timestamp'], T) for m in msgs)
+                        html_chat = "".join(render_chat_bubble(m['text'], m['role'], m.get('timestamp'), T) for m in msgs)
                         st.markdown(f'<div class="chat-container">{html_chat}</div>', unsafe_allow_html=True)
                 else:
                     st.info(T["no_chat"])
