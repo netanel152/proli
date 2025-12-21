@@ -30,8 +30,8 @@
 
 - **Backend:** Python 3.12+, FastAPI
 - **Frontend (Admin):** Streamlit
-- **AI Engine:** Google Gemini (Generative AI)
-- **Database:** MongoDB Atlas
+- **AI Engine:** Google Gemini (via new `google-genai` SDK)
+- **Database:** MongoDB Atlas (Async via `motor`)
 - **Messaging:** WhatsApp (via Green API)
 - **Media Storage:** Cloudinary
 - **Deployment:** Docker / Heroku ready (Procfile included)
@@ -69,7 +69,7 @@
 ## 📂 Project Structure
 
 ```text
-D:\Projects\fixi-backend\
+fixi-backend/
 ├── app/                        # FastAPI Backend Application
 │   ├── core/                   # Config & Database connections
 │   ├── services/               # Core Business Logic (AI, WhatsApp)
@@ -77,12 +77,13 @@ D:\Projects\fixi-backend\
 │   └── scheduler.py            # Daily Reminders Task
 ├── admin_panel/                # Streamlit Admin Dashboard
 │   ├── app.py                  # Entry Point
-│   ├── pages.py                # UI Views
+│   ├── page_views/             # UI Views
 │   └── auth.py                 # Authentication Logic
 ├── scripts/                    # Utility Scripts
 │   ├── seed_db.py              # Reset & Populate DB with Test Data
-│   └── clear_history.py        # Wipe Chat Logs
-├── tests/                      # Automated Tests
+│   └── test_connection.py      # Verify API and DB connections
+├── tests/                      # Automated Tests (Pytest)
+├── GEMINI.md                   # AI Agent Instruction Context
 ├── Procfile                    # Heroku Deployment Config
 └── requirements.txt            # Dependencies
 ```
@@ -144,5 +145,11 @@ streamlit run admin_panel/app.py
 Run the full automated test suite to verify routing, booking, and logic:
 
 ```bash
-python -m pytest tests/test_full_flow.py
+pytest tests/test_full_flow.py
 ```
+
+---
+
+## 🤖 AI Context
+
+This project includes a `GEMINI.md` file designed to provide immediate context for AI assistants (like Gemini, Copilot, or Cursor). It contains architectural insights, key commands, and development conventions.

@@ -7,16 +7,26 @@ from datetime import datetime, timedelta
 import pytz
 
 # --- HELPERS ---
-def create_mock_model(intent="UNKNOWN", response_text="Mock AI Response"):
-    """Helper to create a fresh mock model for each test step"""
-    mock_chat = MagicMock()
-    mock_chat.send_message_async = AsyncMock(return_value=MagicMock(text=response_text))
+def setup_mock_client(monkeypatch, intent="UNKNOWN", response_text="Mock AI Response"):
+    """Helper to configure the mock client in app.services.logic"""
+    mock_client = MagicMock()
+    mock_client.models = MagicMock()
+    mock_client.files = MagicMock()
+    mock_client.files.upload = AsyncMock(return_value=MagicMock(uri="mock", mime_type="image/png"))
+
+    async def side_effect(*args, **kwargs):
+        # kwargs might contain 'config' which has 'response_mime_type'
+        config = kwargs.get('config')
+        if config and getattr(config, 'response_mime_type', '') == 'application/json':
+             return MagicMock(text=f'{{"intent": "{intent}", "hour": 16, "day": "TOMORROW"}}')
+        return MagicMock(text=response_text)
+
+    mock_client.models.generate_content = AsyncMock(side_effect=side_effect)
     
-    mock_model = MagicMock()
-    mock_model.start_chat.return_value = mock_chat
-    # Mock for analyze_pro_intent (JSON response)
-    mock_model.generate_content_async = AsyncMock(return_value=MagicMock(text=f'{{"intent": "{intent}", "hour": 16, "day": "TOMORROW"}}'))
-    return mock_model
+    import app.services.logic
+    monkeypatch.setattr(app.services.logic, "client", mock_client)
+    
+    return mock_client
 
 @pytest.mark.asyncio
 async def test_full_lifecycle(mock_db, monkeypatch):
@@ -36,14 +46,11 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     }
     await mock_db.users.insert_one(pro_data)
     pro = await mock_db.users.find_one({"business_name": "יוסי אינסטלציה"})
-    pro_id_str = str(pro["_id"])
     pro_chat_id = "972524828796@c.us"
     user_chat_id = "972501234567@c.us"
 
     # 2. USER: "I need a plumber in Tel Aviv" (Routing)
-    # Mock AI for conversational response
-    mock_model_1 = create_mock_model(intent="UNKNOWN", response_text="Hello! I am Yossi, how can I help?")
-    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_1))
+    setup_mock_client(monkeypatch, intent="UNKNOWN", response_text="Hello! I am Yossi, how can I help?")
     
     resp1 = await ask_fixi_ai("I need a plumber in Tel Aviv", user_chat_id)
     
@@ -54,8 +61,7 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     assert "Yossi" in resp1
 
     # 3. USER: "Book me for tomorrow 10:00" (Deal)
-    mock_model_2 = create_mock_model(intent="UNKNOWN", response_text="Done. [DEAL: Fix leak | Tel Aviv | 10:00]")
-    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_2))
+    setup_mock_client(monkeypatch, intent="UNKNOWN", response_text="Done. [DEAL: Fix leak | Tel Aviv | 10:00]")
     
     resp2 = await ask_fixi_ai("Book me for tomorrow 10:00", user_chat_id)
     
@@ -65,19 +71,17 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     assert "Fix leak" in lead["details"]
 
     # 4. PRO: "Get Work" (Pull Lead)
-    mock_model_3 = create_mock_model(intent="GET_WORK")
-    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_3))
+    setup_mock_client(monkeypatch, intent="GET_WORK")
     
     resp3 = await ask_fixi_ai("get work", pro_chat_id)
     
-    assert "קיבלת עבודה חדשה" in resp3
+    assert "מצאתי עבודה באזור שלך" in resp3
     updated_lead = await mock_db.leads.find_one({"_id": lead["_id"]})
     assert updated_lead["status"] == "booked"
     assert updated_lead["pro_id"] == pro["_id"]
 
     # 5. PRO: "Vacation Tomorrow" (Blocking)
-    mock_model_4 = create_mock_model(intent="VACATION")
-    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_4))
+    setup_mock_client(monkeypatch, intent="VACATION")
     
     # Insert some slots to block
     tomorrow = datetime.now(pytz.utc) + timedelta(days=1)
@@ -95,8 +99,7 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     assert slot["is_taken"] is True
 
     # 6. PRO: "Finish Job" (Completion)
-    mock_model_5 = create_mock_model(intent="FINISH_JOB")
-    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model_5))
+    setup_mock_client(monkeypatch, intent="FINISH_JOB")
     
     resp5 = await ask_fixi_ai("Job done", pro_chat_id)
     assert "העבודה הושלמה" in resp5
@@ -120,9 +123,11 @@ async def test_pro_block_command(mock_db, monkeypatch):
     pro_id = result.inserted_id
     chat_id = "123456@c.us"
     
-    # Create Slot at 16:00 UTC
-    now = datetime.now(pytz.timezone('Asia/Jerusalem'))
-    target_time_il = now.replace(hour=16, minute=0, second=0, microsecond=0)
+    # Create Slot at 16:00 TOMORROW (matching mock)
+    # The mock returns day="TOMORROW", hour=16
+    now_il = datetime.now(pytz.timezone('Asia/Jerusalem'))
+    tomorrow_il = now_il + timedelta(days=1)
+    target_time_il = tomorrow_il.replace(hour=16, minute=0, second=0, microsecond=0)
     target_time_utc = target_time_il.astimezone(pytz.utc)
     
     await mock_db.slots.insert_one({
@@ -132,10 +137,7 @@ async def test_pro_block_command(mock_db, monkeypatch):
     })
     
     # Mock Intent: BLOCK 16
-    mock_model = create_mock_model(intent="BLOCK")
-    # Need to ensure the 'hour' in the mock return matches our test case
-    mock_model.generate_content_async = AsyncMock(return_value=MagicMock(text='{"intent": "BLOCK", "hour": 16, "day": "TODAY"}'))
-    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model))
+    setup_mock_client(monkeypatch, intent="BLOCK")
     
     resp = await ask_fixi_ai("block 16:00", chat_id)
     
@@ -150,12 +152,7 @@ async def test_pro_show_schedule(mock_db, monkeypatch):
     pro_id = result.inserted_id
     chat_id = "123456@c.us"
     
-    # Mock the leads_collection.find logic to avoid mongomock datetime query issues
-    # We need to mock it specifically for the module where it is used (app.services.logic)
-    
     mock_leads_collection = MagicMock()
-    
-    # Create a dummy lead object that behaves like a dictionary
     mock_lead = {
         "pro_id": pro_id,
         "status": "booked",
@@ -164,20 +161,14 @@ async def test_pro_show_schedule(mock_db, monkeypatch):
         "chat_id": "999@c.us"
     }
     
-    # The code calls: leads_collection.find(...).sort(...)
-    # So we need to mock the chain
     mock_cursor = MagicMock()
-    mock_cursor.to_list = AsyncMock(return_value=[mock_lead]) # to_list is async
-    
-    # find() returns the cursor, sort() returns the cursor
+    mock_cursor.to_list = AsyncMock(return_value=[mock_lead])
     mock_leads_collection.find.return_value = mock_cursor
     mock_cursor.sort.return_value = mock_cursor
     
-    # Patch it in app.services.logic
     monkeypatch.setattr("app.services.logic.leads_collection", mock_leads_collection)
 
-    mock_model = create_mock_model(intent="SHOW")
-    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model))
+    setup_mock_client(monkeypatch, intent="SHOW")
     
     resp = await ask_fixi_ai("show schedule", chat_id)
     
