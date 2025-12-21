@@ -1,18 +1,17 @@
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Request
 from app.schemas.whatsapp import WebhookPayload
-from app.services.logic import ask_fixi_ai, send_whatsapp
+from app.services.workflow import process_incoming_message, handle_pro_response
+from app.core.logger import logger
 from app.scheduler import start_scheduler
 from contextlib import asynccontextmanager
-from rich.console import Console
-from app.core.logger import logger
-import traceback
-
-console = Console()
+import uvicorn
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Startup
     start_scheduler()
     yield
+    # Shutdown
 
 app = FastAPI(title="Fixi Bot Server", lifespan=lifespan)
 
@@ -21,64 +20,64 @@ def health_check():
     return {"status": "Fixi is running! 🚀"}
 
 @app.post("/webhook")
-async def handle_incoming_message(payload: WebhookPayload, background_tasks: BackgroundTasks):
-    # 1. סינון ראשוני: רק הודעות נכנסות או יוצאות
-    if payload.typeWebhook not in ["incomingMessageReceived", "outgoingMessageReceived"]:
-        return {"status": "ignored"}
-    
-    if not payload.senderData:
-        return {"status": "ignored_no_sender"}
-    
-    # שליפת Chat ID
-    chat_id = payload.senderData.chatId
-    
-    # 2. סינון קבוצות (הכי חשוב!)
-    # קבוצות בוואטסאפ מסתיימות ב- @g.us
-    if chat_id.endswith("@g.us"):
-        return {"status": "ignored_group"}
-
-    user_text = None
-    media_url = None
-    msg = payload.messageData
-
-    if not msg: return {"status": "no_data"}
-
-    # 3. זיהוי סוג ההודעה
-    msg_type = msg.typeMessage
-    
-    if msg_type == "textMessage" and msg.textMessageData:
-        user_text = msg.textMessageData.textMessage
-        
-    elif msg_type == "extendedTextMessage" and msg.extendedTextMessageData:
-        user_text = msg.extendedTextMessageData.text
-        
-    elif msg_type == "imageMessage" and msg.fileMessageData:
-        media_url = msg.fileMessageData.downloadUrl
-        user_text = msg.fileMessageData.caption 
-        console.print("[magenta]📷 Image Received![/magenta]")
-        
-    elif msg_type == "audioMessage" and msg.fileMessageData:
-        media_url = msg.fileMessageData.downloadUrl
-        console.print("[magenta]🎤 Voice Note Received![/magenta]")
-
-    if not user_text and not media_url:
-        console.print(f"[yellow]⚠️ Received unknown message type: {msg_type}[/yellow]")
-        return {"status": "unknown_type"}
-        
-    log_text = user_text or "[Media File]"
-    console.print(f"[bold blue]📨 New Message from {chat_id}:[/bold blue] {log_text}")
-
-    # 4. שליחה ללוגיקה
-    background_tasks.add_task(process_message, chat_id, user_text, media_url)
-    return {"status": "processing"}
-
-async def process_message(chat_id: str, user_text: str, media_url: str = None):
-    # כאן הבוט עונה
+async def webhook_endpoint(payload: WebhookPayload, background_tasks: BackgroundTasks):
+    """
+    Main entry point for Green API Webhooks.
+    """
     try:
-        logger.info(f"Processing message for {chat_id}")
-        ai_reply = await ask_fixi_ai(user_text, chat_id, media_url)
-        await send_whatsapp(chat_id, ai_reply)
-        logger.info(f"Message sent to {chat_id}")
+        # 1. Basic Filters
+        if payload.typeWebhook == "incomingMessageReceived":
+            sender_data = payload.senderData
+            msg_data = payload.messageData
+            
+            if not sender_data or not msg_data:
+                return {"status": "ignored_no_data"}
+            
+            chat_id = sender_data.chatId
+            
+            # Group Filter
+            if chat_id.endswith("@g.us"):
+                return {"status": "ignored_group"}
+
+            # Extract User Text
+            user_text = ""
+            media_url = None
+            
+            if msg_data.typeMessage == "textMessage":
+                user_text = msg_data.textMessageData.textMessage
+            elif msg_data.typeMessage == "extendedTextMessage":
+                user_text = msg_data.extendedTextMessageData.text
+            elif msg_data.typeMessage in ["imageMessage", "audioMessage"]:
+                # Basic media handling if needed, existing logic had it
+                if msg_data.fileMessageData:
+                    media_url = msg_data.fileMessageData.downloadUrl
+                    user_text = msg_data.fileMessageData.caption or ""
+
+            # Check if it's a Button Response (Green API treats this as a specific type or subtype)
+            # In some Green API versions, button response comes as incomingMessageReceived with typeMessage='buttonsResponseMessage'
+            if msg_data.typeMessage == "buttonsResponseMessage":
+                # Convert Pydantic model to dict for workflow handler or pass necessary data
+                # We need to construct a dict-like payload for handle_pro_response or change its signature
+                # Let's re-use the Pydantic model dump or pass specific args.
+                # 'handle_pro_response' expects a dict in my implementation above.
+                background_tasks.add_task(handle_pro_response, payload.model_dump())
+                return {"status": "processing_button"}
+
+            # Process Standard Message
+            background_tasks.add_task(process_incoming_message, chat_id, user_text, media_url)
+            return {"status": "processing_message"}
+
+        elif payload.typeWebhook == "incomingBlock": 
+            # Sometimes button clicks come here depending on API config
+            # But usually 'incomingMessageReceived' with 'buttonsResponseMessage' type.
+            # We'll leave this for safety.
+            pass
+
+        return {"status": "ignored_type"}
+
     except Exception as e:
-        logger.error(f"Error in process_message: {e}")
-        logger.error(traceback.format_exc())
+        logger.error(f"Webhook Error: {e}")
+        return {"status": "error"}
+
+if __name__ == "__main__":
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)

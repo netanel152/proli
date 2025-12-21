@@ -1,7 +1,8 @@
 import urllib.parse
 from bson import ObjectId
 import httpx
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from app.core.config import settings
 from app.core.database import users_collection, messages_collection, leads_collection, slots_collection
 from app.core.logger import logger
@@ -20,7 +21,8 @@ from datetime import datetime, timedelta, timezone
 import traceback
 import asyncio
 
-genai.configure(api_key=settings.GEMINI_API_KEY)
+# Initialize Google GenAI Client
+client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
 # Configure Cloudinary
 cloudinary.config(
@@ -37,8 +39,12 @@ IL_TZ = pytz.timezone('Asia/Jerusalem')
     wait=wait_random_exponential(multiplier=1, min=2, max=30),
     stop=stop_after_attempt(3)
 )
-async def _generate_with_retry(chat_session, content_parts):
-    return await chat_session.send_message_async(content_parts)
+async def _generate_with_retry(model_name, contents, config):
+    return await client.models.generate_content(
+        model=model_name,
+        contents=contents,
+        config=config
+    )
 
 async def save_message(chat_id: str, role: str, text: str, pro_id: str = None):
     msg_doc = {"chat_id": chat_id, "role": role, "text": text, "timestamp": datetime.now()}
@@ -52,7 +58,10 @@ async def get_chat_history(chat_id: str, limit: int = 20):
     formatted = []
     last_pro_id = None
     for msg in history:
-        formatted.append({"role": "user" if msg["role"] == "user" else "model", "parts": [msg["text"]]})
+        # Convert to strict string to avoid issues
+        text = str(msg.get("text", ""))
+        role = "user" if msg["role"] == "user" else "model"
+        formatted.append({"role": role, "parts": [text]})
         if "pro_id" in msg: last_pro_id = msg["pro_id"]
     return formatted, last_pro_id
 
@@ -66,7 +75,6 @@ async def determine_current_pro(user_text: str, last_pro_id: str = None):
         return await users_collection.find_one({"business_name": "יוסי אינסטלציה"})
 
     # 2. Location Switch (Exact City Match)
-    # Note: Fetching all active pros to scan areas (could be optimized with DB query, but acceptable for small scale)
     active_pros = await users_collection.find({"is_active": True}).to_list(length=None)
     
     for pro in active_pros:
@@ -101,11 +109,11 @@ async def get_dynamic_prompt(pro_data):
     instructions = """
 *** הנחיות שפה וטון (Persona) ***
 1. היה קצר ותמציתי (עד 2 משפטים). בלי הקדמות. השתמש באימוג'י אחד בלבד. 🛠️
-2. טון: ישראלי, "דוגרי", יעיל ואדיב.
+2. טון: ישראלי, \"דוגרי\", יעיל ואדיב.
 
 *** מדיניות מחירים והגנה משפטית ***
 1. מחיר: ציין עלות ביקור והדגש שהיא מתקזזת בתיקון. 
-2. הסתייגות: הבהר שכל מחיר הוא הערכה בלבד והמחיר המחייב ייקבע רק ע"י איש המקצוע בשטח.
+2. הסתייגות: הבהר שכל מחיר הוא הערכה בלבד והמחיר המחייב ייקבע רק ע\"י איש המקצוע בשטח.
 3. תיווך: ציין ש-Fixi היא פלטפורמת תיווך והאחריות על העבודה היא על איש המקצוע בלבד.
 
 *** חילוץ פרטי עסקה [DEAL] ***
@@ -165,8 +173,11 @@ async def analyze_pro_intent(text: str):
     Output JSON: {{ "intent": "...", "hour": int, "day": "TODAY"|"TOMORROW" }}
     """
     try:
-        model = genai.GenerativeModel('gemini-2.5-flash-lite', generation_config={"response_mime_type": "application/json"})
-        response = await model.generate_content_async(prompt)
+        response = await client.models.generate_content(
+            model='gemini-2.5-flash-lite',
+            contents=prompt,
+            config=types.GenerateContentConfig(response_mime_type="application/json")
+        )
         return json.loads(response.text)
     except Exception as e:
         logger.error(f"Intent Analysis Error: {e}")
@@ -281,12 +292,10 @@ async def handle_pro_command(chat_id: str, text: str):
             return "❌ לא הוגדרו אזורי שירות עבורך. לא ניתן למצוא עבודות."
 
         for lead in all_new_leads:
-            # בדיקה 1: האם הליד כבר שויך אליי ספציפית? (חזק יותר ממיקום)
             if lead.get("pro_id") == pro["_id"]:
                 selected_lead = lead
                 break
             
-            # בדיקה 2: האם יש התאמה של עיר בטקסט (עבור לידים ללא שיוך)
             lead_details_lower = lead.get("details", "").lower()
             if any(area in lead_details_lower for area in my_areas):
                 selected_lead = lead
@@ -296,17 +305,13 @@ async def handle_pro_command(chat_id: str, text: str):
             areas_str = ", ".join(pro.get("service_areas", []))
             return f"📭 אין עבודות חדשות כרגע באזורים שלך ({areas_str})."
 
-        # 3. עדכון הסטטוס (תפיסת העבודה)
         await leads_collection.update_one(
             {"_id": selected_lead["_id"]},
             {"$set": {"status": "booked", "pro_id": pro["_id"]}}
         )
         
-        # 4. הכנת ההודעה המפורטת
         details = selected_lead.get("details", "")
         client_phone = selected_lead['chat_id'].replace('@c.us', '')
-        
-        # יצירת לינק ל-Waze
         waze_url = f"https://waze.com/ul?q={urllib.parse.quote(details)}"
         
         msg = (
@@ -314,11 +319,10 @@ async def handle_pro_command(chat_id: str, text: str):
             f"📝 *תיאור:* {details}\\n"
             f"📞 *לקוח:* {client_phone}\\n"
             f"📍 *אזור:* תואם לאזורי השירות שלך\\n"
-            f"🚗 *ניווט:* {waze_url}\\n\\n"
+            f"🚗 *ניווט:* {waze_url}\\n\n"
             f"בהצלחה! סמן 'סיימתי' כשתסיים."
         )
         
-        # 5. שליחת תמונה אם קיימת
         if selected_lead.get("media_url"):
             await send_whatsapp_file(chat_id, selected_lead["media_url"], caption="📷 תמונה מצורפת מהלקוח")
             
@@ -347,29 +351,25 @@ async def handle_pro_command(chat_id: str, text: str):
         return f"🏝️ חסמתי לך את כל היום ב-{display_date}."
     
     elif intent == "CONFIRM":
-        # Find the latest lead for this pro that is pending confirmation
         last_new_lead = await leads_collection.find_one(
             {"pro_id": pro["_id"], "status": "New"},
             sort=[("created_at", -1)]
         )
 
         if not last_new_lead:
-            # Fallback: check if the last job was already booked, to provide a better message.
             last_booked_lead = await leads_collection.find_one(
                 {"pro_id": pro["_id"], "status": "booked"},
                 sort=[("created_at", -1)]
             )
             if last_booked_lead:
-                 return "👍 העבודה כבר אצלך במערכת."
+                return "👍 העבודה כבר אצלך במערכת."
             return "🤔 לא מצאתי עבודה חדשה לאישור."
 
-        # Mark lead as booked
         await leads_collection.update_one(
             {"_id": last_new_lead["_id"]},
             {"$set": {"status": "booked"}}
         )
 
-        # Try to find and block the corresponding slot
         lead_details = last_new_lead.get("details", "")
         time_match = re.search(r"(\d{1,2}:\d{2})", lead_details)
         date_match = re.search(r"(\d{1,2})/(\d{1,2})", lead_details)
@@ -385,18 +385,15 @@ async def handle_pro_command(chat_id: str, text: str):
                 now_il = datetime.now(IL_TZ)
                 target_time_il = now_il.replace(month=month, day=day, hour=hour, minute=minute, second=0, microsecond=0)
                 
-                # Handle year-end crossover (e.g., booking from Dec to Jan)
                 if target_time_il < now_il and now_il.month == 12 and target_time_il.month == 1:
                     target_time_il = target_time_il.replace(year=now_il.year + 1)
 
                 search_utc = target_time_il.astimezone(pytz.utc)
 
-                # Atomically find and update the slot to prevent race conditions
                 slot_update_result = await slots_collection.update_one(
                     {
                         "pro_id": pro["_id"], 
                         "is_taken": False,
-                        # Find slot that contains the appointment time
                         "start_time": {"$lte": search_utc}, 
                         "end_time": {"$gt": search_utc}
                     },
@@ -419,21 +416,19 @@ async def handle_customer_completion_response(chat_id: str, text: str):
     if "כן, הסתיים" not in text:
         return None
 
-    # Find the last 'booked' lead for this customer that is not yet completed.
     lead = await leads_collection.find_one({
         "chat_id": chat_id,
         "status": "booked"
     }, sort=[("created_at", -1)])
 
     if not lead:
-        return None # No active job to close.
+        return None
 
     pro = await users_collection.find_one({"_id": lead["pro_id"]})
     if not pro:
         logger.warning(f"Could not find pro for lead {lead['_id']} during customer completion confirmation.")
         return "תודה על העדכון, אבל היתה בעיה בעדכון המערכת."
 
-    # 1. Update Lead to 'completed'
     await leads_collection.update_one(
         {"_id": lead["_id"]},
         {
@@ -446,12 +441,10 @@ async def handle_customer_completion_response(chat_id: str, text: str):
     )
     logger.success(f"✅ Lead {lead['_id']} marked as COMPLETED by customer.")
 
-    # 2. Notify Pro
     if pro.get("phone_number"):
         pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
         await send_whatsapp_message(pro_chat_id, "👍 הלקוח דיווח שהעבודה הסתיימה. הסטטוס עודכן.")
 
-    # 3. Trigger Rating Flow by sending the rating question to the customer
     feedback_msg = f"מעולה! שמחים לשמוע. איך היה השירות עם {pro.get('business_name', 'המקצוען')}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מעולה)."
     return feedback_msg
 
@@ -510,9 +503,6 @@ async def download_and_store_media(url: str):
         secure_url = None
         try:
             logger.info(f"☁️ Uploading to Cloudinary...")
-            # Running synchronous Cloudinary upload in threadpool if needed, 
-            # but for simplicity in this refactor keeping it direct or using asyncio.to_thread is better practice.
-            # Assuming basic sync usage is acceptable for MVP, but to be strictly non-blocking:
             import asyncio
             upload_result = await asyncio.to_thread(cloudinary.uploader.upload, temp_path, resource_type="auto")
             secure_url = upload_result.get("secure_url")
@@ -565,7 +555,6 @@ async def ask_fixi_ai(user_text: str, chat_id: str, media_url: str = None) -> st
 
         current_pro = await determine_current_pro(user_text or "", last_pro_id)
         
-        
         generic_sys_prompt = """Role: Service Dispatcher. Name: Fixi.
 Goal: Ask for Location and Problem briefly to find the right professional.
 Tone: Human, direct, efficient. Hebrew language.
@@ -576,36 +565,55 @@ Example response: 'היי, באיזו עיר אתם נמצאים ומה התקל
 
         if not current_pro:
             sys_prompt = generic_sys_prompt
-            model = genai.GenerativeModel('gemini-2.5-flash-lite', system_instruction=sys_prompt)
-            chat = model.start_chat(history=history)
-            pro_id_for_message = None # No professional assigned yet
+            pro_id_for_message = None
         else:
             sys_prompt = await get_dynamic_prompt(current_pro)
-            model = genai.GenerativeModel('gemini-2.5-flash-lite', system_instruction=sys_prompt)
-            chat = model.start_chat(history=history)
             pro_id_for_message = current_pro["_id"]
 
         log_text = user_text or "[Media Message]"
         if cloudinary_url: log_text += f" (URL: {cloudinary_url})"
         await save_message(chat_id, "user", log_text, pro_id_for_message)
         
-        # Define legal welcome message
         legal_welcome = "היי! אני פיקסי. 👋 חשוב שתדעו: פיקסי היא פלטפורמת תיווך בלבד. האחריות על ביצוע העבודה והתשלום היא בינך לבין איש המקצוע. בהמשך השיחה אתה מאשר את תנאי השימוש שלנו. \n\nבאיזו עיר אתם ומה התקלה? 🔧"
         
-        content_parts = []
+        # Build contents for new API
+        contents = []
+        
+        # 1. Add History
+        for msg in history:
+            contents.append(types.Content(
+                role=msg["role"],
+                parts=[types.Part(text=p) for p in msg.get("parts", [])]
+            ))
+
+        # 2. Add New Message Parts
+        new_parts = []
         if temp_path and os.path.exists(temp_path):
             try:
-                uploaded_file = await asyncio.to_thread(genai.upload_file, temp_path)
-                content_parts.append(uploaded_file)
-                if temp_path.endswith(".ogg"): content_parts.append("המשתמש שלח הקלטה. הקשב וענה.")
-                else: content_parts.append("המשתמש שלח תמונה. נתח אותה.")
+                # Use client.files.upload
+                uploaded_file = await client.files.upload(path=temp_path)
+                
+                new_parts.append(types.Part(
+                    file_data=types.FileData(file_uri=uploaded_file.uri, mime_type=uploaded_file.mime_type)
+                ))
+                
+                if temp_path.endswith(".ogg"): 
+                    new_parts.append(types.Part(text="המשתמש שלח הקלטה. הקשב וענה."))
+                else: 
+                    new_parts.append(types.Part(text="המשתמש שלח תמונה. נתח אותה."))
             except Exception as e: logger.error(f"Gemini Upload Error: {e}")
 
-        if user_text: content_parts.append(user_text)
+        if user_text:
+            new_parts.append(types.Part(text=user_text))
 
-        if not content_parts: return "סליחה, הייתה בעיה בקבלת הקובץ."
+        if not new_parts: 
+            return "סליחה, הייתה בעיה בקבלת הקובץ."
 
-        response = await _generate_with_retry(chat, content_parts)
+        contents.append(types.Content(role="user", parts=new_parts))
+
+        # 3. Generate
+        config = types.GenerateContentConfig(system_instruction=sys_prompt)
+        response = await _generate_with_retry('gemini-2.0-flash-lite', contents, config)
         reply_text = response.text.strip()
         
         if temp_path and os.path.exists(temp_path): os.remove(temp_path)
@@ -613,7 +621,7 @@ Example response: 'היי, באיזו עיר אתם נמצאים ומה התקל
         if len(history) == 0:
             reply_text = legal_welcome + "\n\n" + reply_text
 
-        deal_match = re.search(r"\[DEAL:(.*?)\]", reply_text)
+        deal_match = re.search(r"(\[DEAL:.*?\])", reply_text)
         if deal_match:
             lead_details = deal_match.group(1).strip()
             final_media_url = cloudinary_url if cloudinary_url else media_url
@@ -708,4 +716,3 @@ async def send_customer_completion_check(lead_id: str, triggered_by: str = "auto
         logger.success(f"Sent customer completion check for lead {lead_id} (Trigger: {triggered_by})")
     except Exception as e:
         logger.error(f"Error in send_customer_completion_check for lead {lead_id}: {e}")
-

@@ -14,17 +14,12 @@ def mock_db():
 @pytest.fixture(autouse=True)
 def patch_dependencies(monkeypatch, mock_db):
     # Patch Database Collections
-    # We need to patch them where they are USED or where they are DEFINED if we can intercept before import.
-    # Since imports happen at top of file, we might need to patch them in 'app.services.logic' AND 'app.core.database'
-    
-    # Let's create mock collections
     users = mock_db.users
     messages = mock_db.messages
     leads = mock_db.leads
     slots = mock_db.slots
     settings = mock_db.settings
     
-    # Patch in app.core.database (source)
     import app.core.database
     monkeypatch.setattr(app.core.database, "users_collection", users)
     monkeypatch.setattr(app.core.database, "messages_collection", messages)
@@ -32,39 +27,38 @@ def patch_dependencies(monkeypatch, mock_db):
     monkeypatch.setattr(app.core.database, "slots_collection", slots)
     monkeypatch.setattr(app.core.database, "settings_collection", settings)
 
-    # Patch in app.services.logic (destination)
     import app.services.logic
     monkeypatch.setattr(app.services.logic, "users_collection", users)
     monkeypatch.setattr(app.services.logic, "messages_collection", messages)
     monkeypatch.setattr(app.services.logic, "leads_collection", leads)
     monkeypatch.setattr(app.services.logic, "slots_collection", slots)
     
-    # Patch in app.scheduler (destination)
     import app.scheduler
     monkeypatch.setattr(app.scheduler, "users_collection", users)
     monkeypatch.setattr(app.scheduler, "leads_collection", leads)
     monkeypatch.setattr(app.scheduler, "settings_collection", settings)
 
     # Patch External APIs
-    # Whatsapp
-    # Logic
     monkeypatch.setattr(app.services.logic, "send_whatsapp_message", AsyncMock())
     monkeypatch.setattr(app.services.logic, "send_whatsapp_file", AsyncMock())
-    # Scheduler
     monkeypatch.setattr(app.scheduler, "send_whatsapp_message", AsyncMock())
     
-    # Google Gemini
-    # We need to mock the GenerativeModel
-    mock_model = MagicMock()
-    mock_chat = MagicMock()
-    # Default response
-    mock_chat.send_message_async = AsyncMock(return_value=MagicMock(text="Mock AI Response"))
-    mock_model.start_chat.return_value = mock_chat
-    mock_model.generate_content_async = AsyncMock(return_value=MagicMock(text='{"intent": "UNKNOWN"}'))
+    # Google GenAI Mock
+    mock_client = MagicMock()
+    mock_client.models = MagicMock()
+    mock_client.files = MagicMock()
     
-    monkeypatch.setattr("google.generativeai.GenerativeModel", MagicMock(return_value=mock_model))
+    # Default behavior
+    mock_client.models.generate_content = AsyncMock(return_value=MagicMock(text="Mock AI Response"))
+    mock_client.files.upload = AsyncMock(return_value=MagicMock(uri="http://mock", mime_type="image/jpeg"))
+
+    # Patch class
+    monkeypatch.setattr("google.genai.Client", MagicMock(return_value=mock_client))
     
-    # We also need to mock cloudinary
+    # Patch instances
+    monkeypatch.setattr(app.services.logic, "client", mock_client)
+
+    # Mock Cloudinary
     monkeypatch.setattr(app.services.logic, "cloudinary", MagicMock())
     
     return mock_db
