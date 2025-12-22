@@ -1,7 +1,7 @@
 import streamlit as st
 from pymongo import MongoClient
 import os
-import certifi # למניעת קריסות SSL
+import certifi
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import pytz

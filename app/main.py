@@ -1,4 +1,4 @@
-from fastapi import FastAPI, BackgroundTasks, Request
+from fastapi import FastAPI, BackgroundTasks
 from app.schemas.whatsapp import WebhookPayload
 from app.services.workflow import process_incoming_message, handle_pro_response
 from app.core.logger import logger
