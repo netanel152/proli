@@ -1,94 +1,84 @@
-# Fixi - AI Automation for Professionals
+# Fixi Backend & Admin Panel - AI Developer Context
 
-## Project Overview
-**Fixi** is a dual-interface platform designed to automate scheduling and customer interaction for service professionals (e.g., plumbers, electricians).
-It consists of two main components:
-1.  **AI WhatsApp Bot (Backend):** Handles user conversations, identifies issues via text/image/audio using Google Gemini, and autonomously books appointments.
-2.  **Admin Panel (Frontend):** A web-based dashboard for professionals to manage leads, schedules, and settings.
+## 1. Project Overview
 
-## Tech Stack & Architecture
-*   **Backend:** Python 3.12+, FastAPI (Async)
-*   **Admin Frontend:** Streamlit
-*   **Database:** MongoDB Atlas (using `motor` for async access)
-*   **AI Engine:** Google Gemini (using the modern `google-genai` v1 SDK)
-*   **Messaging:** WhatsApp via Green API
-*   **Media:** Cloudinary for storage and management
+**Fixi** is an AI-powered CRM and scheduling automation platform for service professionals. It uses WhatsApp as the primary interface for both customers and professionals ("Pros").
 
-## Directory Structure
-*   `app/`: Main FastAPI backend application.
-    *   `main.py`: Entry point for the backend server and webhook handler.
-    *   `core/`: Configuration (`config.py`) and database connection (`database.py`).
-    *   `services/`: Business logic (AI processing, WhatsApp client, Workflow orchestration).
-    *   `schemas/`: Pydantic models.
-*   `admin_panel/`: Streamlit-based dashboard.
-    *   `app.py`: Entry point for the admin interface.
-    *   `page_views/`: UI components for different dashboard pages.
-*   `scripts/`: Utility scripts for maintenance and setup.
-    *   `seed_db.py`: Populates the DB with dummy data (professionals, slots).
-    *   `test_connection.py`: Verifies API keys and DB connectivity.
-*   `tests/`: Automated tests (`pytest`).
+- **User Interface:** WhatsApp (via Green API).
+- **Admin Interface:** Streamlit Dashboard.
+- **Backend:** FastAPI (Async).
+- **AI Engine:** Google Gemini (Generative AI).
+- **Database:** MongoDB Atlas.
 
-## Setup & Installation
+## 2. Architecture & Data Flow
 
-1.  **Environment Setup:**
-    ```bash
-    python -m venv venv
-    # Windows:
-    venv\Scripts\activate
-    # Unix/Mac:
-    source venv/bin/activate
-    ```
+### Core Message Flow (Active)
 
-2.  **Install Dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+The system currently uses a class-based service architecture:
 
-3.  **Configuration:**
-    Create a `.env` file in the root directory with the following keys:
-    ```env
-    MONGO_URI=mongodb+srv://...
-    GEMINI_API_KEY=...
-    GREEN_API_ID=...
-    GREEN_API_TOKEN=...
-    CLOUDINARY_CLOUD_NAME=...
-    CLOUDINARY_API_KEY=...
-    CLOUDINARY_API_SECRET=...
-    ADMIN_PASSWORD=...
-    ```
+1.  **Webhook:** `app/main.py` receives `POST /webhook` from Green API.
+2.  **Routing:** Messages are routed to `app.services.workflow.process_incoming_message`.
+3.  **Processing:**
+    - **`LeadManager`**: Logs messages and manages lead state in MongoDB.
+    - **`AIEngine`**: Sends conversation history to Gemini to generate responses and detect `[DEAL]` tags.
+    - **`WhatsAppClient`**: Handles sending text, buttons, and location links back to users.
 
-## Development Workflow
+### Scheduling & Background Tasks
 
-### Running the Application
-The system requires two separate processes running simultaneously:
+- **`app/scheduler.py`**: Runs periodic tasks (Daily Reminders, Stale Job Monitor).
+- **Hybrid Dependency:** The scheduler currently imports helper functions (`send_pro_reminder`, `send_whatsapp_message`) from the **legacy** `app/services/logic.py` file, creating a split logic state.
 
-**1. Backend Server (FastAPI):**
-Handles WhatsApp webhooks and API logic.
-```bash
-uvicorn app.main:app --reload --port 8000
+### Key Directories
+
+```text
+app/
+├── main.py                     # Entry point (FastAPI)
+├── scheduler.py                # APScheduler tasks
+├── services/
+│   ├── workflow.py             # MAIN ENTRY for message logic
+│   ├── ai_engine.py            # Gemini integration (Class-based)
+│   ├── lead_manager.py         # DB operations for Leads/History
+│   ├── whatsapp_client.py      # Green API wrapper
+│   └── logic.py                # LEGACY/HYBRID: Contains advanced logic not yet ported to workflow
+└── core/                       # Config, Database, Logger
+admin_panel/                    # Streamlit Admin Dashboard
+scripts/                        # Operational scripts (Seeding, Simulation)
 ```
 
-**2. Admin Panel (Streamlit):**
-Provides the visual interface for management.
-```bash
-streamlit run admin_panel/app.py
-```
-*   The Admin Panel is typically accessible at `http://localhost:8501`.
+## 3. Setup & Commands
 
-### Database Management
-*   **Seeding Data:** To reset and populate the database with test professionals and slots:
+### Prerequisites
+
+- Python 3.10+
+- MongoDB Atlas URI
+- Green API Credentials
+- Google Gemini API Key
+
+### Running the System
+
+1.  **Backend (FastAPI):**
     ```bash
-    python scripts/seed_db.py
+    uvicorn app.main:app --reload --port 8000
+    ```
+2.  **Admin Panel (Streamlit):**
+    ```bash
+    streamlit run admin_panel/app.py
     ```
 
 ### Testing
-Run the full automated test suite using the virtual environment:
-```bash
-venv\Scripts\python -m pytest tests/test_full_flow.py
-```
 
-## Conventions
-*   **SDK Usage:** Use `google.genai` and its `types` module. Avoid the deprecated `google.generativeai`.
-*   **Async/Await:** The backend uses `async` functions extensively, especially for database operations (`motor`) and external API calls (`httpx`).
-*   **Configuration:** All environment variables are managed via `pydantic-settings` in `app/core/config.py`.
-*   **Modular Services:** Logic is separated into specific services (`ai_engine.py`, `whatsapp_client.py`) to keep `main.py` clean.
+- **Run Tests:** `pytest tests/`
+- **Seed Database:** `python scripts/seed_db.py` (Resets DB with test pros and slots).
+
+## 4. Current State & Known Issues
+
+- **Refactoring in Progress:** The project is moving from a monolithic `logic.py` to modular services (`workflow.py`, `ai_engine.py`).
+- **Logic Split:** Incoming messages use `workflow.py`, but the scheduler uses `logic.py`. Future tasks should focus on unifying these to use `WhatsAppClient` everywhere.
+- **AI Context:** Currently, `AIEngine` uses a static system prompt. The dynamic prompts stored in `users_collection` (populated by `seed_db.py`) are not fully utilized in the active `workflow.py` path yet.
+
+## 5. Development Conventions
+
+- **Async/Sync:** Prefer `async` for all I/O (Database, API calls).
+- **Logging:** Use `app.core.logger` (Loguru).
+- **Timezones:** Store UTC in DB, display `Asia/Jerusalem` (IL_TZ) to users.
+- **Validation:** Use Pydantic models (see `app/schemas`).
