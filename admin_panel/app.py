@@ -38,7 +38,7 @@ if not check_password(cookies):
 # --- Main App & Language Logic ---
 # Use session state as the source of truth for the current run
 if 'lang_code' not in st.session_state:
-    st.session_state.lang_code = cookies.get("fixi_lang", "HE")
+    st.session_state.lang_code = cookies.get("fixi_lang", "EN")
 
 T = TRANS[st.session_state.lang_code]
 load_css(st.session_state.lang_code, T)

@@ -27,8 +27,8 @@ def get_manager():
 def check_password(cookies):
     cookie_manager = get_manager()
     
-    saved_lang = cookies.get("fixi_lang", "HE")
-    T_auth = TRANS.get(saved_lang, TRANS["HE"])
+    saved_lang = cookies.get("fixi_lang", "EN")
+    T_auth = TRANS.get(saved_lang, TRANS["EN"])
 
     cookie_token = cookies.get("fixi_auth_token")
     
