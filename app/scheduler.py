@@ -1,7 +1,7 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from app.core.database import users_collection, leads_collection, settings_collection
-from app.services.logic import send_whatsapp_message, send_pro_reminder, send_customer_completion_check
+from app.services.workflow import send_pro_reminder, send_customer_completion_check, whatsapp
 from datetime import datetime, timedelta
 import pytz
 import asyncio
@@ -45,7 +45,7 @@ async def send_daily_reminders():
             if chat_id:
                 chat_id = f"{chat_id}@c.us" if not chat_id.endswith("@c.us") else chat_id
                 try:
-                    await send_whatsapp_message(chat_id, msg)
+                    await whatsapp.send_message(chat_id, msg)
                 except Exception as e:
                     print(f"❌ Failed to send to {pro['business_name']}: {e}")
 
