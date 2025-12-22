@@ -28,9 +28,9 @@ class LeadManager:
             lead_doc = {
                 "chat_id": chat_id,
                 "status": "new",
-                "time_preference": time_pref,
-                "address": full_address,
-                "issue": issue,
+                "appointment_time": time_pref,
+                "full_address": full_address,
+                "issue_type": issue,
                 "created_at": datetime.now(timezone.utc),
                 "history": [] 
             }
