@@ -53,12 +53,15 @@ def view_leads_dashboard(T):
             data = []
             for l in leads:
                 # Format Details Summary
-                issue = l.get("issue", l.get("details", ""))
-                time = l.get("time_preference", "?")
-                addr = l.get("address", "?")
+                # Prioritize new keys: issue_type, appointment_time, full_address
+                # Fallback to old keys: issue, time_preference, address
                 
-                # Smart parsing fallback
-                if not l.get("issue") and "[DEAL:" in str(l.get("details", "")):
+                issue = l.get("issue_type", l.get("issue", l.get("details", "")))
+                time = l.get("appointment_time", l.get("time_preference", "?"))
+                addr = l.get("full_address", l.get("address", "?"))
+                
+                # Smart parsing fallback for legacy data if still needed
+                if not l.get("issue_type") and not l.get("issue") and "[DEAL:" in str(l.get("details", "")):
                      try:
                          parts = l["details"].split("[DEAL:")[1].split("]")[0].split("|")
                          if len(parts) >= 3:
@@ -71,6 +74,10 @@ def view_leads_dashboard(T):
                 display_details = l.get("details", "")
                 if not display_details and issue:
                     display_details = f"{issue} | {time} | {addr}"
+                
+                # If we have clean fields, prefer constructing a clean summary
+                if issue != l.get("details", ""):
+                     display_details = f"🔧 {issue} | 🕒 {time} | 📍 {addr}"
 
                 pro_id = l.get("pro_id")
                 pro_name = pro_map_id_to_name.get(pro_id, T["unknown_pro"])
@@ -161,8 +168,8 @@ def view_leads_dashboard(T):
                         # Handle Details Change
                         if "details_summary" in changed_data:
                             update_payload["details"] = changed_data["details_summary"]
-                            # Also update issue field if possible, or just details
-                            update_payload["issue"] = changed_data["details_summary"]
+                            # Also update issue_type field if possible, or just details
+                            update_payload["issue_type"] = changed_data["details_summary"]
 
                         # Handle Professional Change
                         if "professional" in changed_data:
@@ -277,12 +284,12 @@ def view_leads_dashboard(T):
                         new_lead_doc = {
                             "chat_id": chat_id,
                             "details": new_details,
-                            "issue": new_details, # Fallback
+                            "issue_type": new_details, # Standardized
                             "status": new_status,
                             "pro_id": assigned_pro_id,
                             "created_at": datetime.now(pytz.utc),
-                            "address": "", # Optional
-                            "time_preference": "", # Optional
+                            "full_address": "Manual", # Standardized
+                            "appointment_time": "Manual", # Standardized
                             "source": "manual_admin"
                         }
                         

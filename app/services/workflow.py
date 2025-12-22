@@ -182,9 +182,9 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 
                 msg_to_pro = f"""📢 *הצעת עבודה חדשה!*
 
-📍 *כתובת:* {lead['address']}
-🛠️ *תקלה:* {lead['issue']}
-⏰ *זמן מועדף:* {lead['time_preference']}"""
+                📍 *כתובת:* {lead['full_address']}
+                🛠️ *תקלה:* {lead['issue_type']}
+                ⏰ *זמן מועדף:* {lead['appointment_time']}"""
                 
                 # Send Buttons
                 buttons = [
@@ -194,7 +194,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 await whatsapp.send_buttons(pro_phone, msg_to_pro, buttons)
                 
                 # Send Waze Link
-                await whatsapp.send_location_link(pro_phone, lead['address'], "🚗 נווט לכתובת:")
+                await whatsapp.send_location_link(pro_phone, lead['full_address'], "🚗 נווט לכתובת:")
     
     else:
         # Standard AI Reply
