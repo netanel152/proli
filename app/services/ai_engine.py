@@ -7,7 +7,7 @@ import traceback
 class AIEngine:
     def __init__(self):
         self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        self.model_name = "gemini-1.5-flash"
+        self.model_name = "gemini-2.5-flash-lite"
         self.system_prompt = """
 You are Fixi, an AI scheduler for service professionals.
 Your goal is to understand the user's issue and get their specific location (City + Street Address) and preferred time.

@@ -20,7 +20,7 @@ except Exception as e:
 gemini_key = os.getenv("GEMINI_API_KEY")
 try:
     client_ai = genai.Client(api_key=gemini_key)
-    # Using 'gemini-1.5-flash' as a safe default, or keep what was there if known to work
+    # Using 'gemini-2.5-flash-lite' as a safe default, or keep what was there if known to work
     model_name = 'gemini-2.5-flash-lite' 
     response = client_ai.models.generate_content(
         model=model_name,

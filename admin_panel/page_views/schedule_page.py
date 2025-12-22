@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from bson.objectid import ObjectId
-from datetime import datetime, timedelta, time, timezone
+from datetime import datetime, timedelta, time
 from admin_panel.utils import users_collection, slots_collection
 import pytz
 

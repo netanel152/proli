@@ -4,7 +4,6 @@ from app.core.database import users_collection, leads_collection, settings_colle
 from app.services.workflow import send_pro_reminder, send_customer_completion_check, whatsapp
 from datetime import datetime, timedelta
 import pytz
-import asyncio
 from app.core.logger import logger
 
 IL_TZ = pytz.timezone('Asia/Jerusalem')

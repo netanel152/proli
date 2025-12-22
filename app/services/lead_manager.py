@@ -2,7 +2,6 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from app.core.database import leads_collection, messages_collection
 from app.core.logger import logger
-import re
 
 class LeadManager:
     async def create_lead(self, deal_string: str, chat_id: str) -> dict:
