@@ -6,11 +6,78 @@ from app.core.database import users_collection, leads_collection
 from bson import ObjectId
 from datetime import datetime, timezone
 import re
+import httpx
 
 # Initialize services
 whatsapp = WhatsAppClient()
 ai = AIEngine()
 lead_manager = LeadManager()
+
+async def determine_best_pro(issue_type: str = None, location: str = None) -> dict:
+    """
+    Intelligent Routing Engine:
+    1. Active Status
+    2. Location Match (if applicable)
+    3. Rating (High to Low)
+    4. Availability (Load Balancing)
+    """
+    try:
+        # 1. Fetch all active pros
+        query = {"is_active": True}
+        
+        # Filter by issue_type if pro has 'profession' field (Optional future enhancement)
+        # if issue_type:
+        #     query["profession"] = issue_type 
+
+        cursor = users_collection.find(query)
+        pros = await cursor.to_list(length=100)
+        
+        if not pros:
+            return None
+
+        # 2. Location Filtering (Simple text match for now)
+        # In a real app, use geospatial queries or robust geocoding
+        matching_pros = []
+        if location:
+            for pro in pros:
+                areas = pro.get("service_areas", []) # List of strings
+                if any(city in location for city in areas):
+                    matching_pros.append(pro)
+        
+        # If no location match found (or no location provided), fall back to all active pros
+        if not matching_pros:
+            matching_pros = pros
+
+        # 3. Sort by Rating (Descending)
+        # Helper to get rating safely
+        def get_rating(p):
+            return p.get("social_proof", {}).get("rating", 0)
+        
+        matching_pros.sort(key=get_rating, reverse=True)
+
+        # 4. Load Balancing (Check active 'booked' leads)
+        MAX_LOAD = 3 # Configurable
+        selected_pro = None
+        
+        for pro in matching_pros:
+            current_load = await leads_collection.count_documents({
+                "pro_id": pro["_id"],
+                "status": "booked"
+            })
+            
+            if current_load < MAX_LOAD:
+                selected_pro = pro
+                break
+        
+        # Fallback: If all are busy, pick the highest rated regardless of load
+        if not selected_pro and matching_pros:
+            selected_pro = matching_pros[0]
+
+        return selected_pro
+
+    except Exception as e:
+        logger.error(f"Error in determine_best_pro: {e}")
+        return None
 
 async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
     """Sends a reminder to the pro to mark a job as finished."""
@@ -151,11 +218,72 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             await lead_manager.log_message(chat_id, "model", rating_resp)
             return
 
-    # 3. Get AI Response
-    history = await lead_manager.get_chat_history(chat_id)
-    ai_response = await ai.analyze_conversation(history, user_text or "")
+    # 3. Determine Best Professional
+    # We try to extract location/issue from history, but for now we just find the best general pro
+    # Ideally, we would parse user intent *before* picking the pro, but for this flow:
+    # We will pick the "Default Best" pro to set the context.
     
-    # 4. Check for [DEAL]
+    # Optional: Try to find city in user_text to filter
+    # simple heuristic: check common cities or if we had a previous lead with address
+    best_pro = await determine_best_pro(issue_type=None, location=user_text) # MVP: Pass text as loose location filter
+    
+    if not best_pro:
+        # Fallback Persona
+        pro_name = "Fixi Support"
+        base_system_prompt = "You are Fixi, a helpful assistant. We are currently offline. Please leave a message."
+        price_list = ""
+    else:
+        pro_name = best_pro.get("business_name", "Fixi Pro")
+        base_system_prompt = best_pro.get("system_prompt", f"You are Fixi, an AI scheduler for {pro_name}.")
+        price_list = best_pro.get("price_list", "")
+    
+    # Construct Dynamic System Prompt
+    full_system_prompt = f"""
+{base_system_prompt}
+
+You are representing '{pro_name}'.
+
+*** PRICING / SERVICES ***
+{price_list}
+
+*** CORE INSTRUCTIONS ***
+1. Understand the user's issue and get their specific location (City + Street Address) and preferred time.
+2. NEVER output [DEAL] without a full street address. If the user only gives a city, ASK for the street.
+3. If the user provides an address and issue, output the [DEAL] tag at the end.
+
+Format: [DEAL: <Time> | <Full Address> | <Issue Summary>]
+
+Tone: Professional, efficient, Israeli Hebrew.
+    """
+
+    # 4. Handle Media (Download if present)
+    media_data = None
+    media_mime = None
+    
+    if media_url:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(media_url)
+                if resp.status_code == 200:
+                    media_data = resp.content
+                    media_mime = resp.headers.get("Content-Type", "image/jpeg") # Default fallback
+                    logger.info(f"Downloaded media: {len(media_data)} bytes, type: {media_mime}")
+                else:
+                    logger.warning(f"Failed to download media from {media_url}, status: {resp.status_code}")
+        except Exception as e:
+            logger.error(f"Error downloading media: {e}")
+
+    # 5. Get AI Response
+    history = await lead_manager.get_chat_history(chat_id)
+    ai_response = await ai.analyze_conversation(
+        history=history, 
+        user_text=user_text or "", 
+        custom_system_prompt=full_system_prompt,
+        media_data=media_data,
+        media_mime_type=media_mime
+    )
+    
+    # 6. Check for [DEAL]
     deal_match = re.search(r"\[DEAL:.*?\]", ai_response)
     
     if deal_match:
@@ -169,22 +297,20 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
 
         # Create Lead
         deal_string = deal_match.group(0)
-        lead = await lead_manager.create_lead(deal_string, chat_id)
+        # Note: We pass the selected pro_id to link it immediately if we found one
+        lead = await lead_manager.create_lead(deal_string, chat_id, pro_id=best_pro["_id"] if best_pro else None)
         
-        if lead:
-            # Notify Pro (Simplified: Finding the first active pro for demo/MVP)
-            pro = await users_collection.find_one({"is_active": True})
-            
-            if pro and pro.get("phone_number"):
-                pro_phone = pro["phone_number"]
+        if lead and best_pro:
+            pro_phone = best_pro.get("phone_number")
+            if pro_phone:
                 if not pro_phone.endswith("@c.us"):
                     pro_phone = f"{pro_phone}@c.us"                
                 
                 msg_to_pro = f"""📢 *הצעת עבודה חדשה!*
 
-                📍 *כתובת:* {lead['full_address']}
-                🛠️ *תקלה:* {lead['issue_type']}
-                ⏰ *זמן מועדף:* {lead['appointment_time']}"""
+📍 *כתובת:* {lead['full_address']}
+🛠️ *תקלה:* {lead['issue_type']}
+⏰ *זמן מועדף:* {lead['appointment_time']}"""
                 
                 # Send Buttons
                 buttons = [
@@ -246,10 +372,6 @@ async def handle_pro_response(payload: dict):
     elif button_id.startswith("finish_job_confirm_"):
         lead_id = button_id.replace("finish_job_confirm_", "")
         
-        # Trigger same logic as customer completion but for pro side? 
-        # Actually logic.py handled "FINISH_JOB" intention, here we just ask for feedback
-        # But wait, send_pro_reminder asks "did you finish?".
-        
         lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
         if lead:
              await leads_collection.update_one(
@@ -274,7 +396,6 @@ async def handle_pro_response(payload: dict):
     elif button_id.startswith("customer_confirm_completion_"):
          # Treat as "כן, הסתיים"
          lead_id = button_id.replace("customer_confirm_completion_", "")
-         # We can reuse handle_customer_completion_text logic essentially, but we have the lead ID directly
          lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
          if lead:
              await leads_collection.update_one(

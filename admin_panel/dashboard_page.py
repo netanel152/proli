@@ -56,28 +56,28 @@ def view_leads_dashboard(T):
                 # Prioritize new keys: issue_type, appointment_time, full_address
                 # Fallback to old keys: issue, time_preference, address
                 
-                issue = l.get("issue_type", l.get("issue", l.get("details", "")))
-                time = l.get("appointment_time", l.get("time_preference", "?"))
-                addr = l.get("full_address", l.get("address", "?"))
+                issue_type = l.get("issue_type", l.get("issue", l.get("details", "")))
+                appointment_time = l.get("appointment_time", l.get("time_preference", "?"))
+                full_address = l.get("full_address", l.get("address", "?"))
                 
                 # Smart parsing fallback for legacy data if still needed
                 if not l.get("issue_type") and not l.get("issue") and "[DEAL:" in str(l.get("details", "")):
                      try:
                          parts = l["details"].split("[DEAL:")[1].split("]")[0].split("|")
                          if len(parts) >= 3:
-                             time = parts[0].strip()
-                             addr = parts[1].strip()
-                             issue = parts[2].strip()
+                             appointment_time = parts[0].strip()
+                             full_address = parts[1].strip()
+                             issue_type = parts[2].strip()
                      except:
                          pass
                 
                 display_details = l.get("details", "")
-                if not display_details and issue:
-                    display_details = f"{issue} | {time} | {addr}"
+                if not display_details and issue_type:
+                    display_details = f"{issue_type} | {appointment_time} | {full_address}"
                 
                 # If we have clean fields, prefer constructing a clean summary
-                if issue != l.get("details", ""):
-                     display_details = f"🔧 {issue} | 🕒 {time} | 📍 {addr}"
+                if issue_type != l.get("details", ""):
+                     display_details = f"🔧 {issue_type} | 🕒 {appointment_time} | 📍 {full_address}"
 
                 pro_id = l.get("pro_id")
                 pro_name = pro_map_id_to_name.get(pro_id, T["unknown_pro"])
@@ -168,7 +168,7 @@ def view_leads_dashboard(T):
                         # Handle Details Change
                         if "details_summary" in changed_data:
                             update_payload["details"] = changed_data["details_summary"]
-                            # Also update issue_type field if possible, or just details
+                            # Also update issue_type field if possible
                             update_payload["issue_type"] = changed_data["details_summary"]
 
                         # Handle Professional Change

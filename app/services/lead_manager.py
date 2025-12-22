@@ -4,7 +4,7 @@ from app.core.database import leads_collection, messages_collection
 from app.core.logger import logger
 
 class LeadManager:
-    async def create_lead(self, deal_string: str, chat_id: str) -> dict:
+    async def create_lead(self, deal_string: str, chat_id: str, pro_id: ObjectId = None) -> dict:
         """
         Parses [DEAL: time|city|address|issue] and saves to DB.
         Note: The prompt in AIEngine asks for [DEAL: Time | Full Address | Issue Summary]
@@ -16,28 +16,29 @@ class LeadManager:
             
             # Flexible parsing depending on how many parts returned
             if len(parts) >= 3:
-                time_pref = parts[0]
+                appointment_time = parts[0]
                 full_address = parts[1]
-                issue = parts[2]
+                issue_type = parts[2]
             else:
                 # Fallback
-                time_pref = "Not specified"
+                appointment_time = "Not specified"
                 full_address = parts[0] if len(parts) > 0 else "Unknown"
-                issue = parts[1] if len(parts) > 1 else "Unknown"
+                issue_type = parts[1] if len(parts) > 1 else "Unknown"
 
             lead_doc = {
                 "chat_id": chat_id,
                 "status": "new",
-                "appointment_time": time_pref,
+                "appointment_time": appointment_time,
                 "full_address": full_address,
-                "issue_type": issue,
+                "issue_type": issue_type,
                 "created_at": datetime.now(timezone.utc),
-                "history": [] 
+                "history": [],
+                "pro_id": pro_id  # Link to selected pro
             }
             
             result = await leads_collection.insert_one(lead_doc)
             lead_doc["_id"] = result.inserted_id
-            logger.info(f"Lead created: {result.inserted_id}")
+            logger.info(f"Lead created: {result.inserted_id} assigned to pro: {pro_id}")
             return lead_doc
             
         except Exception as e:
