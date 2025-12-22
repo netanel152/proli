@@ -17,7 +17,7 @@ TRANS = {
 
         "title_dashboard": "מרכז שליטה וניהול",
         "page_desc_dashboard": "צפה ונהל לידים נכנסים, עדכן את הסטטוס שלהם וסקור את היסטוריית השיחות.",
-        "metric_total": "סה\"כ לידים",
+        "metric_total": 'סה"כ לידים',
         "metric_new": "לידים ממתינים",
         "metric_pros": "צוות פעיל",
         "table_title": "ניהול לידים ומשימות",
@@ -67,7 +67,7 @@ TRANS = {
         "role_bot": "נציג דיגיטלי",
         "status_active": "פעיל",
         "status_inactive": "לא פעיל",
-        "action_add_new": "➕ הוסף חדש",
+        "action_add_new": "הוסף חדש",
         "action_view_all": "הצג הכל",
         "edit_btn": "ערוך",
         "delete_btn": "מחק",
@@ -148,7 +148,19 @@ TRANS = {
         "select_lead_prompt": "בחר ליד מהרשימה כדי לראות פרטים.",
         "select_row_prompt": "בחר שורה בטבלה כדי לראות פעולות כמו היסטוריית צ'אט או מחיקה.",
         "confirm_clear_slots_title": "אישור מחיקה",
-        "confirm_clear_slots_body": "האם למחוק את כל הסלוטים העתידיים שאינם תפוסים בטווח התאריכים שנבחר? פעולה זו אינה הפיכה."
+        "confirm_clear_slots_body": "האם למחוק את כל הסלוטים העתידיים שאינם תפוסים בטווח התאריכים שנבחר? פעולה זו אינה הפיכה.",
+
+        "tab_dashboard": "📋 דשבורד",
+        "tab_create_lead": "➕ יצירת ליד חדש",
+        "create_lead_title": "יצירת ליד חדש",
+        "create_lead_success": "הליד נוצר בהצלחה!",
+        "input_client_name": "שם הלקוח",
+        "input_client_phone": "מספר טלפון (וואטסאפ)",
+        "input_issue": "תיאור התקלה",
+        "input_status": "סטטוס התחלתי",
+        "input_pro": "שיוך לאיש מקצוע",
+        "submit_create_lead": "צור ליד",
+        "error_phone_required": "מספר טלפון חובה."
     },
     "EN": {
         "dir": "ltr", "align": "left",
@@ -217,7 +229,7 @@ TRANS = {
         "role_bot": "Digital Agent",
         "status_active": "Active",
         "status_inactive": "Inactive",
-        "action_add_new": "➕ Add New",
+        "action_add_new": "Add New",
         "action_view_all": "View All",
         "edit_btn": "Edit",
         "delete_btn": "Delete",
@@ -298,6 +310,17 @@ TRANS = {
         "select_lead_prompt": "Select a lead from the list to view details.",
         "select_row_prompt": "Select a row in the table to see actions like chat history or delete.",
         "confirm_clear_slots_title": "Confirm Deletion",
-        "confirm_clear_slots_body": "Are you sure you want to delete all future non-booked slots within the selected date range? This action is irreversible."
+        "confirm_clear_slots_body": "Are you sure you want to delete all future non-booked slots within the selected date range? This action is irreversible.",
+        "tab_dashboard": "📋 Dashboard",
+        "tab_create_lead": "➕ Create New Lead",
+        "create_lead_title": "Create a New Lead",
+        "create_lead_success": "Lead created successfully!",
+        "input_client_name": "Client Name",
+        "input_client_phone": "Phone Number (Chat ID)",
+        "input_issue": "Issue / Details",
+        "input_status": "Initial Status",
+        "input_pro": "Assign Professional",
+        "submit_create_lead": "Create Lead",
+        "error_phone_required": "Phone number is required."
     }
 }

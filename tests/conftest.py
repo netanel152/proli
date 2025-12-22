@@ -54,11 +54,6 @@ def patch_dependencies(monkeypatch, mock_db):
     mock_ai = MagicMock()
     mock_ai.analyze_conversation = AsyncMock(return_value="Mock AI Response")
 
-    # LeadManager uses the DB collections we patched above, so we might not need to mock it entirely,
-    # but let's leave it real so we verify DB interactions. 
-    # However, LeadManager imports collections from app.core.database, which we patched.
-    # So LeadManager instance should work with mock_db.
-
     import app.services.workflow
     monkeypatch.setattr(app.services.workflow, "whatsapp", mock_whatsapp)
     monkeypatch.setattr(app.services.workflow, "ai", mock_ai)
