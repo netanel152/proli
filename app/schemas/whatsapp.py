@@ -22,7 +22,8 @@ class MessageData(BaseSchema):
     typeMessage: Optional[str] = None
     textMessageData: Optional[TextMessageData] = None
     extendedTextMessageData: Optional[ExtendedTextMessageData] = None
-    fileMessageData: Optional[FileMessageData] = None 
+    fileMessageData: Optional[FileMessageData] = None
+    buttonsResponseMessage: Optional[dict] = None 
 
 class SenderData(BaseSchema):
     chatId: str

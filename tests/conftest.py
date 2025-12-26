@@ -7,6 +7,11 @@ import sys
 # Ensure app is in path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Mock google.genai to avoid ImportErrors if package is missing/conflicted
+sys.modules["google.genai"] = MagicMock()
+# Also mock google.genai.types
+sys.modules["google.genai.types"] = MagicMock()
+
 @pytest.fixture(scope="module")
 def mock_db():
     return AsyncMongoMockClient().fixi_db
@@ -52,7 +57,12 @@ def patch_dependencies(monkeypatch, mock_db):
     mock_whatsapp.send_location_link = AsyncMock()
 
     mock_ai = MagicMock()
-    mock_ai.analyze_conversation = AsyncMock(return_value="Mock AI Response")
+    from app.services.ai_engine import AIResponse, ExtractedData
+    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
+        reply_to_user="Mock AI Response",
+        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Tel Aviv, Rotshild 10", appointment_time="10:00"),
+        transcription=None
+    ))
 
     import app.services.workflow
     monkeypatch.setattr(app.services.workflow, "whatsapp", mock_whatsapp)
