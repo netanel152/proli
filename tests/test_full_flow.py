@@ -1,14 +1,16 @@
 import pytest
 from app.services.workflow import process_incoming_message, handle_pro_response
-from app.scheduler import send_daily_reminders
+from app.services.ai_engine import AIResponse, ExtractedData
 from unittest.mock import MagicMock, AsyncMock
-from datetime import datetime, timedelta
 
 # --- HELPERS ---
-def setup_mock_ai(monkeypatch, response_text="Mock AI Response"):
-    """Helper to configure the mock AI in app.services.workflow"""
+def setup_mock_ai(monkeypatch, responses):
+    """
+    Helper to configure the mock AI in app.services.workflow.
+    responses: list of AIResponse objects to return sequentially (side_effect).
+    """
     mock_ai = MagicMock()
-    mock_ai.analyze_conversation = AsyncMock(return_value=response_text)
+    mock_ai.analyze_conversation = AsyncMock(side_effect=responses)
     
     import app.services.workflow
     monkeypatch.setattr(app.services.workflow, "ai", mock_ai)
@@ -28,7 +30,8 @@ async def test_full_lifecycle(mock_db, monkeypatch):
         "service_areas": ["Tel Aviv"],
         "is_active": True,
         "keywords": ["plumber", "water"],
-        "system_prompt": "You are Yossi."
+        "system_prompt": "You are Yossi.",
+        "social_proof": {"rating": 5.0, "review_count": 0}
     }
     await mock_db.users.insert_one(pro_data)
     pro = await mock_db.users.find_one({"business_name": "יוסי אינסטלציה"})
@@ -36,34 +39,65 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     user_chat_id = "972501234567@c.us"
 
     # 2. USER: "I need a plumber in Tel Aviv" (Routing)
-    # Note: process_incoming_message doesn't return the text, it sends it via WhatsAppClient.
-    # We check the mock_db messages or mock_whatsapp calls.
+    # Logic:
+    # 1. Dispatcher: Extracts City=Tel Aviv, Issue=Plumber
+    # 2. Workflow finds Pro "Yossi".
+    # 3. Pro AI: Says "Hello, I am Yossi".
     
-    setup_mock_ai(monkeypatch, response_text="Hello! I am Yossi, how can I help?")
+    resp_dispatcher = AIResponse(
+        reply_to_user="...", 
+        extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address=None, appointment_time=None),
+        transcription=None
+    )
+    resp_pro = AIResponse(
+        reply_to_user="Hello! I am Yossi, how can I help?",
+        extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address=None, appointment_time=None),
+        transcription=None
+    )
+    
+    setup_mock_ai(monkeypatch, responses=[resp_dispatcher, resp_pro])
     
     await process_incoming_message(user_chat_id, "I need a plumber in Tel Aviv")
     
     # Assert message logged
     messages = await mock_db.messages.find({"chat_id": user_chat_id}).to_list(length=None)
-    assert len(messages) >= 2 # User msg + Model msg
+    # Logged: User msg, Model msg
+    assert len(messages) >= 2 
     assert messages[-1]["text"] == "Hello! I am Yossi, how can I help?"
 
-    # 3. USER: "Book me for tomorrow 10:00" (Deal)
-    # The AIEngine should return [DEAL:...]
-    setup_mock_ai(monkeypatch, response_text="Done. [DEAL: 10:00 | Tel Aviv | Fix leak]")
+    # 3. USER: "Book me for tomorrow 10:00 at Dizengoff 1" (Deal)
+    # Logic:
+    # 1. Dispatcher: Extracts ...
+    # 2. Pro AI: Returns [DEAL] or structured Deal
     
-    await process_incoming_message(user_chat_id, "Book me for tomorrow 10:00")
+    # Dispatcher sees info again (or history carries it, but we mock response)
+    resp_dispatcher_2 = AIResponse(
+        reply_to_user="...", 
+        extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address="Dizengoff 1", appointment_time="tomorrow 10:00"),
+        transcription=None
+    )
+    # Pro sees it and closes deal
+    resp_pro_deal = AIResponse(
+        reply_to_user="Done. [DEAL: tomorrow 10:00 | Dizengoff 1 | plumber]",
+        extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address="Dizengoff 1", appointment_time="tomorrow 10:00"),
+        transcription=None
+    )
+    
+    setup_mock_ai(monkeypatch, responses=[resp_dispatcher_2, resp_pro_deal])
+    
+    await process_incoming_message(user_chat_id, "Book me for tomorrow 10:00 at Dizengoff 1")
     
     # Assert Lead Created
     lead = await mock_db.leads.find_one({"chat_id": user_chat_id, "status": "new"})
     assert lead is not None
-    assert "Fix leak" in lead["issue"]
+    assert lead["issue_type"] == "plumber"
+    assert lead["full_address"] == "Dizengoff 1"
 
     # 4. PRO: Approve via Button
-    # Payload structure for handle_pro_response
     payload = {
         "senderData": {"chatId": pro_chat_id},
         "messageData": {
+            "typeMessage": "buttonsResponseMessage",
             "buttonsResponseMessage": {"selectedButtonId": f"approve_{lead['_id']}"}
         }
     }
@@ -75,8 +109,7 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     assert updated_lead["pro_id"] == pro["_id"]
 
     # 5. USER: "כן, הסתיים" (Completion via Text)
-    # No AI needed here, workflow checks specific text first
-    
+    # No AI needed here
     await process_incoming_message(user_chat_id, "כן, הסתיים")
     
     completed_lead = await mock_db.leads.find_one({"_id": lead["_id"]})

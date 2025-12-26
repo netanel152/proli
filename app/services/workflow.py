@@ -1,5 +1,5 @@
 from app.services.whatsapp_client import WhatsAppClient
-from app.services.ai_engine import AIEngine
+from app.services.ai_engine import AIEngine, AIResponse
 from app.services.lead_manager import LeadManager
 from app.core.logger import logger
 from app.core.database import users_collection, leads_collection
@@ -25,38 +25,35 @@ async def determine_best_pro(issue_type: str = None, location: str = None) -> di
         # 1. Fetch all active pros
         query = {"is_active": True}
         
-        # Filter by issue_type if pro has 'profession' field (Optional future enhancement)
-        # if issue_type:
-        #     query["profession"] = issue_type 
-
         cursor = users_collection.find(query)
         pros = await cursor.to_list(length=100)
         
         if not pros:
             return None
 
-        # 2. Location Filtering (Simple text match for now)
-        # In a real app, use geospatial queries or robust geocoding
+        # 2. Location Filtering
         matching_pros = []
         if location:
             for pro in pros:
                 areas = pro.get("service_areas", []) # List of strings
-                if any(city in location for city in areas):
+                # Loose matching: check if location string contains area or vice versa
+                if any(area in location or location in area for area in areas):
                     matching_pros.append(pro)
         
-        # If no location match found (or no location provided), fall back to all active pros
+        # If no location match found, fall back to all active pros (or strictly return None?)
+        # For Smart Dispatcher, if we have a location but no pro matches, we might want to tell the user?
+        # But sticking to "Fallback to all" for MVP stability unless strictly requested otherwise.
         if not matching_pros:
             matching_pros = pros
 
         # 3. Sort by Rating (Descending)
-        # Helper to get rating safely
         def get_rating(p):
             return p.get("social_proof", {}).get("rating", 0)
         
         matching_pros.sort(key=get_rating, reverse=True)
 
-        # 4. Load Balancing (Check active 'booked' leads)
-        MAX_LOAD = 3 # Configurable
+        # 4. Load Balancing
+        MAX_LOAD = 3 
         selected_pro = None
         
         for pro in matching_pros:
@@ -69,7 +66,6 @@ async def determine_best_pro(issue_type: str = None, location: str = None) -> di
                 selected_pro = pro
                 break
         
-        # Fallback: If all are busy, pick the highest rated regardless of load
         if not selected_pro and matching_pros:
             selected_pro = matching_pros[0]
 
@@ -218,27 +214,66 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             await lead_manager.log_message(chat_id, "model", rating_resp)
             return
 
-    # 3. Determine Best Professional
-    # We try to extract location/issue from history, but for now we just find the best general pro
-    # Ideally, we would parse user intent *before* picking the pro, but for this flow:
-    # We will pick the "Default Best" pro to set the context.
+    # 3. Handle Media (Download if present)
+    media_data = None
+    media_mime = None
+    if media_url:
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(media_url)
+                if resp.status_code == 200:
+                    media_data = resp.content
+                    media_mime = resp.headers.get("Content-Type", "image/jpeg")
+                    logger.info(f"Downloaded media: {len(media_data)} bytes, type: {media_mime}")
+                else:
+                    logger.warning(f"Failed to download media from {media_url}, status: {resp.status_code}")
+        except Exception as e:
+            logger.error(f"Error downloading media: {e}")
+
+    # 4. Smart Dispatcher Phase
+    history = await lead_manager.get_chat_history(chat_id)
     
-    # Optional: Try to find city in user_text to filter
-    # simple heuristic: check common cities or if we had a previous lead with address
-    best_pro = await determine_best_pro(issue_type=None, location=user_text) # MVP: Pass text as loose location filter
+    dispatcher_prompt = """
+    You are Fixi's Smart Dispatcher. 
+    Your goal is to identify the customer's City and Issue Description.
     
-    if not best_pro:
-        # Fallback Persona
-        pro_name = "Fixi Support"
-        base_system_prompt = "You are Fixi, a helpful assistant. We are currently offline. Please leave a message."
-        price_list = ""
-    else:
-        pro_name = best_pro.get("business_name", "Fixi Pro")
-        base_system_prompt = best_pro.get("system_prompt", f"You are Fixi, an AI scheduler for {pro_name}.")
-        price_list = best_pro.get("price_list", "")
+    - If audio is present, trust the transcription.
+    - If City or Issue is missing, ask the user specifically for them.
+    - If both are present, extract them.
     
-    # Construct Dynamic System Prompt
-    full_system_prompt = f"""
+    Tone: Polite, helpful, Israeli Hebrew.
+    """
+
+    dispatcher_response: AIResponse = await ai.analyze_conversation(
+        history=history, 
+        user_text=user_text or "", 
+        custom_system_prompt=dispatcher_prompt,
+        media_data=media_data,
+        media_mime_type=media_mime,
+        require_json=True
+    )
+    
+    extracted_city = dispatcher_response.extracted_data.city
+    extracted_issue = dispatcher_response.extracted_data.issue
+    transcription = dispatcher_response.transcription
+    
+    logger.info(f"Dispatcher analysis: City={extracted_city}, Issue={extracted_issue}, Transcr={transcription}")
+
+    # 5. Logic Gate: Dispatcher vs Professional
+    best_pro = None
+    pro_response_obj = None
+
+    if extracted_city and extracted_issue:
+        # Sufficient data gathered -> Find Pro
+        best_pro = await determine_best_pro(issue_type=extracted_issue, location=extracted_city)
+        
+        if best_pro:
+            # Switch to Pro Persona
+            pro_name = best_pro.get("business_name", "Fixi Pro")
+            price_list = best_pro.get("price_list", "")
+            base_system_prompt = best_pro.get("system_prompt", f"You are Fixi, an AI scheduler for {pro_name}.")
+            
+            full_system_prompt = f"""
 {base_system_prompt}
 
 You are representing '{pro_name}'.
@@ -246,61 +281,62 @@ You are representing '{pro_name}'.
 *** PRICING / SERVICES ***
 {price_list}
 
-*** CORE INSTRUCTIONS ***
-1. Understand the user's issue and get their specific location (City + Street Address) and preferred time.
-2. NEVER output [DEAL] without a full street address. If the user only gives a city, ASK for the street.
-3. If the user provides an address and issue, output the [DEAL] tag at the end.
+*** CONTEXT ***
+Customer is located in: {extracted_city}
+Issue: {extracted_issue}
+Transcription (if any): {transcription or "None"}
 
-Format: [DEAL: <Time> | <Full Address> | <Issue Summary>]
+*** CORE INSTRUCTIONS ***
+1. Acknowledge the issue and location.
+2. If you need the full street address for the booking, ask for it.
+3. If the user provided a full address and time, SET 'is_deal' to true in the JSON output and fill 'full_address' and 'appointment_time'.
+4. Output JSON matching the schema.
 
 Tone: Professional, efficient, Israeli Hebrew.
-    """
+            """
+            
+            # Call AI again with Pro Persona
+            pro_response_obj = await ai.analyze_conversation(
+                history=history,
+                user_text=user_text or "", # Re-eval user text with Pro context
+                custom_system_prompt=full_system_prompt,
+                require_json=True
+            )
+        else:
+            # Fallback if no pro matches (unlikely given logic)
+            pass
 
-    # 4. Handle Media (Download if present)
-    media_data = None
-    media_mime = None
+    # Select which response to send
+    final_response = pro_response_obj if best_pro else dispatcher_response
     
-    if media_url:
-        try:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(media_url)
-                if resp.status_code == 200:
-                    media_data = resp.content
-                    media_mime = resp.headers.get("Content-Type", "image/jpeg") # Default fallback
-                    logger.info(f"Downloaded media: {len(media_data)} bytes, type: {media_mime}")
-                else:
-                    logger.warning(f"Failed to download media from {media_url}, status: {resp.status_code}")
-        except Exception as e:
-            logger.error(f"Error downloading media: {e}")
+    # Send Message to User
+    await whatsapp.send_message(chat_id, final_response.reply_to_user)
+    await lead_manager.log_message(chat_id, "model", final_response.reply_to_user)
 
-    # 5. Get AI Response
-    history = await lead_manager.get_chat_history(chat_id)
-    ai_response = await ai.analyze_conversation(
-        history=history, 
-        user_text=user_text or "", 
-        custom_system_prompt=full_system_prompt,
-        media_data=media_data,
-        media_mime_type=media_mime
-    )
+    # 6. Check for [DEAL] or Structured Booking
+    is_deal = final_response.is_deal
     
-    # 6. Check for [DEAL]
-    deal_match = re.search(r"\[DEAL:.*?\]", ai_response)
+    # Fallback: check for [DEAL] string in reply if model hallucinated format
+    deal_string_match = re.search(r"\[DEAL:.*?\]", final_response.reply_to_user)
+    if deal_string_match:
+        is_deal = True
+        # If we need to parse it back from string, we can, but let's prefer structured if available.
+        # But if is_deal is true from structure, we construct the deal string for create_lead
     
-    if deal_match:
-        # Extract Clean Response for User
-        clean_response = ai_response.replace(deal_match.group(0), "").strip()
-        if not clean_response:
-            clean_response = "תודה! אני בודק זמינות עם איש מקצוע ושולח לך אישור מיד."
-
-        await whatsapp.send_message(chat_id, clean_response)
-        await lead_manager.log_message(chat_id, "model", clean_response)
-
-        # Create Lead
-        deal_string = deal_match.group(0)
-        # Note: We pass the selected pro_id to link it immediately if we found one
-        lead = await lead_manager.create_lead(deal_string, chat_id, pro_id=best_pro["_id"] if best_pro else None)
+    if is_deal and best_pro:
+        # Construct deal string for LeadManager (legacy support) or just pass fields
+        # Ideally LeadManager should be updated, but we stick to constraints.
+        # We construct the string expected by LeadManager: [DEAL: Time | Address | Issue]
         
-        if lead and best_pro:
+        d_time = final_response.extracted_data.appointment_time or "As soon as possible"
+        d_address = final_response.extracted_data.full_address or extracted_city or "Unknown Address"
+        d_issue = final_response.extracted_data.issue or extracted_issue or "Issue"
+        
+        deal_string = f"[DEAL: {d_time} | {d_address} | {d_issue}]"
+        
+        lead = await lead_manager.create_lead(deal_string, chat_id, pro_id=best_pro["_id"])
+        
+        if lead:
             pro_phone = best_pro.get("phone_number")
             if pro_phone:
                 if not pro_phone.endswith("@c.us"):
@@ -311,6 +347,9 @@ Tone: Professional, efficient, Israeli Hebrew.
 📍 *כתובת:* {lead['full_address']}
 🛠️ *תקלה:* {lead['issue_type']}
 ⏰ *זמן מועדף:* {lead['appointment_time']}"""
+
+                if transcription:
+                    msg_to_pro += f"\n🎙️ *תמליל:* {transcription}"
                 
                 # Send Buttons
                 buttons = [
@@ -321,11 +360,6 @@ Tone: Professional, efficient, Israeli Hebrew.
                 
                 # Send Waze Link
                 await whatsapp.send_location_link(pro_phone, lead['full_address'], "🚗 נווט לכתובת:")
-    
-    else:
-        # Standard AI Reply
-        await whatsapp.send_message(chat_id, ai_response)
-        await lead_manager.log_message(chat_id, "model", ai_response)
 
 
 async def handle_pro_response(payload: dict):
