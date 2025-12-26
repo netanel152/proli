@@ -1,68 +1,89 @@
 # Fixi Backend & Admin Panel - AI Developer Context
 
 ## 1. Project Overview
-**Fixi** is an AI-powered CRM and scheduling automation platform for service professionals. It uses WhatsApp as the primary interface for both customers and professionals ("Pros").
+**Fixi** is an AI-powered CRM and scheduling automation platform for service professionals. It transforms WhatsApp into a powerful business tool using a multi-agent approach.
 
 *   **User Interface:** WhatsApp (via Green API).
 *   **Admin Interface:** Streamlit Dashboard.
 *   **Backend:** FastAPI (Async).
-*   **AI Engine:** Google Gemini (Generative AI).
+*   **AI Engine:** Google Gemini 2.0 (Multimodal - Text, Images, Audio).
 *   **Database:** MongoDB Atlas.
+*   **Core Logic:** Intelligent Pro Routing & Load Balancing.
 
-## 2. Architecture & Data Flow
+## 2. Technical Architecture & Tech Stack
 
-### Core Message Flow
-The system uses a modular service architecture:
-1.  **Webhook:** `app/main.py` receives `POST /webhook` from Green API.
-2.  **Routing:** Messages are routed to `app.services.workflow.process_incoming_message`.
-3.  **Processing:**
-    *   **`LeadManager`**: Logs messages and manages lead state in MongoDB.
-    *   **`AIEngine`**: Sends conversation history to Gemini to generate responses and detect `[DEAL]` tags.
-    *   **`WhatsAppClient`**: Handles sending text, buttons, and location links back to users.
+### Core Technologies
+*   **Language:** Python 3.10+
+*   **Web Framework:** **FastAPI** (Async, handling Webhooks)
+*   **Admin UI:** **Streamlit** (Rapid data app development)
+*   **Database:** **MongoDB** (Atlas) - using `motor` (Async) and `pymongo` (Sync).
+*   **AI Engine:** **Google Gemini** (`google-genai` SDK) - Supports Vision & Audio.
+*   **HTTP Client:** **HTTPX** (Async requests for media downloading).
+*   **Messaging Provider:** **Green API** (WhatsApp wrapper).
+*   **Scheduling:** **APScheduler** (Background tasks, reminders).
 
-### Scheduling & Background Tasks
-*   **`app/scheduler.py`**: Runs periodic tasks (Daily Reminders, Stale Job Monitor).
-*   **Dependencies:** Uses `WhatsAppClient` for notifications and `LeadManager` (via DB) for job tracking.
+### Data Flow
+1.  **Inbound:** WhatsApp Webhook -> `POST /webhook` (FastAPI `app/main.py`).
+2.  **Routing Engine (`app.services.workflow.determine_best_pro`):
+    *   **Filter:** Active Pros (`is_active: True`).
+    *   **Location:** Checks if user text matches Pro's `service_areas`.
+    *   **Ranking:** Sorts by `social_proof.rating` (Descending).
+    *   **Load Balancing:** Skips pros with > 3 active ("booked") jobs.
+    *   **Fallback:** Selects highest-rated pro or "Fixi Support" persona.
+3.  **Context Assembly:**
+    *   Fetches the selected Pro's **Dynamic System Prompt** and **Price List**.
+    *   Downloads media (Images/Audio) via `httpx` if present.
+4.  **AI Processing:**
+    *   `AIEngine` analyzes text + media + dynamic prompt.
+    *   Detects intent and extracts [DEAL] tags.
+5.  **Action:**
+    *   **Database:** Creates Lead with linked `pro_id`.
+    *   **Notification:** Sends lead details ONLY to the selected Pro.
+6.  **Visualization:** Admin Panel (`admin_panel/dashboard_page.py`) reflects changes immediately.
 
-### Key Directories
+## 3. Project Structure
+
 ```text
-app/
-├── main.py                     # Entry point (FastAPI)
-├── scheduler.py                # APScheduler tasks
-├── services/
-│   ├── workflow.py             # MAIN ENTRY for message logic
-│   ├── ai_engine.py            # Gemini integration (Class-based)
-│   ├── lead_manager.py         # DB operations for Leads/History
-│   └── whatsapp_client.py      # Green API wrapper
-└── core/                       # Config, Database, Logger
-admin_panel/                    # Streamlit Admin Dashboard
-scripts/                        # Operational scripts (Seeding, Simulation)
+D:\Projects\fixi-backend\
+├── app/                            # FastAPI Backend Core
+│   ├── main.py                     # Entry point: Webhook endpoint
+│   ├── services/
+│   │   ├── workflow.py             # ROUTING ENGINE & Business Logic
+│   │   ├── ai_engine.py            # Gemini Wrapper (Multimodal)
+│   │   ├── lead_manager.py         # DB Operations (CRUD)
+│   │   └── whatsapp_client.py      # Green API Wrapper
+│   └── core/
+│       ├── database.py             # MongoDB Connection
+│       └── config.py               # Env Vars
+├── admin_panel/                    # Streamlit Admin Dashboard
+│   ├── dashboard_page.py           # Main Dashboard (Tabs: View / Create)
+│   ├── components.py               # UI Widgets
+│   └── config.py                   # Translations (HE/EN)
+└── scripts/                        # Operational Scripts
 ```
 
-## 3. Setup & Commands
+## 4. Key Conventions & Rules
+*   **Schema Standardization:**
+    *   `full_address` (was `address`)
+    *   `issue_type` (was `issue`)
+    *   `appointment_time` (was `time_preference`)
+*   **Date/Time:** Store all datetimes in **UTC**. Convert to **Asia/Jerusalem** for display.
+*   **AI Context:** Always inject the *specific* Pro's system prompt. Never use a generic prompt unless in Fallback mode.
+*   **Localization:** The Admin Panel is bilingual (HE/EN). Keys are in `admin_panel/config.py`.
 
-### Prerequisites
-*   Python 3.10+
-*   MongoDB Atlas URI
-*   Green API Credentials
-*   Google Gemini API Key
+## 5. Setup & Development
 
-### Running the System
-1.  **Backend (FastAPI):**
-    ```bash
-    uvicorn app.main:app --reload --port 8000
-    ```
-2.  **Admin Panel (Streamlit):**
-    ```bash
-    streamlit run admin_panel/app.py
-    ```
+### Environment Variables (`.env`)
+```env
+MONGO_URI=mongodb+srv://...
+GEMINI_API_KEY=...
+GREEN_API_ID=...
+GREEN_API_TOKEN=...
+ADMIN_PASSWORD=...
+```
 
-### Testing
-*   **Run Tests:** `pytest tests/`
-*   **Seed Database:** `python scripts/seed_db.py` (Resets DB with test pros and slots).
+### Running the Application
+1.  **Backend:** `uvicorn app.main:app --reload --port 8000`
+2.  **Admin:** `streamlit run admin_panel/app.py`
 
-## 5. Development Conventions
-*   **Async/Sync:** Prefer `async` for all I/O (Database, API calls).
-*   **Logging:** Use `app.core.logger` (Loguru).
-*   **Timezones:** Store UTC in DB, display `Asia/Jerusalem` (IL_TZ) to users.
-*   **Validation:** Use Pydantic models (see `app/schemas`).
+```
