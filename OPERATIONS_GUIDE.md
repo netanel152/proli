@@ -45,3 +45,16 @@
 
 - **הוספת איש מקצוע:** דרך האדמין או `python scripts/seed_db.py`.
 - **ניקוי נתונים:** `python scripts/clear_history.py` (זהירות!).
+
+## אבטחה ומקביליות (Database Safety)
+
+### מנגנון הנעילה של ה-Scheduler
+כדי למנוע שליחת הודעות כפולות (Race Conditions) כאשר רצים מספר תהליכים:
+- ה-Scheduler משתמש בפקודה `find_one_and_update` של MongoDB.
+- פעולה זו היא **אטומית** (Atomic): היא בודקת ונועלת את הריצה בפעולה אחת.
+- הלוגיקה נמצאת ב-`app.scheduler.scheduler_manager`.
+
+### אבטחת Admin Panel
+- הסיסמאות לא נשמרות כטקסט גלוי.
+- המערכת משתמשת ב-**Bcrypt** עם Salt לייצור Hash.
+- האימות מול הדפדפן מתבצע באמצעות Cookie מאובטח (`fixi_auth_token`).
