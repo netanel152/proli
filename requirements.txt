@@ -1,32 +1,33 @@
 fastapi
 uvicorn
 python-dotenv
-pymongo
-requests
 httpx
+motor
+pymongo
+certifi
 google-genai
 apscheduler
-cloudinary
-streamlit
 loguru
 tenacity
-motor
 pydantic
 pydantic-settings
 jinja2
 python-multipart
-# Core Google/GRPC dependencies (let pip resolve versions)
+
+# Google / gRPC
 google-api-core
 grpcio
 grpcio-status
-# UI Components
+
+# UI & Admin Panel
+streamlit
 extra-streamlit-components
-streamlit-cookies-manager
 bcrypt
-# Other utilities
+
+# Utilities
 rich
 pytz
-certifi
+
 # Testing
 pytest
 pytest-asyncio
