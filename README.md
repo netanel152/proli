@@ -21,6 +21,7 @@
   - **Audio:** Transcribes and interprets voice notes in real-time.
 - **Dynamic Personas:** The bot adopts the specific pricing, tone, and rules of the assigned professional.
 - **Availability Management:** Checks real-time calendar availability in MongoDB and books appointments autonomously.
+- **Stale Job Monitor:** Automatically detects "stuck" leads (no completion after 6-24h) and follows up with the pro or customer.
 
 #### 📊 Admin Panel (Manager Facing)
 
@@ -33,9 +34,10 @@
 
 - **Backend:** Python 3.12+, FastAPI, HTTPX
 - **Frontend (Admin):** Streamlit
-- **AI Engine:** Google Gemini 2.0 (via `google-genai` SDK)
+- **AI Engine:** Google Gemini 2.5 Flash Lite (via `google-genai` SDK)
 - **Database:** MongoDB Atlas (Async via `motor`)
 - **Messaging:** WhatsApp (via Green API)
+- **Security:** Bcrypt (Admin Auth)
 - **Deployment:** Docker / Heroku ready
 
 ---
