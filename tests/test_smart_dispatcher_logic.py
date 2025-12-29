@@ -105,7 +105,7 @@ async def test_handover_to_pro_success(mock_workflow_dependencies):
 async def test_audio_transcription_flow(mock_workflow_dependencies):
     """
     Scenario: User sends Audio. Dispatcher transcribes it. User books deal.
-    Expected: Transcription text is passed to the Pro via WhatsApp buttons.
+    Expected: Transcription text is passed to the Pro via WhatsApp text.
     """
     mock_ai, mock_users, mock_whatsapp, mock_lm, _ = mock_workflow_dependencies
     
