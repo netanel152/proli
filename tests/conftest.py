@@ -1,8 +1,12 @@
 import pytest
+import pytest_asyncio
 from mongomock_motor import AsyncMongoMockClient
+from motor.motor_asyncio import AsyncIOMotorClient
 from unittest.mock import AsyncMock, MagicMock
 import os
 import sys
+import certifi
+from app.core.config import settings
 
 # Ensure app is in path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,26 +21,33 @@ def mock_db():
     return AsyncMongoMockClient().fixi_db
 
 @pytest.fixture(autouse=True)
-def patch_dependencies(monkeypatch, mock_db):
+def patch_dependencies(request, monkeypatch, mock_db):
+    """
+    Default mocking for Unit Tests.
+    Skips if the test is marked with 'integration'.
+    """
+    if request.node.get_closest_marker("integration"):
+        return
+
     # Patch Database Collections
     users = mock_db.users
     messages = mock_db.messages
     leads = mock_db.leads
     slots = mock_db.slots
-    settings = mock_db.settings
+    settings_col = mock_db.settings
     
     import app.core.database
     monkeypatch.setattr(app.core.database, "users_collection", users)
     monkeypatch.setattr(app.core.database, "messages_collection", messages)
     monkeypatch.setattr(app.core.database, "leads_collection", leads)
     monkeypatch.setattr(app.core.database, "slots_collection", slots)
-    monkeypatch.setattr(app.core.database, "settings_collection", settings)
+    monkeypatch.setattr(app.core.database, "settings_collection", settings_col)
 
     # Patch Scheduler Collections
     import app.scheduler
     monkeypatch.setattr(app.scheduler, "users_collection", users)
     monkeypatch.setattr(app.scheduler, "leads_collection", leads)
-    monkeypatch.setattr(app.scheduler, "settings_collection", settings)
+    monkeypatch.setattr(app.scheduler, "settings_collection", settings_col)
 
     # Patch Lead Manager Collections (Since it does 'from ... import ...')
     import app.services.lead_manager
@@ -49,8 +60,6 @@ def patch_dependencies(monkeypatch, mock_db):
     monkeypatch.setattr(app.services.workflow, "leads_collection", leads)
 
     # Patch New Services in Workflow
-    # We need to mock the instances: whatsapp, ai, lead_manager in app.services.workflow
-    
     mock_whatsapp = MagicMock()
     mock_whatsapp.send_message = AsyncMock()
     mock_whatsapp.send_location_link = AsyncMock()
@@ -71,3 +80,69 @@ def patch_dependencies(monkeypatch, mock_db):
     monkeypatch.setattr(app.scheduler, "whatsapp", mock_whatsapp)
     
     return mock_db
+
+@pytest_asyncio.fixture
+async def integration_db(monkeypatch):
+    """
+    Fixture for Integration Tests (REAL DB).
+    Connects to MONGO_TEST_URI, clears data, and patches app services.
+    """
+    if not settings.MONGO_TEST_URI:
+        pytest.skip("MONGO_TEST_URI is not set in environment/config")
+
+    client = AsyncIOMotorClient(settings.MONGO_TEST_URI, tlsCAFile=certifi.where())
+    db = client.fixi_test_db
+
+    # Define Collections
+    users = db.users
+    messages = db.messages
+    leads = db.leads
+    slots = db.slots
+    settings_col = db.settings
+
+    # CLEAR DB before test
+    await users.delete_many({})
+    await messages.delete_many({})
+    await leads.delete_many({})
+    await slots.delete_many({})
+    await settings_col.delete_many({})
+
+    # Patch app.core.database
+    import app.core.database
+    monkeypatch.setattr(app.core.database, "users_collection", users)
+    monkeypatch.setattr(app.core.database, "messages_collection", messages)
+    monkeypatch.setattr(app.core.database, "leads_collection", leads)
+    monkeypatch.setattr(app.core.database, "slots_collection", slots)
+    monkeypatch.setattr(app.core.database, "settings_collection", settings_col)
+
+    # Patch Lead Manager
+    import app.services.lead_manager
+    monkeypatch.setattr(app.services.lead_manager, "leads_collection", leads)
+    monkeypatch.setattr(app.services.lead_manager, "messages_collection", messages)
+
+    # --- Patch Workflow Service ---
+    import app.services.workflow
+    monkeypatch.setattr(app.services.workflow, "users_collection", users)
+    monkeypatch.setattr(app.services.workflow, "leads_collection", leads)
+
+    # --- Mock External APIs in Workflow ---
+    mock_whatsapp = MagicMock()
+    mock_whatsapp.send_message = AsyncMock()
+    mock_whatsapp.send_location_link = AsyncMock()
+    monkeypatch.setattr(app.services.workflow, "whatsapp", mock_whatsapp)
+
+    # Optional: Mock AI to avoid API costs during tests
+    mock_ai = MagicMock()
+    from app.services.ai_engine import AIResponse, ExtractedData
+    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
+        reply_to_user="Mock AI Response",
+        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Tel Aviv, Rotshild 10", appointment_time="10:00"),
+        transcription=None
+    ))
+    monkeypatch.setattr(app.services.workflow, "ai", mock_ai)
+
+    # Provide client and db to the test
+    yield db
+
+    # Cleanup (optional)
+    client.close()
