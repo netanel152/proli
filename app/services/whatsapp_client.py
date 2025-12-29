@@ -19,22 +19,6 @@ class WhatsAppClient:
             logger.info(f"Message sent to {chat_id}")
 
     @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
-    async def send_buttons(self, chat_id: str, text: str, buttons: list):
-        """
-        buttons payload example: [{"buttonId": "approve_lead_123", "buttonText": "Approve"}]
-        """
-        url = f"{self.api_url}/sendButtons/{self.api_token}"
-        payload = {
-            "chatId": chat_id,
-            "message": text,
-            "buttons": buttons
-        }
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            logger.info(f"Buttons sent to {chat_id}")
-
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
     async def send_location_link(self, chat_id: str, address: str, text_prefix: str = "Navigate here:"):
         encoded_address = urllib.parse.quote(address)
         waze_url = f"https://waze.com/ul?q={encoded_address}"

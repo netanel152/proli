@@ -89,12 +89,9 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
             return
 
         pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
-        message = "👋 היי, רק מוודא לגבי העבודה האחרונה. האם סיימת?"
-        buttons = [
-            {"buttonId": f"finish_job_confirm_{lead_id}", "buttonText": "🏁 סיימתי"},
-            {"buttonId": f"finish_job_deny_{lead_id}", "buttonText": "⏳ עדיין עובד"}
-        ]
-        await whatsapp.send_buttons(pro_chat_id, message, buttons)
+        message = "👋 היי, רק מוודא לגבי העבודה האחרונה. האם סיימת? \nהשב 'סיימתי' לאישור או 'עדיין עובד' לעדכון."
+        
+        await whatsapp.send_message(pro_chat_id, message)
         logger.success(f"Sent pro reminder for lead {lead_id} (Trigger: {triggered_by})")
     except Exception as e:
         logger.error(f"Error in send_pro_reminder for lead {lead_id}: {e}")
@@ -111,12 +108,9 @@ async def send_customer_completion_check(lead_id: str, triggered_by: str = "auto
         pro = await users_collection.find_one({"_id": lead["pro_id"]})
         pro_name = pro.get("business_name", "איש המקצוע") if pro else "איש המקצוע"
 
-        message = f"היי! 👋 אנחנו ב-Fixi רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. האם העבודה הסתיימה לשביעות רצונך?"
-        buttons = [
-            {"buttonId": f"customer_confirm_completion_{lead_id}", "buttonText": "✅ כן, הסתיים"},
-            {"buttonId": f"customer_deny_completion_{lead_id}", "buttonText": "❌ עדיין לא"}
-        ]
-        await whatsapp.send_buttons(customer_chat_id, message, buttons)
+        message = f"היי! 👋 אנחנו ב-Fixi רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. האם העבודה הסתיימה לשביעות רצונך?\nהשב 'כן' לאישור או 'לא' אם טרם הסתיים."
+        
+        await whatsapp.send_message(customer_chat_id, message)
         logger.success(f"Sent customer completion check for lead {lead_id} (Trigger: {triggered_by})")
     except Exception as e:
         logger.error(f"Error in send_customer_completion_check for lead {lead_id}: {e}")
@@ -193,7 +187,87 @@ async def handle_customer_rating_text(chat_id: str, text: str):
     logger.success(f"⭐ Rating {rating} saved for {business_name}")
     return "תודה רבה על הדירוג! ⭐"
 
+async def handle_pro_text_command(chat_id: str, text: str):
+    """
+    Handles text commands from Professionals:
+    - 'אשר' / '1': Approve newest pending lead.
+    - 'דחה' / '2': Reject newest pending lead.
+    - 'סיימתי' / '3': Mark newest booked lead as completed.
+    """
+    # Identify Pro
+    phone = chat_id.replace("@c.us", "")
+    pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}})
+    if not pro:
+        return None 
+
+    text = text.strip().lower()
+    
+    APPROVE_KEYS = ["אשר", "1", "approve"]
+    REJECT_KEYS = ["דחה", "2", "reject"]
+    FINISH_KEYS = ["סיימתי", "3", "finish", "done"]
+
+    response_text = None
+
+    if text in APPROVE_KEYS:
+        lead = await leads_collection.find_one(
+            {"pro_id": pro["_id"], "status": "new"},
+            sort=[("created_at", -1)]
+        )
+        if lead:
+            await lead_manager.update_lead_status(str(lead["_id"]), "booked", pro["_id"])
+            response_text = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
+            
+            pro_name = pro.get('business_name', 'מומחה')
+            pro_phone = pro.get('phone_number', '').replace('972', '0')
+            customer_msg = f"🎉 נמצא איש מקצוע! {pro_name} בדרך אליך. 📞 טלפון: {pro_phone}"
+            await whatsapp.send_message(lead["chat_id"], customer_msg)
+        else:
+            # Silent fail or info? "No pending job found" might be annoying if they type generic text.
+            # But specific keywords usually mean intent.
+            response_text = "לא מצאתי עבודה חדשה לאישור."
+
+    elif text in REJECT_KEYS:
+        lead = await leads_collection.find_one(
+            {"pro_id": pro["_id"], "status": "new"},
+            sort=[("created_at", -1)]
+        )
+        if lead:
+            await lead_manager.update_lead_status(str(lead["_id"]), "rejected")
+            response_text = "העבודה נדחתה. נחפש איש מקצוע אחר."
+        else:
+            response_text = "לא מצאתי עבודה חדשה לדחייה."
+
+    elif text in FINISH_KEYS:
+        lead = await leads_collection.find_one(
+            {"pro_id": pro["_id"], "status": "booked"},
+            sort=[("created_at", -1)]
+        )
+        if lead:
+            await leads_collection.update_one(
+                {"_id": lead["_id"]},
+                {"$set": {
+                    "status": "completed", 
+                    "completed_at": datetime.now(timezone.utc), 
+                    "waiting_for_rating": True
+                }}
+            )
+            response_text = "✅ עודכן שהעבודה הסתיימה. תודה!"
+            
+            feedback_msg = f"היי! 👋 איך היה השירות עם {pro.get('business_name')}? נשמח לדירוג 1-5."
+            await whatsapp.send_message(lead["chat_id"], feedback_msg)
+        else:
+            response_text = "לא מצאתי עבודה פעילה לסיום."
+
+    return response_text
+
 async def process_incoming_message(chat_id: str, user_text: str, media_url: str = None):
+    # 0. Check for Pro Text Command
+    if user_text:
+        pro_resp = await handle_pro_text_command(chat_id, user_text)
+        if pro_resp:
+            await whatsapp.send_message(chat_id, pro_resp)
+            return
+
     # 1. Log User Message
     log_text = user_text
     if media_url:
@@ -351,104 +425,10 @@ Tone: Professional, efficient, Israeli Hebrew.
                 if transcription:
                     msg_to_pro += f"\n🎙️ *תמליל:* {transcription}"
                 
-                # Send Buttons
-                buttons = [
-                    {"buttonId": f"approve_{lead['_id']}", "buttonText": "אשר עבודה"},
-                    {"buttonId": f"reject_{lead['_id']}", "buttonText": "דחה"}
-                ]
-                await whatsapp.send_buttons(pro_phone, msg_to_pro, buttons)
+                # Send Text Options
+                msg_to_pro += "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
+                await whatsapp.send_message(pro_phone, msg_to_pro)
                 
                 # Send Waze Link
                 await whatsapp.send_location_link(pro_phone, lead['full_address'], "🚗 נווט לכתובת:")
 
-
-async def handle_pro_response(payload: dict):
-    """
-    Handles button clicks from the Pro or Customer.
-    """
-    msg_data = payload.get("messageData", {})
-    button_reply = msg_data.get("buttonsResponseMessage", {})
-    button_id = button_reply.get("selectedButtonId")
-    sender = payload.get("senderData", {}).get("chatId")
-
-    if not button_id:
-        return
-
-    logger.info(f"Button Clicked: {button_id} by {sender}")
-
-    if button_id.startswith("approve_"):
-        lead_id = button_id.replace("approve_", "")
-        lead = await lead_manager.get_lead_by_id(lead_id)
-        
-        if lead:
-            # Update Lead
-            pro_phone_clean = sender.replace("@c.us", "")
-            pro = await users_collection.find_one({"phone_number": pro_phone_clean})
-            pro_id = pro["_id"] if pro else None
-            
-            await lead_manager.update_lead_status(lead_id, "booked", pro_id)
-            
-            # Notify Pro
-            await whatsapp.send_message(sender, "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך.")
-            
-            # Notify Customer
-            pro_name = pro.get('business_name', 'מומחה')
-            pro_phone = pro.get('phone_number', '').replace('972', '0')
-            
-            customer_msg = f"""🎉 נמצא איש מקצוע! {pro_name} בדרך אליך. 📞 טלפון: {pro_phone} ⭐ דירוג: 4.9/5"""
-            await whatsapp.send_message(lead["chat_id"], customer_msg)
-
-    elif button_id.startswith("reject_"):
-        lead_id = button_id.replace("reject_", "")
-        await lead_manager.update_lead_status(lead_id, "rejected")
-        await whatsapp.send_message(sender, "העבודה נדחתה. נחפש איש מקצוע אחר.")
-    
-    elif button_id.startswith("finish_job_confirm_"):
-        lead_id = button_id.replace("finish_job_confirm_", "")
-        
-        lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
-        if lead:
-             await leads_collection.update_one(
-                {"_id": lead["_id"]},
-                {"$set": {
-                    "status": "completed", 
-                    "completed_at": datetime.now(timezone.utc), 
-                    "waiting_for_rating": True
-                }}
-            )
-             await whatsapp.send_message(sender, "✅ עודכן שהעבודה הסתיימה. תודה!")
-             
-             # Ask Customer for feedback
-             pro = await users_collection.find_one({"_id": lead["pro_id"]})
-             pro_name = pro.get('business_name', 'המקצוען') if pro else 'המקצוען'
-             feedback_msg = f"היי! 👋 איך היה השירות עם {pro_name}? נשמח לדירוג 1-5."
-             await whatsapp.send_message(lead["chat_id"], feedback_msg)
-
-    elif button_id.startswith("finish_job_deny_"):
-        await whatsapp.send_message(sender, "👍 אין בעיה. תעדכן כשתסיים.")
-    
-    elif button_id.startswith("customer_confirm_completion_"):
-         # Treat as "כן, הסתיים"
-         lead_id = button_id.replace("customer_confirm_completion_", "")
-         lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
-         if lead:
-             await leads_collection.update_one(
-                {"_id": lead["_id"]},
-                {"$set": {
-                    "status": "completed", 
-                    "completed_at": datetime.now(timezone.utc), 
-                    "waiting_for_rating": True
-                }}
-            )
-             # Notify Pro
-             pro = await users_collection.find_one({"_id": lead["pro_id"]})
-             if pro:
-                 pro_chat = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
-                 await whatsapp.send_message(pro_chat, "👍 הלקוח אישר שהעבודה הסתיימה.")
-                 
-                 # Ask for rating
-                 feedback_msg = f"מעולה! שמחים לשמוע. איך היה השירות עם {pro['business_name']}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מעולה)."
-                 await whatsapp.send_message(sender, feedback_msg)
-
-    elif button_id.startswith("customer_deny_completion_"):
-        await whatsapp.send_message(sender, "הבנתי. אנחנו כאן אם צריך משהו.")

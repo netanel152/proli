@@ -1,5 +1,5 @@
 import pytest
-from app.services.workflow import process_incoming_message, handle_pro_response
+from app.services.workflow import process_incoming_message
 from app.services.ai_engine import AIResponse, ExtractedData
 from unittest.mock import MagicMock, AsyncMock
 
@@ -93,16 +93,8 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     assert lead["issue_type"] == "plumber"
     assert lead["full_address"] == "Dizengoff 1"
 
-    # 4. PRO: Approve via Button
-    payload = {
-        "senderData": {"chatId": pro_chat_id},
-        "messageData": {
-            "typeMessage": "buttonsResponseMessage",
-            "buttonsResponseMessage": {"selectedButtonId": f"approve_{lead['_id']}"}
-        }
-    }
-    
-    await handle_pro_response(payload)
+    # 4. PRO: Approve via Text Command ("אשר")
+    await process_incoming_message(pro_chat_id, "אשר")
     
     updated_lead = await mock_db.leads.find_one({"_id": lead["_id"]})
     assert updated_lead["status"] == "booked"

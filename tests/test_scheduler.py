@@ -28,7 +28,6 @@ def mock_actions():
          patch("app.scheduler.whatsapp") as mock_whatsapp:
         
         mock_whatsapp.send_message = AsyncMock()
-        mock_whatsapp.send_buttons = AsyncMock()
         
         yield mock_remind, mock_check, mock_whatsapp
 
