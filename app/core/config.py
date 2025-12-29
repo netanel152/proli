@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     GREEN_API_TOKEN: str
     GEMINI_API_KEY: str
     MONGO_URI: str
+    MONGO_TEST_URI: str | None = None
     ADMIN_PASSWORD: str
     CLOUDINARY_CLOUD_NAME: str
     CLOUDINARY_API_KEY: str
