@@ -16,10 +16,14 @@ def mock_workflow_dependencies():
         mock_lm.log_message = AsyncMock()
         mock_lm.get_chat_history = AsyncMock(return_value=[])
         mock_lm.create_lead = AsyncMock(return_value={"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id"})
+        mock_lm.create_lead_from_dict = AsyncMock(return_value={"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id"})
         mock_whatsapp.send_message = AsyncMock()
         mock_whatsapp.send_location_link = AsyncMock()
         mock_users.find_one = AsyncMock(return_value=None)
-        mock_leads.find_one = AsyncMock(return_value=None)
+        
+        mock_lead_data = {"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id", "status": "new"}
+        mock_leads.find_one = AsyncMock(side_effect=lambda query, **kwargs: mock_lead_data if "_id" in query else None)
+        mock_leads.update_one = AsyncMock()
         
         # Default users find response
         mock_cursor = MagicMock()
@@ -141,7 +145,7 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
     await process_incoming_message("user123", "", media_url="http://audio.mp3")
     
     # Verify Lead Creation
-    mock_lm.create_lead.assert_called()
+    assert mock_lm.create_lead.called or mock_lm.create_lead_from_dict.called
     
     # Verify Message to Pro contains Transcription
     # We expect multiple calls to send_message. We look for the one to the Pro.
