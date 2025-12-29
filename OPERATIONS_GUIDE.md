@@ -2,10 +2,34 @@
 
 ## ארכיטקטורת ריצה
 
-המערכת רצה בשני תהליכים נפרדים (Processes):
+המערכת יכולה לרוץ בשני אופנים:
 
+**אפשרות א' (מומלץ): Docker Containers**
+*   **Web (Backend):** קונטיינר המריץ את `uvicorn`.
+*   **Admin:** קונטיינר המריץ את `streamlit`.
+*   שניהם מנוהלים דרך `docker-compose.yml` ומשתפים רשת פנימית.
+
+**אפשרות ב': ריצה מקומית (Local)**
 1. **שרת ה-Backend (`uvicorn`):** אחראי על קבלת Webhooks, הרצת מנוע הניתוב (Routing Engine), וניהול התקשורת עם Gemini.
 2. **ממשק הניהול (`streamlit`):** דשבורד ויזואלי למנהל המערכת.
+
+## ניהול וניטור (Logs & Monitoring)
+
+### צפייה בלוגים (Docker)
+המערכת משתמשת ב-`Loguru` לניהול לוגים מובנה.
+```bash
+# צפייה בלוגים של כל השירותים בזמן אמת
+docker-compose logs -f
+
+# צפייה בלוגים של שירות ספציפי
+docker-compose logs -f web    # Backend
+docker-compose logs -f admin  # Admin Panel
+```
+
+### קבצי לוג (Local/Archive)
+הלוגים נשמרים גם לקבצים בתיקיית `logs/`:
+*   `fixi.log`: לוג ראשי (מתגלגל כל 10MB).
+*   הלוגים נשמרים למשך 10 ימים ונדחסים אוטומטית.
 
 ## ניהול שוטף (Dashboard)
 

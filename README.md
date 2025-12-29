@@ -103,6 +103,17 @@
 
 ## ▶️ Running the App
 
+### Option A: Docker (Recommended)
+This will spin up both the Backend and Admin Panel in isolated containers.
+
+```bash
+docker-compose up --build -d
+```
+*   **Backend:** http://localhost:8000
+*   **Admin Panel:** http://localhost:8501
+
+### Option B: Local Development
+
 **1. Backend Server (FastAPI):**
 ```bash
 uvicorn app.main:app --reload --port 8000
