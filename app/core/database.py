@@ -3,9 +3,12 @@ from pymongo import MongoClient
 from app.core.config import settings
 import certifi
 
+# Determine if SSL is needed (usually for Atlas/Cloud)
+ca_file = certifi.where() if "+srv" in settings.MONGO_URI else None
+kwargs = {"tlsCAFile": ca_file} if ca_file else {}
+
 # --- Async Client (Motor) for FastAPI ---
-# tlsCAFile is crucial for Windows/SSL environments
-client = AsyncIOMotorClient(settings.MONGO_URI, tlsCAFile=certifi.where())
+client = AsyncIOMotorClient(settings.MONGO_URI, **kwargs)
 db = client.fixi_db
 
 # Async Collections
@@ -18,7 +21,7 @@ settings_collection = db.settings
 # --- Sync Client (PyMongo) ---
 # Kept strictly for synchronous scripts or legacy tools if needed.
 # Use 'sync_client' explicitly if you need blocking calls.
-sync_client = MongoClient(settings.MONGO_URI, tlsCAFile=certifi.where())
+sync_client = MongoClient(settings.MONGO_URI, **kwargs)
 sync_db = sync_client.fixi_db
 
 def check_db_connection():
