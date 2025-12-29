@@ -21,6 +21,8 @@
 *   **HTTP Client:** **HTTPX** (Async requests for media downloading).
 *   **Messaging Provider:** **Green API** (WhatsApp wrapper).
 *   **Scheduling:** **APScheduler** with **Atomic Locking** (Race-condition free).
+*   **Logging:** **Loguru** (intercepts standard logging, structured file output).
+*   **Infrastructure:** **Docker** & **Docker Compose**.
 
 ### Data Flow
 1.  **Inbound:** WhatsApp Webhook -> `POST /webhook` (FastAPI `app/main.py`).
@@ -62,7 +64,10 @@ D:\Projects\fixi-backend\
 │   ├── auth.py                     # Authentication (Bcrypt + Cookies)
 │   ├── components.py               # UI Widgets
 │   └── config.py                   # Translations (HE/EN)
-└── scripts/                        # Operational Scripts
+├── scripts/                        # Operational Scripts
+├── Dockerfile                      # Container definition
+├── docker-compose.yml              # Multi-container orchestration
+└── entrypoint.sh                   # Startup script
 ```
 
 ## 4. Key Conventions & Rules
@@ -82,7 +87,8 @@ D:\Projects\fixi-backend\
 2.  **Security (Auth):** ✅ Resolved. `admin_panel/auth.py` uses salted `bcrypt`.
 3.  **Concurrency (Scheduler):** ✅ Resolved. Atomic DB locks implemented in `scheduler.py`.
 4.  **Error Handling:** ✅ Improved. Background tasks used for heavy lifting.
-5.  **AI Fallback:** ⚠️ Pending/Partial. Code uses `gemini-2.5-flash-lite` but explicit retry/fallback logic to `gemini-1.5` is not currently active in `ai_engine.py`.
+5.  **Infrastructure:** ✅ Resolved. Dockerized application with structured logging.
+6.  **AI Fallback:** ⚠️ Pending/Partial. Code uses `gemini-2.5-flash-lite` but explicit retry/fallback logic to `gemini-1.5` is not currently active in `ai_engine.py`.
 
 ### Environment Variables (`.env`)
 ```env
