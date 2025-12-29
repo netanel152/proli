@@ -13,7 +13,8 @@ def ai_engine():
             engine = AIEngine()
             # Reset client to a MagicMock we can configure per test
             engine.client = MagicMock()
-            engine.client.models = MagicMock()
+            engine.client.aio = MagicMock()
+            engine.client.aio.models = MagicMock()
             yield engine
 
 @pytest.mark.asyncio
@@ -30,7 +31,7 @@ async def test_malformed_json_raw_text(ai_engine):
     mock_response.text = "I cannot answer this request."
     
     # Setup async generation
-    ai_engine.client.models.generate_content = AsyncMock(return_value=mock_response)
+    ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
     
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
     
@@ -60,7 +61,7 @@ async def test_valid_json_parsing(ai_engine):
     mock_response.parsed = None
     mock_response.text = json.dumps(valid_json)
     
-    ai_engine.client.models.generate_content = AsyncMock(return_value=mock_response)
+    ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
     
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
     
@@ -83,7 +84,7 @@ async def test_sdk_native_parsing(ai_engine):
     mock_response = MagicMock()
     mock_response.parsed = expected_response
     
-    ai_engine.client.models.generate_content = AsyncMock(return_value=mock_response)
+    ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
     
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
     
@@ -96,7 +97,7 @@ async def test_sdk_failure_exception(ai_engine):
     Scenario: SDK raises an exception (e.g. Timeout, API Error).
     Expected: Return "System Overload" fallback response.
     """
-    ai_engine.client.models.generate_content = AsyncMock(side_effect=Exception("API Timeout"))
+    ai_engine.client.aio.models.generate_content = AsyncMock(side_effect=Exception("API Timeout"))
     
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
     
