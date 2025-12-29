@@ -1,6 +1,6 @@
 from fastapi import FastAPI, BackgroundTasks
 from app.schemas.whatsapp import WebhookPayload
-from app.services.workflow import process_incoming_message, handle_pro_response
+from app.services.workflow import process_incoming_message
 from app.core.logger import logger
 from app.scheduler import start_scheduler
 from contextlib import asynccontextmanager
@@ -53,24 +53,12 @@ async def webhook_endpoint(payload: WebhookPayload, background_tasks: Background
                     media_url = msg_data.fileMessageData.downloadUrl
                     user_text = msg_data.fileMessageData.caption or ""
 
-            # Check if it's a Button Response (Green API treats this as a specific type or subtype)
-            # In some Green API versions, button response comes as incomingMessageReceived with typeMessage='buttonsResponseMessage'
-            if msg_data.typeMessage == "buttonsResponseMessage":
-                # Convert Pydantic model to dict for workflow handler or pass necessary data
-                # We need to construct a dict-like payload for handle_pro_response or change its signature
-                # Let's re-use the Pydantic model dump or pass specific args.
-                # 'handle_pro_response' expects a dict in my implementation above.
-                background_tasks.add_task(handle_pro_response, payload.model_dump())
-                return {"status": "processing_button"}
-
             # Process Standard Message
             background_tasks.add_task(process_incoming_message, chat_id, user_text, media_url)
             return {"status": "processing_message"}
 
         elif payload.typeWebhook == "incomingBlock": 
-            # Sometimes button clicks come here depending on API config
-            # But usually 'incomingMessageReceived' with 'buttonsResponseMessage' type.
-            # We'll leave this for safety.
+            # Handle blocked users if needed
             pass
 
         return {"status": "ignored_type"}

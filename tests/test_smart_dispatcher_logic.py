@@ -17,8 +17,9 @@ def mock_workflow_dependencies():
         mock_lm.get_chat_history = AsyncMock(return_value=[])
         mock_lm.create_lead = AsyncMock(return_value={"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id"})
         mock_whatsapp.send_message = AsyncMock()
-        mock_whatsapp.send_buttons = AsyncMock()
         mock_whatsapp.send_location_link = AsyncMock()
+        mock_users.find_one = AsyncMock(return_value=None)
+        mock_leads.find_one = AsyncMock(return_value=None)
         
         # Default users find response
         mock_cursor = MagicMock()
@@ -143,10 +144,16 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
     mock_lm.create_lead.assert_called()
     
     # Verify Message to Pro contains Transcription
-    mock_whatsapp.send_buttons.assert_called()
-    args = mock_whatsapp.send_buttons.call_args[0]
-    msg_to_pro = args[1]
+    # We expect multiple calls to send_message. We look for the one to the Pro.
+    # Pro phone: 972500000000 -> 972500000000@c.us
+    
+    pro_chat = "972500000000@c.us"
+    calls_to_pro = [call for call in mock_whatsapp.send_message.call_args_list if call[0][0] == pro_chat]
+    
+    assert len(calls_to_pro) >= 1
+    msg_to_pro = calls_to_pro[0][0][1]
     
     assert "Mario Plumbing" not in msg_to_pro # Check logic of msg construction if needed
     assert "תמליל" in msg_to_pro
     assert "Water is flowing everywhere" in msg_to_pro
+    assert "אשר" in msg_to_pro # Check for text instructions

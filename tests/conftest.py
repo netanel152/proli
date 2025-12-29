@@ -53,7 +53,6 @@ def patch_dependencies(monkeypatch, mock_db):
     
     mock_whatsapp = MagicMock()
     mock_whatsapp.send_message = AsyncMock()
-    mock_whatsapp.send_buttons = AsyncMock()
     mock_whatsapp.send_location_link = AsyncMock()
 
     mock_ai = MagicMock()

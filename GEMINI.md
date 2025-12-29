@@ -36,9 +36,10 @@
 4.  **AI Processing:**
     *   `AIEngine` (Gemini 2.5) analyzes text + media + dynamic prompt.
     *   Detects intent and extracts [DEAL] tags or Structured JSON.
+*   **Notification:** Sends lead details ONLY to the selected Pro with text instructions for approval/rejection.
 5.  **Action:**
     *   **Database:** Creates Lead with linked `pro_id`.
-    *   **Notification:** Sends lead details ONLY to the selected Pro with Action Buttons (Approve/Reject).
+    *   **Notification:** Sends lead details ONLY to the selected Pro with instructions to reply 'אשר' (Approve) or 'דחה' (Reject).
 6.  **Visualization:** Admin Panel (`admin_panel/dashboard_page.py`) reflects changes immediately.
 
 ## 3. Project Structure

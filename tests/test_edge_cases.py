@@ -17,6 +17,8 @@ def mock_dependencies():
         mock_lm.log_message = AsyncMock()
         mock_wa.send_message = AsyncMock()
         mock_users.find.return_value.to_list = AsyncMock(return_value=[]) # No pros default
+        mock_users.find_one = AsyncMock(return_value=None)
+        mock_leads.find_one = AsyncMock(return_value=None)
         
         # Ensure AI method is AsyncMock
         mock_ai.analyze_conversation = AsyncMock()
