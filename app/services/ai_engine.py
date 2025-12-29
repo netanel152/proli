@@ -62,7 +62,8 @@ class AIEngine:
                 config_args["response_mime_type"] = "application/json"
                 config_args["response_schema"] = AIResponse
 
-            response = await self.client.models.generate_content(
+            # Use the Async IO (.aio) accessor
+            response = await self.client.aio.models.generate_content(
                 model=self.model_name,
                 contents=contents,
                 config=types.GenerateContentConfig(**config_args)

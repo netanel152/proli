@@ -337,11 +337,43 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     best_pro = None
     pro_response_obj = None
 
+    # Track the active lead ID if we find/create one
+    current_lead_id = None
+
     if extracted_city and extracted_issue:
+        # Check for existing active lead
+        active_lead = await leads_collection.find_one({
+            "chat_id": chat_id,
+            "status": {"$in": ["new", "contacted"]} 
+        }, sort=[("created_at", -1)])
+
+        if active_lead:
+            current_lead_id = active_lead["_id"]
+            # Optionally update details if they changed?
+            # For now, we assume the conversation continues on this lead.
+        else:
+            # Create a provisional lead
+            new_lead = await lead_manager.create_lead_from_dict(
+                chat_id=chat_id,
+                issue_type=extracted_issue,
+                full_address=extracted_city, # Provisional address is just city
+                status="contacted", # In progress
+                appointment_time="Pending"
+            )
+            if new_lead:
+                current_lead_id = new_lead["_id"]
+
         # Sufficient data gathered -> Find Pro
         best_pro = await determine_best_pro(issue_type=extracted_issue, location=extracted_city)
         
         if best_pro:
+            # Update the lead with the pro candidate (even if not booked yet)
+            if current_lead_id:
+                await leads_collection.update_one(
+                    {"_id": current_lead_id}, 
+                    {"$set": {"pro_id": best_pro["_id"]}}
+                )
+
             # Switch to Pro Persona
             pro_name = best_pro.get("business_name", "Fixi Pro")
             price_list = best_pro.get("price_list", "")
@@ -394,21 +426,36 @@ Tone: Professional, efficient, Israeli Hebrew.
     deal_string_match = re.search(r"\[DEAL:.*?\]", final_response.reply_to_user)
     if deal_string_match:
         is_deal = True
-        # If we need to parse it back from string, we can, but let's prefer structured if available.
-        # But if is_deal is true from structure, we construct the deal string for create_lead
     
     if is_deal and best_pro:
-        # Construct deal string for LeadManager (legacy support) or just pass fields
-        # Ideally LeadManager should be updated, but we stick to constraints.
-        # We construct the string expected by LeadManager: [DEAL: Time | Address | Issue]
-        
+        # Finalize details
         d_time = final_response.extracted_data.appointment_time or "As soon as possible"
         d_address = final_response.extracted_data.full_address or extracted_city or "Unknown Address"
         d_issue = final_response.extracted_data.issue or extracted_issue or "Issue"
         
-        deal_string = f"[DEAL: {d_time} | {d_address} | {d_issue}]"
-        
-        lead = await lead_manager.create_lead(deal_string, chat_id, pro_id=best_pro["_id"])
+        # If we have a current_lead, update it. If not, create new.
+        if current_lead_id:
+            await leads_collection.update_one(
+                {"_id": current_lead_id},
+                {"$set": {
+                    "status": "new", # Ready for Pro
+                    "appointment_time": d_time,
+                    "full_address": d_address,
+                    "issue_type": d_issue,
+                    "pro_id": best_pro["_id"]
+                }}
+            )
+            lead = await leads_collection.find_one({"_id": current_lead_id})
+        else:
+            # Should rarely happen if Step 5 worked, but safe fallback
+            lead = await lead_manager.create_lead_from_dict(
+                chat_id=chat_id,
+                issue_type=d_issue,
+                full_address=d_address,
+                appointment_time=d_time,
+                status="new",
+                pro_id=best_pro["_id"]
+            )
         
         if lead:
             pro_phone = best_pro.get("phone_number")

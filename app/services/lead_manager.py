@@ -25,25 +25,42 @@ class LeadManager:
                 full_address = parts[0] if len(parts) > 0 else "Unknown"
                 issue_type = parts[1] if len(parts) > 1 else "Unknown"
 
+            return await self.create_lead_from_dict(
+                chat_id=chat_id,
+                issue_type=issue_type,
+                full_address=full_address,
+                appointment_time=appointment_time,
+                status="new",
+                pro_id=pro_id
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to create lead from string '{deal_string}': {e}")
+            return None
+
+    async def create_lead_from_dict(self, chat_id: str, issue_type: str, full_address: str, appointment_time: str = "Pending", status: str = "new", pro_id: ObjectId = None) -> dict:
+        """
+        Creates a lead document directly from parameters.
+        """
+        try:
             lead_doc = {
                 "chat_id": chat_id,
-                "status": "new",
+                "status": status,
                 "appointment_time": appointment_time,
                 "full_address": full_address,
                 "issue_type": issue_type,
                 "created_at": datetime.now(timezone.utc),
                 "history": [],
-                "pro_id": pro_id  # Link to selected pro
+                "pro_id": pro_id
             }
             
             result = await leads_collection.insert_one(lead_doc)
             lead_doc["_id"] = result.inserted_id
-            logger.info(f"Lead created: {result.inserted_id} assigned to pro: {pro_id}")
+            logger.info(f"Lead created/inserted: {result.inserted_id} (Status: {status})")
             return lead_doc
-            
         except Exception as e:
-            logger.error(f"Failed to create lead from string '{deal_string}': {e}")
-            return None
+             logger.error(f"Error creating lead dict: {e}")
+             return None
 
     async def log_message(self, chat_id: str, role: str, text: str):
         msg_doc = {

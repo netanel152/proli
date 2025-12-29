@@ -1,0 +1,28 @@
+version: '3.8'
+
+services:
+  fixi-app:
+    build: .
+    container_name: fixi_monolith
+    ports:
+      - "8000:8000"  # FastAPI
+      - "8501:8501"  # Streamlit
+    env_file:
+      - .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/fixi_db
+    depends_on:
+      - mongo
+    restart: always
+
+  mongo:
+    image: mongo:latest
+    container_name: fixi_mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: always
+
+volumes:
+  mongo_data:

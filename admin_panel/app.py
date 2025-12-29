@@ -71,17 +71,40 @@ with st.sidebar:
     
     # --- Navigation ---
     page_options = [T["nav_dashboard"], T["nav_professionals"], T["nav_schedule"], T["nav_settings"]]
-    page = st.radio(T["nav_title"], page_options)
+    
+    # Initialize navigation state if not present or invalid
+    if "current_page" not in st.session_state:
+        st.session_state.current_page = page_options[0]
+    
+    # Ensure current page is valid (handle language switch)
+    if st.session_state.current_page not in page_options:
+         # Try to map by index if possible, else default to 0
+         st.session_state.current_page = page_options[0]
+
+    # Callback to update state
+    def on_nav_change():
+        st.session_state.current_page = st.session_state.nav_radio
+
+    page = st.radio(
+        T["nav_title"], 
+        page_options, 
+        index=page_options.index(st.session_state.current_page),
+        key="nav_radio",
+        on_change=on_nav_change
+    )
     
     st.divider()
     logout(cookie_manager, T)
 
 # --- Page Rendering ---
-if page == T["nav_dashboard"]:
+# Use session state or the widget value (they should be synced)
+current_selection = st.session_state.get("current_page", page)
+
+if current_selection == T["nav_dashboard"]:
     view_leads_dashboard(T)
-elif page == T["nav_professionals"]:
+elif current_selection == T["nav_professionals"]:
     view_professionals(T)
-elif page == T["nav_schedule"]:
+elif current_selection == T["nav_schedule"]:
     view_schedule_editor(T)
-elif page == T["nav_settings"]:
+elif current_selection == T["nav_settings"]:
     view_system_settings(T)
