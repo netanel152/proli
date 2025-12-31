@@ -22,82 +22,88 @@ class AIResponse(BaseModel):
 class AIEngine:
     def __init__(self):
         self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        self.model_name = "gemini-2.5-flash-lite"
+        # Define the fallback hierarchy
+        self.model_hierarchy = [
+            "gemini-2.5-flash-lite", # Primary: Speed & Cost
+            "gemini-2.5-flash",      # Secondary: Stability
+            "gemini-1.5-flash"       # Fallback: Legacy Reliable
+        ]
 
     async def analyze_conversation(self, history: list, user_text: str, custom_system_prompt: str, media_data: bytes = None, media_mime_type: str = None, require_json: bool = True) -> AIResponse | str:
-        try:
-            contents = []
-            for msg in history:
-                parts = [types.Part(text=p) for p in msg.get("parts", [])]
-                contents.append(types.Content(role=msg["role"], parts=parts))
+        contents = []
+        for msg in history:
+            parts = [types.Part(text=p) for p in msg.get("parts", [])]
+            contents.append(types.Content(role=msg["role"], parts=parts))
+        
+        current_parts = []
+        
+        if media_data and media_mime_type:
+            current_parts.append(types.Part.from_bytes(data=media_data, mime_type=media_mime_type))
             
-            current_parts = []
-            
-            if media_data and media_mime_type:
-                current_parts.append(types.Part.from_bytes(data=media_data, mime_type=media_mime_type))
+            if "image" in media_mime_type:
+                user_text = (user_text or "") + "\n[System: Analyze the image to identify the issue.]"
+            elif "audio" in media_mime_type:
+                    user_text = (user_text or "") + "\n[System: Transcribe the audio verbatim and analyze the intent.]"
+
+        if user_text:
+            current_parts.append(types.Part(text=user_text))
+
+        if current_parts:
+            contents.append(types.Content(
+                role="user",
+                parts=current_parts
+            ))
+
+        if not custom_system_prompt:
+            custom_system_prompt = "You are a helpful assistant."
+
+        config_args = {
+            "system_instruction": custom_system_prompt,
+            "temperature": 0.3
+        }
+
+        if require_json:
+            config_args["response_mime_type"] = "application/json"
+            config_args["response_schema"] = AIResponse
+
+        last_error = None
+
+        # Iterate through models in hierarchy
+        for model_name in self.model_hierarchy:
+            try:
+                # Use the Async IO (.aio) accessor
+                response = await self.client.aio.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(**config_args)
+                )
                 
-                if "image" in media_mime_type:
-                    user_text = (user_text or "") + "\n[System: Analyze the image to identify the issue.]"
-                elif "audio" in media_mime_type:
-                     user_text = (user_text or "") + "\n[System: Transcribe the audio verbatim and analyze the intent.]"
+                if require_json:
+                    try:
+                        if hasattr(response, 'parsed') and response.parsed:
+                            return response.parsed 
+                        else:
+                                data = json.loads(response.text)
+                                return AIResponse(**data)
+                    except Exception as parse_error:
+                        logger.error(f"JSON Parse Error with {model_name}: {parse_error} - Text: {response.text}")
+                        # If JSON fails, it might be the model's fault, so we might want to continue to next model?
+                        # For now, let's treat JSON parse error as a hard failure for this model.
+                        continue 
 
-            if user_text:
-                current_parts.append(types.Part(text=user_text))
+                return response.text.strip()
 
-            if current_parts:
-                contents.append(types.Content(
-                    role="user",
-                    parts=current_parts
-                ))
-
-            if not custom_system_prompt:
-                custom_system_prompt = "You are a helpful assistant."
-
-            config_args = {
-                "system_instruction": custom_system_prompt,
-                "temperature": 0.3
-            }
-
-            if require_json:
-                config_args["response_mime_type"] = "application/json"
-                config_args["response_schema"] = AIResponse
-
-            # Use the Async IO (.aio) accessor
-            response = await self.client.aio.models.generate_content(
-                model=self.model_name,
-                contents=contents,
-                config=types.GenerateContentConfig(**config_args)
-            )
-            
-            if require_json:
-                # The SDK automatically validates if response_schema is passed,
-                # but we usually get a parsed object or need to parse `response.text`.
-                # In the Google GenAI Python SDK v0.1+, parsed is in response.parsed
-                # We will check if response.parsed is available, otherwise json.loads(response.text)
-                try:
-                    # Depending on SDK version, parsed might be available directly
-                    if hasattr(response, 'parsed') and response.parsed:
-                        return response.parsed # It returns the Pydantic instance if schema was Pydantic
-                    else:
-                         data = json.loads(response.text)
-                         return AIResponse(**data)
-                except Exception as parse_error:
-                     logger.error(f"JSON Parse Error: {parse_error} - Text: {response.text}")
-                     # Fallback object
-                     return AIResponse(
-                         reply_to_user="סליחה, לא הבנתי. תוכל לחזור על זה?",
-                         transcription=None,
-                         extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None)
-                     )
-
-            return response.text.strip()
-
-        except Exception as e:
-            logger.error(f"AI Engine Error: {traceback.format_exc()}")
-            if require_json:
-                return AIResponse(
-                     reply_to_user="סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע.",
-                     transcription=None,
-                     extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None)
-                 )
-            return "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."
+            except Exception as e:
+                logger.warning(f"Model {model_name} failed: {e}. Trying next fallback...")
+                last_error = e
+                continue
+        
+        # If all models failed
+        logger.error(f"All AI models failed. Last error: {traceback.format_exc()}")
+        if require_json:
+            return AIResponse(
+                    reply_to_user="סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע.",
+                    transcription=None,
+                    extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None)
+                )
+        return "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."
