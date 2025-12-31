@@ -1,28 +1,65 @@
 version: '3.8'
 
 services:
-  fixi-app:
+  # ---------------------------------------------------------------------------
+  # 1. API Service (FastAPI) - The Core Brain
+  # ---------------------------------------------------------------------------
+  api:
     build: .
-    container_name: fixi_app
+    container_name: fixi_api
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
-      - "8000:8000"  # FastAPI
-      - "8501:8501"  # Streamlit
+      - "8000:8000"
     env_file:
       - .env
     environment:
       - MONGO_URI=mongodb://mongo:27017/fixi_db
     depends_on:
       - mongo
+    volumes:
+      - ./logs:/app/logs
     restart: always
+    networks:
+      - fixi_network
 
+  # ---------------------------------------------------------------------------
+  # 2. Admin Panel (Streamlit) - The Dashboard
+  # ---------------------------------------------------------------------------
+  admin:
+    build: .
+    container_name: fixi_admin
+    command: streamlit run admin_panel/app.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/fixi_db
+    depends_on:
+      - mongo
+    volumes:
+      - ./logs:/app/logs
+    restart: always
+    networks:
+      - fixi_network
+
+  # ---------------------------------------------------------------------------
+  # 3. Database (MongoDB)
+  # ---------------------------------------------------------------------------
   mongo:
-    image: mongo:latest
+    image: mongo:6.0
     container_name: fixi_mongo
     ports:
       - "27017:27017"
     volumes:
       - mongo_data:/data/db
     restart: always
+    networks:
+      - fixi_network
 
 volumes:
   mongo_data:
+
+networks:
+  fixi_network:
+    driver: bridge

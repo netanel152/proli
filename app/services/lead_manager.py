@@ -94,3 +94,4 @@ class LeadManager:
             {"_id": ObjectId(lead_id)},
             {"$set": update_fields}
         )
+        logger.info(f"Lead {lead_id} updated: Status -> {status}, Pro -> {pro_id or 'Unchanged'}")

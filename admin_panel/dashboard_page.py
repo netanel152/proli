@@ -8,6 +8,7 @@ import pytz
 import asyncio
 import os
 import sys
+from app.core.logger import logger
 
 # Allow imports from the root directory to access the 'app' module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -217,6 +218,7 @@ def view_leads_dashboard(T):
                         cy, cn = st.columns(2)
                         if cy.button(T["confirm_yes"], key=f"yes_del_{selected_lead['id']}"):
                             leads_collection.delete_one({"_id": ObjectId(selected_lead['id'])})
+                            logger.info(f"Admin deleted lead {selected_lead['id']}")
                             st.success(T["success_delete"])
                             del st.session_state[f"confirm_delete_{selected_lead['id']}"]
                             st.cache_data.clear()
@@ -294,6 +296,7 @@ def view_leads_dashboard(T):
                         }
                         
                         leads_collection.insert_one(new_lead_doc)
+                        logger.info(f"Admin manually created lead for {chat_id}")
                         st.success(T.get("create_lead_success", "Lead created successfully!"))
                         st.cache_data.clear() # Clear cache so dashboard updates
                         # Optional: Rerun to show empty form or switch tabs (switching tabs programmatically is hard in Streamlit, so just rerun)
