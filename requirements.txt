@@ -1,37 +1,37 @@
 # Core Backend
-fastapi
-uvicorn
-gunicorn
-pydantic
-pydantic-settings
-python-dotenv
-httpx
-tenacity
-jinja2
+fastapi==0.109.2
+uvicorn==0.27.1
+gunicorn==21.2.0
+pydantic==2.6.1
+pydantic-settings==2.1.0
+python-dotenv==1.0.1
+httpx==0.26.0
+tenacity==8.2.3
+jinja2==3.1.3
 
 # Database
-motor
-pymongo
-certifi
+motor==3.3.2
+pymongo==4.6.1
+certifi==2024.2.2
 
 # AI & Machine Learning
-google-genai
+google-genai==0.3.0
 
 # Scheduling & Logging
-APScheduler
-loguru
-pytz
+APScheduler==3.10.4
+loguru==0.7.2
+pytz==2024.1
 
 # Admin Panel (Streamlit)
-streamlit
-extra-streamlit-components
-pandas
-bcrypt
+streamlit==1.31.1
+extra-streamlit-components==0.1.71
+pandas==2.2.0
+bcrypt==4.1.2
 
 # Testing & Dev
-pytest
-pytest-asyncio
-mongomock-motor
-black
-flake8
-watchdog
+pytest==8.0.0
+pytest-asyncio==0.23.5
+mongomock-motor==0.0.26
+black==24.1.1
+flake8==7.0.0
+watchdog==3.0.0

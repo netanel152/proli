@@ -28,7 +28,13 @@ class SenderData(BaseSchema):
     chatId: str
     senderName: Optional[str] = "Unknown"
 
+class InstanceData(BaseSchema):
+    idInstance: int
+    wid: Optional[str] = None
+    typeInstance: Optional[str] = None
+
 class WebhookPayload(BaseSchema):
     typeWebhook: str
+    instanceData: Optional[InstanceData] = None
     senderData: Optional[SenderData] = None
     messageData: Optional[MessageData] = None

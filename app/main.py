@@ -1,7 +1,9 @@
 from fastapi import FastAPI, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from app.schemas.whatsapp import WebhookPayload
 from app.services.workflow import process_incoming_message
 from app.core.logger import logger
+from app.core.config import settings
 from app.scheduler import start_scheduler
 from contextlib import asynccontextmanager
 import uvicorn
@@ -15,6 +17,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Fixi Bot Server", lifespan=lifespan)
 
+# --- Middleware ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify exact domains
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 @app.get("/")
 def health_check():
     return {"status": "Fixi is running! 🚀"}
@@ -25,6 +36,14 @@ async def webhook_endpoint(payload: WebhookPayload, background_tasks: Background
     Main entry point for Green API Webhooks.
     """
     try:
+        # 0. Security Verification
+        # Ensure the webhook comes from OUR Green API instance
+        if payload.instanceData:
+            # incoming idInstance is int, settings is usually str
+            if str(payload.instanceData.idInstance) != str(settings.GREEN_API_ID):
+                logger.warning(f"Security Alert: Blocked webhook from unknown instance: {payload.instanceData.idInstance}")
+                return {"status": "ignored_wrong_instance"}
+        
         # 1. Basic Filters
         if payload.typeWebhook == "incomingMessageReceived":
             sender_data = payload.senderData

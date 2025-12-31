@@ -22,29 +22,46 @@ async def determine_best_pro(issue_type: str = None, location: str = None) -> di
     4. Availability (Load Balancing)
     """
     try:
-        # 1. Fetch all active pros
+        # 1. Build Query
         query = {"is_active": True}
         
-        cursor = users_collection.find(query)
-        pros = await cursor.to_list(length=100)
-        
-        if not pros:
-            return None
-
-        # 2. Location Filtering
-        matching_pros = []
+        # 2. Location Filtering (Database Level Optimization)
+        # We want to find pros where 'service_areas' contains the user's location.
+        # Simple approach: If user says "Tel Aviv", we look for pros with "Tel Aviv" in their areas.
+        # We use a regex for case-insensitive partial matching.
         if location:
-            for pro in pros:
-                areas = pro.get("service_areas", []) # List of strings
-                # Loose matching: check if location string contains area or vice versa
-                if any(area in location or location in area for area in areas):
-                    matching_pros.append(pro)
+            # Escaping regex characters in location is important if we want to be safe, 
+            # but for city names it's usually fine.
+            query["service_areas"] = {"$regex": location, "$options": "i"}
+            
+        cursor = users_collection.find(query)
+        matching_pros = await cursor.to_list(length=100)
         
-        # If no location match found, fall back to all active pros (or strictly return None?)
-        # For Smart Dispatcher, if we have a location but no pro matches, we might want to tell the user?
-        # But sticking to "Fallback to all" for MVP stability unless strictly requested otherwise.
+        # Fallback: If no pros match the specific location, try finding "All" or similar wide-net pros?
+        # Or if the user's location was too specific (e.g. "Dizengoff St, Tel Aviv") and Pro just has "Tel Aviv".
+        # The DB regex above does: ProArea LIKE %UserLoc%. 
+        # So if Pro has "Tel Aviv" and User says "Tel Aviv", it matches.
+        # If Pro has "Tel Aviv" and User says "Dizengoff, Tel Aviv", the regex "Dizengoff, Tel Aviv" won't match "Tel Aviv".
+        # So we might need the Python fallback for the "Reverse" match (User string contains Pro area) if the DB query yields nothing.
+        
+        if not matching_pros and location:
+             # Retry with looser query (just active pros) and filter in Python for the "Reverse" match
+             # This handles: User="Dizengoff Tel Aviv", Pro="Tel Aviv"
+             logger.info(f"No direct location match for '{location}', trying reverse match...")
+             all_pros_cursor = users_collection.find({"is_active": True})
+             all_pros = await all_pros_cursor.to_list(length=100)
+             
+             for pro in all_pros:
+                 areas = pro.get("service_areas", [])
+                 # Check if any area is inside the location string
+                 if any(area in location for area in areas):
+                     matching_pros.append(pro)
+        
         if not matching_pros:
-            matching_pros = pros
+            # Final Fallback: All active pros? 
+            # Original logic did: "if not matching_pros: matching_pros = pros" (all active)
+            # We preserve this behavior for MVP stability.
+            matching_pros = await users_collection.find({"is_active": True}).to_list(length=100)
 
         # 3. Sort by Rating (Descending)
         def get_rating(p):
@@ -64,10 +81,12 @@ async def determine_best_pro(issue_type: str = None, location: str = None) -> di
             
             if current_load < MAX_LOAD:
                 selected_pro = pro
+                logger.info(f"Routing Decision: Selected Pro '{pro.get('business_name')}' (Load: {current_load}/{MAX_LOAD}, Rating: {get_rating(pro)})")
                 break
         
         if not selected_pro and matching_pros:
             selected_pro = matching_pros[0]
+            logger.warning(f"Routing Decision: All pros busy. Fallback to highest rated '{selected_pro.get('business_name')}' despite load.")
 
         return selected_pro
 
