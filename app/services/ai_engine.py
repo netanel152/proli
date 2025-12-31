@@ -44,6 +44,8 @@ class AIEngine:
                 user_text = (user_text or "") + "\n[System: Analyze the image to identify the issue.]"
             elif "audio" in media_mime_type:
                     user_text = (user_text or "") + "\n[System: Transcribe the audio verbatim and analyze the intent.]"
+            elif "video" in media_mime_type:
+                user_text = (user_text or "") + "\n[System: Watch the video to identify the issue and describe what you see.]"
 
         if user_text:
             current_parts.append(types.Part(text=user_text))

@@ -47,7 +47,7 @@ async def webhook_endpoint(payload: WebhookPayload, background_tasks: Background
                 user_text = msg_data.textMessageData.textMessage
             elif msg_data.typeMessage == "extendedTextMessage":
                 user_text = msg_data.extendedTextMessageData.text
-            elif msg_data.typeMessage in ["imageMessage", "audioMessage"]:
+            elif msg_data.typeMessage in ["imageMessage", "audioMessage", "videoMessage"]:
                 # Basic media handling if needed, existing logic had it
                 if msg_data.fileMessageData:
                     media_url = msg_data.fileMessageData.downloadUrl
