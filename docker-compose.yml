@@ -3,7 +3,7 @@ version: '3.8'
 services:
   fixi-app:
     build: .
-    container_name: fixi_monolith
+    container_name: fixi_app
     ports:
       - "8000:8000"  # FastAPI
       - "8501:8501"  # Streamlit

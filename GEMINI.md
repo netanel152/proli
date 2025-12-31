@@ -17,7 +17,7 @@
 *   **Web Framework:** **FastAPI** (Async, handling Webhooks)
 *   **Admin UI:** **Streamlit** (Rapid data app development) with `extra_streamlit_components` for cookie management.
 *   **Database:** **MongoDB** (Atlas) - using `motor` (Async) for the app and `pymongo` (Sync) for scripts.
-*   **AI Engine:** **Google Gemini 2.5 Flash Lite** (`google-genai` SDK) - Supports Vision & Audio.
+*   **AI Engine:** **Google Gemini Adaptive** (Flash Lite 2.5 -> Flash 2.5 -> Flash 1.5) - Supports Vision, Video & Audio.
 *   **HTTP Client:** **HTTPX** (Async requests for media downloading).
 *   **Messaging Provider:** **Green API** (WhatsApp wrapper).
 *   **Scheduling:** **APScheduler** with **Atomic Locking** (Race-condition free).
@@ -88,7 +88,7 @@ D:\Projects\fixi-backend\
 3.  **Concurrency (Scheduler):** ✅ Resolved. Atomic DB locks implemented in `scheduler.py`.
 4.  **Error Handling:** ✅ Improved. Background tasks used for heavy lifting.
 5.  **Infrastructure:** ✅ Resolved. Dockerized application with structured logging.
-6.  **AI Fallback:** ⚠️ Pending/Partial. Code uses `gemini-2.5-flash-lite` but explicit retry/fallback logic to `gemini-1.5` is not currently active in `ai_engine.py`.
+6.  **AI Fallback:** ✅ Resolved. Implemented adaptive hierarchy (Lite -> Flash -> Legacy).
 
 ### Environment Variables (`.env`)
 ```env
