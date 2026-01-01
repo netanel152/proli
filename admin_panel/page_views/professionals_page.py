@@ -4,6 +4,10 @@ from datetime import datetime, timezone
 from admin_panel.utils import users_collection, slots_collection, create_initial_schedule, generate_system_prompt
 import re
 
+# Constants for Prompt Markers
+PROMPT_AREA_MARKER_HE = "אזורי שירות"
+PROMPT_AREA_MARKER_EN = "Service Areas"
+
 @st.cache_data(ttl=60)
 def get_professionals():
     """Cached function to fetch all professionals."""
@@ -51,11 +55,11 @@ def render_pro_list(T):
             c_info, c_actions = st.columns([4, 1])
             with c_info:
                 st.subheader(f"{status_icon} {p['business_name']}")
-                st.caption(f"{T.get(f'type_{p.get("type", "general")}', p.get('type', 'general').capitalize())} | {p.get('phone_number')}")
+                st.caption(f"{T.get(f'type_{p.get("type", "general")}', p.get('type', 'general')).capitalize()} | {p.get('phone_number')}")
                 st.write(f"**{T['new_areas']}:** {', '.join(p.get('service_areas', []))}")
             
             with c_actions:
-                st.write("") # Spacer
+                st.write(" ") # Spacer
                 if st.button(T.get("edit_btn", "Edit"), key=f"edit_{pro_id}", width='stretch'):
                     st.session_state.pro_view_mode = 'edit'
                     st.session_state.pro_to_edit = p
@@ -116,11 +120,13 @@ def render_pro_form(T, pro_data=None):
                 # Auto-update service areas in the prompt
                 current_prompt = st.session_state.pro_prompt
                 service_areas_str = st.session_state.pro_areas
-                areas_line = f"אזורי שירות: {service_areas_str}"
+                areas_line = f"{PROMPT_AREA_MARKER_HE}: {service_areas_str}"
                 
                 # Regex to find and replace the service areas line in Hebrew or English
-                if re.search(r"(אזורי שירות|Service Areas):.*", current_prompt, re.IGNORECASE):
-                    updated_prompt = re.sub(r"(אזורי שירות|Service Areas):.*", areas_line, current_prompt, flags=re.IGNORECASE)
+                # Use the constants in the regex
+                regex_pattern = f"({PROMPT_AREA_MARKER_HE}|{PROMPT_AREA_MARKER_EN}):.*"
+                if re.search(regex_pattern, current_prompt, re.IGNORECASE):
+                    updated_prompt = re.sub(regex_pattern, areas_line, current_prompt, flags=re.IGNORECASE)
                 else:
                     updated_prompt = current_prompt + "\n" + areas_line
                 
@@ -155,5 +161,3 @@ def render_pro_form(T, pro_data=None):
                 st.rerun()
             else:
                 st.error(T["error_fill_fields"])
-
-

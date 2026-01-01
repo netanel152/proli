@@ -3,6 +3,11 @@ from app.services.ai_engine import AIEngine, AIResponse
 from app.services.lead_manager import LeadManager
 from app.core.logger import logger
 from app.core.database import users_collection, leads_collection
+from app.core.messages import Messages
+from app.core.prompts import Prompts
+from app.core.constants import LeadStatus
+from app.services.matching_service import determine_best_pro
+from app.services.notification_service import send_pro_reminder, send_customer_completion_check
 from bson import ObjectId
 from datetime import datetime, timezone
 import re
@@ -13,136 +18,15 @@ whatsapp = WhatsAppClient()
 ai = AIEngine()
 lead_manager = LeadManager()
 
-async def determine_best_pro(issue_type: str = None, location: str = None) -> dict:
-    """
-    Intelligent Routing Engine:
-    1. Active Status
-    2. Location Match (if applicable)
-    3. Rating (High to Low)
-    4. Availability (Load Balancing)
-    """
-    try:
-        # 1. Build Query
-        query = {"is_active": True}
-        
-        # 2. Location Filtering (Database Level Optimization)
-        # We want to find pros where 'service_areas' contains the user's location.
-        # Simple approach: If user says "Tel Aviv", we look for pros with "Tel Aviv" in their areas.
-        # We use a regex for case-insensitive partial matching.
-        if location:
-            # Escaping regex characters in location is important if we want to be safe, 
-            # but for city names it's usually fine.
-            query["service_areas"] = {"$regex": location, "$options": "i"}
-            
-        cursor = users_collection.find(query)
-        matching_pros = await cursor.to_list(length=100)
-        
-        # Fallback: If no pros match the specific location, try finding "All" or similar wide-net pros?
-        # Or if the user's location was too specific (e.g. "Dizengoff St, Tel Aviv") and Pro just has "Tel Aviv".
-        # The DB regex above does: ProArea LIKE %UserLoc%. 
-        # So if Pro has "Tel Aviv" and User says "Tel Aviv", it matches.
-        # If Pro has "Tel Aviv" and User says "Dizengoff, Tel Aviv", the regex "Dizengoff, Tel Aviv" won't match "Tel Aviv".
-        # So we might need the Python fallback for the "Reverse" match (User string contains Pro area) if the DB query yields nothing.
-        
-        if not matching_pros and location:
-             # Retry with looser query (just active pros) and filter in Python for the "Reverse" match
-             # This handles: User="Dizengoff Tel Aviv", Pro="Tel Aviv"
-             logger.info(f"No direct location match for '{location}', trying reverse match...")
-             all_pros_cursor = users_collection.find({"is_active": True})
-             all_pros = await all_pros_cursor.to_list(length=100)
-             
-             for pro in all_pros:
-                 areas = pro.get("service_areas", [])
-                 # Check if any area is inside the location string
-                 if any(area in location for area in areas):
-                     matching_pros.append(pro)
-        
-        if not matching_pros:
-            # Final Fallback: All active pros? 
-            # Original logic did: "if not matching_pros: matching_pros = pros" (all active)
-            # We preserve this behavior for MVP stability.
-            matching_pros = await users_collection.find({"is_active": True}).to_list(length=100)
-
-        # 3. Sort by Rating (Descending)
-        def get_rating(p):
-            return p.get("social_proof", {}).get("rating", 0)
-        
-        matching_pros.sort(key=get_rating, reverse=True)
-
-        # 4. Load Balancing
-        MAX_LOAD = 3 
-        selected_pro = None
-        
-        for pro in matching_pros:
-            current_load = await leads_collection.count_documents({
-                "pro_id": pro["_id"],
-                "status": "booked"
-            })
-            
-            if current_load < MAX_LOAD:
-                selected_pro = pro
-                logger.info(f"Routing Decision: Selected Pro '{pro.get('business_name')}' (Load: {current_load}/{MAX_LOAD}, Rating: {get_rating(pro)})")
-                break
-        
-        if not selected_pro and matching_pros:
-            selected_pro = matching_pros[0]
-            logger.warning(f"Routing Decision: All pros busy. Fallback to highest rated '{selected_pro.get('business_name')}' despite load.")
-
-        return selected_pro
-
-    except Exception as e:
-        logger.error(f"Error in determine_best_pro: {e}")
-        return None
-
-async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
-    """Sends a reminder to the pro to mark a job as finished."""
-    try:
-        lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
-        if not lead or lead.get("status") != "booked":
-            logger.warning(f"send_pro_reminder called for invalid/non-booked lead: {lead_id}")
-            return
-
-        pro = await users_collection.find_one({"_id": lead["pro_id"]})
-        if not pro or not pro.get("phone_number"):
-            logger.error(f"Could not find pro or pro phone for lead {lead_id}")
-            return
-
-        pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
-        message = "👋 היי, רק מוודא לגבי העבודה האחרונה. האם סיימת? \nהשב 'סיימתי' לאישור או 'עדיין עובד' לעדכון."
-        
-        await whatsapp.send_message(pro_chat_id, message)
-        logger.success(f"Sent pro reminder for lead {lead_id} (Trigger: {triggered_by})")
-    except Exception as e:
-        logger.error(f"Error in send_pro_reminder for lead {lead_id}: {e}")
-
-async def send_customer_completion_check(lead_id: str, triggered_by: str = "auto"):
-    """Asks the customer if the job has been completed."""
-    try:
-        lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
-        if not lead or lead.get("status") != "booked":
-            logger.warning(f"send_customer_completion_check called for invalid/non-booked lead: {lead_id}")
-            return
-
-        customer_chat_id = lead["chat_id"]
-        pro = await users_collection.find_one({"_id": lead["pro_id"]})
-        pro_name = pro.get("business_name", "איש המקצוע") if pro else "איש המקצוע"
-
-        message = f"היי! 👋 אנחנו ב-Fixi רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. האם העבודה הסתיימה לשביעות רצונך?\nהשב 'כן' לאישור או 'לא' אם טרם הסתיים."
-        
-        await whatsapp.send_message(customer_chat_id, message)
-        logger.success(f"Sent customer completion check for lead {lead_id} (Trigger: {triggered_by})")
-    except Exception as e:
-        logger.error(f"Error in send_customer_completion_check for lead {lead_id}: {e}")
-
 async def handle_customer_completion_text(chat_id: str, text: str):
     """Checks if the user confirmed job completion via text."""
     text = text.strip()
-    if "כן, הסתיים" not in text:
+    if Messages.Keywords.CUSTOMER_COMPLETION_INDICATOR not in text:
         return None
 
     lead = await leads_collection.find_one({
         "chat_id": chat_id,
-        "status": "booked"
+        "status": LeadStatus.BOOKED
     }, sort=[("created_at", -1)])
 
     if not lead:
@@ -154,7 +38,7 @@ async def handle_customer_completion_text(chat_id: str, text: str):
         {"_id": lead["_id"]},
         {
             "$set": {
-                "status": "completed",
+                "status": LeadStatus.COMPLETED,
                 "completed_at": datetime.now(timezone.utc),
                 "waiting_for_rating": True
             }
@@ -164,15 +48,15 @@ async def handle_customer_completion_text(chat_id: str, text: str):
 
     if pro and pro.get("phone_number"):
         pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
-        await whatsapp.send_message(pro_chat_id, "👍 הלקוח דיווח שהעבודה הסתיימה. הסטטוס עודכן.")
+        await whatsapp.send_message(pro_chat_id, Messages.Pro.CUSTOMER_REPORTED_COMPLETION)
 
     pro_name = pro.get('business_name', 'המקצוען') if pro else 'המקצוען'
-    return f"מעולה! שמחים לשמוע. איך היה השירות עם {pro_name}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מעולה)."
+    return Messages.Customer.COMPLETION_ACK.format(pro_name=pro_name)
 
 async def handle_customer_rating_text(chat_id: str, text: str):
     """Checks if the user sent a rating (1-5)."""
     text = text.strip()
-    if text not in ["1", "2", "3", "4", "5"]:
+    if text not in Messages.Keywords.RATING_OPTIONS:
         return None
         
     rating = int(text)
@@ -204,7 +88,7 @@ async def handle_customer_rating_text(chat_id: str, text: str):
     
     business_name = pro['business_name'] if pro else "איש המקצוע"
     logger.success(f"⭐ Rating {rating} saved for {business_name}")
-    return "תודה רבה על הדירוג! ⭐"
+    return Messages.Customer.RATING_THANKS
 
 async def handle_pro_text_command(chat_id: str, text: str):
     """
@@ -221,61 +105,62 @@ async def handle_pro_text_command(chat_id: str, text: str):
 
     text = text.strip().lower()
     
-    APPROVE_KEYS = ["אשר", "1", "approve"]
-    REJECT_KEYS = ["דחה", "2", "reject"]
-    FINISH_KEYS = ["סיימתי", "3", "finish", "done"]
+    APPROVE_KEYS = Messages.Keywords.APPROVE_COMMANDS
+    REJECT_KEYS = Messages.Keywords.REJECT_COMMANDS
+    FINISH_KEYS = Messages.Keywords.FINISH_COMMANDS
 
     response_text = None
 
     if text in APPROVE_KEYS:
         lead = await leads_collection.find_one(
-            {"pro_id": pro["_id"], "status": "new"},
+            {"pro_id": pro["_id"], "status": LeadStatus.NEW},
             sort=[("created_at", -1)]
         )
         if lead:
-            await lead_manager.update_lead_status(str(lead["_id"]), "booked", pro["_id"])
-            response_text = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
+            await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.BOOKED, pro["_id"])
+            response_text = Messages.Pro.APPROVE_SUCCESS
             
             pro_name = pro.get('business_name', 'מומחה')
             pro_phone = pro.get('phone_number', '').replace('972', '0')
-            customer_msg = f"🎉 נמצא איש מקצוע! {pro_name} בדרך אליך. 📞 טלפון: {pro_phone}"
+            customer_msg = Messages.Customer.PRO_FOUND.format(pro_name=pro_name, pro_phone=pro_phone)
             await whatsapp.send_message(lead["chat_id"], customer_msg)
         else:
             # Silent fail or info? "No pending job found" might be annoying if they type generic text.
             # But specific keywords usually mean intent.
-            response_text = "לא מצאתי עבודה חדשה לאישור."
+            response_text = Messages.Pro.NO_PENDING_APPROVE
 
     elif text in REJECT_KEYS:
         lead = await leads_collection.find_one(
-            {"pro_id": pro["_id"], "status": "new"},
+            {"pro_id": pro["_id"], "status": LeadStatus.NEW},
             sort=[("created_at", -1)]
         )
         if lead:
-            await lead_manager.update_lead_status(str(lead["_id"]), "rejected")
-            response_text = "העבודה נדחתה. נחפש איש מקצוע אחר."
+            await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.REJECTED)
+            response_text = Messages.Pro.REJECT_SUCCESS
         else:
-            response_text = "לא מצאתי עבודה חדשה לדחייה."
+            response_text = Messages.Pro.NO_PENDING_REJECT
 
     elif text in FINISH_KEYS:
         lead = await leads_collection.find_one(
-            {"pro_id": pro["_id"], "status": "booked"},
+            {"pro_id": pro["_id"], "status": LeadStatus.BOOKED},
             sort=[("created_at", -1)]
         )
         if lead:
             await leads_collection.update_one(
                 {"_id": lead["_id"]},
                 {"$set": {
-                    "status": "completed", 
+                    "status": LeadStatus.COMPLETED, 
                     "completed_at": datetime.now(timezone.utc), 
                     "waiting_for_rating": True
                 }}
             )
-            response_text = "✅ עודכן שהעבודה הסתיימה. תודה!"
+            response_text = Messages.Pro.FINISH_SUCCESS
             
-            feedback_msg = f"היי! 👋 איך היה השירות עם {pro.get('business_name')}? נשמח לדירוג 1-5."
+            pro_name = pro.get('business_name', 'המקצוען')
+            feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
             await whatsapp.send_message(lead["chat_id"], feedback_msg)
         else:
-            response_text = "לא מצאתי עבודה פעילה לסיום."
+            response_text = Messages.Pro.NO_ACTIVE_FINISH
 
     return response_text
 
@@ -326,16 +211,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # 4. Smart Dispatcher Phase
     history = await lead_manager.get_chat_history(chat_id)
     
-    dispatcher_prompt = """
-    You are Fixi's Smart Dispatcher. 
-    Your goal is to identify the customer's City and Issue Description.
-    
-    - If audio is present, trust the transcription.
-    - If City or Issue is missing, ask the user specifically for them.
-    - If both are present, extract them.
-    
-    Tone: Polite, helpful, Israeli Hebrew.
-    """
+    dispatcher_prompt = Prompts.DISPATCHER_SYSTEM
 
     dispatcher_response: AIResponse = await ai.analyze_conversation(
         history=history, 
@@ -363,7 +239,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         # Check for existing active lead
         active_lead = await leads_collection.find_one({
             "chat_id": chat_id,
-            "status": {"$in": ["new", "contacted"]} 
+            "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}
         }, sort=[("created_at", -1)])
 
         if active_lead:
@@ -376,7 +252,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 chat_id=chat_id,
                 issue_type=extracted_issue,
                 full_address=extracted_city, # Provisional address is just city
-                status="contacted", # In progress
+                status=LeadStatus.CONTACTED, # In progress
                 appointment_time="Pending"
             )
             if new_lead:
@@ -398,27 +274,14 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             price_list = best_pro.get("price_list", "")
             base_system_prompt = best_pro.get("system_prompt", f"You are Fixi, an AI scheduler for {pro_name}.")
             
-            full_system_prompt = f"""
-{base_system_prompt}
-
-You are representing '{pro_name}'.
-
-*** PRICING / SERVICES ***
-{price_list}
-
-*** CONTEXT ***
-Customer is located in: {extracted_city}
-Issue: {extracted_issue}
-Transcription (if any): {transcription or "None"}
-
-*** CORE INSTRUCTIONS ***
-1. Acknowledge the issue and location.
-2. If you need the full street address for the booking, ask for it.
-3. If the user provided a full address and time, SET 'is_deal' to true in the JSON output and fill 'full_address' and 'appointment_time'.
-4. Output JSON matching the schema.
-
-Tone: Professional, efficient, Israeli Hebrew.
-            """
+            full_system_prompt = Prompts.PRO_BASE_SYSTEM.format(
+                base_system_prompt=base_system_prompt,
+                pro_name=pro_name,
+                price_list=price_list,
+                extracted_city=extracted_city,
+                extracted_issue=extracted_issue,
+                transcription=transcription or "None"
+            )
             
             # Call AI again with Pro Persona
             pro_response_obj = await ai.analyze_conversation(
@@ -442,7 +305,7 @@ Tone: Professional, efficient, Israeli Hebrew.
     is_deal = final_response.is_deal
     
     # Fallback: check for [DEAL] string in reply if model hallucinated format
-    deal_string_match = re.search(r"\[DEAL:.*?\]", final_response.reply_to_user)
+    deal_string_match = re.search(r"[DEAL:.*?]", final_response.reply_to_user)
     if deal_string_match:
         is_deal = True
     
@@ -457,7 +320,7 @@ Tone: Professional, efficient, Israeli Hebrew.
             await leads_collection.update_one(
                 {"_id": current_lead_id},
                 {"$set": {
-                    "status": "new", # Ready for Pro
+                    "status": LeadStatus.NEW, # Ready for Pro
                     "appointment_time": d_time,
                     "full_address": d_address,
                     "issue_type": d_issue,
@@ -472,7 +335,7 @@ Tone: Professional, efficient, Israeli Hebrew.
                 issue_type=d_issue,
                 full_address=d_address,
                 appointment_time=d_time,
-                status="new",
+                status=LeadStatus.NEW,
                 pro_id=best_pro["_id"]
             )
         
@@ -480,21 +343,21 @@ Tone: Professional, efficient, Israeli Hebrew.
             pro_phone = best_pro.get("phone_number")
             if pro_phone:
                 if not pro_phone.endswith("@c.us"):
-                    pro_phone = f"{pro_phone}@c.us"                
+                    pro_phone = f"{pro_phone}@c.us"
                 
-                msg_to_pro = f"""📢 *הצעת עבודה חדשה!*
-
-📍 *כתובת:* {lead['full_address']}
-🛠️ *תקלה:* {lead['issue_type']}
-⏰ *זמן מועדף:* {lead['appointment_time']}"""
+                msg_to_pro = Messages.Pro.NEW_LEAD_HEADER + "\n\n"
+                msg_to_pro += Messages.Pro.NEW_LEAD_DETAILS.format(
+                    full_address=lead['full_address'],
+                    issue_type=lead['issue_type'],
+                    appointment_time=lead['appointment_time']
+                )
 
                 if transcription:
-                    msg_to_pro += f"\n🎙️ *תמליל:* {transcription}"
+                    msg_to_pro += Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(transcription=transcription)
                 
                 # Send Text Options
-                msg_to_pro += "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
+                msg_to_pro += Messages.Pro.NEW_LEAD_FOOTER
                 await whatsapp.send_message(pro_phone, msg_to_pro)
                 
                 # Send Waze Link
-                await whatsapp.send_location_link(pro_phone, lead['full_address'], "🚗 נווט לכתובת:")
-
+                await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)

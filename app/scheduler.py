@@ -3,6 +3,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from app.core.database import users_collection, leads_collection, settings_collection
 from app.services.workflow import send_pro_reminder, send_customer_completion_check, whatsapp
 from datetime import datetime, timedelta
+from app.core.constants import LeadStatus
 import pytz
 from app.core.logger import logger
 
@@ -23,7 +24,7 @@ async def send_daily_reminders():
     for pro in active_pros:
         booked_jobs_cursor = leads_collection.find({
             "pro_id": pro["_id"],
-            "status": "booked",
+            "status": LeadStatus.BOOKED,
             "created_at": {"$gte": start_utc, "$lt": end_utc}
         }).sort("created_at", 1)
         
@@ -66,7 +67,7 @@ async def monitor_unfinished_jobs():
     t1_start = now_utc - timedelta(hours=6)
     t1_end = now_utc - timedelta(hours=4)
     t1_leads_cursor = leads_collection.find({
-        "status": "booked",
+        "status": LeadStatus.BOOKED,
         "created_at": {"$gte": t1_start, "$lt": t1_end}
     })
     async for lead in t1_leads_cursor:
@@ -77,7 +78,7 @@ async def monitor_unfinished_jobs():
     t2_start = now_utc - timedelta(hours=24)
     t2_end = now_utc - timedelta(hours=6)
     t2_leads_cursor = leads_collection.find({
-        "status": "booked",
+        "status": LeadStatus.BOOKED,
         "created_at": {"$gte": t2_start, "$lt": t2_end}
     })
     async for lead in t2_leads_cursor:
@@ -87,7 +88,7 @@ async def monitor_unfinished_jobs():
     # Tier 3: >24 hours old -> Flag for Admin
     t3_end = now_utc - timedelta(hours=24)
     update_result = await leads_collection.update_many(
-        {"status": "booked", "created_at": {"$lt": t3_end}, "flag": {"$ne": "requires_admin"}},
+        {"status": LeadStatus.BOOKED, "created_at": {"$lt": t3_end}, "flag": {"$ne": "requires_admin"}},
         {"$set": {"flag": "requires_admin"}}
     )
     if update_result.modified_count > 0:

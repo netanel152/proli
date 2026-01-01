@@ -59,6 +59,16 @@ def patch_dependencies(request, monkeypatch, mock_db):
     monkeypatch.setattr(app.services.workflow, "users_collection", users)
     monkeypatch.setattr(app.services.workflow, "leads_collection", leads)
 
+    # Patch Matching Service Collections
+    import app.services.matching_service
+    monkeypatch.setattr(app.services.matching_service, "users_collection", users)
+    monkeypatch.setattr(app.services.matching_service, "leads_collection", leads)
+
+    # Patch Notification Service Collections
+    import app.services.notification_service
+    monkeypatch.setattr(app.services.notification_service, "users_collection", users)
+    monkeypatch.setattr(app.services.notification_service, "leads_collection", leads)
+
     # Patch New Services in Workflow
     mock_whatsapp = MagicMock()
     mock_whatsapp.send_message = AsyncMock()

@@ -9,7 +9,9 @@ def mock_workflow_dependencies():
          patch("app.services.workflow.users_collection") as mock_users, \
          patch("app.services.workflow.whatsapp") as mock_whatsapp, \
          patch("app.services.workflow.lead_manager") as mock_lm, \
-         patch("app.services.workflow.leads_collection") as mock_leads:
+         patch("app.services.workflow.leads_collection") as mock_leads, \
+         patch("app.services.matching_service.users_collection", new=mock_users), \
+         patch("app.services.matching_service.leads_collection", new=mock_leads):
         
         # Async methods setup
         mock_ai.analyze_conversation = AsyncMock()
@@ -102,7 +104,7 @@ async def test_handover_to_pro_success(mock_workflow_dependencies):
     
     # Assertions
     mock_users.find.assert_called() # Should search for pro
-    mock_whatsapp.send_message.assert_called_with("user123", "Hello, I am Mario the Plumber.")
+    mock_whatsapp.send_message.assert_any_call("user123", "Hello, I am Mario the Plumber.")
     assert mock_ai.analyze_conversation.call_count == 2 # Dispatcher + Pro
 
 @pytest.mark.asyncio

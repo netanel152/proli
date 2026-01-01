@@ -26,11 +26,11 @@
 
 ### Data Flow
 1.  **Inbound:** WhatsApp Webhook -> `POST /webhook` (FastAPI `app/main.py`).
-2.  **Routing Engine (`app.services.workflow.determine_best_pro`):
+2.  **Routing Engine (`app.services.matching_service.determine_best_pro`):
     *   **Filter:** Active Pros (`is_active: True`).
     *   **Location:** Checks if user text matches Pro's `service_areas`.
     *   **Ranking:** Sorts by `social_proof.rating` (Descending).
-    *   **Load Balancing:** Skips pros with > 3 active ("booked") jobs.
+    *   **Load Balancing:** Skips pros with > `WorkerConstants.MAX_PRO_LOAD` active ("booked") jobs.
     *   **Fallback:** Selects highest-rated pro or "Fixi Support" persona.
 3.  **Context Assembly:**
     *   Fetches the selected Pro's **Dynamic System Prompt** and **Price List**.
@@ -38,10 +38,9 @@
 4.  **AI Processing:**
     *   `AIEngine` (Gemini 2.5) analyzes text + media + dynamic prompt.
     *   Detects intent and extracts [DEAL] tags or Structured JSON.
-*   **Notification:** Sends lead details ONLY to the selected Pro with text instructions for approval/rejection.
 5.  **Action:**
     *   **Database:** Creates Lead with linked `pro_id`.
-    *   **Notification:** Sends lead details ONLY to the selected Pro with instructions to reply 'אשר' (Approve) or 'דחה' (Reject).
+    *   **Notification (`app.services.notification_service`):** Sends lead details ONLY to the selected Pro with instructions to reply 'אשר' (Approve) or 'דחה' (Reject).
 6.  **Visualization:** Admin Panel (`admin_panel/dashboard_page.py`) reflects changes immediately.
 
 ## 3. Project Structure
@@ -52,13 +51,18 @@ D:\Projects\fixi-backend\
 │   ├── main.py                     # Entry point: Webhook endpoint
 │   ├── scheduler.py                # APScheduler with Atomic Locking
 │   ├── services/
-│   │   ├── workflow.py             # ROUTING ENGINE & Business Logic
+│   │   ├── workflow.py             # Main Orchestrator
+│   │   ├── matching_service.py     # Pro Routing & Discovery Logic
+│   │   ├── notification_service.py # WhatsApp Notification Logic
 │   │   ├── ai_engine.py            # Gemini Wrapper (Multimodal)
 │   │   ├── lead_manager.py         # DB Operations (CRUD)
 │   │   └── whatsapp_client.py      # Green API Wrapper
 │   └── core/
 │       ├── database.py             # MongoDB Connection (Async/Sync)
-│       └── config.py               # Env Vars
+│       ├── config.py               # Env Vars & Settings
+│       ├── constants.py            # Enums & System Constants (Status, Limits)
+│       ├── messages.py             # UI/Notification Text Templates
+│       └── prompts.py              # AI System Prompts
 ├── admin_panel/                    # Streamlit Admin Dashboard
 │   ├── dashboard_page.py           # Main Dashboard (Tabs: View / Create)
 │   ├── auth.py                     # Authentication (Bcrypt + Cookies)
@@ -75,12 +79,13 @@ D:\Projects\fixi-backend\
     *   `full_address` (was `address`)
     *   `issue_type` (was `issue`)
     *   `appointment_time` (was `time_preference`)
-*   **Date/Time:** Store all datetimes in **UTC**. Convert to **Asia/Jerusalem** for display.
-*   **AI Context:** Always inject the *specific* Pro's system prompt.
+*   **Date/Time:** Store all datetimes in **UTC**. Convert to **Asia/Jerusalem** (configured in `settings.TIMEZONE`) for display.
+*   **AI Context:** Always inject the *specific* Pro's system prompt using `app.core.prompts.Prompts`.
 *   **Security:** 
     *   Use `admin_panel.auth.make_hash` for passwords.
     *   Never commit secrets.
 *   **Concurrency:** Use `find_one_and_update` for scheduler locks.
+*   **Constants:** Use `app.core.constants` for statuses (`LeadStatus`) and configuration (`WorkerConstants`).
 
 ## 5. Audit Findings & Resolution Status
 1.  **Performance (Motor):** ✅ Resolved. Core app uses `motor`. `pymongo` reserved for scripts.
@@ -88,7 +93,8 @@ D:\Projects\fixi-backend\
 3.  **Concurrency (Scheduler):** ✅ Resolved. Atomic DB locks implemented in `scheduler.py`.
 4.  **Error Handling:** ✅ Improved. Background tasks used for heavy lifting.
 5.  **Infrastructure:** ✅ Resolved. Dockerized application with structured logging.
-6.  **AI Fallback:** ✅ Resolved. Implemented adaptive hierarchy (Lite -> Flash -> Legacy).
+6.  **AI Fallback:** ✅ Resolved. Implemented adaptive hierarchy via `settings.AI_MODELS`.
+7.  **Refactoring:** ✅ Resolved. Monolithic `workflow.py` split into `matching_service.py` and `notification_service.py`. Hardcoded strings moved to `app/core/constants.py` and `app/core/messages.py`.
 
 ### Environment Variables (`.env`)
 ```env
