@@ -8,7 +8,7 @@ client = TestClient(app)
 # Payload Templates
 VALID_PAYLOAD = {
     "typeWebhook": "incomingMessageReceived",
-    "instanceData": {"idInstance": 123, "wid": "1234567890@c.us", "typeInstance": "whatsapp"},
+    "instanceData": {"idInstance": 7107387490, "wid": "1234567890@c.us", "typeInstance": "whatsapp"},
     "timestamp": 1234567890,
     "idMessage": "F1234567890",
     "senderData": {"chatId": "972501234567@c.us", "senderName": "Test User"},

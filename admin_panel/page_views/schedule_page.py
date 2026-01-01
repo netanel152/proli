@@ -3,6 +3,7 @@ import pandas as pd
 from bson.objectid import ObjectId
 from datetime import datetime, timedelta, time
 from admin_panel.utils import users_collection, slots_collection
+from app.core.config import settings
 import pytz
 
 @st.cache_data(ttl=60)
@@ -25,7 +26,7 @@ def view_schedule_editor(T):
     
     if selected_pro_name:
         pro = pro_map[selected_pro_name]
-        tz = pytz.timezone('Asia/Jerusalem')
+        tz = pytz.timezone(settings.TIMEZONE)
         
         tab_daily, tab_bulk = st.tabs([T["tab_daily"], T["tab_bulk"]])
         
@@ -185,4 +186,3 @@ def view_schedule_editor(T):
                     if cn.button(T["confirm_no"], key="confirm_clear_no"):
                         del st.session_state.confirm_clear_slots
                         st.rerun()
-

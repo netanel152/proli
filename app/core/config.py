@@ -10,6 +10,13 @@ class Settings(BaseSettings):
     CLOUDINARY_CLOUD_NAME: str
     CLOUDINARY_API_KEY: str
     CLOUDINARY_API_SECRET: str
+    AI_MODELS: list[str] = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-1.5-flash"]
+    TIMEZONE: str = "Asia/Jerusalem"
+    
+    # New Configs
+    PROJECT_NAME: str = "Fixi Bot Server"
+    BACKEND_CORS_ORIGINS: list[str] = ["*"]
+    MAX_CHAT_HISTORY: int = 20
     
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

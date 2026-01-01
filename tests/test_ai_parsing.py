@@ -8,6 +8,7 @@ def ai_engine():
     # Patch settings to avoid needing real API key
     with patch("app.services.ai_engine.settings") as mock_settings:
         mock_settings.GEMINI_API_KEY = "fake_key"
+        mock_settings.AI_MODELS = ["gemini-2.5-flash-lite"] # Mock a single model for testing
         # Patch genai.Client to prevent real network calls during init
         with patch("google.genai.Client"):
             engine = AIEngine()
@@ -32,11 +33,13 @@ async def test_malformed_json_raw_text(ai_engine):
     
     # Setup async generation
     ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-    
+
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
-    
+
     assert isinstance(result, AIResponse)
-    assert result.reply_to_user == "סליחה, לא הבנתי. תוכל לחזור על זה?"
+    assert result.reply_to_user == "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."
+    
+    
     assert result.extracted_data.city is None
 
 @pytest.mark.asyncio

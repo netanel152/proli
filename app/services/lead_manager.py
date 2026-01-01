@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from app.core.database import leads_collection, messages_collection
 from app.core.logger import logger
+from app.core.constants import LeadStatus
+from app.core.config import settings
 
 class LeadManager:
     async def create_lead(self, deal_string: str, chat_id: str, pro_id: ObjectId = None) -> dict:
@@ -30,7 +32,7 @@ class LeadManager:
                 issue_type=issue_type,
                 full_address=full_address,
                 appointment_time=appointment_time,
-                status="new",
+                status=LeadStatus.NEW,
                 pro_id=pro_id
             )
             
@@ -38,7 +40,7 @@ class LeadManager:
             logger.error(f"Failed to create lead from string '{deal_string}': {e}")
             return None
 
-    async def create_lead_from_dict(self, chat_id: str, issue_type: str, full_address: str, appointment_time: str = "Pending", status: str = "new", pro_id: ObjectId = None) -> dict:
+    async def create_lead_from_dict(self, chat_id: str, issue_type: str, full_address: str, appointment_time: str = "Pending", status: str = LeadStatus.NEW, pro_id: ObjectId = None) -> dict:
         """
         Creates a lead document directly from parameters.
         """
@@ -71,7 +73,7 @@ class LeadManager:
         }
         await messages_collection.insert_one(msg_doc)
 
-    async def get_chat_history(self, chat_id: str, limit: int = 20) -> list:
+    async def get_chat_history(self, chat_id: str, limit: int = settings.MAX_CHAT_HISTORY) -> list:
         cursor = messages_collection.find({"chat_id": chat_id}).sort("timestamp", 1).limit(limit)
         msgs = await cursor.to_list(length=limit)
         formatted = []

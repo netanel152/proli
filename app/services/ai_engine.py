@@ -22,12 +22,8 @@ class AIResponse(BaseModel):
 class AIEngine:
     def __init__(self):
         self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
-        # Define the fallback hierarchy
-        self.model_hierarchy = [
-            "gemini-2.5-flash-lite", # Primary: Speed & Cost
-            "gemini-2.5-flash",      # Secondary: Stability
-            "gemini-1.5-flash"       # Fallback: Legacy Reliable
-        ]
+        # Define the fallback hierarchy from settings
+        self.model_hierarchy = settings.AI_MODELS
 
     async def analyze_conversation(self, history: list, user_text: str, custom_system_prompt: str, media_data: bytes = None, media_mime_type: str = None, require_json: bool = True) -> AIResponse | str:
         contents = []
