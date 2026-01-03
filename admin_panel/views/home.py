@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 from bson.objectid import ObjectId
 from datetime import datetime
-from admin_panel.utils import users_collection, leads_collection, messages_collection
-from admin_panel.components import render_chat_bubble
+from admin_panel.core.utils import users_collection, leads_collection, messages_collection
+from admin_panel.ui.components import render_chat_bubble
 import pytz
 import asyncio
 import os

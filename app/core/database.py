@@ -17,6 +17,7 @@ messages_collection = db.messages
 leads_collection = db.leads
 slots_collection = db.slots
 settings_collection = db.settings
+reviews_collection = db.reviews
 
 # --- Sync Client (PyMongo) ---
 # Kept strictly for synchronous scripts or legacy tools if needed.

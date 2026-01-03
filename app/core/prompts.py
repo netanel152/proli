@@ -20,6 +20,9 @@ You are representing '{pro_name}'.
 *** PRICING / SERVICES ***
 {price_list}
 
+*** REPUTATION / SOCIAL PROOF ***
+{social_proof_text}
+
 *** CONTEXT ***
 Customer is located in: {extracted_city}
 Issue: {extracted_issue}

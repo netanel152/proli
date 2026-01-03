@@ -1,6 +1,6 @@
 import streamlit as st
 from datetime import datetime, time
-from admin_panel.utils import settings_collection
+from admin_panel.core.utils import settings_collection
 
 def view_system_settings(T):
     st.title(T["settings_title"])

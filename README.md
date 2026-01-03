@@ -123,5 +123,5 @@ uvicorn app.main:app --reload --port 8000
 
 **2. Admin Panel (Streamlit):**
 ```bash
-streamlit run admin_panel/app.py
+streamlit run admin_panel/main.py
 ```

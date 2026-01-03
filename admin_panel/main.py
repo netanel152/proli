@@ -9,16 +9,16 @@ parent_dir = os.path.dirname(current_dir)
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
-from admin_panel.config import TRANS
-from admin_panel.components import load_css
+from admin_panel.core.config import TRANS
+from admin_panel.ui.components import load_css
 import time
-from admin_panel.auth import check_password, logout, get_manager
+from admin_panel.core.auth import check_password, logout, get_manager
 
 # Import new page views
-from admin_panel.dashboard_page import view_leads_dashboard
-from admin_panel.page_views.professionals_page import view_professionals
-from admin_panel.page_views.schedule_page import view_schedule_editor
-from admin_panel.page_views.settings_page import view_system_settings
+from admin_panel.views.home import view_leads_dashboard
+from admin_panel.views.professionals import view_professionals
+from admin_panel.views.schedule import view_schedule_editor
+from admin_panel.views.settings import view_system_settings
 
 # --- Page Config ---
 st.set_page_config(

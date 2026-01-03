@@ -6,6 +6,8 @@ class Messages:
         RATING_THANKS = "תודה רבה על הדירוג! ⭐"
         PRO_FOUND = "🎉 נמצא איש מקצוע! {pro_name} בדרך אליך. 📞 טלפון: {pro_phone}"
         RATE_SERVICE = "היי! 👋 איך היה השירות עם {pro_name}? נשמח לדירוג 1-5."
+        REVIEW_REQUEST = "תודה על הדירוג! האם תרצה לכתוב ביקורת קצרה על החוויה? אם כן, פשוט כתוב אותה כעת."
+        REVIEW_SAVED = "תודה רבה! הביקורת שלך נשמרה."
 
     class Pro:
         # Messages sent to professionals

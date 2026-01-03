@@ -1,7 +1,7 @@
 import streamlit as st
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
-from admin_panel.utils import users_collection, slots_collection, create_initial_schedule, generate_system_prompt
+from admin_panel.core.utils import users_collection, slots_collection, create_initial_schedule, generate_system_prompt
 import re
 
 # Constants for Prompt Markers
@@ -52,11 +52,27 @@ def render_pro_list(T):
         status_icon = "🟢" if is_active else "🔴"
         
         with st.container(border=True):
-            c_info, c_actions = st.columns([4, 1])
+            c_img, c_info, c_actions = st.columns([1, 3, 1])
+            
+            with c_img:
+                image_url = p.get('profile_image_url')
+                if image_url:
+                    st.markdown(f'<img src="{image_url}" class="pro-circle-img">', unsafe_allow_html=True)
+                else:
+                    # Placeholder icon if no image
+                    st.markdown("""
+                        <div style="width:80px; height:80px; border-radius:50%; background:#f1f5f9; display:flex; align-items:center; justify-content:center; border:2px solid #e2e8f0;">
+                            <span class="material-symbols-rounded" style="font-size:40px; color:#94a3b8;">person</span>
+                        </div>
+                    """, unsafe_allow_html=True)
+
             with c_info:
-                st.subheader(f"{status_icon} {p['business_name']}")
-                st.caption(f"{T.get(f'type_{p.get("type", "general")}', p.get('type', 'general')).capitalize()} | {p.get('phone_number')}")
-                st.write(f"**{T['new_areas']}:** {', '.join(p.get('service_areas', []))}")
+                verified_badge = " ✅" if p.get('is_verified') else ""
+                st.subheader(f"{status_icon} {p['business_name']}{verified_badge}")
+                st.caption(f"{T.get(f'type_{p.get('type', 'general')}', p.get('type', 'general')).capitalize()} | {p.get('phone_number')}")
+                st.write(f"**{T['new_areas']}**: {', '.join(p.get('service_areas', []))}")
+                if p.get('license_number'):
+                    st.write(f"**License**: {p['license_number']}")
             
             with c_actions:
                 st.write(" ") # Spacer
@@ -99,12 +115,21 @@ def render_pro_form(T, pro_data=None):
         with c1:
             name = st.text_input(T["new_name"], value=pro_data.get("business_name", "") if is_edit else "")
             phone = st.text_input(T["new_phone"], value=pro_data.get("phone_number", "") if is_edit else "")
+            license_number = st.text_input("License / Business ID", value=pro_data.get("license_number", "") if is_edit else "")
         with c2:
             ptype_options = ["plumber", "electrician", "handyman", "locksmith", "painter", "cleaner", "general"]
             default_type = pro_data.get("type", "general") if is_edit else "general"
             ptype_index = ptype_options.index(default_type) if default_type in ptype_options else ptype_options.index("general")
             ptype = st.selectbox(T["new_type"], ptype_options, index=ptype_index, format_func=lambda x: T.get(f"type_{x}", x.capitalize()))
             active = st.checkbox(T["active"], value=pro_data.get("is_active", True) if is_edit else True)
+            is_verified = st.checkbox("Is Verified", value=pro_data.get("is_verified", False) if is_edit else False)
+
+        # Image Upload
+        existing_image_url = pro_data.get("profile_image_url", "") if is_edit else ""
+        if existing_image_url:
+            st.image(existing_image_url, width=100, caption="Current Profile Image")
+        
+        uploaded_file = st.file_uploader("Upload Profile Image", type=['png', 'jpg', 'jpeg'])
 
         st.text_input(T["new_areas"], value=", ".join(pro_data.get("service_areas", [])) if is_edit else "", key="pro_areas", help=T.get("areas_help", "Comma-separated list of cities"))
         st.text_area(T["new_prices"], height=100, help=T.get("prices_help", "Optional. One item per line, e.g., 'Service call: $100'"), value=pro_data.get("prices_for_prompt", "") if is_edit else "", key="pro_prices")
@@ -117,6 +142,24 @@ def render_pro_form(T, pro_data=None):
         if st.form_submit_button(submit_label, type="primary"):
             if name and phone and st.session_state.pro_areas:
                 
+                # Handle Image Upload
+                final_image_url = existing_image_url
+                if uploaded_file:
+                    try:
+                        from app.services.cloudinary_client import upload_image
+                        uploaded_url = upload_image(uploaded_file)
+                        if uploaded_url:
+                            final_image_url = uploaded_url
+                        else:
+                            st.error("Failed to upload image to Cloudinary.")
+                            return
+                    except ImportError:
+                        st.error("Cloudinary module not found. Please install requirements.")
+                        return
+                    except Exception as e:
+                        st.error(f"Upload error: {e}")
+                        return
+
                 # Auto-update service areas in the prompt
                 current_prompt = st.session_state.pro_prompt
                 service_areas_str = st.session_state.pro_areas
@@ -138,6 +181,7 @@ def render_pro_form(T, pro_data=None):
 
                 pro_payload = {
                     "business_name": name, "phone_number": phone, "type": ptype, "is_active": active,
+                    "is_verified": is_verified, "license_number": license_number, "profile_image_url": final_image_url,
                     "service_areas": [x.strip() for x in service_areas_str.split(",")],
                     "prices_for_prompt": st.session_state.pro_prices,
                     "system_prompt": updated_prompt,

@@ -1,6 +1,6 @@
 services:
   # ---------------------------------------------------------------------------
-  # 1. API Service (FastAPI) - The Core Brain
+  # API Service (FastAPI) - The Core Brain
   # ---------------------------------------------------------------------------
   api:
     build: .
@@ -21,12 +21,12 @@ services:
       - fixi_network
 
   # ---------------------------------------------------------------------------
-  # 2. Admin Panel (Streamlit) - The Dashboard
+  # Admin Panel (Streamlit) - The Dashboard
   # ---------------------------------------------------------------------------
   admin:
     build: .
     container_name: fixi_admin
-    command: streamlit run admin_panel/app.py --server.port 8501 --server.address 0.0.0.0
+    command: streamlit run admin_panel/main.py --server.port 8501 --server.address 0.0.0.0
     ports:
       - "8501:8501"
     env_file:
@@ -42,7 +42,7 @@ services:
       - fixi_network
 
   # ---------------------------------------------------------------------------
-  # 3. Database (MongoDB)
+  # Database (MongoDB)
   # ---------------------------------------------------------------------------
   mongo:
     image: mongo:6.0
