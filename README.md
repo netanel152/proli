@@ -20,8 +20,9 @@
   - **Vision:** Analyzes photos of issues (e.g., a leaking pipe) to understand the problem.
   - **Video:** Watches clips to identify dynamic issues (e.g., flickering lights, strange noises).
   - **Audio:** Transcribes and interprets voice notes in real-time.
+- **Interactive UI:** Uses native WhatsApp buttons for seamless confirmations and quick actions.
 - **Dynamic Personas:** The bot adopts the specific pricing, tone, and rules of the assigned professional.
-- **Availability Management:** Checks real-time calendar availability in MongoDB and books appointments autonomously.
+- **Availability Management:** Checks real-time calendar availability in MongoDB and books appointments autonomously using atomic locks.
 - **Stale Job Monitor:** Automatically detects "stuck" leads (no completion after 6-24h) and follows up with the pro or customer.
 
 #### 📊 Admin Panel (Manager Facing)

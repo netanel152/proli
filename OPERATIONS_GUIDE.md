@@ -83,6 +83,12 @@ docker-compose logs -f admin  # Admin Panel
 - פעולה זו היא **אטומית** (Atomic): היא בודקת ונועלת את הריצה בפעולה אחת.
 - הלוגיקה נמצאת ב-`app.scheduler.scheduler_manager`.
 
+### Slot Booking Safety (נעילת תורים)
+בדומה ל-Scheduler, גם קביעת התורים ביומן משתמשת במנגנון אטומי למניעת כפילויות (Double Booking):
+- הפונקציה `book_slot_for_lead` משתמשת ב-`find_one_and_update` על קולקציית `slots`.
+- היא מחפשת חלון זמן פנוי (`is_taken: False`) ונועלת אותו (`is_taken: True`) בפעולה אחת.
+- זה מבטיח שגם אם שני לידים מנסים לתפוס את אותו תור באותה מילי-שנייה, רק אחד יצליח.
+
 ### אבטחת Admin Panel
 - הסיסמאות לא נשמרות כטקסט גלוי.
 - המערכת משתמשת ב-**Bcrypt** עם Salt לייצור Hash.
