@@ -15,6 +15,8 @@ class WorkerConstants:
     SLOT_DURATION_HOURS = 1
     SLOT_SEARCH_WINDOW_HOURS = 2
     DEFAULT_CURRENCY = "ILS"
+    SOS_TIMEOUT_MINUTES = 60
+    ADMIN_PHONE = "972524828796"
 
 class APIStatus:
     RUNNING = "Fixi is running! 🚀"
@@ -24,3 +26,29 @@ class APIStatus:
     IGNORED_WRONG_INSTANCE = "ignored_wrong_instance"
     IGNORED_TYPE = "ignored_type"
     ERROR = "error"
+
+class Defaults:
+    PENDING_TIME = "Pending"
+    ASAP_TIME = "As soon as possible"
+    UNKNOWN_ADDRESS = "Unknown Address"
+    UNKNOWN_ISSUE = "Issue"
+    GENERIC_PRO_NAME = "איש המקצוע"
+    FIXI_PRO_NAME = "Fixi Pro"
+    EXPERT_NAME = "מומחה"
+    DEFAULT_TRANSCRIPTION = "None"
+
+class ProType(str, Enum):
+    PLUMBER = "plumber"
+    ELECTRICIAN = "electrician"
+    HANDYMAN = "handyman"
+    LOCKSMITH = "locksmith"
+    PAINTER = "painter"
+    CLEANER = "cleaner"
+    GENERAL = "general"
+
+class AdminDefaults:
+    UNKNOWN_PRO = "Unknown"
+    MANUAL_SOURCE = "manual_admin"
+    MANUAL_LABEL = "Manual"
+    DEFAULT_PLAN = "basic"
+    DEFAULT_RATING = 5.0

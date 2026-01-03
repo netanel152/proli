@@ -5,7 +5,7 @@ from app.core.logger import logger
 from app.core.database import users_collection, leads_collection, reviews_collection
 from app.core.messages import Messages
 from app.core.prompts import Prompts
-from app.core.constants import LeadStatus
+from app.core.constants import LeadStatus, Defaults
 from app.services.matching_service import determine_best_pro, book_slot_for_lead
 from app.services.notification_service import send_pro_reminder
 from bson import ObjectId
@@ -28,14 +28,14 @@ async def send_customer_completion_check(lead_id: str, triggered_by: str = "auto
 
         customer_chat_id = lead["chat_id"]
         pro = await users_collection.find_one({"_id": lead["pro_id"]})
-        pro_name = pro.get("business_name", "איש המקצוע") if pro else "איש המקצוע"
+        pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME) if pro else Defaults.GENERIC_PRO_NAME
 
         await whatsapp.send_interactive_buttons(
             to_number=customer_chat_id.replace("@c.us", ""),
             text=Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name),
             buttons=[
-                {"id": "confirm_finish", "title": "✅ כן, הסתיים"},
-                {"id": "not_finished", "title": "❌ עדיין לא"}
+                {"id": Messages.Keywords.BUTTON_CONFIRM_FINISH, "title": Messages.Keywords.BUTTON_TITLE_YES_FINISHED},
+                {"id": Messages.Keywords.BUTTON_NOT_FINISHED, "title": Messages.Keywords.BUTTON_TITLE_NO_NOT_YET}
             ]
         )
         logger.success(f"Sent customer completion check (buttons) for lead {lead_id} (Trigger: {triggered_by})")
@@ -52,7 +52,7 @@ async def handle_customer_completion_text(chat_id: str, text: str):
     is_completion = False
     if Messages.Keywords.CUSTOMER_COMPLETION_INDICATOR in text:
         is_completion = True
-    elif "confirm_finish" in text or "כן, הסתיים" in text:
+    elif Messages.Keywords.BUTTON_CONFIRM_FINISH in text or Messages.Keywords.TEXT_YES_FINISHED in text:
         is_completion = True
         
     if not is_completion:
@@ -84,7 +84,7 @@ async def handle_customer_completion_text(chat_id: str, text: str):
         pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
         await whatsapp.send_message(pro_chat_id, Messages.Pro.CUSTOMER_REPORTED_COMPLETION)
 
-    pro_name = pro.get('business_name', 'המקצוען') if pro else 'המקצוען'
+    pro_name = pro.get('business_name', Defaults.EXPERT_NAME) if pro else Defaults.EXPERT_NAME
     return Messages.Customer.COMPLETION_ACK.format(pro_name=pro_name)
 
 async def handle_customer_rating_text(chat_id: str, text: str):
@@ -124,7 +124,7 @@ async def handle_customer_rating_text(chat_id: str, text: str):
         }}
     )
     
-    business_name = pro['business_name'] if pro else "איש המקצוע"
+    business_name = pro['business_name'] if pro else Defaults.GENERIC_PRO_NAME
     logger.success(f"⭐ Rating {rating} saved for {business_name}")
     return Messages.Customer.REVIEW_REQUEST
 
@@ -192,7 +192,7 @@ async def handle_pro_text_command(chat_id: str, text: str):
             if booking_success:
                 response_text += "\n📅 היומן עודכן בהצלחה!"
             
-            pro_name = pro.get('business_name', 'מומחה')
+            pro_name = pro.get('business_name', Defaults.EXPERT_NAME)
             pro_phone = pro.get('phone_number', '').replace('972', '0')
             customer_msg = Messages.Customer.PRO_FOUND.format(pro_name=pro_name, pro_phone=pro_phone)
             await whatsapp.send_message(lead["chat_id"], customer_msg)
@@ -226,7 +226,7 @@ async def handle_pro_text_command(chat_id: str, text: str):
             )
             response_text = Messages.Pro.FINISH_SUCCESS
             
-            pro_name = pro.get('business_name', 'המקצוען')
+            pro_name = pro.get('business_name', Defaults.GENERIC_PRO_NAME)
             feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
             await whatsapp.send_message(lead["chat_id"], feedback_msg)
         else:
@@ -327,7 +327,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 issue_type=extracted_issue,
                 full_address=extracted_city, 
                 status=LeadStatus.CONTACTED,
-                appointment_time="Pending"
+                appointment_time=Defaults.PENDING_TIME
             )
             if new_lead:
                 current_lead_id = new_lead["_id"]
@@ -343,9 +343,9 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 )
 
             # Switch to Pro Persona
-            pro_name = best_pro.get("business_name", "Fixi Pro")
+            pro_name = best_pro.get("business_name", Defaults.FIXI_PRO_NAME)
             price_list = best_pro.get("price_list", "")
-            base_system_prompt = best_pro.get("system_prompt", f"You are Fixi, an AI scheduler for {pro_name}.")
+            base_system_prompt = best_pro.get("system_prompt", Messages.AISystemPrompts.FIXI_SCHEDULER_ROLE.format(pro_name=pro_name))
             
             rating = best_pro.get("social_proof", {}).get("rating", 5.0)
             count = best_pro.get("social_proof", {}).get("review_count", 0)
@@ -358,7 +358,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 social_proof_text=social_proof_text,
                 extracted_city=extracted_city,
                 extracted_issue=extracted_issue,
-                transcription=transcription or "None"
+                transcription=transcription or Defaults.DEFAULT_TRANSCRIPTION
             )
             
             pro_response_obj = await ai.analyze_conversation(
@@ -386,9 +386,9 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     
     if is_deal and best_pro:
         # Finalize details
-        d_time = final_response.extracted_data.appointment_time or "As soon as possible"
-        d_address = final_response.extracted_data.full_address or extracted_city or "Unknown Address"
-        d_issue = final_response.extracted_data.issue or extracted_issue or "Issue"
+        d_time = final_response.extracted_data.appointment_time or Defaults.ASAP_TIME
+        d_address = final_response.extracted_data.full_address or extracted_city or Defaults.UNKNOWN_ADDRESS
+        d_issue = final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
         
         if current_lead_id:
             await leads_collection.update_one(

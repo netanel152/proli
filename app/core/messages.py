@@ -27,6 +27,13 @@ class Messages:
         NEW_LEAD_FOOTER = "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
         NAVIGATE_TO = "🚗 נווט לכתובת:"
 
+    class SOS:
+        CUSTOMER_REASSIGNING = "מתנצלים על ההמתנה, אנו מאתרים עבורך איש מקצוע זמין יותר כעת... ⏳"
+        PRO_LOST_LEAD = "העבודה הועברה לאיש מקצוע אחר עקב חוסר מענה."
+        ADMIN_REPORT_HEADER = "🚨 *דו\"ח לידים תקועים (Fixi)*"
+        ADMIN_REPORT_BODY = "נמצאו {count} לידים ללא מענה (> {timeout} דק'):\n"
+        ADMIN_REPORT_FOOTER = "\nהמערכת ניסתה להעביר אותם אך ללא הצלחה. נדרשת התערבות ידנית."
+
     class Keywords:
         # Logic commands used in 'if' statements
         APPROVE_COMMANDS = ["אשר", "1", "approve"]
@@ -38,3 +45,16 @@ class Messages:
         CUSTOMER_COMPLETION_INDICATOR = "כן, הסתיים"
         BUTTON_CONFIRM_FINISH = "confirm_finish"
         BUTTON_NOT_FINISHED = "not_finished"
+        TEXT_YES_FINISHED = "כן, הסתיים"
+        BUTTON_TITLE_YES_FINISHED = "✅ כן, הסתיים"
+        BUTTON_TITLE_NO_NOT_YET = "❌ עדיין לא"
+
+    class Errors:
+        AI_OVERLOAD = "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."
+
+    class AISystemPrompts:
+        ANALYZE_IMAGE = "[System: Analyze the image to identify the issue.]"
+        TRANSCRIBE_AUDIO = "[System: Transcribe the audio verbatim and analyze the intent.]"
+        ANALYZE_VIDEO = "[System: Watch the video to identify the issue and describe what you see.]"
+        DEFAULT_SYSTEM = "You are a helpful assistant."
+        FIXI_SCHEDULER_ROLE = "You are Fixi, an AI scheduler for {pro_name}."

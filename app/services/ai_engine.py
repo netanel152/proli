@@ -2,6 +2,7 @@ from google import genai
 from google.genai import types
 from app.core.config import settings
 from app.core.logger import logger
+from app.core.messages import Messages
 from pydantic import BaseModel, Field
 from typing import Optional
 import traceback
@@ -37,11 +38,11 @@ class AIEngine:
             current_parts.append(types.Part.from_bytes(data=media_data, mime_type=media_mime_type))
             
             if "image" in media_mime_type:
-                user_text = (user_text or "") + "\n[System: Analyze the image to identify the issue.]"
+                user_text = (user_text or "") + f"\n{Messages.AISystemPrompts.ANALYZE_IMAGE}"
             elif "audio" in media_mime_type:
-                    user_text = (user_text or "") + "\n[System: Transcribe the audio verbatim and analyze the intent.]"
+                    user_text = (user_text or "") + f"\n{Messages.AISystemPrompts.TRANSCRIBE_AUDIO}"
             elif "video" in media_mime_type:
-                user_text = (user_text or "") + "\n[System: Watch the video to identify the issue and describe what you see.]"
+                user_text = (user_text or "") + f"\n{Messages.AISystemPrompts.ANALYZE_VIDEO}"
 
         if user_text:
             current_parts.append(types.Part(text=user_text))
@@ -53,7 +54,7 @@ class AIEngine:
             ))
 
         if not custom_system_prompt:
-            custom_system_prompt = "You are a helpful assistant."
+            custom_system_prompt = Messages.AISystemPrompts.DEFAULT_SYSTEM
 
         config_args = {
             "system_instruction": custom_system_prompt,
@@ -100,8 +101,8 @@ class AIEngine:
         logger.error(f"All AI models failed. Last error: {traceback.format_exc()}")
         if require_json:
             return AIResponse(
-                    reply_to_user="סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע.",
+                    reply_to_user=Messages.Errors.AI_OVERLOAD,
                     transcription=None,
                     extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None)
                 )
-        return "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."
+        return Messages.Errors.AI_OVERLOAD

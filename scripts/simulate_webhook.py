@@ -53,4 +53,6 @@ async def simulate_message():
         print(f"\n❌ Error: {e}")
 
 if __name__ == "__main__":
+    if os.name == 'nt':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(simulate_message())

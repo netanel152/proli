@@ -1,4 +1,5 @@
 import os
+import certifi
 from dotenv import load_dotenv
 from google import genai
 from pymongo.mongo_client import MongoClient
@@ -10,7 +11,11 @@ print("🔄 Testing connections...")
 # --- בדיקת מונגו ---
 mongo_uri = os.getenv("MONGO_URI")
 try:
-    client_mongo = MongoClient(mongo_uri)
+    # Match app/core/database.py logic for SSL
+    ca_file = certifi.where() if "+srv" in (mongo_uri or "") else None
+    kwargs = {"tlsCAFile": ca_file} if ca_file else {}
+    
+    client_mongo = MongoClient(mongo_uri, **kwargs)
     client_mongo.admin.command('ping')
     print("✅ MongoDB: Connected successfully!")
 except Exception as e:
