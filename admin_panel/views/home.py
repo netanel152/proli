@@ -32,7 +32,7 @@ def view_leads_dashboard(T):
         c1.metric(T["metric_total"], leads_collection.count_documents({}))
         c2.metric(T["metric_new"], leads_collection.count_documents({"status": "new"}))
         c3.metric(T["metric_pros"], users_collection.count_documents({"is_active": True}))
-        if c_ref.button(T.get("refresh_btn", "Refresh"), width='stretch', key="refresh_dashboard"):
+        if c_ref.button(T.get("refresh_btn", "Refresh"), key="refresh_dashboard"):
             st.rerun()
 
         st.markdown("---")
@@ -145,7 +145,7 @@ def view_leads_dashboard(T):
                         required=True
                     )
                 },
-                width='stretch',
+                use_container_width=True,
                 hide_index=True,
                 num_rows="dynamic"
             )
@@ -202,11 +202,11 @@ def view_leads_dashboard(T):
                 
                 with c1:
                     # Delete Action
-                    if st.button(f"🗑️ {T.get('delete_btn', 'Delete Lead')}", key=f"delete_{selected_lead['id']}", width='stretch'):
+                    if st.button(f"🗑️ {T.get('delete_btn', 'Delete Lead')}", key=f"delete_{selected_lead['id']}"):
                          st.session_state[f"confirm_delete_{selected_lead['id']}"] = True
 
                     # Manual Customer Check Action
-                    if st.button("📱 בדיקה מול לקוח", key=f"check_{selected_lead['id']}", help="Send WhatsApp verification", width='stretch'):
+                    if st.button("📱 בדיקה מול לקוח", key=f"check_{selected_lead['id']}", help="Send WhatsApp verification"):
                         try:
                             asyncio.run(send_customer_completion_check(selected_lead['id'], triggered_by="admin"))
                             st.success("✅ Check sent!")
