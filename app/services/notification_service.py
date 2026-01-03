@@ -27,22 +27,3 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
         logger.success(f"Sent pro reminder for lead {lead_id} (Trigger: {triggered_by})")
     except Exception as e:
         logger.error(f"Error in send_pro_reminder for lead {lead_id}: {e}")
-
-async def send_customer_completion_check(lead_id: str, triggered_by: str = "auto"):
-    """Asks the customer if the job has been completed."""
-    try:
-        lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
-        if not lead or lead.get("status") != LeadStatus.BOOKED:
-            logger.warning(f"send_customer_completion_check called for invalid/non-booked lead: {lead_id}")
-            return
-
-        customer_chat_id = lead["chat_id"]
-        pro = await users_collection.find_one({"_id": lead["pro_id"]})
-        pro_name = pro.get("business_name", "איש המקצוע") if pro else "איש המקצוע"
-
-        message = Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name)
-        
-        await whatsapp.send_message(customer_chat_id, message)
-        logger.success(f"Sent customer completion check for lead {lead_id} (Trigger: {triggered_by})")
-    except Exception as e:
-        logger.error(f"Error in send_customer_completion_check for lead {lead_id}: {e}")

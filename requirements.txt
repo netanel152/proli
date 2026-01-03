@@ -16,6 +16,7 @@ certifi==2024.2.2
 
 # AI & Machine Learning
 google-genai==0.3.0
+cloudinary==1.38.0
 
 # Scheduling & Logging
 APScheduler==3.10.4

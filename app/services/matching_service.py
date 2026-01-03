@@ -1,6 +1,8 @@
-from app.core.database import users_collection, leads_collection
+from app.core.database import users_collection, leads_collection, slots_collection
 from app.core.logger import logger
 from app.core.constants import LeadStatus, WorkerConstants
+from datetime import datetime, timedelta, timezone
+from bson import ObjectId
 
 async def determine_best_pro(issue_type: str = None, location: str = None) -> dict:
     """
@@ -15,41 +17,25 @@ async def determine_best_pro(issue_type: str = None, location: str = None) -> di
         query = {"is_active": True}
         
         # 2. Location Filtering (Database Level Optimization)
-        # We want to find pros where 'service_areas' contains the user's location.
-        # Simple approach: If user says "Tel Aviv", we look for pros with "Tel Aviv" in their areas.
-        # We use a regex for case-insensitive partial matching.
         if location:
-            # Escaping regex characters in location is important if we want to be safe, 
-            # but for city names it's usually fine.
             query["service_areas"] = {"$regex": location, "$options": "i"}
             
         cursor = users_collection.find(query)
         matching_pros = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
         
-        # Fallback: If no pros match the specific location, try finding "All" or similar wide-net pros?
-        # Or if the user's location was too specific (e.g. "Dizengoff St, Tel Aviv") and Pro just has "Tel Aviv".
-        # The DB regex above does: ProArea LIKE %UserLoc%. 
-        # So if Pro has "Tel Aviv" and User says "Tel Aviv", it matches.
-        # If Pro has "Tel Aviv" and User says "Dizengoff, Tel Aviv", the regex "Dizengoff, Tel Aviv" won't match "Tel Aviv".
-        # So we might need the Python fallback for the "Reverse" match (User string contains Pro area) if the DB query yields nothing.
-        
+        # Fallback: Reverse match
         if not matching_pros and location:
-             # Retry with looser query (just active pros) and filter in Python for the "Reverse" match
-             # This handles: User="Dizengoff Tel Aviv", Pro="Tel Aviv"
              logger.info(f"No direct location match for '{location}', trying reverse match...")
              all_pros_cursor = users_collection.find({"is_active": True})
              all_pros = await all_pros_cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
              
              for pro in all_pros:
                  areas = pro.get("service_areas", [])
-                 # Check if any area is inside the location string
                  if any(area in location for area in areas):
                      matching_pros.append(pro)
         
         if not matching_pros:
-            # Final Fallback: All active pros? 
-            # Original logic did: "if not matching_pros: matching_pros = pros" (all active)
-            # We preserve this behavior for MVP stability.
+            # Final Fallback: All active pros
             matching_pros = await users_collection.find({"is_active": True}).to_list(length=WorkerConstants.DB_QUERY_LIMIT)
 
         # 3. Sort by Rating (Descending)
@@ -81,3 +67,45 @@ async def determine_best_pro(issue_type: str = None, location: str = None) -> di
     except Exception as e:
         logger.error(f"Error in determine_best_pro: {e}")
         return None
+
+async def book_slot_for_lead(pro_id: str, lead_created_at: datetime) -> bool:
+    """
+    Attempts to book a slot for the pro around the lead creation time.
+    """
+    try:
+        if not lead_created_at:
+            return False
+
+        # Ensure UTC
+        if lead_created_at.tzinfo is None:
+            lead_created_at = lead_created_at.replace(tzinfo=timezone.utc)
+
+        # 1. Calculate Estimated Slot Time (Round up to next hour)
+        # e.g., 14:15 -> 15:00
+        estimated_time = lead_created_at.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+
+        # 2. Define Search Window (+/- 2 hours)
+        start_window = estimated_time - timedelta(hours=2)
+        end_window = estimated_time + timedelta(hours=2)
+
+        # 3. Find and Book Slot (Atomic)
+        slot = await slots_collection.find_one_and_update(
+            {
+                "pro_id": ObjectId(pro_id) if isinstance(pro_id, str) else pro_id,
+                "is_taken": False,
+                "start_time": {"$gte": start_window, "$lte": end_window}
+            },
+            {"$set": {"is_taken": True}},
+            sort=[("start_time", 1)]
+        )
+
+        if slot:
+            logger.info(f"📅 Booked slot {slot['_id']} for Pro {pro_id} at {slot['start_time']}")
+            return True
+        else:
+            logger.info(f"⚠️ No available slot found for Pro {pro_id} near {estimated_time}")
+            return False
+
+    except Exception as e:
+        logger.error(f"Error in book_slot_for_lead: {e}")
+        return False
