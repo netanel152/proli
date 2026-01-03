@@ -8,7 +8,7 @@
 *   **Backend:** FastAPI (Async).
 *   **AI Engine:** Google Gemini 2.5 (Multimodal - Text, Images, Audio).
 *   **Database:** MongoDB Atlas.
-*   **Core Logic:** Intelligent Pro Routing & Load Balancing.
+*   **Core Logic:** Intelligent Pro Routing, Load Balancing & Calendar Booking.
 
 ## 2. Technical Architecture & Tech Stack
 
@@ -20,7 +20,7 @@
 *   **AI Engine:** **Google Gemini Adaptive** (Flash Lite 2.5 -> Flash 2.5 -> Flash 1.5) - Supports Vision, Video & Audio.
 *   **HTTP Client:** **HTTPX** (Async requests for media downloading).
 *   **Media Storage:** **Cloudinary** (For future media handling/persistence).
-*   **Messaging Provider:** **Green API** (WhatsApp wrapper).
+*   **Messaging Provider:** **Green API** (WhatsApp wrapper with Interactive Buttons).
 *   **Scheduling:** **APScheduler** with **Atomic Locking** (Race-condition free).
 *   **Logging:** **Loguru** (intercepts standard logging, structured file output).
 *   **Infrastructure:** **Docker** & **Docker Compose**.
@@ -44,6 +44,7 @@
     *   Detects intent and extracts [DEAL] tags or Structured JSON.
 5.  **Action:**
     *   **Database:** Updates Lead with linked `pro_id`.
+    *   **Booking:** `matching_service.book_slot_for_lead` ensures atomic slot reservation.
     *   **Notification (`app.services.notification_service`):** Sends lead details ONLY to the selected Pro with instructions to reply 'אשר' (Approve) or 'דחה' (Reject).
 6.  **Visualization:** Admin Panel (`admin_panel/dashboard_page.py`) reflects changes immediately.
 
@@ -59,7 +60,7 @@ D:\Projects\fixi-backend\
 │   │       └── webhook.py          # Green API Webhook Endpoint
 │   ├── services/
 │   │   ├── workflow.py             # Main Orchestrator
-│   │   ├── matching_service.py     # Pro Routing & Discovery Logic
+│   │   ├── matching_service.py     # Pro Routing & Booking Logic
 │   │   ├── notification_service.py # WhatsApp Notification Logic
 │   │   ├── ai_engine.py            # Gemini Wrapper (Multimodal)
 │   │   ├── lead_manager.py         # DB Operations (CRUD)
@@ -83,6 +84,10 @@ D:\Projects\fixi-backend\
 │   │   └── settings.py             # System Settings
 │   └── ui/                         # UI Components
 │       └── components.py           # Widgets & Styles
+├── tests/                          # Test Suite
+│   ├── test_booking_and_messaging.py
+│   ├── test_admin_auth.py
+│   └── ...
 ├── scripts/                        # Operational Scripts
 ├── Dockerfile                      # Container definition
 ├── docker-compose.yml              # Multi-container orchestration
@@ -99,7 +104,7 @@ D:\Projects\fixi-backend\
 *   **Security:** 
     *   Use `admin_panel.auth.make_hash` for passwords.
     *   Never commit secrets.
-*   **Concurrency:** Use `find_one_and_update` for scheduler locks.
+*   **Concurrency:** Use `find_one_and_update` for scheduler and booking locks.
 *   **Constants:** Use `app.core.constants` for statuses (`LeadStatus`) and configuration (`WorkerConstants`).
 
 ## 5. Audit Findings & Resolution Status
@@ -109,7 +114,8 @@ D:\Projects\fixi-backend\
 4.  **Error Handling:** ✅ Improved. Background tasks used for heavy lifting.
 5.  **Infrastructure:** ✅ Resolved. Dockerized application with structured logging.
 6.  **AI Fallback:** ✅ Resolved. Implemented adaptive hierarchy via `settings.AI_MODELS`.
-7.  **Refactoring:** ✅ Resolved. Monolithic `workflow.py` split into `matching_service.py` and `notification_service.py`. Hardcoded strings moved to `app/core/constants.py` and `app/core/messages.py`.
+7.  **Refactoring:** ✅ Resolved. Monolithic `workflow.py` split.
+8.  **New Features:** ✅ Implemented. Interactive buttons and calendar booking logic with comprehensive tests (`tests/test_booking_and_messaging.py`, `tests/test_admin_auth.py`).
 
 ### Environment Variables (`.env`)
 ```env
