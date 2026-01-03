@@ -31,6 +31,6 @@ Fixi בנויה כפלטפורמה מולטי-מודאלית ומבוזרת. מ�
 
 ## 3. התאמות בקוד (Advanced)
 אם נדרש שינוי בלוגיקת הניתוב (למשל, העדפה למקצוע ספציפי):
-*   קובץ: `app/services/workflow.py`
+*   קובץ: `app/services/matching_service.py`
 *   פונקציה: `determine_best_pro`
 *   ניתן להוסיף סינון לפי שדה `profession` ב-User Object אם יוסיפו אותו בעתיד.

@@ -16,6 +16,8 @@ The application has passed the critical security, stability, and observability c
 | **Architecture** | Monolithic Failure | ✅ **Fixed** | Split `api` and `admin` into separate, isolated services. |
 | **Observability**| Lost Logs | ✅ **Fixed** | Logs are persisted to disk and cover all critical flows (Auth, Routing, Deletion). |
 | **Performance** | Slow Routing | ✅ **Fixed** | Moved location filtering to MongoDB (Regex). |
+| **Stability** | Stuck Leads | ✅ **Fixed** | Implemented SOS Auto-Healer for automatic lead reassignment. |
+| **Testing** | Manual Verification| ✅ **Fixed** | Implemented comprehensive Pytest suite for business logic. |
 
 ## 🚀 Deployment Checklist (The Final "Polish")
 While the *code* is ready, ensure your *server* environment covers these last miles:
