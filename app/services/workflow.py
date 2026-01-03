@@ -6,8 +6,8 @@ from app.core.database import users_collection, leads_collection, reviews_collec
 from app.core.messages import Messages
 from app.core.prompts import Prompts
 from app.core.constants import LeadStatus
-from app.services.matching_service import determine_best_pro
-from app.services.notification_service import send_pro_reminder, send_customer_completion_check
+from app.services.matching_service import determine_best_pro, book_slot_for_lead
+from app.services.notification_service import send_pro_reminder
 from bson import ObjectId
 from datetime import datetime, timezone
 import re
@@ -18,10 +18,44 @@ whatsapp = WhatsAppClient()
 ai = AIEngine()
 lead_manager = LeadManager()
 
+async def send_customer_completion_check(lead_id: str, triggered_by: str = "auto"):
+    """Asks the customer if the job has been completed using interactive buttons."""
+    try:
+        lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
+        if not lead or lead.get("status") != LeadStatus.BOOKED:
+            logger.warning(f"send_customer_completion_check called for invalid/non-booked lead: {lead_id}")
+            return
+
+        customer_chat_id = lead["chat_id"]
+        pro = await users_collection.find_one({"_id": lead["pro_id"]})
+        pro_name = pro.get("business_name", "איש המקצוע") if pro else "איש המקצוע"
+
+        await whatsapp.send_interactive_buttons(
+            to_number=customer_chat_id.replace("@c.us", ""),
+            text=Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name),
+            buttons=[
+                {"id": "confirm_finish", "title": "✅ כן, הסתיים"},
+                {"id": "not_finished", "title": "❌ עדיין לא"}
+            ]
+        )
+        logger.success(f"Sent customer completion check (buttons) for lead {lead_id} (Trigger: {triggered_by})")
+    except Exception as e:
+        logger.error(f"Error in send_customer_completion_check for lead {lead_id}: {e}")
+
 async def handle_customer_completion_text(chat_id: str, text: str):
     """Checks if the user confirmed job completion via text."""
     text = text.strip()
-    if Messages.Keywords.CUSTOMER_COMPLETION_INDICATOR not in text:
+    # Check for text response OR button ID interaction (simulated here if payload comes as text in some architectures, 
+    # but GreenAPI usually sends separate webhook. Assuming text handling catches button titles or IDs if echoed).
+    # For now, we stick to text keywords + adding button titles to keywords if needed.
+    
+    is_completion = False
+    if Messages.Keywords.CUSTOMER_COMPLETION_INDICATOR in text:
+        is_completion = True
+    elif "confirm_finish" in text or "כן, הסתיים" in text:
+        is_completion = True
+        
+    if not is_completion:
         return None
 
     lead = await leads_collection.find_one({
@@ -44,7 +78,7 @@ async def handle_customer_completion_text(chat_id: str, text: str):
             }
         }
     )
-    logger.success(f"✅ Lead {lead['_id']} marked as COMPLETED by customer (Text).")
+    logger.success(f"✅ Lead {lead['_id']} marked as COMPLETED by customer.")
 
     if pro and pro.get("phone_number"):
         pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
@@ -105,7 +139,7 @@ async def handle_customer_review_comment(chat_id: str, text: str):
         return None
 
     pro_id = lead["pro_id"]
-    rating_given = lead.get("rating_given", 5) # Default to 5 if missing, but should be there
+    rating_given = lead.get("rating_given", 5) 
 
     review_doc = {
         "pro_id": pro_id,
@@ -127,10 +161,7 @@ async def handle_customer_review_comment(chat_id: str, text: str):
 
 async def handle_pro_text_command(chat_id: str, text: str):
     """
-    Handles text commands from Professionals:
-    - 'אשר' / '1': Approve newest pending lead.
-    - 'דחה' / '2': Reject newest pending lead.
-    - 'סיימתי' / '3': Mark newest booked lead as completed.
+    Handles text commands from Professionals.
     """
     # Identify Pro
     phone = chat_id.replace("@c.us", "")
@@ -153,15 +184,19 @@ async def handle_pro_text_command(chat_id: str, text: str):
         )
         if lead:
             await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.BOOKED, pro["_id"])
+            
+            # Trigger Booking Logic
+            booking_success = await book_slot_for_lead(pro["_id"], lead["created_at"])
+            
             response_text = Messages.Pro.APPROVE_SUCCESS
+            if booking_success:
+                response_text += "\n📅 היומן עודכן בהצלחה!"
             
             pro_name = pro.get('business_name', 'מומחה')
             pro_phone = pro.get('phone_number', '').replace('972', '0')
             customer_msg = Messages.Customer.PRO_FOUND.format(pro_name=pro_name, pro_phone=pro_phone)
             await whatsapp.send_message(lead["chat_id"], customer_msg)
         else:
-            # Silent fail or info? "No pending job found" might be annoying if they type generic text.
-            # But specific keywords usually mean intent.
             response_text = Messages.Pro.NO_PENDING_APPROVE
 
     elif text in REJECT_KEYS:
@@ -213,7 +248,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         log_text = f"{user_text or ''} [MEDIA: {media_url}]"
     await lead_manager.log_message(chat_id, "user", log_text)
 
-    # 2. Check for Customer Completion or Rating (Priority over AI)
+    # 2. Check for Customer Completion or Rating
     if user_text:
         completion_resp = await handle_customer_completion_text(chat_id, user_text)
         if completion_resp:
@@ -285,15 +320,13 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
 
         if active_lead:
             current_lead_id = active_lead["_id"]
-            # Optionally update details if they changed?
-            # For now, we assume the conversation continues on this lead.
         else:
             # Create a provisional lead
             new_lead = await lead_manager.create_lead_from_dict(
                 chat_id=chat_id,
                 issue_type=extracted_issue,
-                full_address=extracted_city, # Provisional address is just city
-                status=LeadStatus.CONTACTED, # In progress
+                full_address=extracted_city, 
+                status=LeadStatus.CONTACTED,
                 appointment_time="Pending"
             )
             if new_lead:
@@ -303,7 +336,6 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         best_pro = await determine_best_pro(issue_type=extracted_issue, location=extracted_city)
         
         if best_pro:
-            # Update the lead with the pro candidate (even if not booked yet)
             if current_lead_id:
                 await leads_collection.update_one(
                     {"_id": current_lead_id}, 
@@ -315,7 +347,6 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             price_list = best_pro.get("price_list", "")
             base_system_prompt = best_pro.get("system_prompt", f"You are Fixi, an AI scheduler for {pro_name}.")
             
-            # Extract Social Proof
             rating = best_pro.get("social_proof", {}).get("rating", 5.0)
             count = best_pro.get("social_proof", {}).get("review_count", 0)
             social_proof_text = f"{rating} stars based on {count} reviews"
@@ -330,15 +361,13 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 transcription=transcription or "None"
             )
             
-            # Call AI again with Pro Persona
             pro_response_obj = await ai.analyze_conversation(
                 history=history,
-                user_text=user_text or "", # Re-eval user text with Pro context
+                user_text=user_text or "", 
                 custom_system_prompt=full_system_prompt,
                 require_json=True
             )
         else:
-            # Fallback if no pro matches (unlikely given logic)
             pass
 
     # Select which response to send
@@ -351,7 +380,6 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # 6. Check for [DEAL] or Structured Booking
     is_deal = final_response.is_deal
     
-    # Fallback: check for [DEAL] string in reply if model hallucinated format
     deal_string_match = re.search(r"[DEAL:.*?]", final_response.reply_to_user)
     if deal_string_match:
         is_deal = True
@@ -362,12 +390,11 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         d_address = final_response.extracted_data.full_address or extracted_city or "Unknown Address"
         d_issue = final_response.extracted_data.issue or extracted_issue or "Issue"
         
-        # If we have a current_lead, update it. If not, create new.
         if current_lead_id:
             await leads_collection.update_one(
                 {"_id": current_lead_id},
                 {"$set": {
-                    "status": LeadStatus.NEW, # Ready for Pro
+                    "status": LeadStatus.NEW, 
                     "appointment_time": d_time,
                     "full_address": d_address,
                     "issue_type": d_issue,
@@ -376,7 +403,6 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             )
             lead = await leads_collection.find_one({"_id": current_lead_id})
         else:
-            # Should rarely happen if Step 5 worked, but safe fallback
             lead = await lead_manager.create_lead_from_dict(
                 chat_id=chat_id,
                 issue_type=d_issue,
@@ -402,9 +428,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 if transcription:
                     msg_to_pro += Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(transcription=transcription)
                 
-                # Send Text Options
                 msg_to_pro += Messages.Pro.NEW_LEAD_FOOTER
                 await whatsapp.send_message(pro_phone, msg_to_pro)
                 
-                # Send Waze Link
                 await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)

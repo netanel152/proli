@@ -12,6 +12,9 @@ class LeadStatus(str, Enum):
 class WorkerConstants:
     MAX_PRO_LOAD = 3
     DB_QUERY_LIMIT = 100
+    SLOT_DURATION_HOURS = 1
+    SLOT_SEARCH_WINDOW_HOURS = 2
+    DEFAULT_CURRENCY = "ILS"
 
 class APIStatus:
     RUNNING = "Fixi is running! 🚀"
