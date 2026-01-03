@@ -9,6 +9,7 @@ import asyncio
 import os
 import sys
 from app.core.logger import logger
+from app.core.constants import AdminDefaults, Defaults
 
 # Allow imports from the root directory to access the 'app' module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -39,9 +40,9 @@ def view_leads_dashboard(T):
 
         # Helpers for Professionals
         all_pros = list(users_collection.find())
-        pro_map_id_to_name = {p["_id"]: p.get("business_name", "Unknown") for p in all_pros}
-        pro_map_name_to_id = {p.get("business_name", "Unknown"): p["_id"] for p in all_pros}
-        pro_names = [p.get("business_name", "Unknown") for p in all_pros]
+        pro_map_id_to_name = {p["_id"]: p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros}
+        pro_map_name_to_id = {p.get("business_name", AdminDefaults.UNKNOWN_PRO): p["_id"] for p in all_pros}
+        pro_names = [p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros]
         pro_names.insert(0, T["unknown_pro"]) # Add 'Unassigned' option
 
         # Data Loading
@@ -259,7 +260,7 @@ def view_leads_dashboard(T):
             with c2:
                 # Pro assignment
                 # Use the same pro list from dashboard
-                pro_names_create = [p.get("business_name", "Unknown") for p in all_pros]
+                pro_names_create = [p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros]
                 pro_names_create.insert(0, T["unknown_pro"])
                 
                 selected_pro_name = st.selectbox(T.get("input_pro", "Assign Professional"), options=pro_names_create)
@@ -290,9 +291,9 @@ def view_leads_dashboard(T):
                             "status": new_status,
                             "pro_id": assigned_pro_id,
                             "created_at": datetime.now(pytz.utc),
-                            "full_address": "Manual", # Standardized
-                            "appointment_time": "Manual", # Standardized
-                            "source": "manual_admin"
+                            "full_address": AdminDefaults.MANUAL_LABEL, # Standardized
+                            "appointment_time": AdminDefaults.MANUAL_LABEL, # Standardized
+                            "source": AdminDefaults.MANUAL_SOURCE
                         }
                         
                         leads_collection.insert_one(new_lead_doc)

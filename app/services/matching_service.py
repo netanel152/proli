@@ -4,7 +4,7 @@ from app.core.constants import LeadStatus, WorkerConstants
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 
-async def determine_best_pro(issue_type: str = None, location: str = None) -> dict:
+async def determine_best_pro(issue_type: str = None, location: str = None, excluded_pro_ids: list = None) -> dict:
     """
     Intelligent Routing Engine:
     1. Active Status
@@ -15,6 +15,10 @@ async def determine_best_pro(issue_type: str = None, location: str = None) -> di
     try:
         # 1. Build Query
         query = {"is_active": True}
+        
+        if excluded_pro_ids:
+            # Filter out IDs provided in the exclusion list
+            query["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
         
         # 2. Location Filtering (Database Level Optimization)
         if location:

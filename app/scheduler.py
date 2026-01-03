@@ -2,6 +2,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from app.core.database import users_collection, leads_collection, settings_collection
 from app.services.workflow import send_pro_reminder, send_customer_completion_check, whatsapp
+from app.services.monitor_service import check_and_reassign_stale_leads, send_periodic_admin_report
 from datetime import datetime, timedelta
 from app.core.constants import LeadStatus
 import pytz
@@ -155,6 +156,22 @@ def start_scheduler():
         monitor_unfinished_jobs,
         IntervalTrigger(minutes=30), # Run every 30 minutes
         id="stale_job_monitor",
+        replace_existing=True
+    )
+
+    # Job 3: SOS Auto-Healer (Reassigns stale leads)
+    scheduler.add_job(
+        check_and_reassign_stale_leads,
+        IntervalTrigger(minutes=10),
+        id="sos_auto_healer",
+        replace_existing=True
+    )
+
+    # Job 4: SOS Admin Reporter (Summarizes stuck leads)
+    scheduler.add_job(
+        send_periodic_admin_report,
+        IntervalTrigger(hours=4),
+        id="sos_admin_reporter",
         replace_existing=True
     )
 

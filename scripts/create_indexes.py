@@ -56,6 +56,10 @@ async def create_all_indexes():
         await leads_collection.create_index([("pro_id", ASCENDING), ("status", ASCENDING)])
         print("  ✅ Created compound index: pro_id + status")
 
+        # Compound: Fast lookup for SOS monitor (Status + Date)
+        await leads_collection.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
+        print("  ✅ Created compound index: status + created_at")
+
     except Exception as e:
         print(f"  ❌ Error indexing Leads: {e}")
 
