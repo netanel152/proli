@@ -4,7 +4,7 @@ services:
   # ---------------------------------------------------------------------------
   api:
     build: .
-    container_name: fixi_api
+    container_name: core_brain
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
     ports:
       - "8000:8000"
@@ -25,7 +25,7 @@ services:
   # ---------------------------------------------------------------------------
   admin:
     build: .
-    container_name: fixi_admin
+    container_name: admin_panel
     command: streamlit run admin_panel/main.py --server.port 8501 --server.address 0.0.0.0
     ports:
       - "8501:8501"
@@ -46,7 +46,7 @@ services:
   # ---------------------------------------------------------------------------
   mongo:
     image: mongo:6.0
-    container_name: fixi_mongo
+    container_name: mongo_db
     ports:
       - "27017:27017"
     volumes:

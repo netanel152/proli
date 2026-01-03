@@ -40,7 +40,7 @@ def render_pro_list(T):
     with c2:
         st.metric(T["status_active"], len([p for p in pros if p.get("is_active", True)]))
     with c3:
-        if st.button(f"＋ {T.get('action_add_new', 'Add New')}", type="primary", width='stretch'):
+        if st.button(f"＋ {T.get('action_add_new', 'Add New')}", type="primary"):
             st.session_state.pro_view_mode = 'add'
             st.rerun()
             
@@ -76,12 +76,12 @@ def render_pro_list(T):
             
             with c_actions:
                 st.write(" ") # Spacer
-                if st.button(T.get("edit_btn", "Edit"), key=f"edit_{pro_id}", width='stretch'):
+                if st.button(T.get("edit_btn", "Edit"), key=f"edit_{pro_id}"):
                     st.session_state.pro_view_mode = 'edit'
                     st.session_state.pro_to_edit = p
                     st.rerun()
                 
-                if st.button(T.get("delete_btn", "Delete"), key=f"del_{pro_id}", width='stretch', type="secondary"):
+                if st.button(T.get("delete_btn", "Delete"), key=f"del_{pro_id}", type="secondary"):
                     st.session_state[f"confirm_del_{pro_id}"] = True
             
             if st.session_state.get(f"confirm_del_{pro_id}"):

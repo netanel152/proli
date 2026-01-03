@@ -77,7 +77,7 @@ def view_schedule_editor(T):
                     "is_taken": st.column_config.CheckboxColumn(T["sch_taken"], default=False)
                 },
                 num_rows="dynamic",
-                width='stretch',
+                use_container_width=True,
                 key=f"editor_{pro['_id']}_{selected_date}"
             )
             
