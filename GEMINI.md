@@ -13,12 +13,13 @@
 ## 2. Technical Architecture & Tech Stack
 
 ### Core Technologies
-*   **Language:** Python 3.10+
+*   **Language:** Python 3.12+
 *   **Web Framework:** **FastAPI** (Async, handling Webhooks)
 *   **Admin UI:** **Streamlit** (Rapid data app development) with `extra_streamlit_components` for cookie management.
 *   **Database:** **MongoDB** (Atlas) - using `motor` (Async) for the app and `pymongo` (Sync) for scripts.
 *   **AI Engine:** **Google Gemini Adaptive** (Flash Lite 2.5 -> Flash 2.5 -> Flash 1.5) - Supports Vision, Video & Audio.
 *   **HTTP Client:** **HTTPX** (Async requests for media downloading).
+*   **Media Storage:** **Cloudinary** (For future media handling/persistence).
 *   **Messaging Provider:** **Green API** (WhatsApp wrapper).
 *   **Scheduling:** **APScheduler** with **Atomic Locking** (Race-condition free).
 *   **Logging:** **Loguru** (intercepts standard logging, structured file output).
@@ -26,20 +27,23 @@
 
 ### Data Flow
 1.  **Inbound:** WhatsApp Webhook -> `POST /webhook` (FastAPI `app/api/routes/webhook.py`).
-2.  **Routing Engine (`app.services.matching_service.determine_best_pro`):
+2.  **Dispatcher Analysis:**
+    *   `AIEngine` uses `Prompts.DISPATCHER_SYSTEM` to analyze user text/media.
+    *   Extracts `city` and `issue` type.
+    *   Creates/Updates a provisional lead (Status: `CONTACTED`).
+3.  **Routing Engine (`app.services.matching_service.determine_best_pro`):
     *   **Filter:** Active Pros (`is_active: True`).
-    *   **Location:** Checks if user text matches Pro's `service_areas`.
+    *   **Location:** Checks if extracted `city` matches Pro's `service_areas`.
     *   **Ranking:** Sorts by `social_proof.rating` (Descending).
     *   **Load Balancing:** Skips pros with > `WorkerConstants.MAX_PRO_LOAD` active ("booked") jobs.
     *   **Fallback:** Selects highest-rated pro or "Fixi Support" persona.
-3.  **Context Assembly:**
-    *   Fetches the selected Pro's **Dynamic System Prompt** and **Price List**.
-    *   Downloads media (Images/Audio) via `httpx` if present.
-4.  **AI Processing:**
-    *   `AIEngine` (Gemini 2.5) analyzes text + media + dynamic prompt.
+4.  **Pro Persona AI Processing:**
+    *   Fetches the selected Pro's **Dynamic System Prompt**, **Price List**, and **Social Proof**.
+    *   `AIEngine` re-runs analysis with the *specific* Pro Persona (Tone, Pricing, Rules).
+    *   Generates a reply for the user.
     *   Detects intent and extracts [DEAL] tags or Structured JSON.
 5.  **Action:**
-    *   **Database:** Creates Lead with linked `pro_id`.
+    *   **Database:** Updates Lead with linked `pro_id`.
     *   **Notification (`app.services.notification_service`):** Sends lead details ONLY to the selected Pro with instructions to reply 'אשר' (Approve) or 'דחה' (Reject).
 6.  **Visualization:** Admin Panel (`admin_panel/dashboard_page.py`) reflects changes immediately.
 
@@ -113,6 +117,9 @@ MONGO_URI=mongodb+srv://...
 GEMINI_API_KEY=...
 GREEN_API_ID=...
 GREEN_API_TOKEN=...
+CLOUDINARY_CLOUD_NAME=...
+CLOUDINARY_API_KEY=...
+CLOUDINARY_API_SECRET=...
 ADMIN_PASSWORD=...
 ```
 

@@ -135,6 +135,16 @@ async def integration_db(monkeypatch):
     monkeypatch.setattr(app.services.workflow, "users_collection", users)
     monkeypatch.setattr(app.services.workflow, "leads_collection", leads)
 
+    # --- Patch Matching Service ---
+    import app.services.matching_service
+    monkeypatch.setattr(app.services.matching_service, "users_collection", users)
+    monkeypatch.setattr(app.services.matching_service, "leads_collection", leads)
+
+    # --- Patch Notification Service ---
+    import app.services.notification_service
+    monkeypatch.setattr(app.services.notification_service, "users_collection", users)
+    monkeypatch.setattr(app.services.notification_service, "leads_collection", leads)
+
     # --- Mock External APIs in Workflow ---
     mock_whatsapp = MagicMock()
     mock_whatsapp.send_message = AsyncMock()

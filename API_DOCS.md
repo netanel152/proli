@@ -62,3 +62,6 @@ The main entry point for receiving messages from Green API.
 - `200 OK`: `{ "status": "processing_message" }` (Task queued)
 - `200 OK`: `{ "status": "ignored_group" }` (Groups are ignored)
 - `200 OK`: `{ "status": "ignored_no_data" }` (Malformed payload)
+- `200 OK`: `{ "status": "ignored_type" }` (Unsupported webhook type)
+- `200 OK`: `{ "status": "ignored_wrong_instance" }` (Security mismatch)
+- `200 OK`: `{ "status": "error" }` (Internal handling error)

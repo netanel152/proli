@@ -1,0 +1,15 @@
+**/.git
+**/.vscode
+**/__pycache__
+**/.pytest_cache
+**/venv
+**/node_modules
+logs/*.log
+.env
+.dockerignore
+Dockerfile
+docker-compose.yml
+README.md
+GEMINI.md
+pytest.ini
+tests/

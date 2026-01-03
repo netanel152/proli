@@ -20,7 +20,7 @@ VALID_PAYLOAD = {
 
 @pytest.fixture
 def mock_background_tasks():
-    with patch("app.main.process_incoming_message") as mock_process:
+    with patch("app.api.routes.webhook.process_incoming_message") as mock_process:
         yield mock_process
 
 def test_webhook_valid_text_message(mock_background_tasks):
