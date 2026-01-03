@@ -25,7 +25,7 @@
 *   **Infrastructure:** **Docker** & **Docker Compose**.
 
 ### Data Flow
-1.  **Inbound:** WhatsApp Webhook -> `POST /webhook` (FastAPI `app/main.py`).
+1.  **Inbound:** WhatsApp Webhook -> `POST /webhook` (FastAPI `app/api/routes/webhook.py`).
 2.  **Routing Engine (`app.services.matching_service.determine_best_pro`):
     *   **Filter:** Active Pros (`is_active: True`).
     *   **Location:** Checks if user text matches Pro's `service_areas`.
@@ -48,8 +48,11 @@
 ```text
 D:\Projects\fixi-backend\
 ├── app/                            # FastAPI Backend Core
-│   ├── main.py                     # Entry point: Webhook endpoint
+│   ├── main.py                     # Entry point: App Config & Startup
 │   ├── scheduler.py                # APScheduler with Atomic Locking
+│   ├── api/                        # API Routes
+│   │   └── routes/
+│   │       └── webhook.py          # Green API Webhook Endpoint
 │   ├── services/
 │   │   ├── workflow.py             # Main Orchestrator
 │   │   ├── matching_service.py     # Pro Routing & Discovery Logic
