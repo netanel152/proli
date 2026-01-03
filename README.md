@@ -130,3 +130,14 @@ uvicorn app.main:app --reload --port 8000
 ```bash
 streamlit run admin_panel/main.py
 ```
+
+## 📚 Documentation
+
+For more detailed information, please refer to the `docs/` folder:
+
+- **[API Documentation](docs/API_DOCS.md)**: API Endpoints and Webhook structure.
+- **[Logic Flow](docs/DOCUMENTATION_FLOW.md)**: Detailed explanation of the lead lifecycle and AI decision making.
+- **[Operations Guide](docs/OPERATIONS_GUIDE.md)**: Manual for running, monitoring, and troubleshooting the system.
+- **[Gemini Context](docs/GEMINI.md)**: Technical architecture and AI context for developers.
+- **[Scaling Guide](docs/SCALING_GUIDE.md)**: Strategies for scaling the application.
+- **[Production Readiness](docs/PRODUCTION_READINESS.md)**: Checklist for going to production.
