@@ -2,7 +2,7 @@ from app.services.whatsapp_client import WhatsAppClient
 from app.services.ai_engine import AIEngine, AIResponse
 from app.services.lead_manager import LeadManager
 from app.core.logger import logger
-from app.core.database import users_collection, leads_collection
+from app.core.database import users_collection, leads_collection, reviews_collection
 from app.core.messages import Messages
 from app.core.prompts import Prompts
 from app.core.constants import LeadStatus
@@ -83,12 +83,47 @@ async def handle_customer_rating_text(chat_id: str, text: str):
     
     await leads_collection.update_one(
         {"_id": lead["_id"]},
-        {"$set": {"waiting_for_rating": False, "rating_given": rating}}
+        {"$set": {
+            "waiting_for_rating": False, 
+            "rating_given": rating,
+            "waiting_for_review_comment": True
+        }}
     )
     
     business_name = pro['business_name'] if pro else "איש המקצוע"
     logger.success(f"⭐ Rating {rating} saved for {business_name}")
-    return Messages.Customer.RATING_THANKS
+    return Messages.Customer.REVIEW_REQUEST
+
+async def handle_customer_review_comment(chat_id: str, text: str):
+    """Checks if the user sent a textual review after rating."""
+    lead = await leads_collection.find_one({
+        "chat_id": chat_id,
+        "waiting_for_review_comment": True
+    })
+
+    if not lead:
+        return None
+
+    pro_id = lead["pro_id"]
+    rating_given = lead.get("rating_given", 5) # Default to 5 if missing, but should be there
+
+    review_doc = {
+        "pro_id": pro_id,
+        "customer_chat_id": chat_id,
+        "rating": rating_given,
+        "comment": text,
+        "created_at": datetime.now(timezone.utc)
+    }
+
+    await reviews_collection.insert_one(review_doc)
+
+    await leads_collection.update_one(
+        {"_id": lead["_id"]},
+        {"$set": {"waiting_for_review_comment": False}}
+    )
+    
+    logger.success(f"📝 Review comment saved for lead {lead['_id']}")
+    return Messages.Customer.REVIEW_SAVED
 
 async def handle_pro_text_command(chat_id: str, text: str):
     """
@@ -192,6 +227,12 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             await lead_manager.log_message(chat_id, "model", rating_resp)
             return
 
+        review_resp = await handle_customer_review_comment(chat_id, user_text)
+        if review_resp:
+            await whatsapp.send_message(chat_id, review_resp)
+            await lead_manager.log_message(chat_id, "model", review_resp)
+            return
+
     # 3. Handle Media (Download if present)
     media_data = None
     media_mime = None
@@ -274,10 +315,16 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             price_list = best_pro.get("price_list", "")
             base_system_prompt = best_pro.get("system_prompt", f"You are Fixi, an AI scheduler for {pro_name}.")
             
+            # Extract Social Proof
+            rating = best_pro.get("social_proof", {}).get("rating", 5.0)
+            count = best_pro.get("social_proof", {}).get("review_count", 0)
+            social_proof_text = f"{rating} stars based on {count} reviews"
+
             full_system_prompt = Prompts.PRO_BASE_SYSTEM.format(
                 base_system_prompt=base_system_prompt,
                 pro_name=pro_name,
                 price_list=price_list,
+                social_proof_text=social_proof_text,
                 extracted_city=extracted_city,
                 extracted_issue=extracted_issue,
                 transcription=transcription or "None"

@@ -6,7 +6,7 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str
     MONGO_URI: str
     MONGO_TEST_URI: str | None = None
-    ADMIN_PASSWORD: str
+    ADMIN_PASSWORD: str | None = None
     CLOUDINARY_CLOUD_NAME: str
     CLOUDINARY_API_KEY: str
     CLOUDINARY_API_SECRET: str

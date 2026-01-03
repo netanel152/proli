@@ -3,9 +3,10 @@ import os
 import time
 import extra_streamlit_components as stx
 import bcrypt
+import hashlib
 from datetime import datetime, timedelta
 from app.core.logger import logger
-from admin_panel.config import TRANS
+from admin_panel.core.config import TRANS
 
 # --- Security: Bcrypt Hash ---
 def make_hash(password):
@@ -58,24 +59,14 @@ def check_password(cookies):
             return True
 
         # 2. Cookie Check (Secure)
-        # The cookie contains a salted hash of the real password.
-        # Logic: If we have a hash, we verify the cookie token against it (if token is also a hash of the pw, or just a session token?)
-        # Current logic: cookie_token is check_hash(real_password, cookie_token).
-        # We need to validate the cookie matches the server secret.
-        
-        # Simpler approach: If cookie exists, we consider it valid for the session duration 
-        # BUT we must verify it matches the current server password to invalidate old cookies on pw change.
         if cookie_token:
-            is_valid = False
             if admin_hash:
-                 # If we stored the HASH itself in the cookie (not ideal but existing logic was similar), 
-                 # or if we stored a hash OF the hash?
-                 # Existing logic: cookie was `make_hash(real_password)`. 
-                 # verification: `check_hash(real_password, cookie_token)`.
-                 # With admin_hash (which is already hashed), we can't "check_hash" against it easily unless we know the plain text.
-                 # IMPROVED: The cookie should be a signed session or we accept that we can't validate it without re-login.
-                 # FAST FIX: Allow re-login if cookie validation fails.
-                 pass
+                 # Verify hash of the hash (SHA256 of the bcrypt hash)
+                 # This allows us to verify the cookie without knowing the plain password
+                 expected_token = hashlib.sha256(admin_hash.encode()).hexdigest()
+                 if cookie_token == expected_token:
+                     st.session_state["authenticated"] = True
+                     return True
             elif admin_plain:
                  if check_hash(admin_plain, cookie_token):
                      st.session_state["authenticated"] = True
@@ -114,9 +105,14 @@ def check_password(cookies):
                     st.session_state["authenticated"] = True
                     
                     if remember_me:
-                        # Store a secure salted hash in the cookie
-                        # We hash the password again for the cookie
-                        secure_token = make_hash(password)
+                        # Store a secure token in the cookie
+                        if admin_hash:
+                            # Token is SHA256 of the admin_hash
+                            secure_token = hashlib.sha256(admin_hash.encode()).hexdigest()
+                        else:
+                            # Legacy: Token is bcrypt hash of the plain password
+                            secure_token = make_hash(password)
+                            
                         expires = datetime.now() + timedelta(days=7)
                         cookie_manager.set("fixi_auth_token", secure_token, expires_at=expires)
                     

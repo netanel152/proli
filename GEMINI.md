@@ -64,10 +64,18 @@ D:\Projects\fixi-backend\
 │       ├── messages.py             # UI/Notification Text Templates
 │       └── prompts.py              # AI System Prompts
 ├── admin_panel/                    # Streamlit Admin Dashboard
-│   ├── dashboard_page.py           # Main Dashboard (Tabs: View / Create)
-│   ├── auth.py                     # Authentication (Bcrypt + Cookies)
-│   ├── components.py               # UI Widgets
-│   └── config.py                   # Translations (HE/EN)
+│   ├── main.py                     # Main Entry Point
+│   ├── core/                       # Core Logic
+│   │   ├── auth.py                 # Authentication (Bcrypt + Cookies)
+│   │   ├── config.py               # Translations (HE/EN)
+│   │   └── utils.py                # DB & Helpers
+│   ├── views/                      # View Logic
+│   │   ├── home.py                 # Dashboard View
+│   │   ├── professionals.py        # Pros View
+│   │   ├── schedule.py             # Schedule Editor
+│   │   └── settings.py             # System Settings
+│   └── ui/                         # UI Components
+│       └── components.py           # Widgets & Styles
 ├── scripts/                        # Operational Scripts
 ├── Dockerfile                      # Container definition
 ├── docker-compose.yml              # Multi-container orchestration
@@ -107,6 +115,6 @@ ADMIN_PASSWORD=...
 
 ### Running the Application
 1.  **Backend:** `uvicorn app.main:app --reload --port 8000`
-2.  **Admin:** `streamlit run admin_panel/app.py`
+2.  **Admin:** `streamlit run admin_panel/main.py`
 
 ```

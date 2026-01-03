@@ -358,6 +358,16 @@ def load_css(lang_code, T):
             gap: 4px;
         }}
         
+        /* --- Circular Profile Image --- */
+        .pro-circle-img {{
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            box-shadow: var(--shadow-sm);
+        }}
+        
         .material-symbols-rounded {{
             font-size: 1.2em;
         }}
