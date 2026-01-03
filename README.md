@@ -23,7 +23,9 @@
 - **Interactive UI:** Uses native WhatsApp buttons for seamless confirmations and quick actions.
 - **Dynamic Personas:** The bot adopts the specific pricing, tone, and rules of the assigned professional.
 - **Availability Management:** Checks real-time calendar availability in MongoDB and books appointments autonomously using atomic locks.
-- **Stale Job Monitor:** Automatically detects "stuck" leads (no completion after 6-24h) and follows up with the pro or customer.
+- **Stale Job Monitor:** Automatically detects "stuck" leads (no completion after 4-24h) and follows up with the pro or customer.
+- **SOS Auto-Recovery (Healer):** Automatically reassigns leads to a new professional if the current one doesn't respond within the timeout (configurable, default 30 mins).
+- **SOS Admin Reporter:** Sends a batched summary of stuck leads to the administrator every 4 hours if reassignment fails.
 
 #### 📊 Admin Panel (Manager Facing)
 
@@ -41,6 +43,7 @@
 - **Media Storage:** Cloudinary
 - **Messaging:** WhatsApp (via Green API)
 - **Security:** Bcrypt (Admin Auth)
+- **Testing:** Pytest with AsyncIO & Mocking (Comprehensive suite covering AI, DB, and Business Logic)
 - **Deployment:** Docker / Heroku ready
 
 ---

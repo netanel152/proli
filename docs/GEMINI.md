@@ -46,7 +46,10 @@
     *   **Database:** Updates Lead with linked `pro_id`.
     *   **Booking:** `matching_service.book_slot_for_lead` ensures atomic slot reservation.
     *   **Notification (`app.services.notification_service`):** Sends lead details ONLY to the selected Pro with instructions to reply 'אשר' (Approve) or 'דחה' (Reject).
-6.  **Visualization:** Admin Panel (`admin_panel/dashboard_page.py`) reflects changes immediately.
+6.  **SOS Recovery (`app.services.monitor_service`):**
+    *   **Healer:** Automatically reassigns leads that remain in `NEW` or `CONTACTED` status beyond `WorkerConstants.SOS_TIMEOUT_MINUTES`.
+    *   **Reporter:** Batches leads that fail reassignment and notifies the admin.
+7.  **Visualization:** Admin Panel (`admin_panel/dashboard_page.py`) reflects changes immediately.
 
 ## 3. Project Structure
 
@@ -115,7 +118,9 @@ D:\Projects\fixi-backend\
 5.  **Infrastructure:** ✅ Resolved. Dockerized application with structured logging.
 6.  **AI Fallback:** ✅ Resolved. Implemented adaptive hierarchy via `settings.AI_MODELS`.
 7.  **Refactoring:** ✅ Resolved. Monolithic `workflow.py` split.
-8.  **New Features:** ✅ Implemented. Interactive buttons and calendar booking logic with comprehensive tests (`tests/test_booking_and_messaging.py`, `tests/test_admin_auth.py`).
+8.  **New Features:** ✅ Implemented. Interactive buttons and calendar booking logic.
+9.  **SOS Recovery:** ✅ Implemented. Automated reassignment and admin reporting.
+10. **Test Coverage:** ✅ Improved. Added comprehensive suite for SOS monitor, AI parsing, and full lifecycle.
 
 ### Environment Variables (`.env`)
 ```env
