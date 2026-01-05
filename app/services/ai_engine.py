@@ -7,6 +7,11 @@ from pydantic import BaseModel, Field
 from typing import Optional
 import traceback
 import json
+import tempfile
+import httpx
+import os
+import asyncio
+import time
 
 class ExtractedData(BaseModel):
     city: Optional[str] = Field(description="The extracted city/location from the user's input.")
@@ -26,7 +31,7 @@ class AIEngine:
         # Define the fallback hierarchy from settings
         self.model_hierarchy = settings.AI_MODELS
 
-    async def analyze_conversation(self, history: list, user_text: str, custom_system_prompt: str, media_data: bytes = None, media_mime_type: str = None, require_json: bool = True) -> AIResponse | str:
+    async def analyze_conversation(self, history: list, user_text: str, custom_system_prompt: str, media_data: bytes = None, media_mime_type: str = None, require_json: bool = True, media_url: str = None) -> AIResponse | str:
         contents = []
         for msg in history:
             parts = [types.Part(text=p) for p in msg.get("parts", [])]
@@ -34,9 +39,50 @@ class AIEngine:
         
         current_parts = []
         
-        if media_data and media_mime_type:
+        # Handle media: URL takes precedence for large files (audio/video), bytes for small (images)
+        if media_url and media_mime_type and ("audio" in media_mime_type or "video" in media_mime_type):
+             # For Audio/Video, we must use the File API to avoid size limits and timeouts
+             tmp_path = None
+             try:
+                 # Download to temp file and upload to Gemini
+                 async with httpx.AsyncClient() as client:
+                     async with client.stream('GET', media_url) as resp:
+                         if resp.status_code == 200:
+                             with tempfile.NamedTemporaryFile(delete=False, suffix=f".{media_mime_type.split('/')[-1]}") as tmp:
+                                 tmp_path = tmp.name
+                                 async for chunk in resp.aiter_bytes():
+                                     tmp.write(chunk)
+
+                             # Upload to Gemini
+                             uploaded_file = await self.client.aio.files.upload(path=tmp_path, config=types.UploadFileConfig(mime_type=media_mime_type))
+
+                             # Wait for processing if it's a video
+                             if "video" in media_mime_type:
+                                 while True:
+                                     file_status = await self.client.aio.files.get(name=uploaded_file.name)
+                                     if file_status.state.name == "ACTIVE":
+                                         break
+                                     elif file_status.state.name == "FAILED":
+                                         raise Exception("Gemini File Processing Failed")
+                                     logger.info(f"Waiting for video processing: {file_status.state.name}")
+                                     await asyncio.sleep(2)
+
+                             current_parts.append(types.Part.from_uri(file_uri=uploaded_file.uri, mime_type=media_mime_type))
+
+                         else:
+                             logger.error(f"Failed to download media for Gemini from {media_url}")
+             except Exception as e:
+                 logger.error(f"Error handling media URL for Gemini: {e}")
+             finally:
+                 # Ensure cleanup happens even if upload/processing fails
+                 if tmp_path and os.path.exists(tmp_path):
+                     os.unlink(tmp_path)
+
+        elif media_data and media_mime_type:
+            # Fallback to bytes for images or if URL failed/not provided
             current_parts.append(types.Part.from_bytes(data=media_data, mime_type=media_mime_type))
             
+        if media_mime_type:
             if "image" in media_mime_type:
                 user_text = (user_text or "") + f"\n{Messages.AISystemPrompts.ANALYZE_IMAGE}"
             elif "audio" in media_mime_type:

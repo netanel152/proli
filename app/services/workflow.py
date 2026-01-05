@@ -268,21 +268,45 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             await lead_manager.log_message(chat_id, "model", review_resp)
             return
 
-    # 3. Handle Media (Download if present)
+    # 3. Handle Media (Identify type, but defer heavy download to AI Engine for A/V)
     media_data = None
     media_mime = None
+
+    # We do a HEAD request or initial check to get MIME type, or just assume from extension if possible.
+    # But current flow downloads everything. Let's optimize:
+    # If it's audio/video, pass URL to AI Engine.
+    # If it's image, download here (bytes).
+
     if media_url:
         try:
             async with httpx.AsyncClient() as client:
-                resp = await client.get(media_url)
-                if resp.status_code == 200:
-                    media_data = resp.content
-                    media_mime = resp.headers.get("Content-Type", "image/jpeg")
-                    logger.info(f"Downloaded media: {len(media_data)} bytes, type: {media_mime}")
+                # First, check HEAD to get content type
+                head_resp = await client.head(media_url)
+                content_type = head_resp.headers.get("Content-Type", "")
+
+                # If HEAD fails or gives no type (common with some presigned URLs), we might need to GET first bytes.
+                # For safety/simplicity in this fix, we will DOWNLOAD if it looks like an image,
+                # but pass URL if it looks like audio/video.
+
+                # Heuristic: If we don't know type, we download.
+                # If we know it's audio/video, we pass URL.
+
+                if "audio" in content_type or "video" in content_type:
+                    media_mime = content_type
+                    # Do NOT download into memory.
+                    logger.info(f"Detected A/V media ({media_mime}). Passing URL to AI Engine.")
                 else:
-                    logger.warning(f"Failed to download media from {media_url}, status: {resp.status_code}")
+                    # It's an image or unknown. Download it.
+                    resp = await client.get(media_url)
+                    if resp.status_code == 200:
+                        media_data = resp.content
+                        media_mime = resp.headers.get("Content-Type", "image/jpeg")
+                        logger.info(f"Downloaded image media: {len(media_data)} bytes, type: {media_mime}")
+                    else:
+                        logger.warning(f"Failed to download media from {media_url}, status: {resp.status_code}")
+
         except Exception as e:
-            logger.error(f"Error downloading media: {e}")
+            logger.error(f"Error handling media check: {e}")
 
     # 4. Smart Dispatcher Phase
     history = await lead_manager.get_chat_history(chat_id)
@@ -295,6 +319,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         custom_system_prompt=dispatcher_prompt,
         media_data=media_data,
         media_mime_type=media_mime,
+        media_url=media_url, # Pass URL for A/V handling
         require_json=True
     )
     

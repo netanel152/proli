@@ -20,8 +20,10 @@ VALID_PAYLOAD = {
 
 @pytest.fixture
 def mock_background_tasks():
-    with patch("app.api.routes.webhook.process_incoming_message") as mock_process:
-        yield mock_process
+    # Patch the settings to match the test payload ID
+    with patch("app.core.config.settings.GREEN_API_ID", "7107387490"):
+        with patch("app.api.routes.webhook.process_incoming_message") as mock_process:
+            yield mock_process
 
 def test_webhook_valid_text_message(mock_background_tasks):
     mock_process = mock_background_tasks
