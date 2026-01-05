@@ -78,6 +78,7 @@ async def test_bad_input_file_type(mock_dependencies):
         mock_resp.content = b"%PDF..."
         mock_resp.headers = {"Content-Type": "application/pdf"}
         mock_client.get.return_value = mock_resp
+        mock_client.head.return_value = mock_resp
         
         # We want to ensure it doesn't crash and maybe passes info to AI
         mock_ai.analyze_conversation.return_value = AIResponse(
