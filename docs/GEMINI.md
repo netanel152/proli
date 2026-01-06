@@ -54,7 +54,7 @@
 ## 3. Project Structure
 
 ```text
-D:\Projects\fixi-backend\
+./
 ├── app/                            # FastAPI Backend Core
 │   ├── main.py                     # Entry point: App Config & Startup
 │   ├── scheduler.py                # APScheduler with Atomic Locking
@@ -62,11 +62,12 @@ D:\Projects\fixi-backend\
 │   │   └── routes/
 │   │       └── webhook.py          # Green API Webhook Endpoint
 │   ├── services/
-│   │   ├── workflow.py             # Main Orchestrator
+│   │   ├── workflow.py             # Main Orchestrator (Entry Point for Business Logic)
 │   │   ├── matching_service.py     # Pro Routing & Booking Logic
 │   │   ├── notification_service.py # WhatsApp Notification Logic
 │   │   ├── ai_engine.py            # Gemini Wrapper (Multimodal)
 │   │   ├── lead_manager.py         # DB Operations (CRUD)
+│   │   ├── monitor_service.py      # SOS Recovery & Stale Lead Monitor
 │   │   └── whatsapp_client.py      # Green API Wrapper
 │   └── core/
 │       ├── database.py             # MongoDB Connection (Async/Sync)
@@ -117,7 +118,7 @@ D:\Projects\fixi-backend\
 4.  **Error Handling:** ✅ Improved. Background tasks used for heavy lifting.
 5.  **Infrastructure:** ✅ Resolved. Dockerized application with structured logging.
 6.  **AI Fallback:** ✅ Resolved. Implemented adaptive hierarchy via `settings.AI_MODELS`.
-7.  **Refactoring:** ✅ Resolved. Monolithic `workflow.py` split.
+7.  **Refactoring:** ✅ Resolved. Modularized `workflow.py` by extracting logic into `ai_engine`, `matching_service`, and `lead_manager`.
 8.  **New Features:** ✅ Implemented. Interactive buttons and calendar booking logic.
 9.  **SOS Recovery:** ✅ Implemented. Automated reassignment and admin reporting.
 10. **Test Coverage:** ✅ Improved. Added comprehensive suite for SOS monitor, AI parsing, and full lifecycle.
