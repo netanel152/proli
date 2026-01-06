@@ -2,17 +2,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.constants import APIStatus
-from app.scheduler import start_scheduler
 from contextlib import asynccontextmanager
 from app.api.routes import webhook
+from app.core.redis_client import close_redis_client
 import uvicorn
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    start_scheduler()
     yield
     # Shutdown
+    await close_redis_client()
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 

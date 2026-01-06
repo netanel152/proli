@@ -11,7 +11,6 @@ import tempfile
 import httpx
 import os
 import asyncio
-import time
 
 class ExtractedData(BaseModel):
     city: Optional[str] = Field(description="The extracted city/location from the user's input.")
@@ -26,6 +25,11 @@ class AIResponse(BaseModel):
     is_deal: bool = Field(default=False, description="Set to True ONLY if the user has provided specific Time AND Address and agreed to book.")
 
 class AIEngine:
+    """
+    Handles interactions with Google Gemini API.
+    Designed to be run within a background worker (ARQ) due to potential latency
+    in media processing and LLM generation.
+    """
     def __init__(self):
         self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
         # Define the fallback hierarchy from settings

@@ -115,13 +115,14 @@
 ## ▶️ Running the App
 
 ### Option A: Docker (Recommended)
-This will spin up both the Backend and Admin Panel in isolated containers.
+This will spin up the Backend, Worker, and Admin Panel in isolated containers.
 
 ```bash
 docker-compose up --build -d
 ```
 *   **Backend:** http://localhost:8000
 *   **Admin Panel:** http://localhost:8501
+*   **Worker:** Runs in background (logs via `docker-compose logs -f worker`)
 
 ### Option B: Local Development
 
@@ -130,7 +131,12 @@ docker-compose up --build -d
 uvicorn app.main:app --reload --port 8000
 ```
 
-**2. Admin Panel (Streamlit):**
+**2. Worker (Background Jobs):**
+```bash
+python -m app.worker
+```
+
+**3. Admin Panel (Streamlit):**
 ```bash
 streamlit run admin_panel/main.py
 ```

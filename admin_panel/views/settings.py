@@ -48,3 +48,46 @@ def view_system_settings(T):
             )
             st.success(T["success_save"])
             st.rerun()
+
+    # --- Safety & Monitoring Settings ---
+    st.header(T.get("safety_title", "🛡️ Safety & Monitoring"))
+    st.caption(T.get("safety_desc", "Control the automated recovery and monitoring agents."))
+    
+    with st.container(border=True):
+        st.markdown("##### " + T.get("sos_controls", "SOS Controls"))
+        
+        col_sos1, col_sos2, col_sos3 = st.columns(3)
+        
+        # 1. Stale Monitor
+        mon_active = col_sos1.checkbox(
+            T.get("stale_mon_active", "Stale Job Monitor"), 
+            value=config.get("stale_monitor_active", True),
+            help="Checks for booked jobs that haven't been completed."
+        )
+        
+        # 2. SOS Healer
+        healer_active = col_sos2.checkbox(
+            T.get("sos_healer_active", "SOS Auto-Healer"), 
+            value=config.get("sos_healer_active", True),
+            help="Automatically reassigns leads that Pros ignored."
+        )
+        
+        # 3. SOS Reporter
+        reporter_active = col_sos3.checkbox(
+            T.get("sos_reporter_active", "SOS Admin Reporter"), 
+            value=config.get("sos_reporter_active", True),
+            help="Sends batched reports of stuck leads to Admin WhatsApp."
+        )
+        
+        if st.button(T.get("save_safety", "Save Safety Settings"), type="primary"):
+            settings_collection.update_one(
+                {"_id": "scheduler_config"},
+                {"$set": {
+                    "stale_monitor_active": mon_active,
+                    "sos_healer_active": healer_active,
+                    "sos_reporter_active": reporter_active
+                }},
+                upsert=True
+            )
+            st.success(T["success_save"])
+            st.rerun()

@@ -1,5 +1,6 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from app.core.database import users_collection, leads_collection, settings_collection
 from app.services.workflow import send_pro_reminder, send_customer_completion_check, whatsapp
 from app.services.monitor_service import check_and_reassign_stale_leads, send_periodic_admin_report
@@ -53,10 +54,12 @@ async def send_daily_reminders():
 async def monitor_unfinished_jobs():
     """
     Monitors 'booked' leads and takes action based on their age.
-    - 4-6 hours: Remind pro.
-    - 6-24 hours: Check with customer.
-    - >24 hours: Flag for admin.
     """
+    # 1. Check Config
+    config = await settings_collection.find_one({"_id": "scheduler_config"})
+    if config and not config.get("stale_monitor_active", True):
+        return
+
     now_il = datetime.now(IL_TZ)
     if not (8 <= now_il.hour < 21):
         return  # Safety: Only run during business hours
@@ -95,81 +98,94 @@ async def monitor_unfinished_jobs():
     if update_result.modified_count > 0:
         print(f"[Monitor] T3: Flagged {update_result.modified_count} leads for admin review.")
 
+# --- Wrappers for Imported Services ---
 
-async def scheduler_manager():
+async def run_sos_healer():
+    """Wrapper for SOS Auto-Healer with Toggle Check"""
+    config = await settings_collection.find_one({"_id": "scheduler_config"})
+    if config and not config.get("sos_healer_active", True):
+        return
+    await check_and_reassign_stale_leads()
+
+async def run_sos_reporter():
+    """Wrapper for SOS Admin Reporter with Toggle Check"""
+    config = await settings_collection.find_one({"_id": "scheduler_config"})
+    if config and not config.get("sos_reporter_active", True):
+        return
+    await send_periodic_admin_report()
+
+
+async def daily_reminders_job():
     """
-    Race-Condition Free Manager for daily reminders.
+    Daily Reminders Job (Cron).
     Uses atomic 'find_one_and_update' to check availability and lock the run in one step.
+    Runs once per day at the scheduled Cron time.
     """
     try:
         # 1. Ensure Config Exists (Upsert)
         await settings_collection.update_one(
             {"_id": "scheduler_config"},
-            {"$setOnInsert": {"run_time": "08:00", "is_active": True, "last_run_date": None}},
+            {"$setOnInsert": {
+                "run_time": "08:00", 
+                "is_active": True, 
+                "last_run_date": None,
+                "stale_monitor_active": True,
+                "sos_healer_active": True,
+                "sos_reporter_active": True
+            }},
             upsert=True
         )
 
-        # 2. Check for Manual Trigger (Atomic)
-        manual_trigger = await settings_collection.find_one_and_update(
-            {"_id": "scheduler_config", "trigger_now": True},
-            {"$set": {"trigger_now": False, "last_run_date": datetime.now(IL_TZ).strftime("%Y-%m-%d")}})
+        # 2. Scheduled Run (Atomic Check-and-Lock)
+        today_str = datetime.now(IL_TZ).strftime("%Y-%m-%d")
         
-        if manual_trigger:
-            print("🚀 [Scheduler] Manual trigger locked & executing daily reminders!")
-            await send_daily_reminders()
-            return
-
-        # 3. Scheduled Run (Atomic Check-and-Lock)
-        now_il = datetime.now(IL_TZ)
-        current_time_str = now_il.strftime("%H:%M")
-        today_str = now_il.strftime("%Y-%m-%d")
-        
+        # Only run if active and NOT run today yet
         result = await settings_collection.find_one_and_update(
             {
                 "_id": "scheduler_config",
                 "is_active": True,
-                "last_run_date": {"$ne": today_str},
-                "run_time": {"$lte": current_time_str}
+                "last_run_date": {"$ne": today_str}
             },
-            {"$set": {"last_run_date": today_str}})
+            {"$set": {"last_run_date": today_str}}
+        )
 
         if result:
-            print(f"⏰ [Scheduler] Time to run daily reminders! Locked job for {today_str}.")
+            print(f"⏰ [Scheduler] Executing daily reminders for {today_str}.")
             await send_daily_reminders()
 
     except Exception as e:
-        print(f"❌ [Scheduler Manager Error] {e}")
+        print(f"❌ [Scheduler Error] {e}")
 
 def start_scheduler():
     scheduler = AsyncIOScheduler(timezone=IL_TZ)
     
-    # Job 1: Daily "Good Morning" Reminders
+    # Job 1: Daily "Good Morning" Reminders (Cron)
     scheduler.add_job(
-        scheduler_manager,
-        IntervalTrigger(seconds=60),
-        id="scheduler_manager",
+        daily_reminders_job,
+        CronTrigger(hour=8, minute=0, timezone=IL_TZ),
+        id="daily_reminders_job",
         replace_existing=True
     )
 
-    # Job 2: Stale Job Monitor
+    # Job 2: Stale Job Monitor (Wrapped)
     scheduler.add_job(
         monitor_unfinished_jobs,
-        IntervalTrigger(minutes=30), # Run every 30 minutes
+        IntervalTrigger(minutes=30),
         id="stale_job_monitor",
         replace_existing=True
     )
 
-    # Job 3: SOS Auto-Healer (Reassigns stale leads)
+    # Job 3: SOS Auto-Healer (Wrapped)
     scheduler.add_job(
-        check_and_reassign_stale_leads,
+        run_sos_healer,
         IntervalTrigger(minutes=10),
         id="sos_auto_healer",
         replace_existing=True
     )
 
-    # Job 4: SOS Admin Reporter (Summarizes stuck leads)
+    # Job 4: SOS Admin Reporter (Wrapped)
     scheduler.add_job(
-        send_periodic_admin_report,
+        run_sos_reporter,
         IntervalTrigger(hours=4),
         id="sos_admin_reporter",
         replace_existing=True
@@ -177,3 +193,4 @@ def start_scheduler():
 
     scheduler.start()
     print("🚀 APScheduler Started with all jobs!")
+    return scheduler

@@ -6,6 +6,8 @@ services:
     build: .
     container_name: core_brain
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+    ports:
+      - "8000:8000"
     env_file:
       - .env
     environment:
@@ -20,12 +22,37 @@ services:
       - fixi_network
 
   # ---------------------------------------------------------------------------
+  # Task Worker (ARQ) - Background Processing
+  # ---------------------------------------------------------------------------
+  worker:
+    build: .
+    container_name: task_worker
+    command: python -m app.worker
+    env_file:
+      - .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/fixi_db
+      - REDIS_HOST=redis
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+    restart: always
+    networks:
+      - fixi_network
+
+  # ---------------------------------------------------------------------------
   # Admin Panel (Streamlit) - The Dashboard
   # ---------------------------------------------------------------------------
   admin:
     build: .
     container_name: admin_panel
     command: streamlit run admin_panel/main.py --server.port 8501 --server.address 0.0.0.0
+    ports:
+      - "8501:8501"
     env_file:
       - .env
     environment:
@@ -59,6 +86,25 @@ services:
       - fixi_network
 
   # ---------------------------------------------------------------------------
+  # Redis (Cache & Task Queue)
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:alpine
+    container_name: redis_cache
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: always
+    networks:
+      - fixi_network
+
+  # ---------------------------------------------------------------------------
   # Nginx Reverse Proxy
   # ---------------------------------------------------------------------------
   nginx:
@@ -77,6 +123,7 @@ services:
 
 volumes:
   mongo_data:
+  redis_data:
 
 networks:
   fixi_network:

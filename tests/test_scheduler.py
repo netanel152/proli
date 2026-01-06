@@ -19,6 +19,10 @@ def mock_collections():
         mock_leads.update_many = AsyncMock()
         mock_leads.update_many.return_value.modified_count = 0
         
+        # Setup settings mock
+        mock_settings.find_one = AsyncMock()
+        mock_settings.find_one.return_value = {"stale_monitor_active": True, "sos_healer_active": True, "sos_reporter_active": True}
+        
         yield mock_leads, mock_users, mock_settings
 
 @pytest.fixture
