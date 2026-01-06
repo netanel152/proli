@@ -39,3 +39,7 @@ watchdog==3.0.0
 
 # Seeding
 Faker==23.2.0
+
+# Task Queue & Caching
+redis>=5.0.1
+arq>=0.25.0

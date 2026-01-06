@@ -35,6 +35,7 @@ class InstanceData(BaseSchema):
 
 class WebhookPayload(BaseSchema):
     typeWebhook: str
+    idMessage: Optional[str] = None
     instanceData: Optional[InstanceData] = None
     senderData: Optional[SenderData] = None
     messageData: Optional[MessageData] = None

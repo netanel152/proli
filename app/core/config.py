@@ -7,6 +7,12 @@ class Settings(BaseSettings):
     MONGO_URI: str
     MONGO_TEST_URI: str | None = None
     ADMIN_PASSWORD: str | None = None
+    
+    # Redis
+    REDIS_HOST: str = "redis"
+    REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
+    
     CLOUDINARY_CLOUD_NAME: str
     CLOUDINARY_API_KEY: str
     CLOUDINARY_API_SECRET: str

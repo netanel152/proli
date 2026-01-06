@@ -6,12 +6,14 @@
 
 **אפשרות א' (מומלץ): Docker Containers**
 *   **Web (Backend):** קונטיינר המריץ את `uvicorn`.
+*   **Worker:** קונטיינר המריץ את תהליכי הרקע (`arq` + `scheduler`).
 *   **Admin:** קונטיינר המריץ את `streamlit`.
-*   שניהם מנוהלים דרך `docker-compose.yml` ומשתפים רשת פנימית.
+*   כולם מנוהלים דרך `docker-compose.yml` ומשתפים רשת פנימית.
 
 **אפשרות ב': ריצה מקומית (Local)**
-1. **שרת ה-Backend (`uvicorn`):** אחראי על קבלת Webhooks, הרצת מנוע הניתוב (Routing Engine), וניהול התקשורת עם Gemini.
-2. **ממשק הניהול (`streamlit`):** דשבורד ויזואלי למנהל המערכת.
+1. **שרת ה-Backend (`uvicorn`):** אחראי על קבלת Webhooks וניהול התקשורת עם Gemini.
+2. **ה-Worker (`python -m app.worker`):** אחראי על עיבוד הודעות כבד, תזמון משימות (Scheduler), ומערכת ה-SOS.
+3. **ממשק הניהול (`streamlit`):** דשבורד ויזואלי למנהל המערכת.
 
 ## ניהול וניטור (Logs & Monitoring)
 
@@ -23,6 +25,7 @@ docker-compose logs -f
 
 # צפייה בלוגים של שירות ספציפי
 docker-compose logs -f web    # Backend
+docker-compose logs -f worker # Background Worker
 docker-compose logs -f admin  # Admin Panel
 ```
 

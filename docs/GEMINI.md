@@ -122,6 +122,8 @@
 8.  **New Features:** ✅ Implemented. Interactive buttons and calendar booking logic.
 9.  **SOS Recovery:** ✅ Implemented. Automated reassignment and admin reporting.
 10. **Test Coverage:** ✅ Improved. Added comprehensive suite for SOS monitor, AI parsing, and full lifecycle.
+11. **Worker Resilience:** ✅ Resolved. Added DB connectivity check on startup (ping) to prevent silent failures.
+12. **Architecture:** ✅ Resolved. Moved Scheduler from API to Worker process for better separation of concerns.
 
 ### Environment Variables (`.env`)
 ```env
@@ -137,6 +139,7 @@ ADMIN_PASSWORD=...
 
 ### Running the Application
 1.  **Backend:** `uvicorn app.main:app --reload --port 8000`
-2.  **Admin:** `streamlit run admin_panel/main.py`
+2.  **Worker:** `python -m app.worker`
+3.  **Admin:** `streamlit run admin_panel/main.py`
 
 ```
