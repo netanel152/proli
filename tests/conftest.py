@@ -100,7 +100,7 @@ async def integration_db(monkeypatch):
     if not settings.MONGO_TEST_URI:
         pytest.skip("MONGO_TEST_URI is not set in environment/config")
 
-    client = AsyncIOMotorClient(settings.MONGO_TEST_URI, tlsCAFile=certifi.where())
+    client = AsyncIOMotorClient(settings.MONGO_TEST_URI)
     db = client.fixi_test_db
 
     # Define Collections

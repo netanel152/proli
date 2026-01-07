@@ -6,11 +6,11 @@ import httpx
 
 @pytest.fixture
 def mock_dependencies():
-    with patch("app.services.workflow.lead_manager") as mock_lm, \
-         patch("app.services.workflow.whatsapp") as mock_wa, \
-         patch("app.services.workflow.ai") as mock_ai, \
-         patch("app.services.workflow.users_collection") as mock_users, \
-         patch("app.services.workflow.leads_collection") as mock_leads:
+    with patch("app.services.workflow_service.lead_manager") as mock_lm, \
+         patch("app.services.workflow_service.whatsapp") as mock_wa, \
+         patch("app.services.workflow_service.ai") as mock_ai, \
+         patch("app.services.workflow_service.users_collection") as mock_users, \
+         patch("app.services.workflow_service.leads_collection") as mock_leads:
         
         # Defaults
         mock_lm.get_chat_history = AsyncMock(return_value=[])

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Response, status
 from app.core.database import check_db_connection
 from app.core.redis_client import get_redis_client
-from app.services.whatsapp_client import WhatsAppClient
+from app.services.whatsapp_client_service import WhatsAppClient
 from app.core.logger import logger
 from typing import Dict
 

@@ -6,7 +6,7 @@ from app.services.ai_engine_service import AIEngine, AIResponse, ExtractedData
 @pytest.fixture
 def ai_engine():
     # Patch settings to avoid needing real API key
-    with patch("app.services.ai_engine.settings") as mock_settings:
+    with patch("app.services.ai_engine_service.settings") as mock_settings:
         mock_settings.GEMINI_API_KEY = "fake_key"
         mock_settings.AI_MODELS = ["gemini-2.5-flash-lite"] # Mock a single model for testing
         # Patch genai.Client to prevent real network calls during init
