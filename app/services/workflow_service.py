@@ -329,6 +329,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     
     dispatcher_prompt = Prompts.DISPATCHER_SYSTEM
 
+    logger.info("Starting AI Dispatcher analysis...")
     dispatcher_response: AIResponse = await ai.analyze_conversation(
         history=history, 
         user_text=user_text or "", 
@@ -343,7 +344,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     extracted_issue = dispatcher_response.extracted_data.issue
     transcription = dispatcher_response.transcription
     
-    logger.info(f"Dispatcher analysis: City={extracted_city}, Issue={extracted_issue}, Transcr={transcription}")
+    logger.info(f"Dispatcher analysis result: City='{extracted_city}', Issue='{extracted_issue}', Transcription_Len={len(transcription) if transcription else 0}")
 
     # 5. Logic Gate: Dispatcher vs Professional
     best_pro = None
