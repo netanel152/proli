@@ -6,9 +6,9 @@ from app.services.lead_manager_service import LeadManager
 
 @pytest.fixture
 def mock_lead_manager_db():
-    with patch("app.services.lead_manager.leads_collection") as mock_leads, \
-         patch("app.services.lead_manager.messages_collection") as mock_messages, \
-         patch("app.services.lead_manager.ContextManager") as mock_context_manager:
+    with patch("app.services.lead_manager_service.leads_collection") as mock_leads, \
+         patch("app.services.lead_manager_service.messages_collection") as mock_messages, \
+         patch("app.services.lead_manager_service.ContextManager") as mock_context_manager:
         
         # Setup AsyncMocks for common methods
         mock_leads.insert_one = AsyncMock()

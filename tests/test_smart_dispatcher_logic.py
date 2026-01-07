@@ -5,11 +5,11 @@ from app.services.ai_engine_service import AIResponse, ExtractedData
 
 @pytest.fixture
 def mock_workflow_dependencies():
-    with patch("app.services.workflow.ai", new_callable=MagicMock) as mock_ai, \
-         patch("app.services.workflow.users_collection") as mock_users, \
-         patch("app.services.workflow.whatsapp") as mock_whatsapp, \
-         patch("app.services.workflow.lead_manager") as mock_lm, \
-         patch("app.services.workflow.leads_collection") as mock_leads, \
+    with patch("app.services.workflow_service.ai", new_callable=MagicMock) as mock_ai, \
+         patch("app.services.workflow_service.users_collection") as mock_users, \
+         patch("app.services.workflow_service.whatsapp") as mock_whatsapp, \
+         patch("app.services.workflow_service.lead_manager") as mock_lm, \
+         patch("app.services.workflow_service.leads_collection") as mock_leads, \
          patch("app.services.matching_service.users_collection", new=mock_users), \
          patch("app.services.matching_service.leads_collection", new=mock_leads):
         
