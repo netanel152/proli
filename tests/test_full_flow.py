@@ -1,6 +1,6 @@
 import pytest
-from app.services.workflow import process_incoming_message
-from app.services.ai_engine import AIResponse, ExtractedData
+from app.services.workflow_service import process_incoming_message
+from app.services.ai_engine_service import AIResponse, ExtractedData
 from unittest.mock import MagicMock, AsyncMock
 
 # --- HELPERS ---
@@ -12,8 +12,8 @@ def setup_mock_ai(monkeypatch, responses):
     mock_ai = MagicMock()
     mock_ai.analyze_conversation = AsyncMock(side_effect=responses)
     
-    import app.services.workflow
-    monkeypatch.setattr(app.services.workflow, "ai", mock_ai)
+    import app.services.workflow_service
+    monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
     return mock_ai
 
 @pytest.mark.asyncio

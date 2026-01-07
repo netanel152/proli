@@ -40,6 +40,7 @@
 - **Frontend (Admin):** Streamlit
 - **AI Engine:** Google Gemini Adaptive (Flash Lite 2.5 → Flash 2.5 → Flash 1.5 Fallback)
 - **Database:** MongoDB Atlas (Async via `motor`)
+- **Cache:** Redis (Context & State)
 - **Media Storage:** Cloudinary
 - **Messaging:** WhatsApp (via Green API)
 - **Security:** Bcrypt (Admin Auth)

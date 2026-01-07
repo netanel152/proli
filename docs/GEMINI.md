@@ -17,6 +17,7 @@
 *   **Web Framework:** **FastAPI** (Async, handling Webhooks)
 *   **Admin UI:** **Streamlit** (Rapid data app development) with `extra_streamlit_components` for cookie management.
 *   **Database:** **MongoDB** (Atlas) - using `motor` (Async) for the app and `pymongo` (Sync) for scripts.
+*   **Cache & State:** **Redis** (Context Caching & User State Management).
 *   **AI Engine:** **Google Gemini Adaptive** (Flash Lite 2.5 -> Flash 2.5 -> Flash 1.5) - Supports Vision, Video & Audio.
 *   **HTTP Client:** **HTTPX** (Async requests for media downloading).
 *   **Media Storage:** **Cloudinary** (For future media handling/persistence).
@@ -124,6 +125,8 @@
 10. **Test Coverage:** ✅ Improved. Added comprehensive suite for SOS monitor, AI parsing, and full lifecycle.
 11. **Worker Resilience:** ✅ Resolved. Added DB connectivity check on startup (ping) to prevent silent failures.
 12. **Architecture:** ✅ Resolved. Moved Scheduler from API to Worker process for better separation of concerns.
+13. **Context Caching:** ✅ Resolved. Implemented Redis "Write-Through" cache for chat history to improve performance.
+14. **State Management:** ✅ Resolved. Implemented Redis-based `StateManager` to control user flows (Idle, Pro Mode, Customer Flow).
 
 ### Environment Variables (`.env`)
 ```env

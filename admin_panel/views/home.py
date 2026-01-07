@@ -13,7 +13,7 @@ from app.core.constants import AdminDefaults, Defaults
 
 # Allow imports from the root directory to access the 'app' module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from app.services.workflow import send_customer_completion_check
+from app.services.workflow_service import send_customer_completion_check
 
 def view_leads_dashboard(T):
     st.title(T["title_dashboard"])

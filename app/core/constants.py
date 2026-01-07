@@ -9,6 +9,14 @@ class LeadStatus(str, Enum):
     CLOSED = "closed"
     CANCELLED = "cancelled"
 
+class UserStates(str, Enum):
+    IDLE = "idle"                      # Default state
+    PRO_MODE = "pro_mode"              # User is acting as a Professional
+    CUSTOMER_FLOW = "customer_flow"    # User is in a booking flow
+    AWAITING_ADDRESS = "awaiting_address"
+    AWAITING_MEDIA = "awaiting_media"
+    AWAITING_TIME = "awaiting_time"
+
 class WorkerConstants:
     MAX_PRO_LOAD = 3
     DB_QUERY_LIMIT = 100

@@ -1,6 +1,6 @@
 from arq.connections import RedisSettings
 from app.core.config import settings
-from app.services.workflow import process_incoming_message
+from app.services.workflow_service import process_incoming_message
 from app.core.logger import logger
 from app.core.database import client
 from app.scheduler import start_scheduler

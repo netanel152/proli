@@ -2,12 +2,13 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 from bson import ObjectId
-from app.services.lead_manager import LeadManager
+from app.services.lead_manager_service import LeadManager
 
 @pytest.fixture
 def mock_lead_manager_db():
     with patch("app.services.lead_manager.leads_collection") as mock_leads, \
-         patch("app.services.lead_manager.messages_collection") as mock_messages:
+         patch("app.services.lead_manager.messages_collection") as mock_messages, \
+         patch("app.services.lead_manager.ContextManager") as mock_context_manager:
         
         # Setup AsyncMocks for common methods
         mock_leads.insert_one = AsyncMock()
@@ -22,12 +23,17 @@ def mock_lead_manager_db():
         mock_cursor.limit.return_value = mock_cursor
         mock_cursor.to_list = AsyncMock()
         mock_messages.find.return_value = mock_cursor
+
+        # Mock ContextManager methods
+        mock_context_manager.get_history = AsyncMock(return_value=None) # Default to Cache Miss
+        mock_context_manager.update_history = AsyncMock()
+        mock_context_manager.set_history = AsyncMock()
         
-        yield mock_leads, mock_messages
+        yield mock_leads, mock_messages, mock_context_manager
 
 @pytest.mark.asyncio
 async def test_create_lead_success(mock_lead_manager_db):
-    mock_leads, _ = mock_lead_manager_db
+    mock_leads, _, _ = mock_lead_manager_db
     lead_manager = LeadManager()
     
     # Setup mock return for insert_one
@@ -51,7 +57,7 @@ async def test_create_lead_success(mock_lead_manager_db):
 
 @pytest.mark.asyncio
 async def test_create_lead_flexible_parsing(mock_lead_manager_db):
-    mock_leads, _ = mock_lead_manager_db
+    mock_leads, _, _ = mock_lead_manager_db
     lead_manager = LeadManager()
     
     mock_leads.insert_one.return_value.inserted_id = ObjectId("507f1f77bcf86cd799439011")
@@ -66,7 +72,7 @@ async def test_create_lead_flexible_parsing(mock_lead_manager_db):
 
 @pytest.mark.asyncio
 async def test_update_lead_status(mock_lead_manager_db):
-    mock_leads, _ = mock_lead_manager_db
+    mock_leads, _, _ = mock_lead_manager_db
     lead_manager = LeadManager()
     
     lead_id = "507f1f77bcf86cd799439011"
@@ -84,8 +90,8 @@ async def test_update_lead_status(mock_lead_manager_db):
     assert update["$set"]["pro_id"] == pro_id
 
 @pytest.mark.asyncio
-async def test_get_chat_history(mock_lead_manager_db):
-    _, mock_messages = mock_lead_manager_db
+async def test_get_chat_history_cache_miss(mock_lead_manager_db):
+    _, mock_messages, mock_context_manager = mock_lead_manager_db
     lead_manager = LeadManager()
     
     # Mock data returned from DB
@@ -97,17 +103,42 @@ async def test_get_chat_history(mock_lead_manager_db):
     
     history = await lead_manager.get_chat_history("123", limit=10)
     
+    # Verify Cache Miss behavior
+    mock_context_manager.get_history.assert_called_once_with("123")
+    mock_messages.find.assert_called_once()
+    mock_context_manager.set_history.assert_called_once()
+
     assert len(history) == 2
     assert history[0]["role"] == "user"
     assert history[0]["parts"] == ["Hi"]
     assert history[1]["role"] == "model"
     assert history[1]["parts"] == ["Hello"]
+
+@pytest.mark.asyncio
+async def test_get_chat_history_cache_hit(mock_lead_manager_db):
+    _, mock_messages, mock_context_manager = mock_lead_manager_db
+    lead_manager = LeadManager()
     
-    mock_messages.find.assert_called_once()
+    # Mock data returned from Cache
+    cached_history = [
+        {"role": "user", "parts": ["Hi Cached"]},
+        {"role": "model", "parts": ["Hello Cached"]}
+    ]
+    mock_context_manager.get_history.return_value = cached_history
+    
+    history = await lead_manager.get_chat_history("123", limit=10)
+    
+    # Verify Cache Hit behavior
+    mock_context_manager.get_history.assert_called_once_with("123")
+    mock_messages.find.assert_not_called()
+    mock_context_manager.set_history.assert_not_called()
+
+    assert len(history) == 2
+    assert history[0]["parts"] == ["Hi Cached"]
 
 @pytest.mark.asyncio
 async def test_log_message(mock_lead_manager_db):
-    _, mock_messages = mock_lead_manager_db
+    _, mock_messages, mock_context_manager = mock_lead_manager_db
     lead_manager = LeadManager()
     
     await lead_manager.log_message("123", "user", "Test message")
@@ -120,3 +151,6 @@ async def test_log_message(mock_lead_manager_db):
     assert doc["role"] == "user"
     assert doc["text"] == "Test message"
     assert "timestamp" in doc
+    
+    # Verify Cache Update
+    mock_context_manager.update_history.assert_called_once_with("123", "user", "Test message")

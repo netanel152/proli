@@ -50,14 +50,14 @@ def patch_dependencies(request, monkeypatch, mock_db):
     monkeypatch.setattr(app.scheduler, "settings_collection", settings_col)
 
     # Patch Lead Manager Collections (Since it does 'from ... import ...')
-    import app.services.lead_manager
-    monkeypatch.setattr(app.services.lead_manager, "leads_collection", leads)
-    monkeypatch.setattr(app.services.lead_manager, "messages_collection", messages)
+    import app.services.lead_manager_service
+    monkeypatch.setattr(app.services.lead_manager_service, "leads_collection", leads)
+    monkeypatch.setattr(app.services.lead_manager_service, "messages_collection", messages)
 
     # Patch Workflow Collections
-    import app.services.workflow
-    monkeypatch.setattr(app.services.workflow, "users_collection", users)
-    monkeypatch.setattr(app.services.workflow, "leads_collection", leads)
+    import app.services.workflow_service
+    monkeypatch.setattr(app.services.workflow_service, "users_collection", users)
+    monkeypatch.setattr(app.services.workflow_service, "leads_collection", leads)
 
     # Patch Matching Service Collections
     import app.services.matching_service
@@ -75,16 +75,16 @@ def patch_dependencies(request, monkeypatch, mock_db):
     mock_whatsapp.send_location_link = AsyncMock()
 
     mock_ai = MagicMock()
-    from app.services.ai_engine import AIResponse, ExtractedData
+    from app.services.ai_engine_service import AIResponse, ExtractedData
     mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
         reply_to_user="Mock AI Response",
         extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Tel Aviv, Rotshild 10", appointment_time="10:00"),
         transcription=None
     ))
 
-    import app.services.workflow
-    monkeypatch.setattr(app.services.workflow, "whatsapp", mock_whatsapp)
-    monkeypatch.setattr(app.services.workflow, "ai", mock_ai)
+    import app.services.workflow_service
+    monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_whatsapp)
+    monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
     
     # Also patch scheduler's whatsapp instance if it's imported separately
     monkeypatch.setattr(app.scheduler, "whatsapp", mock_whatsapp)
@@ -126,14 +126,14 @@ async def integration_db(monkeypatch):
     monkeypatch.setattr(app.core.database, "settings_collection", settings_col)
 
     # Patch Lead Manager
-    import app.services.lead_manager
-    monkeypatch.setattr(app.services.lead_manager, "leads_collection", leads)
-    monkeypatch.setattr(app.services.lead_manager, "messages_collection", messages)
+    import app.services.lead_manager_service
+    monkeypatch.setattr(app.services.lead_manager_service, "leads_collection", leads)
+    monkeypatch.setattr(app.services.lead_manager_service, "messages_collection", messages)
 
     # --- Patch Workflow Service ---
-    import app.services.workflow
-    monkeypatch.setattr(app.services.workflow, "users_collection", users)
-    monkeypatch.setattr(app.services.workflow, "leads_collection", leads)
+    import app.services.workflow_service
+    monkeypatch.setattr(app.services.workflow_service, "users_collection", users)
+    monkeypatch.setattr(app.services.workflow_service, "leads_collection", leads)
 
     # --- Patch Matching Service ---
     import app.services.matching_service
@@ -149,17 +149,17 @@ async def integration_db(monkeypatch):
     mock_whatsapp = MagicMock()
     mock_whatsapp.send_message = AsyncMock()
     mock_whatsapp.send_location_link = AsyncMock()
-    monkeypatch.setattr(app.services.workflow, "whatsapp", mock_whatsapp)
+    monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_whatsapp)
 
     # Optional: Mock AI to avoid API costs during tests
     mock_ai = MagicMock()
-    from app.services.ai_engine import AIResponse, ExtractedData
+    from app.services.ai_engine_service import AIResponse, ExtractedData
     mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
         reply_to_user="Mock AI Response",
         extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Tel Aviv, Rotshild 10", appointment_time="10:00"),
         transcription=None
     ))
-    monkeypatch.setattr(app.services.workflow, "ai", mock_ai)
+    monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
 
     # Provide client and db to the test
     yield db

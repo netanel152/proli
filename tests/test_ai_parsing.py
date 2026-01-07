@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 import json
-from app.services.ai_engine import AIEngine, AIResponse, ExtractedData
+from app.services.ai_engine_service import AIEngine, AIResponse, ExtractedData
 
 @pytest.fixture
 def ai_engine():
