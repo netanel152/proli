@@ -146,7 +146,7 @@ def render_pro_form(T, pro_data=None):
                 final_image_url = existing_image_url
                 if uploaded_file:
                     try:
-                        from app.services.cloudinary_client import upload_image
+                        from app.services.cloudinary_client_service import upload_image
                         uploaded_url = upload_image(uploaded_file)
                         if uploaded_url:
                             final_image_url = uploaded_url

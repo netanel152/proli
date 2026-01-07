@@ -1,6 +1,6 @@
 import pytest
-from app.services.lead_manager import LeadManager
-from app.services.workflow import handle_pro_text_command, determine_best_pro, whatsapp
+from app.services.lead_manager_service import LeadManager
+from app.services.workflow_service import handle_pro_text_command, determine_best_pro, whatsapp
 from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 
@@ -134,14 +134,14 @@ async def test_pro_lifecycle_text_commands(integration_db):
     
     # Verify Customer was notified via the patched whatsapp mock
     # Access the mock dynamically from the module to ensure we get the patched version
-    from app.services import workflow
-    workflow.whatsapp.send_message.assert_called()
+    from app.services import workflow_service
+    workflow_service.whatsapp.send_message.assert_called()
     
     updated_lead = await integration_db.leads.find_one({"_id": lead_id})
     assert updated_lead["status"] == "booked"
 
     # Reset mock for next step
-    workflow.whatsapp.send_message.reset_mock()
+    workflow_service.whatsapp.send_message.reset_mock()
 
     # 4. Pro Sends "סיימתי" (Finish)
     response_text_finish = await handle_pro_text_command(pro_chat_id, "סיימתי")

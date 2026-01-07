@@ -4,6 +4,7 @@ from app.core.database import leads_collection, messages_collection
 from app.core.logger import logger
 from app.core.constants import LeadStatus
 from app.core.config import settings
+from app.services.context_manager_service import ContextManager
 
 class LeadManager:
     async def create_lead(self, deal_string: str, chat_id: str, pro_id: ObjectId = None) -> dict:
@@ -65,6 +66,7 @@ class LeadManager:
              return None
 
     async def log_message(self, chat_id: str, role: str, text: str):
+        # 1. MongoDB Insert (Safety)
         msg_doc = {
             "chat_id": chat_id,
             "role": role,
@@ -72,13 +74,33 @@ class LeadManager:
             "timestamp": datetime.now(timezone.utc)
         }
         await messages_collection.insert_one(msg_doc)
+        
+        # 2. Redis Cache Update (Performance)
+        await ContextManager.update_history(chat_id, role, text)
 
     async def get_chat_history(self, chat_id: str, limit: int = settings.MAX_CHAT_HISTORY) -> list:
+        # 1. Try fetching from ContextManager (Redis)
+        cached_history = await ContextManager.get_history(chat_id)
+        
+        if cached_history is not None:
+            # If cache hit, return it (slicing if needed to respect limit)
+            # Assuming cache stores full relevant history or we manage size elsewhere.
+            # If limit is smaller than cached history, we take the last 'limit' items.
+            if len(cached_history) > limit:
+                return cached_history[-limit:]
+            return cached_history
+
+        # 2. If empty/None, fetch from MongoDB
         cursor = messages_collection.find({"chat_id": chat_id}).sort("timestamp", 1).limit(limit)
         msgs = await cursor.to_list(length=limit)
+        
         formatted = []
         for m in msgs:
             formatted.append({"role": "user" if m["role"] == "user" else "model", "parts": [m["text"]]})
+        
+        # 3. Save to ContextManager
+        await ContextManager.set_history(chat_id, formatted)
+        
         return formatted
 
     async def get_lead_by_id(self, lead_id: str):

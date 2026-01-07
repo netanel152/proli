@@ -1,11 +1,13 @@
 from app.services.whatsapp_client import WhatsAppClient
-from app.services.ai_engine import AIEngine, AIResponse
-from app.services.lead_manager import LeadManager
+from app.services.ai_engine_service import AIEngine, AIResponse
+from app.services.lead_manager_service import LeadManager
+from app.services.state_manager_service import StateManager
+from app.services.context_manager_service import ContextManager
 from app.core.logger import logger
 from app.core.database import users_collection, leads_collection, reviews_collection
 from app.core.messages import Messages
 from app.core.prompts import Prompts
-from app.core.constants import LeadStatus, Defaults
+from app.core.constants import LeadStatus, Defaults, UserStates
 from app.services.matching_service import determine_best_pro, book_slot_for_lead
 from app.services.notification_service import send_pro_reminder
 from bson import ObjectId
@@ -235,6 +237,20 @@ async def handle_pro_text_command(chat_id: str, text: str):
     return response_text
 
 async def process_incoming_message(chat_id: str, user_text: str, media_url: str = None):
+    # Global Reset Check
+    normalized_text = (user_text or "").strip().lower()
+    if normalized_text in ["תפריט", "reset", "menu", "התחלה"]:
+         await StateManager.clear_state(chat_id)
+         await ContextManager.clear_context(chat_id)
+         await whatsapp.send_message(chat_id, "Reset successful")
+         return
+
+    # Get State
+    current_state = await StateManager.get_state(chat_id)
+    logger.info(f"🚦 User {chat_id} is in State: {current_state}")
+
+    # TODO: Handle specific states (PRO_MODE, AWAITING_ADDRESS) here
+
     # 0. Check for Pro Text Command
     if user_text:
         pro_resp = await handle_pro_text_command(chat_id, user_text)

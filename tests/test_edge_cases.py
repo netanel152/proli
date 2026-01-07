@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.services.workflow import process_incoming_message
-from app.services.ai_engine import AIResponse, ExtractedData
+from app.services.workflow_service import process_incoming_message
+from app.services.ai_engine_service import AIResponse, ExtractedData
 import httpx
 
 @pytest.fixture

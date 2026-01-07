@@ -2,7 +2,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 from app.core.database import users_collection, leads_collection, settings_collection
-from app.services.workflow import send_pro_reminder, send_customer_completion_check, whatsapp
+from app.services.workflow_service import send_pro_reminder, send_customer_completion_check, whatsapp
 from app.services.monitor_service import check_and_reassign_stale_leads, send_periodic_admin_report
 from datetime import datetime, timedelta
 from app.core.constants import LeadStatus
