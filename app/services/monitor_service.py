@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 from app.core.database import leads_collection, users_collection
 from app.core.constants import LeadStatus, WorkerConstants
 from app.core.logger import logger
-from app.services.whatsapp_client import WhatsAppClient
+from app.services.whatsapp_client_service import WhatsAppClient
 from app.services import matching_service
 from app.core.messages import Messages
 from bson import ObjectId

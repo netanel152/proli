@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.constants import APIStatus
 from contextlib import asynccontextmanager
-from app.api.routes import webhook
+from app.api.routes import webhook, health
 from app.core.redis_client import close_redis_client
 import uvicorn
 
@@ -27,10 +27,7 @@ app.add_middleware(
 
 # --- Routers ---
 app.include_router(webhook.router)
-
-@app.get("/")
-def health_check():
-    return {"status": APIStatus.RUNNING}
+app.include_router(health.router)
 
 if __name__ == "__main__":
     uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
