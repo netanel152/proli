@@ -1,4 +1,4 @@
-from app.services.whatsapp_client import WhatsAppClient
+from app.services.whatsapp_client_service import WhatsAppClient
 from app.services.ai_engine_service import AIEngine, AIResponse
 from app.services.lead_manager_service import LeadManager
 from app.services.state_manager_service import StateManager

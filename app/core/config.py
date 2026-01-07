@@ -6,6 +6,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str
     MONGO_URI: str
     MONGO_TEST_URI: str | None = None
+    MONGO_MAX_POOL_SIZE: int = 100
+    MONGO_MIN_POOL_SIZE: int = 10
+    MONGO_MAX_IDLE_TIME_MS: int = 30000
     ADMIN_PASSWORD: str | None = None
     
     # Redis
@@ -23,6 +26,8 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Fixi Bot Server"
     BACKEND_CORS_ORIGINS: list[str] = ["*"]
     MAX_CHAT_HISTORY: int = 20
+    ENVIRONMENT: str = "development"  # "production" or "development"
+    LOG_LEVEL: str = "INFO"
     
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

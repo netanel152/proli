@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
-from app.services import matching_service, whatsapp_client
+from app.services import matching_service, whatsapp_client_service
 
 # --- Task 1: Test Booking Logic ---
 
@@ -88,7 +88,7 @@ async def test_send_interactive_buttons_payload():
     """
     Verify that send_interactive_buttons constructs the correct JSON payload.
     """
-    client = whatsapp_client.WhatsAppClient()
+    client = whatsapp_client_service.WhatsAppClient()
     
     # Mock data
     to_number = "123456789"

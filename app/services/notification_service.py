@@ -1,4 +1,4 @@
-from app.services.whatsapp_client import WhatsAppClient
+from app.services.whatsapp_client_service import WhatsAppClient
 from app.core.database import leads_collection, users_collection
 from app.core.logger import logger
 from app.core.messages import Messages

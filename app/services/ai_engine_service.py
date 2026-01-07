@@ -9,8 +9,8 @@ import traceback
 import json
 import tempfile
 import httpx
-import os
 import asyncio
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 class ExtractedData(BaseModel):
     city: Optional[str] = Field(description="The extracted city/location from the user's input.")

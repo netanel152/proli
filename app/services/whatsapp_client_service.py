@@ -1,5 +1,5 @@
 import httpx
-from tenacity import retry, stop_after_attempt, wait_fixed
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from app.core.config import settings
 from app.core.logger import logger
 import urllib.parse
@@ -9,7 +9,11 @@ class WhatsAppClient:
         self.api_url = f"https://api.green-api.com/waInstance{settings.GREEN_API_ID}"
         self.api_token = settings.GREEN_API_TOKEN
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    @retry(
+        retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
     async def _send_request(self, endpoint: str, payload: dict):
         url = f"{self.api_url}/{endpoint}/{self.api_token}"
         async with httpx.AsyncClient() as client:
@@ -17,7 +21,11 @@ class WhatsAppClient:
             resp.raise_for_status()
             return resp.json()
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    @retry(
+        retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
     async def send_message(self, chat_id: str, text: str):
         payload = {"chatId": chat_id, "message": text}
         try:
@@ -27,14 +35,22 @@ class WhatsAppClient:
             logger.error(f"Failed to send message to {chat_id}: {e}")
             raise
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    @retry(
+        retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
     async def send_location_link(self, chat_id: str, address: str, text_prefix: str = "Navigate here:"):
         encoded_address = urllib.parse.quote(address)
         waze_url = f"https://waze.com/ul?q={encoded_address}"
         message = f"{text_prefix}\n{waze_url}"
         await self.send_message(chat_id, message)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+    @retry(
+        retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
     async def send_interactive_buttons(self, to_number: str, text: str, buttons: list[dict]) -> dict:
         """
         Sends an interactive message with buttons.

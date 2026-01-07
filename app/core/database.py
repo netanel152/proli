@@ -8,7 +8,13 @@ ca_file = certifi.where() if "+srv" in settings.MONGO_URI else None
 kwargs = {"tlsCAFile": ca_file} if ca_file else {}
 
 # --- Async Client (Motor) for FastAPI ---
-client = AsyncIOMotorClient(settings.MONGO_URI, **kwargs)
+client = AsyncIOMotorClient(
+    settings.MONGO_URI,
+    maxPoolSize=settings.MONGO_MAX_POOL_SIZE,
+    minPoolSize=settings.MONGO_MIN_POOL_SIZE,
+    maxIdleTimeMS=settings.MONGO_MAX_IDLE_TIME_MS,
+    **kwargs
+)
 db = client.fixi_db
 
 # Async Collections
