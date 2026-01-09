@@ -10,7 +10,7 @@ import pytz
 load_dotenv()
 
 # Standalone MongoDB Connection for Admin Panel
-mongo_uri = os.getenv("MONGO_URI")
+mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or os.getenv("MONGO_URL")
 if not mongo_uri:
     # Fallback to local if env var is missing (safety)
     mongo_uri = "mongodb://localhost:27017/fixi_db"

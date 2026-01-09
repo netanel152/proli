@@ -14,7 +14,7 @@ async def get_redis_client() -> Redis:
     """
     global _redis_client
     if _redis_client is None:
-        redis_url = f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+        redis_url = settings.REDIS_URL or f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
         try:
             _redis_client = from_url(
                 redis_url, 
@@ -36,13 +36,16 @@ async def get_arq_pool():
     global _arq_pool
     if _arq_pool is None:
         try:
-            _arq_pool = await create_pool(
-                RedisSettings(
-                    host=settings.REDIS_HOST,
-                    port=settings.REDIS_PORT,
-                    database=settings.REDIS_DB
+            if settings.REDIS_URL:
+                _arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+            else:
+                _arq_pool = await create_pool(
+                    RedisSettings(
+                        host=settings.REDIS_HOST,
+                        port=settings.REDIS_PORT,
+                        database=settings.REDIS_DB
+                    )
                 )
-            )
             logger.info("ARQ Redis pool created.")
         except Exception as e:
             logger.error(f"Could not create ARQ pool: {e}")

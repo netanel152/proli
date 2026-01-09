@@ -29,4 +29,5 @@ USER appuser
 # Expose ports
 EXPOSE 8000 8501
 
-# No default CMD - controlled by docker-compose
+# Default command runs the API service
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
