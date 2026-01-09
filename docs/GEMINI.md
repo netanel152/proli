@@ -22,35 +22,31 @@
 *   **HTTP Client:** **HTTPX** (Async requests for media downloading).
 *   **Media Storage:** **Cloudinary** (For future media handling/persistence).
 *   **Messaging Provider:** **Green API** (WhatsApp wrapper with Interactive Buttons).
-*   **Scheduling:** **APScheduler** with **Atomic Locking** (Race-condition free).
+*   **Task Queue:** **ARQ** (Async Redis Queue) for offloading heavy message processing.
+*   **Scheduling:** **APScheduler** (Cron Jobs) running alongside ARQ in the Worker process.
 *   **Logging:** **Loguru** (intercepts standard logging, structured file output).
 *   **Infrastructure:** **Docker** & **Docker Compose**.
 
 ### Data Flow
 1.  **Inbound:** WhatsApp Webhook -> `POST /webhook` (FastAPI `app/api/routes/webhook.py`).
-2.  **Dispatcher Analysis:**
-    *   `AIEngine` uses `Prompts.DISPATCHER_SYSTEM` to analyze user text/media.
-    *   Extracts `city` and `issue` type.
-    *   Creates/Updates a provisional lead (Status: `CONTACTED`).
-3.  **Routing Engine (`app.services.matching_service.determine_best_pro`):
+2.  **Task Enqueue:** Webhook immediately enqueues a job (`process_message_task`) to **ARQ** and returns 200 OK.
+3.  **Worker Processing (`app/worker.py`):**
+    *   **Context:** `ContextManager` fetches chat history from Redis.
+    *   **State:** `StateManager` checks user state (Idle, Pro Mode, etc.).
+    *   **Dispatcher:** `AIEngine` analyzes input to route the lead or continue conversation.
+4.  **Routing Engine (`app.services.matching_service_service.determine_best_pro`):**
     *   **Filter:** Active Pros (`is_active: True`).
     *   **Location:** Checks if extracted `city` matches Pro's `service_areas`.
     *   **Ranking:** Sorts by `social_proof.rating` (Descending).
     *   **Load Balancing:** Skips pros with > `WorkerConstants.MAX_PRO_LOAD` active ("booked") jobs.
-    *   **Fallback:** Selects highest-rated pro or "Fixi Support" persona.
-4.  **Pro Persona AI Processing:**
-    *   Fetches the selected Pro's **Dynamic System Prompt**, **Price List**, and **Social Proof**.
-    *   `AIEngine` re-runs analysis with the *specific* Pro Persona (Tone, Pricing, Rules).
-    *   Generates a reply for the user.
-    *   Detects intent and extracts [DEAL] tags or Structured JSON.
-5.  **Action:**
+5.  **Action & Notification:**
     *   **Database:** Updates Lead with linked `pro_id`.
     *   **Booking:** `matching_service.book_slot_for_lead` ensures atomic slot reservation.
-    *   **Notification (`app.services.notification_service`):** Sends lead details ONLY to the selected Pro with instructions to reply 'אשר' (Approve) or 'דחה' (Reject).
-6.  **SOS Recovery (`app.services.monitor_service`):**
-    *   **Healer:** Automatically reassigns leads that remain in `NEW` or `CONTACTED` status beyond `WorkerConstants.SOS_TIMEOUT_MINUTES`.
-    *   **Reporter:** Batches leads that fail reassignment and notifies the admin.
-7.  **Visualization:** Admin Panel (`admin_panel/dashboard_page.py`) reflects changes immediately.
+    *   **Notification:** Sends details to Pro and confirmation to User via `notification_service`.
+6.  **Background Monitoring (APScheduler):**
+    *   **Healer:** Reassigns stale leads (`NEW`/`CONTACTED` > 30m).
+    *   **Reporter:** Alerts admin of stuck leads (> 24h).
+    *   **Reminders:** Sends daily agenda to Pros.
 
 ## 3. Project Structure
 
@@ -58,24 +54,29 @@
 ./
 ├── app/                            # FastAPI Backend Core
 │   ├── main.py                     # Entry point: App Config & Startup
-│   ├── scheduler.py                # APScheduler with Atomic Locking
+│   ├── scheduler.py                # APScheduler Config (Periodic Tasks)
+│   ├── worker.py                   # ARQ Worker Entry Point
 │   ├── api/                        # API Routes
 │   │   └── routes/
 │   │       └── webhook.py          # Green API Webhook Endpoint
 │   ├── services/
-│   │   ├── workflow.py             # Main Orchestrator (Entry Point for Business Logic)
-│   │   ├── matching_service.py     # Pro Routing & Booking Logic
-│   │   ├── notification_service.py # WhatsApp Notification Logic
-│   │   ├── ai_engine.py            # Gemini Wrapper (Multimodal)
-│   │   ├── lead_manager.py         # DB Operations (CRUD)
-│   │   ├── monitor_service.py      # SOS Recovery & Stale Lead Monitor
-│   │   └── whatsapp_client.py      # Green API Wrapper
+│   │   ├── workflow_service.py         # Main Orchestrator (Business Logic)
+│   │   ├── matching_service.py         # Pro Routing & Booking Logic
+│   │   ├── notification_service.py     # WhatsApp Notification Logic
+│   │   ├── ai_engine_service.py        # Gemini Wrapper (Multimodal)
+│   │   ├── lead_manager_service.py     # DB Operations (CRUD)
+│   │   ├── monitor_service.py          # SOS Recovery & Stale Lead Monitor
+│   │   ├── whatsapp_client_service.py  # Green API Wrapper
+│   │   ├── context_manager_service.py  # Redis Chat History Manager
+│   │   └── state_manager_service.py    # Redis User State Manager
 │   └── core/
+│       ├── arq_worker.py           # ARQ Settings & Startup Hooks
 │       ├── database.py             # MongoDB Connection (Async/Sync)
 │       ├── config.py               # Env Vars & Settings
 │       ├── constants.py            # Enums & System Constants (Status, Limits)
 │       ├── messages.py             # UI/Notification Text Templates
-│       └── prompts.py              # AI System Prompts
+│       ├── prompts.py              # AI System Prompts
+│       └── redis_client.py         # Redis Connection Helper
 ├── admin_panel/                    # Streamlit Admin Dashboard
 │   ├── main.py                     # Main Entry Point
 │   ├── core/                       # Core Logic
@@ -90,9 +91,6 @@
 │   └── ui/                         # UI Components
 │       └── components.py           # Widgets & Styles
 ├── tests/                          # Test Suite
-│   ├── test_booking_and_messaging.py
-│   ├── test_admin_auth.py
-│   └── ...
 ├── scripts/                        # Operational Scripts
 ├── Dockerfile                      # Container definition
 ├── docker-compose.yml              # Multi-container orchestration
@@ -100,6 +98,9 @@
 ```
 
 ## 4. Key Conventions & Rules
+*   **Service Layer:** All business logic resides in `app/services/`. Files should be suffixed with `_service.py` where appropriate, but imports should be clean.
+*   **State Management:** Use `StateManager.get_state(chat_id)` to determine if a user is in a specific flow (e.g., `REQUIRE_MORE_INFO`).
+*   **Context:** Use `ContextManager.get_history(chat_id)` to retrieve conversation context for the AI.
 *   **Schema Standardization:**
     *   `full_address` (was `address`)
     *   `issue_type` (was `issue`)
@@ -110,39 +111,49 @@
     *   Use `admin_panel.auth.make_hash` for passwords.
     *   Never commit secrets.
 *   **Concurrency:** Use `find_one_and_update` for scheduler and booking locks.
-*   **Constants:** Use `app.core.constants` for statuses (`LeadStatus`) and configuration (`WorkerConstants`).
 
 ## 5. Audit Findings & Resolution Status
 1.  **Performance (Motor):** ✅ Resolved. Core app uses `motor`. `pymongo` reserved for scripts.
 2.  **Security (Auth):** ✅ Resolved. `admin_panel/auth.py` uses salted `bcrypt`.
 3.  **Concurrency (Scheduler):** ✅ Resolved. Atomic DB locks implemented in `scheduler.py`.
-4.  **Error Handling:** ✅ Improved. Background tasks used for heavy lifting.
+4.  **Error Handling:** ✅ Improved. Background tasks (ARQ) used for heavy lifting.
 5.  **Infrastructure:** ✅ Resolved. Dockerized application with structured logging.
 6.  **AI Fallback:** ✅ Resolved. Implemented adaptive hierarchy via `settings.AI_MODELS`.
-7.  **Refactoring:** ✅ Resolved. Modularized `workflow.py` by extracting logic into `ai_engine`, `matching_service`, and `lead_manager`.
+7.  **Refactoring:** ✅ Resolved. Modularized `workflow.py` by extracting logic into `ai_engine_service`, `matching_service`, and `lead_manager_service`.
 8.  **New Features:** ✅ Implemented. Interactive buttons and calendar booking logic.
 9.  **SOS Recovery:** ✅ Implemented. Automated reassignment and admin reporting.
 10. **Test Coverage:** ✅ Improved. Added comprehensive suite for SOS monitor, AI parsing, and full lifecycle.
 11. **Worker Resilience:** ✅ Resolved. Added DB connectivity check on startup (ping) to prevent silent failures.
-12. **Architecture:** ✅ Resolved. Moved Scheduler from API to Worker process for better separation of concerns.
-13. **Context Caching:** ✅ Resolved. Implemented Redis "Write-Through" cache for chat history to improve performance.
-14. **State Management:** ✅ Resolved. Implemented Redis-based `StateManager` to control user flows (Idle, Pro Mode, Customer Flow).
+12. **Architecture:** ✅ Resolved. Moved Scheduler from API to Worker process (bundled with ARQ) for better separation of concerns.
+13. **Context Caching:** ✅ Resolved. Implemented Redis "Write-Through" cache for chat history (`ContextManager`).
+14. **State Management:** ✅ Resolved. Implemented Redis-based `StateManager` to control user flows.
 
 ### Environment Variables (`.env`)
 ```env
+# Core
 MONGO_URI=mongodb+srv://...
+MONGO_TEST_URI=mongodb+srv://... (Optional)
+ADMIN_PASSWORD=...
+PROJECT_NAME="Fixi Bot Server"
+ENVIRONMENT="development"
+
+# APIs
 GEMINI_API_KEY=...
 GREEN_API_ID=...
 GREEN_API_TOKEN=...
 CLOUDINARY_CLOUD_NAME=...
 CLOUDINARY_API_KEY=...
 CLOUDINARY_API_SECRET=...
-ADMIN_PASSWORD=...
+
+# Redis (Defaults shown)
+REDIS_HOST=redis
+REDIS_PORT=6379
+REDIS_DB=0
 ```
 
 ### Running the Application
 1.  **Backend:** `uvicorn app.main:app --reload --port 8000`
-2.  **Worker:** `python -m app.worker`
+2.  **Worker (ARQ + Scheduler):** `python -m app.worker`
 3.  **Admin:** `streamlit run admin_panel/main.py`
 
 ```

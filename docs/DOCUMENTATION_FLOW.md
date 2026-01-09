@@ -14,7 +14,7 @@
 6. **Rated:** לאחר שהלקוח מדרג, הציון משוקלל בפרופיל איש המקצוע והליד נסגר סופית.
 7. **Rejected (נדחה):** איש המקצוע דחה את הליד (המערכת יכולה לנסות לנתב מחדש - לוגיקה עתידית).
 
-## 2. מוח ה-AI (קבצים: `ai_engine.py`, `workflow.py`)
+## 2. מוח ה-AI (קבצים: `ai_engine_service.py`, `workflow_service.py`)
 
 המערכת משתמשת ב-Gemini 2.5 Flash Lite בתהליך דו-שלבי:
 
@@ -32,8 +32,9 @@
 
 ה-`Scheduler` (קובץ `app/scheduler.py`) מנוהל כעת על ידי תהליך ה-**Worker** (`app/worker.py`), ולא על ידי ה-API.
 
-- **Daily Reminders (כל 60 שניות):**
-    - בודק ב-MongoDB (`settings_collection`) אם הגיע הזמן לשלוח תזכורות (ברירת מחדל: 08:00).
+- **Daily Reminders (בכל בוקר ב-08:00):**
+    - פועל באמצעות `CronTrigger`.
+    - בודק ומבצע נעילה אטומית ב-MongoDB (`settings_collection`) כדי להבטיח ריצה יחידה.
     - שולח לכל איש מקצוע רשימה מרוכזת של הלידים בסטטוס `Booked` לאותו יום דרך `WhatsAppClient`.
 
 - **Stale Job Monitor (כל 30 דקות):**
