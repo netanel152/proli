@@ -33,12 +33,23 @@ class Messages:
         ADMIN_REPORT_HEADER = "🚨 *דו\"ח לידים תקועים (Fixi)*"
         ADMIN_REPORT_BODY = "נמצאו {count} לידים ללא מענה (> {timeout} דק'):\n"
         ADMIN_REPORT_FOOTER = "\nהמערכת ניסתה להעביר אותם אך ללא הצלחה. נדרשת התערבות ידנית."
+        
+        # New additions
+        TO_USER_WITH_PRO = "העברתי את הבקשה לאיש המקצוע שלך, הוא ייצור קשר בהקדם. 🛠️"
+        TO_USER_NO_PRO = "העברתי את הפרטים לצוות התמיכה, נחזור אליך בהקדם. 👨‍💻"
+        PRO_ALERT = "⚠️ Customer {chat_id} needs help. Msg: {last_message}"
+        ADMIN_ALERT = "🚨 System SOS from {chat_id}. Msg: {last_message}"
+
+    class System:
+        RESET_SUCCESS = "Reset successful"
 
     class Keywords:
         # Logic commands used in 'if' statements
         APPROVE_COMMANDS = ["אשר", "1", "approve"]
         REJECT_COMMANDS = ["דחה", "2", "reject"]
         FINISH_COMMANDS = ["סיימתי", "3", "finish", "done"]
+        RESET_COMMANDS = ["תפריט", "reset", "menu", "התחלה"]
+        SOS_COMMANDS = ["נציג", "אנושי", "עזרה", "מנהל", "human", "help", "admin", "sos"]
         RATING_OPTIONS = ["1", "2", "3", "4", "5"]
         
         # Interactive Button IDs & Titles

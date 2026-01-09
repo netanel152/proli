@@ -4,6 +4,7 @@ from app.core.logger import logger
 from app.core.config import settings
 from app.core.constants import APIStatus
 from app.core.redis_client import get_redis_client, get_arq_pool
+from app.services.security_service import SecurityService
 
 router = APIRouter()
 
@@ -45,6 +46,11 @@ async def webhook_endpoint(payload: WebhookPayload):
             # Group Filter
             if chat_id.endswith("@g.us"):
                 return {"status": APIStatus.IGNORED_GROUP}
+
+            # Rate Limit Check
+            if not await SecurityService.check_rate_limit(chat_id):
+                logger.warning(f"⛔ Rate limit exceeded for {chat_id}")
+                return {"status": APIStatus.IGNORED_RATE_LIMIT}
 
             # Extract User Text
             user_text = ""

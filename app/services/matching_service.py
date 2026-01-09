@@ -1,72 +1,142 @@
 from app.core.database import users_collection, leads_collection, slots_collection
 from app.core.logger import logger
-from app.core.constants import LeadStatus, WorkerConstants
+from app.core.constants import LeadStatus, WorkerConstants, ISRAEL_CITIES_COORDS
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 
+def get_coordinates(city_name: str):
+    """
+    Returns [Longitude, Latitude] for a given city name if found in the static dictionary.
+    Normalizes input to lowercase.
+    """
+    if not city_name:
+        return None
+    return ISRAEL_CITIES_COORDS.get(city_name.lower().strip())
+
 async def determine_best_pro(issue_type: str = None, location: str = None, excluded_pro_ids: list = None) -> dict:
     """
-    Intelligent Routing Engine:
+    Intelligent Routing Engine with Geo-Spatial Support:
     1. Active Status
-    2. Location Match (if applicable)
-    3. Rating (High to Low)
-    4. Availability (Load Balancing)
+    2. Location Match (Geo-Spatial $near or Fallback Regex)
+    3. Load Balancing (Check active leads)
+    4. Rating (High to Low)
     """
     try:
-        # 1. Build Query
-        query = {"is_active": True}
+        # 1. Base Query
+        query = {
+            "is_active": True,
+            "role": "professional" # Ensure we only get pros
+        }
         
         if excluded_pro_ids:
-            # Filter out IDs provided in the exclusion list
             query["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
         
-        # 2. Location Filtering (Database Level Optimization)
-        if location:
+        # 2. Location Filtering
+        coordinates = get_coordinates(location)
+        geo_enabled = False
+
+        if coordinates:
+            # Use MongoDB $near operator (Legacy Coordinate Pairs)
+            # Finds pros within 10km (10000 meters)
+            query["location"] = {
+                "$near": {
+                    "$geometry": {
+                        "type": "Point",
+                        "coordinates": coordinates
+                    },
+                    "$maxDistance": 10000 
+                }
+            }
+            geo_enabled = True
+            logger.info(f"📍 Geo-Spatial query enabled for '{location}' at {coordinates}")
+        elif location:
+            # Fallback to Regex on service_areas
             query["service_areas"] = {"$regex": location, "$options": "i"}
-            
+            logger.info(f"🔍 Text-based location query for '{location}'")
+        else:
+            logger.info("⚠️ No location provided for routing.")
+
+        # Execute Query
+        # Note: $near sorts by distance automatically.
         cursor = users_collection.find(query)
         matching_pros = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
         
-        # Fallback: Reverse match
-        if not matching_pros and location:
+        # Fallback: Reverse match (only if using text-based search and no results)
+        if not matching_pros and location and not geo_enabled:
              logger.info(f"No direct location match for '{location}', trying reverse match...")
-             all_pros_cursor = users_collection.find({"is_active": True})
+             # Warning: This is expensive, use sparingly
+             all_pros_cursor = users_collection.find({"is_active": True, "role": "professional"})
              all_pros = await all_pros_cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
              
              for pro in all_pros:
                  areas = pro.get("service_areas", [])
-                 if any(area in location for area in areas):
+                 # Check if any of the pro's areas are substrings of the location or vice versa
+                 if any(area.lower() in location.lower() for area in areas):
                      matching_pros.append(pro)
         
         if not matching_pros:
-            # Final Fallback: All active pros
-            matching_pros = await users_collection.find({"is_active": True}).to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+             # Final Fallback: All active pros (Emergency Catch-all)
+            logger.warning("No pros found matching location. Fallback to all active pros.")
+            fallback_query = {"is_active": True, "role": "professional"}
+            if excluded_pro_ids:
+                fallback_query["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
+            
+            matching_pros = await users_collection.find(fallback_query).to_list(length=WorkerConstants.DB_QUERY_LIMIT)
 
-        # 3. Sort by Rating (Descending)
-        def get_rating(p):
-            return p.get("social_proof", {}).get("rating", 0)
-        
-        matching_pros.sort(key=get_rating, reverse=True)
+        # 3. Load Balancing & Sorting
+        # If $near was used, they are sorted by distance. 
+        # If not, we should sort by rating.
+        # However, we must filter by Load first.
 
-        # 4. Load Balancing
-        selected_pro = None
+        candidates = []
         
         for pro in matching_pros:
+            # Check Active Load
             current_load = await leads_collection.count_documents({
                 "pro_id": pro["_id"],
-                "status": LeadStatus.BOOKED
+                "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]} # Check all active states
             })
             
-            if current_load < WorkerConstants.MAX_PRO_LOAD:
-                selected_pro = pro
-                logger.info(f"Routing Decision: Selected Pro '{pro.get('business_name')}' (Load: {current_load}/{WorkerConstants.MAX_PRO_LOAD}, Rating: {get_rating(pro)})")
-                break
-        
-        if not selected_pro and matching_pros:
-            selected_pro = matching_pros[0]
-            logger.warning(f"Routing Decision: All pros busy. Fallback to highest rated '{selected_pro.get('business_name')}' despite load.")
+            # Helper to get rating safely
+            rating = pro.get("social_proof", {}).get("rating", 0)
 
-        return selected_pro
+            if current_load < WorkerConstants.MAX_PRO_LOAD:
+                candidates.append({
+                    "pro": pro,
+                    "load": current_load,
+                    "rating": rating
+                })
+            else:
+                logger.debug(f"Skipping Pro '{pro.get('business_name')}' - Overloaded ({current_load} active leads)")
+
+        if not candidates:
+             logger.warning("All matching pros are overloaded. Returning highest rated from original matches.")
+             # Fallback to just rating if everyone is busy
+             def get_rating_simple(p):
+                return p.get("social_proof", {}).get("rating", 0)
+             matching_pros.sort(key=get_rating_simple, reverse=True)
+             return matching_pros[0] if matching_pros else None
+
+        # 4. Final Selection Logic
+        # If Geo-Spatial was used, candidates are already sorted by distance (roughly).
+        # We might want to pick the highest rated among the top closest, or just the closest.
+        # Let's prioritize:
+        # - If Geo used: Keep order (Distance), but maybe boost if rating is significantly higher? 
+        # For now, let's keep it simple:
+        # If Geo used -> Return closest qualified candidate.
+        # If Text used -> Sort by Rating.
+        
+        if geo_enabled:
+            # Already sorted by distance by MongoDB
+            selected = candidates[0]
+            logger.info(f"✅ Geo-Routing: Selected '{selected['pro'].get('business_name')}' (Dist: Closest, Load: {selected['load']})")
+            return selected['pro']
+        else:
+            # Sort by Rating Descending
+            candidates.sort(key=lambda x: x["rating"], reverse=True)
+            selected = candidates[0]
+            logger.info(f"✅ Text-Routing: Selected '{selected['pro'].get('business_name')}' (Rating: {selected['rating']}, Load: {selected['load']})")
+            return selected['pro']
 
     except Exception as e:
         logger.error(f"Error in determine_best_pro: {e}")

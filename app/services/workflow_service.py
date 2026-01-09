@@ -9,7 +9,7 @@ from app.core.messages import Messages
 from app.core.prompts import Prompts
 from app.core.constants import LeadStatus, Defaults, UserStates
 from app.services.matching_service import determine_best_pro, book_slot_for_lead
-from app.services.notification_service import send_pro_reminder
+from app.services.notification_service import send_pro_reminder, send_sos_alert
 from bson import ObjectId
 from datetime import datetime, timezone
 import re
@@ -239,15 +239,37 @@ async def handle_pro_text_command(chat_id: str, text: str):
 async def process_incoming_message(chat_id: str, user_text: str, media_url: str = None):
     # Global Reset Check
     normalized_text = (user_text or "").strip().lower()
-    if normalized_text in ["תפריט", "reset", "menu", "התחלה"]:
+    if normalized_text in Messages.Keywords.RESET_COMMANDS:
          await StateManager.clear_state(chat_id)
          await ContextManager.clear_context(chat_id)
-         await whatsapp.send_message(chat_id, "Reset successful")
+         await whatsapp.send_message(chat_id, Messages.System.RESET_SUCCESS)
          return
 
     # Get State
     current_state = await StateManager.get_state(chat_id)
     logger.info(f"🚦 User {chat_id} is in State: {current_state}")
+
+    # SOS / Human Handoff Check
+    sos_keywords = Messages.Keywords.SOS_COMMANDS
+    if user_text and any(k in normalized_text for k in sos_keywords):
+        await StateManager.set_state(chat_id, UserStates.SOS)
+        
+        # Find active lead
+        active_lead = await leads_collection.find_one({
+            "chat_id": chat_id,
+            "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]}
+        }, sort=[("created_at", -1)])
+        
+        pro_id = active_lead["pro_id"] if active_lead and "pro_id" in active_lead else None
+        
+        await send_sos_alert(chat_id, user_text, pro_id)
+        
+        if pro_id:
+            await whatsapp.send_message(chat_id, Messages.SOS.TO_USER_WITH_PRO)
+        else:
+            await whatsapp.send_message(chat_id, Messages.SOS.TO_USER_NO_PRO)
+            
+        return
 
     # TODO: Handle specific states (PRO_MODE, AWAITING_ADDRESS) here
 
@@ -316,7 +338,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                     resp = await client.get(media_url)
                     if resp.status_code == 200:
                         media_data = resp.content
-                        media_mime = resp.headers.get("Content-Type", "image/jpeg")
+                        media_mime = resp.headers.get("Content-Type", Defaults.DEFAULT_MIME_TYPE)
                         logger.info(f"Downloaded image media: {len(media_data)} bytes, type: {media_mime}")
                     else:
                         logger.warning(f"Failed to download media from {media_url}, status: {resp.status_code}")

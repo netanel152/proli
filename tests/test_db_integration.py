@@ -163,29 +163,38 @@ async def test_pro_assignment_logic_db(integration_db):
     - Rating (High to Low)
     - Load Balancing (<3 active jobs)
     """
+    # Create Geo Index
+    await integration_db.users.create_index([("location", "2dsphere")])
+
     # Setup 3 Pros
+    # Tel Aviv Coords: [34.7818, 32.0853]
     pro_good = {
         "business_name": "Pro Good",
         "is_active": True,
         "service_areas": ["Tel Aviv"],
+        "location": {"type": "Point", "coordinates": [34.7818, 32.0853]},
         "social_proof": {"rating": 5.0},
-        "phone_number": "972501111111"
+        "phone_number": "972501111111",
+        "role": "professional"
     }
     pro_avg = {
         "business_name": "Pro Avg",
         "is_active": True,
         "service_areas": ["Tel Aviv"],
+        "location": {"type": "Point", "coordinates": [34.7818, 32.0853]},
         "social_proof": {"rating": 3.0},
-        "phone_number": "972502222222"
+        "phone_number": "972502222222",
+        "role": "professional"
     }
     pro_busy = {
         "business_name": "Pro Busy",
         "is_active": True,
         "service_areas": ["Tel Aviv"],
+        "location": {"type": "Point", "coordinates": [34.7818, 32.0853]},
         "social_proof": {"rating": 5.0},
-        "phone_number": "972503333333"
-    }
-    
+        "phone_number": "972503333333",
+        "role": "professional"
+    }    
     # Insert Pros
     res_good = await integration_db.users.insert_one(pro_good)
     res_avg = await integration_db.users.insert_one(pro_avg)
