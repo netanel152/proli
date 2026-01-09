@@ -109,3 +109,27 @@ docker-compose logs -f admin  # Admin Panel
 - הסיסמאות לא נשמרות כטקסט גלוי.
 - המערכת משתמשת ב-**Bcrypt** עם Salt לייצור Hash.
 - האימות מול הדפדפן מתבצע באמצעות Cookie מאובטח (`fixi_auth_token`).
+
+## נספח: משתני סביבה (.env)
+
+להלן רשימה מלאה של המשתנים הנתמכים:
+
+### חובה (Required)
+*   `MONGO_URI`: מחרוזת התחברות ל-MongoDB Atlas.
+*   `GEMINI_API_KEY`: מפתח API של Google Gemini.
+*   `GREEN_API_ID`: מזהה מופע (Instance ID) ב-Green API.
+*   `GREEN_API_TOKEN`: טוקן אימות ב-Green API.
+*   `CLOUDINARY_CLOUD_NAME`: שם ענן ב-Cloudinary.
+*   `CLOUDINARY_API_KEY`: מפתח API ב-Cloudinary.
+*   `CLOUDINARY_API_SECRET`: סוד API ב-Cloudinary.
+*   `ADMIN_PASSWORD`: סיסמה לכניסה לממשק הניהול.
+
+### רשות (Optional)
+*   `MONGO_TEST_URI`: DB נפרד להרצת טסטים (מומלץ כדי לא למחוק מידע אמיתי).
+*   `REDIS_HOST`: כתובת שרת Redis (ברירת מחדל: `redis`).
+*   `REDIS_PORT`: פורט Redis (ברירת מחדל: `6379`).
+*   `REDIS_DB`: אינדקס ה-DB ב-Redis (ברירת מחדל: `0`).
+*   `PROJECT_NAME`: שם הפרויקט (ברירת מחדל: "Fixi Bot Server").
+*   `ENVIRONMENT`: סביבת ריצה - `development` או `production`.
+*   `LOG_LEVEL`: רמת פירוט לוגים (ברירת מחדל: `INFO`).
+*   `MAX_CHAT_HISTORY`: כמות הודעות אחרונות לזכור בקונטקסט (ברירת מחדל: `20`).
