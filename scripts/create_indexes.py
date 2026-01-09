@@ -34,6 +34,10 @@ async def create_all_indexes():
         await users_collection.create_index([("service_areas", ASCENDING)])
         print("  ✅ Created index: service_areas")
 
+        # Geo-spatial index for location-based routing
+        await users_collection.create_index([("location", "2dsphere")])
+        print("  ✅ Created 2dsphere index: location")
+
     except Exception as e:
         print(f"  ❌ Error indexing Users: {e}")
 

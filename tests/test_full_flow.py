@@ -28,7 +28,9 @@ async def test_full_lifecycle(mock_db, monkeypatch):
         "business_name": "יוסי אינסטלציה",
         "phone_number": "972524828796",
         "service_areas": ["Tel Aviv"],
+        "location": {"type": "Point", "coordinates": [34.7818, 32.0853]},
         "is_active": True,
+        "role": "professional",
         "keywords": ["plumber", "water"],
         "system_prompt": "You are Yossi.",
         "social_proof": {"rating": 5.0, "review_count": 0}
@@ -37,6 +39,10 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     pro = await mock_db.users.find_one({"business_name": "יוסי אינסטלציה"})
     pro_chat_id = "972524828796@c.us"
     user_chat_id = "972501234567@c.us"
+
+    # PATCH: Bypass determine_best_pro DB query because mongomock doesn't support $near
+    mock_determine_best_pro = AsyncMock(return_value=pro)
+    monkeypatch.setattr("app.services.workflow_service.determine_best_pro", mock_determine_best_pro)
 
     # 2. USER: "I need a plumber in Tel Aviv" (Routing)
     # Logic:
