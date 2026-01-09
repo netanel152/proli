@@ -6,11 +6,14 @@ from app.core.database import client
 from app.scheduler import start_scheduler
 
 # Redis configuration for ARQ
-redis_settings = RedisSettings(
-    host=settings.REDIS_HOST,
-    port=settings.REDIS_PORT,
-    database=settings.REDIS_DB
-)
+if settings.REDIS_URL:
+    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
+else:
+    redis_settings = RedisSettings(
+        host=settings.REDIS_HOST,
+        port=settings.REDIS_PORT,
+        database=settings.REDIS_DB
+    )
 
 async def startup(ctx):
     """
