@@ -1,6 +1,6 @@
-# Fixi Testing Guide 🧪
+# Proli Testing Guide 🧪
 
-This document provides a comprehensive guide to testing the Fixi Backend. The project uses `pytest` as the test runner and `pytest-asyncio` for handling asynchronous coroutines.
+This document provides a comprehensive guide to testing the Proli Backend. The project uses `pytest` as the test runner and `pytest-asyncio` for handling asynchronous coroutines.
 
 ## 1. Test Suite Structure
 

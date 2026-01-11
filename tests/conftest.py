@@ -18,7 +18,7 @@ sys.modules["google.genai.types"] = MagicMock()
 
 @pytest.fixture(scope="module")
 def mock_db():
-    return AsyncMongoMockClient().fixi_db
+    return AsyncMongoMockClient().proli_db
 
 @pytest.fixture(autouse=True)
 def patch_dependencies(request, monkeypatch, mock_db):
@@ -101,7 +101,7 @@ async def integration_db(monkeypatch):
         pytest.skip("MONGO_TEST_URI is not set in environment/config")
 
     client = AsyncIOMotorClient(settings.MONGO_TEST_URI)
-    db = client.fixi_test_db
+    db = client.proli_test_db
 
     # Define Collections
     users = db.users

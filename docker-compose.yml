@@ -11,7 +11,7 @@ services:
     env_file:
       - .env
     environment:
-      - MONGO_URI=mongodb://mongo:27017/fixi_db
+      - MONGO_URI=mongodb://mongo:27017/proli_db
     depends_on:
       mongo:
         condition: service_healthy
@@ -19,7 +19,7 @@ services:
       - ./logs:/app/logs
     restart: always
     networks:
-      - fixi_network
+      - proli_network
 
   # ---------------------------------------------------------------------------
   # Task Worker (ARQ) - Background Processing
@@ -31,7 +31,7 @@ services:
     env_file:
       - .env
     environment:
-      - MONGO_URI=mongodb://mongo:27017/fixi_db
+      - MONGO_URI=mongodb://mongo:27017/proli_db
       - REDIS_HOST=redis
     depends_on:
       mongo:
@@ -42,7 +42,7 @@ services:
       - ./logs:/app/logs
     restart: always
     networks:
-      - fixi_network
+      - proli_network
 
   # ---------------------------------------------------------------------------
   # Admin Panel (Streamlit) - The Dashboard
@@ -56,7 +56,7 @@ services:
     env_file:
       - .env
     environment:
-      - MONGO_URI=mongodb://mongo:27017/fixi_db
+      - MONGO_URI=mongodb://mongo:27017/proli_db
     depends_on:
       mongo:
         condition: service_healthy
@@ -64,7 +64,7 @@ services:
       - ./logs:/app/logs
     restart: always
     networks:
-      - fixi_network
+      - proli_network
 
   # ---------------------------------------------------------------------------
   # Database (MongoDB)
@@ -83,7 +83,7 @@ services:
       retries: 5
     restart: always
     networks:
-      - fixi_network
+      - proli_network
 
   # ---------------------------------------------------------------------------
   # Redis (Cache & Task Queue)
@@ -102,7 +102,7 @@ services:
       retries: 5
     restart: always
     networks:
-      - fixi_network
+      - proli_network
 
   # ---------------------------------------------------------------------------
   # Nginx Reverse Proxy
@@ -119,12 +119,12 @@ services:
       - admin
     restart: always
     networks:
-      - fixi_network
+      - proli_network
 
 volumes:
   mongo_data:
   redis_data:
 
 networks:
-  fixi_network:
+  proli_network:
     driver: bridge

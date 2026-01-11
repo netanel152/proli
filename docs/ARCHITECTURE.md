@@ -1,10 +1,10 @@
-# Fixi System Architecture
+# Proli System Architecture
 
-This document provides a high-level overview of the Fixi system architecture, component interactions, and data flow.
+This document provides a high-level overview of the Proli system architecture, component interactions, and data flow.
 
 ## 1. High-Level Overview
 
-Fixi acts as an intelligent intermediary between Clients (WhatsApp Users) and Professionals. It utilizes a microservices-like architecture (within a monorepo) orchestrated by Docker Compose.
+Proli acts as an intelligent intermediary between Clients (WhatsApp Users) and Professionals. It utilizes a microservices-like architecture (within a monorepo) orchestrated by Docker Compose.
 
 ### Core Components
 

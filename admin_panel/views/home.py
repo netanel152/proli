@@ -102,7 +102,7 @@ def view_leads_dashboard(T):
             st.download_button(
                 label="📥 Export CSV",
                 data=csv,
-                file_name=f'fixi_leads_{datetime.now().strftime("%Y-%m-%d")}.csv',
+                file_name=f'proli_leads_{datetime.now().strftime("%Y-%m-%d")}.csv',
                 mime='text/csv',
                 key="export_leads_csv"
             )

@@ -28,7 +28,7 @@ class WorkerConstants:
     ADMIN_PHONE = "972524828796"
 
 class APIStatus:
-    RUNNING = "Fixi is running! 🚀"
+    RUNNING = "Proli is running! 🚀"
     PROCESSING = "processing_message"
     IGNORED_GROUP = "ignored_group"
     IGNORED_NO_DATA = "ignored_no_data"
@@ -43,7 +43,7 @@ class Defaults:
     UNKNOWN_ADDRESS = "Unknown Address"
     UNKNOWN_ISSUE = "Issue"
     GENERIC_PRO_NAME = "איש המקצוע"
-    FIXI_PRO_NAME = "Fixi Pro"
+    PROLI_PRO_NAME = "Proli Pro"
     EXPERT_NAME = "מומחה"
     DEFAULT_TRANSCRIPTION = "None"
     DEFAULT_MIME_TYPE = "image/jpeg"

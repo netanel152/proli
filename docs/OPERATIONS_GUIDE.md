@@ -1,4 +1,4 @@
-# מדריך תפעול ותקלות - Fixi
+# מדריך תפעול ותקלות - Proli
 
 ## ארכיטקטורת ריצה
 
@@ -31,7 +31,7 @@ docker-compose logs -f admin  # Admin Panel
 
 ### קבצי לוג (Local/Archive)
 הלוגים נשמרים גם לקבצים בתיקיית `logs/`:
-*   `fixi.log`: לוג ראשי (מתגלגל כל 10MB).
+*   `proli.log`: לוג ראשי (מתגלגל כל 10MB).
 *   הלוגים נשמרים למשך 10 ימים ונדחסים אוטומטית.
 
 ## ניהול שוטף (Dashboard)
@@ -53,7 +53,7 @@ docker-compose logs -f admin  # Admin Panel
 
 ## פתרון תקלות נפוצות
 
-### 1. הבוט עונה כ-"Fixi Support" (ברירת מחדל)
+### 1. הבוט עונה כ-"Proli Support" (ברירת מחדל)
 זה קורה כאשר מנוע הניתוב לא מוצא איש מקצוע מתאים.
 *   **בדיקה:** האם יש אנשי מקצוע עם `is_active: True` ב-DB?
 *   **בדיקה:** האם הלקוח ציין עיר שלא נמצאת ב-`service_areas` של אף אחד?
@@ -108,7 +108,7 @@ docker-compose logs -f admin  # Admin Panel
 ### אבטחת Admin Panel
 - הסיסמאות לא נשמרות כטקסט גלוי.
 - המערכת משתמשת ב-**Bcrypt** עם Salt לייצור Hash.
-- האימות מול הדפדפן מתבצע באמצעות Cookie מאובטח (`fixi_auth_token`).
+- האימות מול הדפדפן מתבצע באמצעות Cookie מאובטח (`proli_auth_token`).
 
 ## נספח: משתני סביבה (.env)
 
@@ -129,7 +129,7 @@ docker-compose logs -f admin  # Admin Panel
 *   `REDIS_HOST`: כתובת שרת Redis (ברירת מחדל: `redis`).
 *   `REDIS_PORT`: פורט Redis (ברירת מחדל: `6379`).
 *   `REDIS_DB`: אינדקס ה-DB ב-Redis (ברירת מחדל: `0`).
-*   `PROJECT_NAME`: שם הפרויקט (ברירת מחדל: "Fixi Bot Server").
+*   `PROJECT_NAME`: שם הפרויקט (ברירת מחדל: "Proli Bot Server").
 *   `ENVIRONMENT`: סביבת ריצה - `development` או `production`.
 *   `LOG_LEVEL`: רמת פירוט לוגים (ברירת מחדל: `INFO`).
 *   `MAX_CHAT_HISTORY`: כמות הודעות אחרונות לזכור בקונטקסט (ברירת מחדל: `20`).

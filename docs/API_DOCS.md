@@ -1,4 +1,4 @@
-# Fixi Backend API Documentation
+# Proli Backend API Documentation
 
 ## Base URL
 Local: `http://localhost:8000`
@@ -14,7 +14,7 @@ Returns the operational status of the API.
 **Response:**
 ```json
 {
-  "status": "Fixi is running! 🚀"
+  "status": "Proli is running! 🚀"
 }
 ```
 
