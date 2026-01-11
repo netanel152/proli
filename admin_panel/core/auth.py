@@ -23,16 +23,16 @@ def check_hash(password, hashed):
 # --- Cookie Manager ---
 def get_manager():
     if "cookie_manager" not in st.session_state:
-        st.session_state.cookie_manager = stx.CookieManager(key="fixi_auth_manager")
+        st.session_state.cookie_manager = stx.CookieManager(key="proli_auth_manager")
     return st.session_state.cookie_manager
 
 def check_password(cookies):
     cookie_manager = get_manager()
     
-    saved_lang = cookies.get("fixi_lang", "EN")
+    saved_lang = cookies.get("proli_lang", "EN")
     T_auth = TRANS.get(saved_lang, TRANS["EN"])
 
-    cookie_token = cookies.get("fixi_auth_token")
+    cookie_token = cookies.get("proli_auth_token")
     
     # Secure Auth: Check for Hash first, then fallback to Legacy Plain Text
     admin_hash = os.getenv("ADMIN_PASSWORD_HASH")
@@ -76,7 +76,7 @@ def check_password(cookies):
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.markdown("<br><br>", unsafe_allow_html=True)
-        st.title("🔐 Fixi Admin")
+        st.title("🔐 Proli Admin")
         st.markdown(f"### {T_auth['welcome_message']}")
         
         with st.form("login_form"):
@@ -114,7 +114,7 @@ def check_password(cookies):
                             secure_token = make_hash(password)
                             
                         expires = datetime.now() + timedelta(days=7)
-                        cookie_manager.set("fixi_auth_token", secure_token, expires_at=expires)
+                        cookie_manager.set("proli_auth_token", secure_token, expires_at=expires)
                     
                     st.success("Connected!")
                     time.sleep(1)
@@ -135,7 +135,7 @@ def logout(cookie_manager, T):
         
         try:
             # Send command to frontend to delete cookie
-            cookie_manager.delete("fixi_auth_token")
+            cookie_manager.delete("proli_auth_token")
         except: pass
         
         time.sleep(0.5)

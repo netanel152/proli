@@ -22,7 +22,7 @@ from admin_panel.views.settings import view_system_settings
 
 # --- Page Config ---
 st.set_page_config(
-    page_title="Fixi Admin",
+    page_title="Proli Admin",
     page_icon="🛠️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -38,13 +38,13 @@ if not check_password(cookies):
 # --- Main App & Language Logic ---
 # Use session state as the source of truth for the current run
 if 'lang_code' not in st.session_state:
-    st.session_state.lang_code = cookies.get("fixi_lang", "EN")
+    st.session_state.lang_code = cookies.get("proli_lang", "EN")
 
 T = TRANS[st.session_state.lang_code]
 load_css(st.session_state.lang_code, T)
 
 with st.sidebar:
-    st.title("Fixi Admin")
+    st.title("Proli Admin")
     
     # Language Selector
     lang_options = ["HE", "EN"]
@@ -63,7 +63,7 @@ with st.sidebar:
     if selected_lang != st.session_state.lang_code:
         st.session_state.lang_code = selected_lang
         expires = datetime.now() + timedelta(days=365)
-        cookie_manager.set("fixi_lang", selected_lang, expires_at=expires)
+        cookie_manager.set("proli_lang", selected_lang, expires_at=expires)
         time.sleep(0.05) # Small delay to help ensure cookie is set
         st.rerun()
 

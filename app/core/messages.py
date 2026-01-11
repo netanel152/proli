@@ -1,7 +1,7 @@
 class Messages:
     class Customer:
         # User-facing messages
-        COMPLETION_CHECK = "היי! 👋 אנחנו ב-Fixi רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. האם העבודה הסתיימה?"
+        COMPLETION_CHECK = "היי! 👋 אנחנו ב-Proli רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. האם העבודה הסתיימה?"
         COMPLETION_ACK = "מעולה! שמחים לשמוע. איך היה השירות עם {pro_name}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מעולה)."
         RATING_THANKS = "תודה רבה על הדירוג! ⭐"
         PRO_FOUND = "🎉 נמצא איש מקצוע! {pro_name} בדרך אליך. 📞 טלפון: {pro_phone}"
@@ -30,7 +30,7 @@ class Messages:
     class SOS:
         CUSTOMER_REASSIGNING = "מתנצלים על ההמתנה, אנו מאתרים עבורך איש מקצוע זמין יותר כעת... ⏳"
         PRO_LOST_LEAD = "העבודה הועברה לאיש מקצוע אחר עקב חוסר מענה."
-        ADMIN_REPORT_HEADER = "🚨 *דו\"ח לידים תקועים (Fixi)*"
+        ADMIN_REPORT_HEADER = "🚨 *דו\"ח לידים תקועים (Proli)*"
         ADMIN_REPORT_BODY = "נמצאו {count} לידים ללא מענה (> {timeout} דק'):\n"
         ADMIN_REPORT_FOOTER = "\nהמערכת ניסתה להעביר אותם אך ללא הצלחה. נדרשת התערבות ידנית."
         
@@ -68,4 +68,4 @@ class Messages:
         TRANSCRIBE_AUDIO = "[System: Transcribe the audio verbatim and analyze the intent.]"
         ANALYZE_VIDEO = "[System: Watch the video to identify the issue and describe what you see.]"
         DEFAULT_SYSTEM = "You are a helpful assistant."
-        FIXI_SCHEDULER_ROLE = "You are Fixi, an AI scheduler for {pro_name}."
+        PROLI_SCHEDULER_ROLE = "You are Proli, an AI scheduler for {pro_name}."

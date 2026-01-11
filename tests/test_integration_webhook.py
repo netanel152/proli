@@ -14,7 +14,7 @@ VALID_PAYLOAD = {
     "senderData": {"chatId": "972501234567@c.us", "senderName": "Test User"},
     "messageData": {
         "typeMessage": "textMessage",
-        "textMessageData": {"textMessage": "Hello Fixi"}
+        "textMessageData": {"textMessage": "Hello Proli"}
     }
 }
 
@@ -46,7 +46,7 @@ def test_webhook_valid_text_message(mock_background_tasks):
     mock_pool.enqueue_job.assert_called_once_with(
         'process_message_task',
         "972501234567@c.us",
-        "Hello Fixi",
+        "Hello Proli",
         None
     )
 

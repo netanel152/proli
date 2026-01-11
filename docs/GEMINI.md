@@ -1,7 +1,7 @@
-# Fixi Backend & Admin Panel - AI Developer Context
+# Proli Backend & Admin Panel - AI Developer Context
 
 ## 1. Project Overview
-**Fixi** is an AI-powered CRM and scheduling automation platform for service professionals. It transforms WhatsApp into a powerful business tool using a multi-agent approach.
+**Proli** is an AI-powered CRM and scheduling automation platform for service professionals. It transforms WhatsApp into a powerful business tool using a multi-agent approach.
 
 *   **User Interface:** WhatsApp (via Green API).
 *   **Admin Interface:** Streamlit Dashboard.
@@ -134,7 +134,7 @@
 MONGO_URI=mongodb+srv://...
 MONGO_TEST_URI=mongodb+srv://... (Optional)
 ADMIN_PASSWORD=...
-PROJECT_NAME="Fixi Bot Server"
+PROJECT_NAME="Proli Bot Server"
 ENVIRONMENT="development"
 
 # APIs

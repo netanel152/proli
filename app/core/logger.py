@@ -80,7 +80,7 @@ def setup_logging():
 
     # File handler (always structured/archive)
     logger.add(
-        os.path.join(log_dir, "fixi.log"),
+        os.path.join(log_dir, "proli.log"),
         rotation="10 MB",
         retention="10 days",
         level="DEBUG",

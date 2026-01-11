@@ -71,7 +71,7 @@ async def test_chat_history_integrity(integration_db):
     chat_id = "history_user@c.us"
     
     messages_to_log = [
-        ("user", "Hello Fixi"),
+        ("user", "Hello Proli"),
         ("model", "Hello! How can I help?"),
         ("user", "I need a plumber"),
         ("model", "Where are you located?")
@@ -84,7 +84,7 @@ async def test_chat_history_integrity(integration_db):
     # 2. Verify Raw DB Storage
     stored_msgs = await integration_db.messages.find({"chat_id": chat_id}).sort("timestamp", 1).to_list(None)
     assert len(stored_msgs) == 4
-    assert stored_msgs[0]["text"] == "Hello Fixi"
+    assert stored_msgs[0]["text"] == "Hello Proli"
     assert stored_msgs[3]["text"] == "Where are you located?"
     
     # 3. Verify get_chat_history (Service Layer)
@@ -92,7 +92,7 @@ async def test_chat_history_integrity(integration_db):
     
     assert len(history) == 4
     # Check format required by Gemini (role, parts)
-    assert history[0] == {"role": "user", "parts": ["Hello Fixi"]}
+    assert history[0] == {"role": "user", "parts": ["Hello Proli"]}
     assert history[1] == {"role": "model", "parts": ["Hello! How can I help?"]}
     assert history[2] == {"role": "user", "parts": ["I need a plumber"]}
     assert history[3] == {"role": "model", "parts": ["Where are you located?"]}

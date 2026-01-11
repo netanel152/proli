@@ -170,7 +170,7 @@ TRANS = {
         "nav_settings": "⚙️ System Settings",
         "nav_professionals": "👷 Professionals",
 
-        "welcome_message": "Welcome to Fixi Control Center",
+        "welcome_message": "Welcome to Proli Control Center",
         "admin_password_label": "Admin Password",
         "admin_password_placeholder": "Enter password...",
         "remember_me": "Keep me logged in",

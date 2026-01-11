@@ -15,7 +15,7 @@ client = AsyncIOMotorClient(
     maxIdleTimeMS=settings.MONGO_MAX_IDLE_TIME_MS,
     **kwargs
 )
-db = client.fixi_db
+db = client.proli_db
 
 # Async Collections
 users_collection = db.users
@@ -29,7 +29,7 @@ reviews_collection = db.reviews
 # Kept strictly for synchronous scripts or legacy tools if needed.
 # Use 'sync_client' explicitly if you need blocking calls.
 sync_client = MongoClient(settings.MONGO_URI, **kwargs)
-sync_db = sync_client.fixi_db
+sync_db = sync_client.proli_db
 
 def check_db_connection():
     try:

@@ -406,9 +406,9 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 )
 
             # Switch to Pro Persona
-            pro_name = best_pro.get("business_name", Defaults.FIXI_PRO_NAME)
+            pro_name = best_pro.get("business_name", Defaults.PROLI_PRO_NAME)
             price_list = best_pro.get("price_list", "")
-            base_system_prompt = best_pro.get("system_prompt", Messages.AISystemPrompts.FIXI_SCHEDULER_ROLE.format(pro_name=pro_name))
+            base_system_prompt = best_pro.get("system_prompt", Messages.AISystemPrompts.PROLI_SCHEDULER_ROLE.format(pro_name=pro_name))
             
             rating = best_pro.get("social_proof", {}).get("rating", 5.0)
             count = best_pro.get("social_proof", {}).get("review_count", 0)

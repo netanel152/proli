@@ -2,7 +2,7 @@ import bcrypt
 import getpass
 
 def generate_hash():
-    print("--- Fixi Admin Password Hasher ---")
+    print("--- Proli Admin Password Hasher ---")
     password = getpass.getpass("Enter the admin password to hash: ")
     
     if not password:

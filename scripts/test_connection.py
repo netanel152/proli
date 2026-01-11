@@ -29,7 +29,7 @@ try:
     model_name = 'gemini-2.5-flash-lite' 
     response = client_ai.models.generate_content(
         model=model_name,
-        contents="Say 'Hello Fixi'"
+        contents="Say 'Hello Proli'"
     )
     print(f"✅ Gemini AI: Connected! Bot said: {response.text.strip()}")
 except Exception as e:

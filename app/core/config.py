@@ -6,15 +6,15 @@ class Settings(BaseSettings):
     GREEN_API_ID: str
     GREEN_API_TOKEN: str
     GEMINI_API_KEY: str
-    MONGO_URI: str = Field(default="mongodb://localhost:27017/fixi_db")
+    MONGO_URI: str = Field(default="mongodb://localhost:27017/proli_db")
     
     @field_validator("MONGO_URI", mode="before")
     @classmethod
     def assemble_mongo_uri(cls, v: str | None) -> str:
-        if v and v != "mongodb://localhost:27017/fixi_db":
+        if v and v != "mongodb://localhost:27017/proli_db":
             return v
         # Try common cloud provider env vars
-        return os.getenv("MONGODB_URI") or os.getenv("MONGO_URL") or "mongodb://localhost:27017/fixi_db"
+        return os.getenv("MONGODB_URI") or os.getenv("MONGO_URL") or "mongodb://localhost:27017/proli_db"
 
     MONGO_TEST_URI: str | None = None
     MONGO_MAX_POOL_SIZE: int = 100
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     TIMEZONE: str = "Asia/Jerusalem"
     
     # New Configs
-    PROJECT_NAME: str = "Fixi Bot Server"
+    PROJECT_NAME: str = "Proli Bot Server"
     BACKEND_CORS_ORIGINS: list[str] = ["*"]
     MAX_CHAT_HISTORY: int = 20
     ENVIRONMENT: str = "development"  # "production" or "development"

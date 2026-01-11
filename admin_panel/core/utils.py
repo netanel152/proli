@@ -13,13 +13,13 @@ load_dotenv()
 mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or os.getenv("MONGO_URL")
 if not mongo_uri:
     # Fallback to local if env var is missing (safety)
-    mongo_uri = "mongodb://localhost:27017/fixi_db"
+    mongo_uri = "mongodb://localhost:27017/proli_db"
 
 ca_file = certifi.where() if "+srv" in mongo_uri else None
 kwargs = {"tlsCAFile": ca_file} if ca_file else {}
 
 client = MongoClient(mongo_uri, **kwargs)
-db = client.fixi_db # Assuming 'fixi_db' is your database name
+db = client.proli_db # Assuming 'proli_db' is your database name
 
 users_collection = db.users
 leads_collection = db.leads
@@ -40,7 +40,7 @@ def generate_system_prompt(name, profession, areas, prices):
         keywords = ["חשמל", "קצר", "אור", "שקע", "פחת", "נשרף", "חוטים"]
 
     prompt = f"""
-אתה 'פיקסי', העוזר האישי של '{name}'.
+אתה 'פרולי', העוזר האישי של '{name}'.
 תפקיד: {role}.
 המטרה: אבחון, הרגעה וסגירת תור.
 

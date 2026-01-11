@@ -1,4 +1,4 @@
-# Fixi Scripts Guide 🛠️
+# Proli Scripts Guide 🛠️
 
 This document explains the purpose and usage of the operational scripts located in the `scripts/` directory. These scripts are useful for development, testing, and maintenance.
 

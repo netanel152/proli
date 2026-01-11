@@ -1,4 +1,4 @@
-# Fixi - AI Automation for Professionals 🛠️🤖
+# Proli - AI Automation for Professionals 🛠️🤖
 
 **[English](#english) | [עברית](#hebrew)**
 
@@ -6,7 +6,7 @@
 
 <a name="english"></a>
 
-**Fixi** is a smart CRM and scheduling automation platform designed for service professionals (plumbers, electricians, technicians). It seamlessly combines a **Multimodal WhatsApp AI Bot** for customer interaction with a robust **Admin Panel** for business management.
+**Proli** is a smart CRM and scheduling automation platform designed for service professionals (plumbers, electricians, technicians). It seamlessly combines a **Multimodal WhatsApp AI Bot** for customer interaction with a robust **Admin Panel** for business management.
 
 ### 🚀 Core Features
 
@@ -53,7 +53,7 @@
 
 <div dir="rtl">
 
-**Fixi** היא פלטפורמת אוטומציה וניהול יומן חכמה המיועדת לבעלי מקצוע (אינסטלטורים, חשמלאים, טכנאים). המערכת משלבת בוט וואטסאפ מולטי-מודאלי חכם לשיחה עם לקוחות יחד עם פאנל ניהול מתקדם.
+**Proli** היא פלטפורמת אוטומציה וניהול יומן חכמה המיועדת לבעלי מקצוע (אינסטלטורים, חשמלאים, טכנאים). המערכת משלבת בוט וואטסאפ מולטי-מודאלי חכם לשיחה עם לקוחות יחד עם פאנל ניהול מתקדם.
 
 ### 🚀 פיצ'רים מרכזיים
 
@@ -87,7 +87,7 @@
 
     ```bash
     git clone <url>
-    cd fixi-backend
+    cd proli-backend
     python -m venv venv
     source venv/bin/activate  # Windows: venv\Scripts\activate
     pip install -r requirements.txt
