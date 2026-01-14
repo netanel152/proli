@@ -8,6 +8,8 @@ class Messages:
         RATE_SERVICE = "היי! 👋 איך היה השירות עם {pro_name}? נשמח לדירוג 1-5."
         REVIEW_REQUEST = "תודה על הדירוג! האם תרצה לכתוב ביקורת קצרה על החוויה? אם כן, פשוט כתוב אותה כעת."
         REVIEW_SAVED = "תודה רבה! הביקורת שלך נשמרה."
+        ADDRESS_SAVED = "✅ הכתובת עודכנה בהצלחה!"
+        ADDRESS_INVALID = "❌ לא הצלחתי לזהות את הכתובת. אנא נסה לשלוח מיקום (Location Pin) או הקלד עיר ורחוב בצורה ברורה."
 
     class Pro:
         # Messages sent to professionals
@@ -26,6 +28,12 @@ class Messages:
         NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"
         NEW_LEAD_FOOTER = "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
         NAVIGATE_TO = "🚗 נווט לכתובת:"
+        PRO_HELP_MENU = """👋 שלום איש מקצוע!
+הנה הפקודות הזמינות לך:
+• 'אשר' / '1' - אישור העבודה האחרונה
+• 'דחה' / '2' - דחיית העבודה
+• 'סיימתי' / '3' - דיווח על סיום עבודה
+• 'תפריט' - הצגת עזרה זו"""
 
     class SOS:
         CUSTOMER_REASSIGNING = "מתנצלים על ההמתנה, אנו מאתרים עבורך איש מקצוע זמין יותר כעת... ⏳"
