@@ -271,7 +271,38 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             
         return
 
-    # TODO: Handle specific states (PRO_MODE, AWAITING_ADDRESS) here
+    # Handle Specific States
+    if current_state == UserStates.PRO_MODE:
+        pro_resp = await handle_pro_text_command(chat_id, user_text)
+        if pro_resp:
+            await whatsapp.send_message(chat_id, pro_resp)
+        else:
+            await whatsapp.send_message(chat_id, Messages.Pro.PRO_HELP_MENU)
+        return
+
+    if current_state == UserStates.AWAITING_ADDRESS:
+        if user_text and len(user_text) > 3:
+            # Find the most recent active lead
+            active_lead = await leads_collection.find_one(
+                {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
+                sort=[("created_at", -1)]
+            )
+            
+            if active_lead:
+                await leads_collection.update_one(
+                    {"_id": active_lead["_id"]}, 
+                    {"$set": {"full_address": user_text}}
+                )
+                await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_SAVED)
+                # Clear state to allow normal flow to resume on next message
+                await StateManager.clear_state(chat_id)
+                return
+            else:
+                # No active lead found, clear state to avoid loop
+                await StateManager.clear_state(chat_id)
+        else:
+            await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_INVALID)
+            return
 
     # 0. Check for Pro Text Command
     if user_text:
