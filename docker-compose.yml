@@ -28,9 +28,6 @@ services:
     command: python -m app.worker
     env_file:
       - .env
-    environment:
-      - MONGO_URI=mongodb://mongo:27017/proli_db
-      - REDIS_HOST=redis
     depends_on:
       mongo:
         condition: service_healthy
@@ -53,8 +50,6 @@ services:
       - "8501:8501"
     env_file:
       - .env
-    environment:
-      - MONGO_URI=mongodb://mongo:27017/proli_db
     depends_on:
       mongo:
         condition: service_healthy
