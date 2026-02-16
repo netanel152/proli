@@ -3,7 +3,7 @@ from pydantic import Field, field_validator
 import os
 
 class Settings(BaseSettings):
-    GREEN_API_ID: str
+    GREEN_API_INSTANCE_ID: str
     GREEN_API_TOKEN: str
     GEMINI_API_KEY: str
     MONGO_URI: str = Field(default="mongodb://localhost:27017/proli_db")

@@ -6,7 +6,7 @@ import urllib.parse
 
 class WhatsAppClient:
     def __init__(self):
-        self.api_url = f"https://api.green-api.com/waInstance{settings.GREEN_API_ID}"
+        self.api_url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}"
         self.api_token = settings.GREEN_API_TOKEN
 
     @retry(

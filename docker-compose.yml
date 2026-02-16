@@ -10,8 +10,6 @@ services:
       - "8000:8000"
     env_file:
       - .env
-    environment:
-      - MONGO_URI=mongodb://mongo:27017/proli_db
     depends_on:
       mongo:
         condition: service_healthy

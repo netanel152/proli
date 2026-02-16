@@ -29,7 +29,7 @@ async def webhook_endpoint(payload: WebhookPayload):
         # 1. Security Verification
         # Ensure the webhook comes from OUR Green API instance
         if payload.instanceData:
-            if str(payload.instanceData.idInstance) != str(settings.GREEN_API_ID):
+            if str(payload.instanceData.idInstance) != str(settings.GREEN_API_INSTANCE_ID):
                 logger.warning(f"Security Alert: Blocked webhook from unknown instance: {payload.instanceData.idInstance}")
                 return {"status": APIStatus.IGNORED_WRONG_INSTANCE}
         

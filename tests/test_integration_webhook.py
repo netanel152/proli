@@ -21,7 +21,7 @@ VALID_PAYLOAD = {
 @pytest.fixture
 def mock_background_tasks():
     # Patch the settings to match the test payload ID
-    with patch("app.core.config.settings.GREEN_API_ID", "7107387490"):
+    with patch("app.core.config.settings.GREEN_API_INSTANCE_ID", "7107387490"):
         # Mock ARQ pool
         with patch("app.api.routes.webhook.get_arq_pool") as mock_get_pool:
             mock_pool = AsyncMock()
