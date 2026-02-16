@@ -19,19 +19,26 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy project files
+# Copy project files (הכל מועתק כ-root כרגע)
 COPY . .
 
-# Create a non-root user and switch to it
-RUN useradd -m appuser && chown -R appuser:appuser /app
+# Copy start script
+COPY start.sh .
+# נותנים הרשאות ריצה (עדיין כ-root, אז זה יעבוד)
+RUN chmod +x start.sh
+
+# Create a non-root user
+RUN useradd -m appuser
+
+# Change ownership of the app directory to the new user
+# מעבירים את הבעלות על כל הקבצים למשתמש החדש
+RUN chown -R appuser:appuser /app
+
+# Switch to non-root user (רק עכשיו עוברים למשתמש המוגבל)
 USER appuser
 
 # Expose ports
 EXPOSE 8000 8501
 
-# העתקת סקריפט ההרצה ומתן הרשאות ביצוע
-COPY start.sh .
-RUN chmod +x start.sh
-
-# הפעלת הכל ביחד
+# Default command runs the script
 CMD ["./start.sh"]
