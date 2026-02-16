@@ -29,5 +29,9 @@ USER appuser
 # Expose ports
 EXPOSE 8000 8501
 
-# Default command runs the API service
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# העתקת סקריפט ההרצה ומתן הרשאות ביצוע
+COPY start.sh .
+RUN chmod +x start.sh
+
+# הפעלת הכל ביחד
+CMD ["./start.sh"]

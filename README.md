@@ -12,7 +12,7 @@
 
 #### 🤖 Intelligent WhatsApp Bot (User Facing)
 
-- **Smart Routing Engine:** Automatically routes leads to the *best* professional based on:
+- **Smart Routing Engine:** Automatically routes leads to the _best_ professional based on:
   - **Location:** Matches user city with Pro service areas.
   - **Rating:** Prioritizes top-rated professionals.
   - **Load Balancing:** Distributes work to avoid overloading busy pros.
@@ -100,7 +100,7 @@
     MONGO_URI=mongodb+srv://...
     MONGO_TEST_URI=mongodb+srv://... (Optional, for running tests)
     GEMINI_API_KEY=...
-    GREEN_API_ID=...
+    GREEN_API_INSTANCE_ID=...
     GREEN_API_TOKEN=...
     CLOUDINARY_CLOUD_NAME=...
     CLOUDINARY_API_KEY=...
@@ -116,28 +116,33 @@
 ## ▶️ Running the App
 
 ### Option A: Docker (Recommended)
+
 This will spin up the Backend, Worker, and Admin Panel in isolated containers.
 
 ```bash
 docker-compose up --build -d
 ```
-*   **Backend:** http://localhost:8000
-*   **Admin Panel:** http://localhost:8501
-*   **Worker:** Runs in background (logs via `docker-compose logs -f worker`)
+
+- **Backend:** http://localhost:8000
+- **Admin Panel:** http://localhost:8501
+- **Worker:** Runs in background (logs via `docker-compose logs -f worker`)
 
 ### Option B: Local Development
 
 **1. Backend Server (FastAPI):**
+
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
 **2. Worker (Background Jobs):**
+
 ```bash
 python -m app.worker
 ```
 
 **3. Admin Panel (Streamlit):**
+
 ```bash
 streamlit run admin_panel/main.py
 ```

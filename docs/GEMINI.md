@@ -1,52 +1,55 @@
 # Proli Backend & Admin Panel - AI Developer Context
 
 ## 1. Project Overview
+
 **Proli** is an AI-powered CRM and scheduling automation platform for service professionals. It transforms WhatsApp into a powerful business tool using a multi-agent approach.
 
-*   **User Interface:** WhatsApp (via Green API).
-*   **Admin Interface:** Streamlit Dashboard.
-*   **Backend:** FastAPI (Async).
-*   **AI Engine:** Google Gemini 2.5 (Multimodal - Text, Images, Audio).
-*   **Database:** MongoDB Atlas.
-*   **Core Logic:** Intelligent Pro Routing, Load Balancing & Calendar Booking.
+- **User Interface:** WhatsApp (via Green API).
+- **Admin Interface:** Streamlit Dashboard.
+- **Backend:** FastAPI (Async).
+- **AI Engine:** Google Gemini 2.5 (Multimodal - Text, Images, Audio).
+- **Database:** MongoDB Atlas.
+- **Core Logic:** Intelligent Pro Routing, Load Balancing & Calendar Booking.
 
 ## 2. Technical Architecture & Tech Stack
 
 ### Core Technologies
-*   **Language:** Python 3.12+
-*   **Web Framework:** **FastAPI** (Async, handling Webhooks)
-*   **Admin UI:** **Streamlit** (Rapid data app development) with `extra_streamlit_components` for cookie management.
-*   **Database:** **MongoDB** (Atlas) - using `motor` (Async) for the app and `pymongo` (Sync) for scripts.
-*   **Cache & State:** **Redis** (Context Caching & User State Management).
-*   **AI Engine:** **Google Gemini Adaptive** (Flash Lite 2.5 -> Flash 2.5 -> Flash 1.5) - Supports Vision, Video & Audio.
-*   **HTTP Client:** **HTTPX** (Async requests for media downloading).
-*   **Media Storage:** **Cloudinary** (For future media handling/persistence).
-*   **Messaging Provider:** **Green API** (WhatsApp wrapper with Interactive Buttons).
-*   **Task Queue:** **ARQ** (Async Redis Queue) for offloading heavy message processing.
-*   **Scheduling:** **APScheduler** (Cron Jobs) running alongside ARQ in the Worker process.
-*   **Logging:** **Loguru** (intercepts standard logging, structured file output).
-*   **Infrastructure:** **Docker** & **Docker Compose**.
+
+- **Language:** Python 3.12+
+- **Web Framework:** **FastAPI** (Async, handling Webhooks)
+- **Admin UI:** **Streamlit** (Rapid data app development) with `extra_streamlit_components` for cookie management.
+- **Database:** **MongoDB** (Atlas) - using `motor` (Async) for the app and `pymongo` (Sync) for scripts.
+- **Cache & State:** **Redis** (Context Caching & User State Management).
+- **AI Engine:** **Google Gemini Adaptive** (Flash Lite 2.5 -> Flash 2.5 -> Flash 1.5) - Supports Vision, Video & Audio.
+- **HTTP Client:** **HTTPX** (Async requests for media downloading).
+- **Media Storage:** **Cloudinary** (For future media handling/persistence).
+- **Messaging Provider:** **Green API** (WhatsApp wrapper with Interactive Buttons).
+- **Task Queue:** **ARQ** (Async Redis Queue) for offloading heavy message processing.
+- **Scheduling:** **APScheduler** (Cron Jobs) running alongside ARQ in the Worker process.
+- **Logging:** **Loguru** (intercepts standard logging, structured file output).
+- **Infrastructure:** **Docker** & **Docker Compose**.
 
 ### Data Flow
+
 1.  **Inbound:** WhatsApp Webhook -> `POST /webhook` (FastAPI `app/api/routes/webhook.py`).
 2.  **Task Enqueue:** Webhook immediately enqueues a job (`process_message_task`) to **ARQ** and returns 200 OK.
 3.  **Worker Processing (`app/worker.py`):**
-    *   **Context:** `ContextManager` fetches chat history from Redis.
-    *   **State:** `StateManager` checks user state (Idle, Pro Mode, etc.).
-    *   **Dispatcher:** `AIEngine` analyzes input to route the lead or continue conversation.
+    - **Context:** `ContextManager` fetches chat history from Redis.
+    - **State:** `StateManager` checks user state (Idle, Pro Mode, etc.).
+    - **Dispatcher:** `AIEngine` analyzes input to route the lead or continue conversation.
 4.  **Routing Engine (`app.services.matching_service_service.determine_best_pro`):**
-    *   **Filter:** Active Pros (`is_active: True`).
-    *   **Location:** Checks if extracted `city` matches Pro's `service_areas`.
-    *   **Ranking:** Sorts by `social_proof.rating` (Descending).
-    *   **Load Balancing:** Skips pros with > `WorkerConstants.MAX_PRO_LOAD` active ("booked") jobs.
+    - **Filter:** Active Pros (`is_active: True`).
+    - **Location:** Checks if extracted `city` matches Pro's `service_areas`.
+    - **Ranking:** Sorts by `social_proof.rating` (Descending).
+    - **Load Balancing:** Skips pros with > `WorkerConstants.MAX_PRO_LOAD` active ("booked") jobs.
 5.  **Action & Notification:**
-    *   **Database:** Updates Lead with linked `pro_id`.
-    *   **Booking:** `matching_service.book_slot_for_lead` ensures atomic slot reservation.
-    *   **Notification:** Sends details to Pro and confirmation to User via `notification_service`.
+    - **Database:** Updates Lead with linked `pro_id`.
+    - **Booking:** `matching_service.book_slot_for_lead` ensures atomic slot reservation.
+    - **Notification:** Sends details to Pro and confirmation to User via `notification_service`.
 6.  **Background Monitoring (APScheduler):**
-    *   **Healer:** Reassigns stale leads (`NEW`/`CONTACTED` > 30m).
-    *   **Reporter:** Alerts admin of stuck leads (> 24h).
-    *   **Reminders:** Sends daily agenda to Pros.
+    - **Healer:** Reassigns stale leads (`NEW`/`CONTACTED` > 30m).
+    - **Reporter:** Alerts admin of stuck leads (> 24h).
+    - **Reminders:** Sends daily agenda to Pros.
 
 ## 3. Project Structure
 
@@ -98,21 +101,23 @@
 ```
 
 ## 4. Key Conventions & Rules
-*   **Service Layer:** All business logic resides in `app/services/`. Files should be suffixed with `_service.py` where appropriate, but imports should be clean.
-*   **State Management:** Use `StateManager.get_state(chat_id)` to determine if a user is in a specific flow (e.g., `REQUIRE_MORE_INFO`).
-*   **Context:** Use `ContextManager.get_history(chat_id)` to retrieve conversation context for the AI.
-*   **Schema Standardization:**
-    *   `full_address` (was `address`)
-    *   `issue_type` (was `issue`)
-    *   `appointment_time` (was `time_preference`)
-*   **Date/Time:** Store all datetimes in **UTC**. Convert to **Asia/Jerusalem** (configured in `settings.TIMEZONE`) for display.
-*   **AI Context:** Always inject the *specific* Pro's system prompt using `app.core.prompts.Prompts`.
-*   **Security:** 
-    *   Use `admin_panel.auth.make_hash` for passwords.
-    *   Never commit secrets.
-*   **Concurrency:** Use `find_one_and_update` for scheduler and booking locks.
+
+- **Service Layer:** All business logic resides in `app/services/`. Files should be suffixed with `_service.py` where appropriate, but imports should be clean.
+- **State Management:** Use `StateManager.get_state(chat_id)` to determine if a user is in a specific flow (e.g., `REQUIRE_MORE_INFO`).
+- **Context:** Use `ContextManager.get_history(chat_id)` to retrieve conversation context for the AI.
+- **Schema Standardization:**
+  - `full_address` (was `address`)
+  - `issue_type` (was `issue`)
+  - `appointment_time` (was `time_preference`)
+- **Date/Time:** Store all datetimes in **UTC**. Convert to **Asia/Jerusalem** (configured in `settings.TIMEZONE`) for display.
+- **AI Context:** Always inject the _specific_ Pro's system prompt using `app.core.prompts.Prompts`.
+- **Security:**
+  - Use `admin_panel.auth.make_hash` for passwords.
+  - Never commit secrets.
+- **Concurrency:** Use `find_one_and_update` for scheduler and booking locks.
 
 ## 5. Audit Findings & Resolution Status
+
 1.  **Performance (Motor):** ✅ Resolved. Core app uses `motor`. `pymongo` reserved for scripts.
 2.  **Security (Auth):** ✅ Resolved. `admin_panel/auth.py` uses salted `bcrypt`.
 3.  **Concurrency (Scheduler):** ✅ Resolved. Atomic DB locks implemented in `scheduler.py`.
@@ -129,6 +134,7 @@
 14. **State Management:** ✅ Resolved. Implemented Redis-based `StateManager` to control user flows.
 
 ### Environment Variables (`.env`)
+
 ```env
 # Core
 MONGO_URI=mongodb+srv://...
@@ -139,7 +145,7 @@ ENVIRONMENT="development"
 
 # APIs
 GEMINI_API_KEY=...
-GREEN_API_ID=...
+GREEN_API_INSTANCE_ID=...
 GREEN_API_TOKEN=...
 CLOUDINARY_CLOUD_NAME=...
 CLOUDINARY_API_KEY=...
@@ -152,8 +158,11 @@ REDIS_DB=0
 ```
 
 ### Running the Application
+
 1.  **Backend:** `uvicorn app.main:app --reload --port 8000`
 2.  **Worker (ARQ + Scheduler):** `python -m app.worker`
 3.  **Admin:** `streamlit run admin_panel/main.py`
+
+```
 
 ```
