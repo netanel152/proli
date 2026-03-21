@@ -55,11 +55,29 @@ async def webhook_endpoint(payload: WebhookPayload):
             # Extract User Text
             user_text = ""
             media_url = None
-            
+
             if msg_data.typeMessage == "textMessage":
                 user_text = msg_data.textMessageData.textMessage
             elif msg_data.typeMessage == "extendedTextMessage":
-                user_text = msg_data.extendedTextMessageData.text
+                user_text = msg_data.extendedTextMessageData.text or ""
+            elif msg_data.typeMessage == "buttonsResponseMessage":
+                # Handle interactive button clicks from Green API
+                if msg_data.buttonsResponseMessage:
+                    user_text = msg_data.buttonsResponseMessage.selectedButtonId or msg_data.buttonsResponseMessage.selectedButtonText or ""
+                    logger.info(f"Button response from {chat_id}: {user_text}")
+            elif msg_data.typeMessage == "locationMessage":
+                # Handle location pin messages
+                if msg_data.locationMessageData:
+                    loc = msg_data.locationMessageData
+                    parts = []
+                    if loc.nameLocation:
+                        parts.append(loc.nameLocation)
+                    if loc.address:
+                        parts.append(loc.address)
+                    if loc.latitude and loc.longitude:
+                        parts.append(f"({loc.latitude}, {loc.longitude})")
+                    user_text = " ".join(parts) if parts else f"מיקום: {loc.latitude}, {loc.longitude}"
+                    logger.info(f"Location message from {chat_id}: {user_text}")
             elif msg_data.typeMessage in ["imageMessage", "audioMessage", "videoMessage"]:
                 if msg_data.fileMessageData:
                     media_url = msg_data.fileMessageData.downloadUrl

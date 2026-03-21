@@ -5,7 +5,7 @@ from app.core.constants import UserStates
 from typing import Optional, Dict, Any
 
 class StateManager:
-    TTL = 3600  # 1 hour expiration
+    TTL = 14400  # 4 hours expiration (allows longer conversations)
 
     @classmethod
     async def get_state(cls, chat_id: str) -> str:

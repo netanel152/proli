@@ -49,7 +49,7 @@ class Messages:
         ADMIN_ALERT = "🚨 System SOS from {chat_id}. Msg: {last_message}"
 
     class System:
-        RESET_SUCCESS = "Reset successful"
+        RESET_SUCCESS = "🔄 השיחה אופסה בהצלחה. איך אפשר לעזור?"
 
     class Keywords:
         # Logic commands used in 'if' statements

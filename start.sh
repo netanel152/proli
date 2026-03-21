@@ -1,20 +1,27 @@
 #!/bin/bash
+set -e
 
-# הפעלת ה-Worker ברקע
+echo "Starting Proli services..."
+
+# Start Worker in background
 python -m app.worker &
-status=$?
-if [ $status -ne 0 ]; then
-  echo "Failed to start worker: $status"
-  exit $status
-fi
+WORKER_PID=$!
+echo "Worker started (PID: $WORKER_PID)"
 
-# הפעלת האדמין ברקע
+# Start Admin Panel in background
 streamlit run admin_panel/main.py --server.port 8501 --server.address 0.0.0.0 &
-status=$?
-if [ $status -ne 0 ]; then
-  echo "Failed to start admin panel: $status"
-  exit $status
-fi
+ADMIN_PID=$!
+echo "Admin panel started (PID: $ADMIN_PID)"
 
-# הפעלת ה-API (בחזית - זה מה שמחזיק את הקונטיינר חי)
+# Trap to clean up background processes on exit
+cleanup() {
+    echo "Shutting down..."
+    kill $WORKER_PID $ADMIN_PID 2>/dev/null || true
+    wait $WORKER_PID $ADMIN_PID 2>/dev/null || true
+    echo "All processes stopped."
+}
+trap cleanup EXIT SIGTERM SIGINT
+
+# Start API in foreground (keeps container alive)
+echo "Starting API server..."
 uvicorn app.main:app --host 0.0.0.0 --port 8000

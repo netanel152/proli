@@ -37,6 +37,9 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
         
         # 1. Try to alert the Professional
         if pro_id:
+            # Ensure pro_id is ObjectId for MongoDB query
+            if isinstance(pro_id, str):
+                pro_id = ObjectId(pro_id)
             pro = await users_collection.find_one({"_id": pro_id})
             if pro and pro.get("phone_number"):
                 pro_phone = pro["phone_number"]

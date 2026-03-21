@@ -12,7 +12,7 @@ from app.core.logger import logger
 IL_TZ = pytz.timezone('Asia/Jerusalem')
 
 async def send_daily_reminders():
-    print(f"⏰ [Scheduler] Starting daily reminders check at {datetime.now(IL_TZ)}")
+    logger.info(f"⏰ [Scheduler] Starting daily reminders check at {datetime.now(IL_TZ)}")
     
     active_pros = await users_collection.find({"is_active": True}).to_list(length=None)
     
@@ -49,7 +49,7 @@ async def send_daily_reminders():
                 try:
                     await whatsapp.send_message(chat_id, msg)
                 except Exception as e:
-                    print(f"❌ Failed to send to {pro['business_name']}: {e}")
+                    logger.error(f"❌ Failed to send to {pro['business_name']}: {e}")
 
 async def monitor_unfinished_jobs():
     """
@@ -64,7 +64,7 @@ async def monitor_unfinished_jobs():
     if not (8 <= now_il.hour < 21):
         return  # Safety: Only run during business hours
 
-    print(f"🕵️ [Scheduler] Running Stale Job Monitor at {now_il.strftime('%H:%M')}...")
+    logger.info(f"🕵️ [Scheduler] Running Stale Job Monitor at {now_il.strftime('%H:%M')}...")
     now_utc = datetime.now(pytz.utc)
 
     # Tier 1: 4-6 hours old -> Remind Pro
@@ -75,7 +75,7 @@ async def monitor_unfinished_jobs():
         "created_at": {"$gte": t1_start, "$lt": t1_end}
     })
     async for lead in t1_leads_cursor:
-        print(f"[Monitor] T1: Sending pro reminder for lead {lead['_id']}")
+        logger.info(f"[Monitor] T1: Sending pro reminder for lead {lead['_id']}")
         await send_pro_reminder(str(lead["_id"]))
 
     # Tier 2: 6-24 hours old -> Check with Customer
@@ -86,7 +86,7 @@ async def monitor_unfinished_jobs():
         "created_at": {"$gte": t2_start, "$lt": t2_end}
     })
     async for lead in t2_leads_cursor:
-        print(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")
+        logger.info(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")
         await send_customer_completion_check(str(lead["_id"]))
 
     # Tier 3: >24 hours old -> Flag for Admin
@@ -96,7 +96,7 @@ async def monitor_unfinished_jobs():
         {"$set": {"flag": "requires_admin"}}
     )
     if update_result.modified_count > 0:
-        print(f"[Monitor] T3: Flagged {update_result.modified_count} leads for admin review.")
+        logger.info(f"[Monitor] T3: Flagged {update_result.modified_count} leads for admin review.")
 
 # --- Wrappers for Imported Services ---
 
@@ -150,11 +150,11 @@ async def daily_reminders_job():
         )
 
         if result:
-            print(f"⏰ [Scheduler] Executing daily reminders for {today_str}.")
+            logger.info(f"⏰ [Scheduler] Executing daily reminders for {today_str}.")
             await send_daily_reminders()
 
     except Exception as e:
-        print(f"❌ [Scheduler Error] {e}")
+        logger.error(f"❌ [Scheduler Error] {e}")
 
 def start_scheduler():
     scheduler = AsyncIOScheduler(timezone=IL_TZ)
@@ -192,5 +192,5 @@ def start_scheduler():
     )
 
     scheduler.start()
-    print("🚀 APScheduler Started with all jobs!")
+    logger.info("🚀 APScheduler Started with all jobs!")
     return scheduler
