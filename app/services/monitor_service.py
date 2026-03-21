@@ -52,7 +52,7 @@ async def check_and_reassign_stale_leads():
             
             new_pro = await matching_service.determine_best_pro(
                 issue_type=lead.get("issue_type"),
-                location=lead.get("full_address") or lead.get("city"), # Check schema
+                location=lead.get("full_address"),
                 excluded_pro_ids=excluded_ids
             )
             

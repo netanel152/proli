@@ -1,6 +1,7 @@
 import httpx
 import asyncio
 import json
+import os
 
 async def simulate_message():
     print("--- WhatsApp Webhook Simulator ---")
