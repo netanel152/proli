@@ -39,20 +39,24 @@ async def create_pros():
         {
             "business_name": "יוסי אינסטלציה",
             "phone_number": "972500000001",
+            "role": "professional",
             "service_areas": AREAS_CENTER,
             "categories": ["Plumber"],
             "is_active": True,
-            "rating": 4.9,
+            "social_proof": {"rating": 4.9, "review_count": 12},
+            "location": {"type": "Point", "coordinates": [34.7818, 32.0853]},  # Tel Aviv [lon, lat]
             "system_prompt": "אתה יוסי, אינסטלטור מנוסה. היה אדיב ומקצועי.",
             "price_list": {"ביקור": 250, "פתיחת סתימה": 400}
         },
         {
             "business_name": "משה חשמל ומיזוג",
             "phone_number": "972500000002",
+            "role": "professional",
             "service_areas": AREAS_SOUTH,
             "categories": ["Electrician"],
             "is_active": True,
-            "rating": 4.7,
+            "social_proof": {"rating": 4.7, "review_count": 8},
+            "location": {"type": "Point", "coordinates": [34.7742, 32.0158]},  # Holon [lon, lat]
             "system_prompt": "אתה משה, חשמלאי מוסמך. תן דגש על בטיחות.",
             "price_list": {"ביקור": 300, "התקנת שקע": 150}
         }
@@ -173,32 +177,32 @@ def create_chat_history(chat_id, start_time):
     # 1. User: Hi
     history.append({
         "chat_id": chat_id,
-        "sender": "user",
-        "content": "היי, יש לי בעיה בבית",
+        "role": "user",
+        "text": "היי, יש לי בעיה בבית",
         "timestamp": start_time
     })
-    
+
     # 2. Assistant: details?
     history.append({
         "chat_id": chat_id,
-        "sender": "assistant",
-        "content": "היי! אני כאן לעזור. מה בדיוק הבעיה ואיפה?",
+        "role": "assistant",
+        "text": "היי! אני כאן לעזור. מה בדיוק הבעיה ואיפה?",
         "timestamp": start_time + timedelta(seconds=15)
     })
-    
+
     # 3. User: Issue
     history.append({
         "chat_id": chat_id,
-        "sender": "user",
-        "content": "יש לי נזילה במטבח מתחת לכיור",
+        "role": "user",
+        "text": "יש לי נזילה במטבח מתחת לכיור",
         "timestamp": start_time + timedelta(seconds=45)
     })
-    
+
     # 4. Assistant: searching
     history.append({
         "chat_id": chat_id,
-        "sender": "assistant",
-        "content": "הבנתי, אני בודק איזה אינסטלטור פנוי באזור שלך...",
+        "role": "assistant",
+        "text": "הבנתי, אני בודק איזה אינסטלטור פנוי באזור שלך...",
         "timestamp": start_time + timedelta(seconds=60)
     })
     

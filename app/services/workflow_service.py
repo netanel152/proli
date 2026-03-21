@@ -94,41 +94,65 @@ async def handle_customer_rating_text(chat_id: str, text: str):
     text = text.strip()
     if text not in Messages.Keywords.RATING_OPTIONS:
         return None
-        
+
     rating = int(text)
-    
+
     lead = await leads_collection.find_one({
         "chat_id": chat_id,
         "waiting_for_rating": True
     })
-    
+
     if not lead:
         return None
-        
-    pro_id = lead["pro_id"]
-    pro = await users_collection.find_one({"_id": pro_id})
-    
-    current_rating = pro.get("social_proof", {}).get("rating", 5.0)
-    count = pro.get("social_proof", {}).get("review_count", 0)
-    new_rating = round(((current_rating * 10) + rating) / 11, 1) 
-    
-    await users_collection.update_one(
-        {"_id": pro_id},
-        {"$set": {"social_proof.rating": new_rating, "social_proof.review_count": count + 1}}
-    )
-    
-    await leads_collection.update_one(
-        {"_id": lead["_id"]},
-        {"$set": {
-            "waiting_for_rating": False, 
-            "rating_given": rating,
-            "waiting_for_review_comment": True
-        }}
-    )
-    
-    business_name = pro['business_name'] if pro else Defaults.GENERIC_PRO_NAME
-    logger.success(f"⭐ Rating {rating} saved for {business_name}")
-    return Messages.Customer.REVIEW_REQUEST
+
+    try:
+        pro_id = lead["pro_id"]
+        pro = await users_collection.find_one({"_id": pro_id})
+
+        if not pro:
+            logger.error(f"Pro {pro_id} not found for rating on lead {lead['_id']}")
+            return None
+
+        # Atomic rating update using aggregation pipeline to avoid race conditions
+        await users_collection.update_one(
+            {"_id": pro_id},
+            [
+                {"$set": {
+                    "social_proof.rating": {
+                        "$round": [
+                            {"$divide": [
+                                {"$add": [
+                                    {"$multiply": [
+                                        {"$ifNull": ["$social_proof.rating", 5.0]},
+                                        {"$ifNull": ["$social_proof.review_count", 0]}
+                                    ]},
+                                    rating
+                                ]},
+                                {"$add": [{"$ifNull": ["$social_proof.review_count", 0]}, 1]}
+                            ]},
+                            1
+                        ]
+                    },
+                    "social_proof.review_count": {"$add": [{"$ifNull": ["$social_proof.review_count", 0]}, 1]}
+                }}
+            ]
+        )
+
+        await leads_collection.update_one(
+            {"_id": lead["_id"]},
+            {"$set": {
+                "waiting_for_rating": False,
+                "rating_given": rating,
+                "waiting_for_review_comment": True
+            }}
+        )
+
+        business_name = pro.get('business_name', Defaults.GENERIC_PRO_NAME)
+        logger.success(f"⭐ Rating {rating} saved for {business_name}")
+        return Messages.Customer.REVIEW_REQUEST
+    except Exception as e:
+        logger.error(f"Error handling rating for lead {lead['_id']}: {e}")
+        return None
 
 async def handle_customer_review_comment(chat_id: str, text: str):
     """Checks if the user sent a textual review after rating."""
@@ -167,7 +191,7 @@ async def handle_pro_text_command(chat_id: str, text: str):
     """
     # Identify Pro
     phone = chat_id.replace("@c.us", "")
-    pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}})
+    pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional"})
     if not pro:
         return None 
 
@@ -304,11 +328,17 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_INVALID)
             return
 
-    # 0. Check for Pro Text Command
-    if user_text:
-        pro_resp = await handle_pro_text_command(chat_id, user_text)
-        if pro_resp:
-            await whatsapp.send_message(chat_id, pro_resp)
+    # 0. Auto-detect Professional on first contact
+    if current_state == UserStates.IDLE:
+        phone = chat_id.replace("@c.us", "")
+        is_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional"})
+        if is_pro:
+            await StateManager.set_state(chat_id, UserStates.PRO_MODE)
+            pro_resp = await handle_pro_text_command(chat_id, user_text)
+            if pro_resp:
+                await whatsapp.send_message(chat_id, pro_resp)
+            else:
+                await whatsapp.send_message(chat_id, Messages.Pro.PRO_HELP_MENU)
             return
 
     # 1. Log User Message
@@ -474,7 +504,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # 6. Check for [DEAL] or Structured Booking
     is_deal = final_response.is_deal
     
-    deal_string_match = re.search(r"[DEAL:.*?]", final_response.reply_to_user)
+    deal_string_match = re.search(r"\[DEAL:.*?\]", final_response.reply_to_user)
     if deal_string_match:
         is_deal = True
     

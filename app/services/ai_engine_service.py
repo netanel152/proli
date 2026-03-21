@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 import traceback
 import json
+import os
 import tempfile
 import httpx
 import asyncio
@@ -60,9 +61,11 @@ class AIEngine:
                              # Upload to Gemini
                              uploaded_file = await self.client.aio.files.upload(path=tmp_path, config=types.UploadFileConfig(mime_type=media_mime_type))
 
-                             # Wait for processing if it's a video
+                             # Wait for processing if it's a video (with timeout)
                              if "video" in media_mime_type:
-                                 while True:
+                                 max_wait_seconds = 120
+                                 waited = 0
+                                 while waited < max_wait_seconds:
                                      file_status = await self.client.aio.files.get(name=uploaded_file.name)
                                      if file_status.state.name == "ACTIVE":
                                          break
@@ -70,6 +73,9 @@ class AIEngine:
                                          raise Exception("Gemini File Processing Failed")
                                      logger.info(f"Waiting for video processing: {file_status.state.name}")
                                      await asyncio.sleep(2)
+                                     waited += 2
+                                 else:
+                                     raise Exception(f"Gemini video processing timed out after {max_wait_seconds}s")
 
                              current_parts.append(types.Part.from_uri(file_uri=uploaded_file.uri, mime_type=media_mime_type))
 
