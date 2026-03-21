@@ -3,6 +3,7 @@ from app.core.database import leads_collection, users_collection
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, WorkerConstants
+from app.core.config import settings
 from bson import ObjectId
 
 whatsapp = WhatsAppClient()
@@ -52,7 +53,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
 
         # 2. If no pro or alert failed, alert Admin
         if not alert_sent:
-            admin_phone = WorkerConstants.ADMIN_PHONE
+            admin_phone = settings.ADMIN_PHONE
             admin_chat_id = f"{admin_phone}@c.us" if not admin_phone.endswith('@c.us') else admin_phone
             
             msg = Messages.SOS.ADMIN_ALERT.format(chat_id=chat_id, last_message=last_message)

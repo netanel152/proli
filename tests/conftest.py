@@ -35,13 +35,15 @@ def patch_dependencies(request, monkeypatch, mock_db):
     leads = mock_db.leads
     slots = mock_db.slots
     settings_col = mock_db.settings
-    
+    reviews = mock_db.reviews
+
     import app.core.database
     monkeypatch.setattr(app.core.database, "users_collection", users)
     monkeypatch.setattr(app.core.database, "messages_collection", messages)
     monkeypatch.setattr(app.core.database, "leads_collection", leads)
     monkeypatch.setattr(app.core.database, "slots_collection", slots)
     monkeypatch.setattr(app.core.database, "settings_collection", settings_col)
+    monkeypatch.setattr(app.core.database, "reviews_collection", reviews)
 
     # Patch Scheduler Collections
     import app.scheduler
@@ -58,6 +60,17 @@ def patch_dependencies(request, monkeypatch, mock_db):
     import app.services.workflow_service
     monkeypatch.setattr(app.services.workflow_service, "users_collection", users)
     monkeypatch.setattr(app.services.workflow_service, "leads_collection", leads)
+    monkeypatch.setattr(app.services.workflow_service, "reviews_collection", reviews)
+
+    # Patch extracted flow modules (they import collections directly)
+    import app.services.customer_flow
+    monkeypatch.setattr(app.services.customer_flow, "users_collection", users)
+    monkeypatch.setattr(app.services.customer_flow, "leads_collection", leads)
+    monkeypatch.setattr(app.services.customer_flow, "reviews_collection", reviews)
+
+    import app.services.pro_flow
+    monkeypatch.setattr(app.services.pro_flow, "users_collection", users)
+    monkeypatch.setattr(app.services.pro_flow, "leads_collection", leads)
 
     # Patch Matching Service Collections
     import app.services.matching_service
@@ -109,6 +122,7 @@ async def integration_db(monkeypatch):
     leads = db.leads
     slots = db.slots
     settings_col = db.settings
+    reviews = db.reviews
 
     # CLEAR DB before test
     await users.delete_many({})
@@ -116,6 +130,7 @@ async def integration_db(monkeypatch):
     await leads.delete_many({})
     await slots.delete_many({})
     await settings_col.delete_many({})
+    await reviews.delete_many({})
 
     # Patch app.core.database
     import app.core.database
@@ -124,6 +139,7 @@ async def integration_db(monkeypatch):
     monkeypatch.setattr(app.core.database, "leads_collection", leads)
     monkeypatch.setattr(app.core.database, "slots_collection", slots)
     monkeypatch.setattr(app.core.database, "settings_collection", settings_col)
+    monkeypatch.setattr(app.core.database, "reviews_collection", reviews)
 
     # Patch Lead Manager
     import app.services.lead_manager_service
@@ -134,6 +150,16 @@ async def integration_db(monkeypatch):
     import app.services.workflow_service
     monkeypatch.setattr(app.services.workflow_service, "users_collection", users)
     monkeypatch.setattr(app.services.workflow_service, "leads_collection", leads)
+    monkeypatch.setattr(app.services.workflow_service, "reviews_collection", reviews)
+
+    import app.services.customer_flow
+    monkeypatch.setattr(app.services.customer_flow, "users_collection", users)
+    monkeypatch.setattr(app.services.customer_flow, "leads_collection", leads)
+    monkeypatch.setattr(app.services.customer_flow, "reviews_collection", reviews)
+
+    import app.services.pro_flow
+    monkeypatch.setattr(app.services.pro_flow, "users_collection", users)
+    monkeypatch.setattr(app.services.pro_flow, "leads_collection", leads)
 
     # --- Patch Matching Service ---
     import app.services.matching_service

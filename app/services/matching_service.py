@@ -84,20 +84,23 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
             matching_pros = await users_collection.find(fallback_query).to_list(length=WorkerConstants.DB_QUERY_LIMIT)
 
         # 3. Load Balancing & Sorting
-        # If $near was used, they are sorted by distance. 
-        # If not, we should sort by rating.
-        # However, we must filter by Load first.
+        # Batch-fetch active lead counts for all matching pros in a single query
+        pro_ids = [pro["_id"] for pro in matching_pros]
+        load_pipeline = [
+            {"$match": {
+                "pro_id": {"$in": pro_ids},
+                "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]}
+            }},
+            {"$group": {"_id": "$pro_id", "count": {"$sum": 1}}}
+        ]
+        load_counts = {}
+        async for doc in leads_collection.aggregate(load_pipeline):
+            load_counts[doc["_id"]] = doc["count"]
 
         candidates = []
-        
+
         for pro in matching_pros:
-            # Check Active Load
-            current_load = await leads_collection.count_documents({
-                "pro_id": pro["_id"],
-                "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]} # Check all active states
-            })
-            
-            # Helper to get rating safely
+            current_load = load_counts.get(pro["_id"], 0)
             rating = pro.get("social_proof", {}).get("rating", 0)
 
             if current_load < WorkerConstants.MAX_PRO_LOAD:

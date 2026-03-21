@@ -43,9 +43,9 @@
 - **Cache:** Redis (Context & State)
 - **Media Storage:** Cloudinary
 - **Messaging:** WhatsApp (via Green API)
-- **Security:** Bcrypt (Admin Auth)
+- **Security:** Bcrypt (Admin Auth), Webhook Token Verification, Session-based Cookies
 - **Testing:** Pytest with AsyncIO & Mocking (Comprehensive suite covering AI, DB, and Business Logic)
-- **Deployment:** Docker / Heroku ready
+- **Deployment:** Docker Compose / Railway (multi-service)
 
 ---
 
@@ -105,7 +105,9 @@
     CLOUDINARY_CLOUD_NAME=...
     CLOUDINARY_API_KEY=...
     CLOUDINARY_API_SECRET=...
-    ADMIN_PASSWORD=admin123
+    ADMIN_PASSWORD_HASH=...  # Generate with: python scripts/generate_admin_hash.py
+    ADMIN_PHONE=972501234567  # Admin WhatsApp number for SOS alerts
+    WEBHOOK_TOKEN=...  # Optional: enables webhook auth (?token=<value>)
     ```
 
 3.  **Seed Database:**
@@ -156,4 +158,8 @@ For more detailed information, please refer to the `docs/` folder:
 - **[Operations Guide](docs/OPERATIONS_GUIDE.md)**: Manual for running, monitoring, and troubleshooting the system.
 - **[Gemini Context](docs/GEMINI.md)**: Technical architecture and AI context for developers.
 - **[Scaling Guide](docs/SCALING_GUIDE.md)**: Strategies for scaling the application.
+- **[Architecture](docs/ARCHITECTURE.md)**: System architecture and component interactions.
+- **[Railway Setup](docs/RAILWAY_SETUP.md)**: Multi-service Railway deployment guide.
+- **[Testing Guide](docs/TESTING.md)**: Test suite structure, mocking strategy, and how to run tests.
 - **[Production Readiness](docs/PRODUCTION_READINESS.md)**: Checklist for going to production.
+- **[Analysis Report](docs/ANALYSIS_REPORT.md)**: March 2026 code review — all 19 issues resolved.

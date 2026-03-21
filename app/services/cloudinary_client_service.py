@@ -3,6 +3,7 @@ import cloudinary.uploader
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from app.core.config import settings
+from app.core.logger import logger
 
 # Configure Cloudinary
 cloudinary.config( 
@@ -23,7 +24,7 @@ def upload_image(file_object) -> str | None:
         response = cloudinary.uploader.upload(file_object)
         return response.get("secure_url")
     except Exception as e:
-        print(f"Error uploading to Cloudinary: {e}")
+        logger.error(f"Error uploading to Cloudinary: {e}")
         return None
 
 async def upload_image_async(file_object) -> str | None:
@@ -37,5 +38,5 @@ async def upload_image_async(file_object) -> str | None:
         response = await loop.run_in_executor(executor, cloudinary.uploader.upload, file_object)
         return response.get("secure_url")
     except Exception as e:
-        print(f"Error uploading to Cloudinary: {e}")
+        logger.error(f"Error uploading to Cloudinary: {e}")
         return None

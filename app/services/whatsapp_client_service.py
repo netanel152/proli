@@ -8,6 +8,17 @@ class WhatsAppClient:
     def __init__(self):
         self.api_url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}"
         self.api_token = settings.GREEN_API_TOKEN
+        self._client: httpx.AsyncClient | None = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=30.0)
+        return self._client
+
+    async def close(self):
+        if self._client and not self._client.is_closed:
+            await self._client.close()
+            self._client = None
 
     @retry(
         retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
@@ -16,10 +27,10 @@ class WhatsAppClient:
     )
     async def _send_request(self, endpoint: str, payload: dict):
         url = f"{self.api_url}/{endpoint}/{self.api_token}"
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(url, json=payload)
-            resp.raise_for_status()
-            return resp.json()
+        client = await self._get_client()
+        resp = await client.post(url, json=payload)
+        resp.raise_for_status()
+        return resp.json()
 
     @retry(
         retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
@@ -56,28 +67,23 @@ class WhatsAppClient:
         Sends an interactive message with buttons.
         buttons: list of dicts with 'id' and 'title'.
         """
-        # Ensure correct format (chatId vs phone number)
-        # If to_number already has @c.us, use it. If not, append it.
         chat_id = f"{to_number}@c.us" if not to_number.endswith("@c.us") else to_number
-        
+
         buttons_payload = [
             {"buttonId": b["id"], "buttonText": {"displayText": b["title"]}}
             for b in buttons
         ]
-        
+
         payload = {
             "chatId": chat_id,
             "message": text,
             "buttons": buttons_payload
         }
-        
+
         try:
             resp = await self._send_request("sendInteractiveMessage", payload)
             logger.info(f"Interactive buttons sent to {chat_id}")
             return resp
         except Exception as e:
             logger.error(f"Failed to send interactive buttons to {chat_id}: {e}")
-            # We don't raise here to avoid crashing flow, just log error? 
-            # Or should we raise? Retries are handled by decorator. 
-            # Let's raise to be safe.
             raise

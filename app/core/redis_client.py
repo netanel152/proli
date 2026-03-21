@@ -1,3 +1,4 @@
+import asyncio
 from redis.asyncio import Redis, from_url
 from arq import create_pool
 from arq.connections import RedisSettings
@@ -7,22 +8,33 @@ from typing import Optional
 
 _redis_client: Optional[Redis] = None
 _arq_pool = None
+_redis_lock = asyncio.Lock()
+_arq_lock = asyncio.Lock()
 
 async def get_redis_client() -> Redis:
     """
     Returns a singleton async Redis client instance.
+    Uses asyncio.Lock to prevent race conditions during initialization.
     """
     global _redis_client
-    if _redis_client is None:
+    if _redis_client is not None:
+        return _redis_client
+
+    async with _redis_lock:
+        # Double-check after acquiring lock
+        if _redis_client is not None:
+            return _redis_client
+
         redis_url = settings.REDIS_URL or f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
         try:
-            _redis_client = from_url(
-                redis_url, 
-                encoding="utf-8", 
+            client = from_url(
+                redis_url,
+                encoding="utf-8",
                 decode_responses=True,
                 max_connections=20
             )
-            await _redis_client.ping()
+            await client.ping()
+            _redis_client = client
             logger.info("Connected to Redis successfully.")
         except Exception as e:
             logger.error(f"Could not connect to Redis: {e}")
@@ -32,9 +44,17 @@ async def get_redis_client() -> Redis:
 async def get_arq_pool():
     """
     Returns a singleton ARQ Redis pool instance.
+    Uses asyncio.Lock to prevent race conditions during initialization.
     """
     global _arq_pool
-    if _arq_pool is None:
+    if _arq_pool is not None:
+        return _arq_pool
+
+    async with _arq_lock:
+        # Double-check after acquiring lock
+        if _arq_pool is not None:
+            return _arq_pool
+
         try:
             if settings.REDIS_URL:
                 _arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
@@ -62,7 +82,7 @@ async def close_redis_client():
             logger.info("Redis connection closed.")
         except Exception as e:
             logger.error(f"Error closing Redis client: {e}")
-            
+
     if _arq_pool:
         try:
             await _arq_pool.close()

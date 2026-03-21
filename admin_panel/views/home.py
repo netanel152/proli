@@ -2,10 +2,9 @@ import streamlit as st
 import pandas as pd
 from bson.objectid import ObjectId
 from datetime import datetime
-from admin_panel.core.utils import users_collection, leads_collection, messages_collection
+from admin_panel.core.utils import users_collection, leads_collection, messages_collection, send_completion_check_sync
 from admin_panel.ui.components import render_chat_bubble
 import pytz
-import asyncio
 import os
 import sys
 from app.core.logger import logger
@@ -13,7 +12,6 @@ from app.core.constants import AdminDefaults, Defaults
 
 # Allow imports from the root directory to access the 'app' module
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from app.services.workflow_service import send_customer_completion_check
 
 def view_leads_dashboard(T):
     st.title(T["title_dashboard"])
@@ -209,7 +207,7 @@ def view_leads_dashboard(T):
                     # Manual Customer Check Action
                     if st.button("📱 בדיקה מול לקוח", key=f"check_{selected_lead['id']}", help="Send WhatsApp verification"):
                         try:
-                            asyncio.run(send_customer_completion_check(selected_lead['id'], triggered_by="admin"))
+                            send_completion_check_sync(selected_lead['id'])
                             st.success("✅ Check sent!")
                         except Exception as e:
                             st.error(f"Failed: {e}")

@@ -103,22 +103,21 @@ async def test_send_interactive_buttons_payload():
         {"buttonId": "btn2", "buttonText": {"displayText": "Option 2"}}
     ]
 
-    # Mock httpx.AsyncClient
-    with patch("httpx.AsyncClient") as mock_client_cls:
-        mock_instance = mock_client_cls.return_value.__aenter__.return_value
-        mock_instance.post = AsyncMock(return_value=MagicMock(status_code=200, json=lambda: {"ok": True}))
+    # Mock _send_request on the client instance
+    client._send_request = AsyncMock(return_value={"ok": True})
 
-        # Action
-        await client.send_interactive_buttons(to_number, text, buttons)
+    # Action
+    await client.send_interactive_buttons(to_number, text, buttons)
 
-        # Assertion
-        mock_instance.post.assert_called_once()
-        
-        # Get arguments passed to post
-        call_args = mock_instance.post.call_args
-        # args[0] is url, kwargs['json'] is payload
-        payload = call_args.kwargs['json']
-        
-        assert payload["chatId"] == "123456789@c.us"
-        assert payload["message"] == text
-        assert payload["buttons"] == expected_buttons_payload
+    # Assertion
+    client._send_request.assert_called_once()
+
+    # Get arguments passed to _send_request
+    call_args = client._send_request.call_args
+    endpoint = call_args.args[0]
+    payload = call_args.args[1]
+
+    assert endpoint == "sendInteractiveMessage"
+    assert payload["chatId"] == "123456789@c.us"
+    assert payload["message"] == text
+    assert payload["buttons"] == expected_buttons_payload

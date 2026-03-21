@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 from app.schemas.whatsapp import WebhookPayload
 from app.core.logger import logger
 from app.core.config import settings
@@ -9,12 +10,18 @@ from app.services.security_service import SecurityService
 router = APIRouter()
 
 @router.post("/webhook")
-async def webhook_endpoint(payload: WebhookPayload):
+async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=None)):
     """
     Main entry point for Green API Webhooks.
     """
+    # Webhook Token Verification
+    if settings.WEBHOOK_TOKEN:
+        if token != settings.WEBHOOK_TOKEN:
+            logger.warning("Security Alert: Webhook request with invalid or missing token")
+            return JSONResponse(status_code=403, content={"status": "forbidden"})
+
     try:
-        # 0. Idempotency Check (Redis)
+        # Idempotency Check (Redis)
         if payload.idMessage:
             redis = await get_redis_client()
             cache_key = f"webhook:{payload.idMessage}"
@@ -26,14 +33,14 @@ async def webhook_endpoint(payload: WebhookPayload):
                 logger.info(f"Idempotency: Skipping duplicate message {payload.idMessage}")
                 return {"status": APIStatus.PROCESSING, "detail": "duplicate"}
         
-        # 1. Security Verification
+        # Security Verification
         # Ensure the webhook comes from OUR Green API instance
         if payload.instanceData:
             if str(payload.instanceData.idInstance) != str(settings.GREEN_API_INSTANCE_ID):
                 logger.warning(f"Security Alert: Blocked webhook from unknown instance: {payload.instanceData.idInstance}")
                 return {"status": APIStatus.IGNORED_WRONG_INSTANCE}
         
-        # 2. Basic Filters
+        # Basic Filters
         if payload.typeWebhook == "incomingMessageReceived":
             sender_data = payload.senderData
             msg_data = payload.messageData

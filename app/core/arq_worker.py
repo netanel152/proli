@@ -3,6 +3,7 @@ from app.core.config import settings
 from app.services.workflow_service import process_incoming_message
 from app.core.logger import logger
 from app.core.database import client
+from app.core.http_client import close_http_client
 from app.scheduler import start_scheduler
 
 # Redis configuration for ARQ
@@ -38,11 +39,14 @@ async def shutdown(ctx):
     Called when the worker shuts down.
     """
     logger.info("ARQ Worker shutting down...")
-    
+
     # Shutdown Scheduler
     if "scheduler" in ctx:
         ctx["scheduler"].shutdown()
-        logger.info("🛑 Scheduler shut down.")
+        logger.info("Scheduler shut down.")
+
+    # Close shared HTTP client
+    await close_http_client()
 
 async def process_message_task(ctx, chat_id: str, user_text: str, media_url: str = None):
     """

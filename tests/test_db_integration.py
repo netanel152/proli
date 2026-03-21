@@ -1,6 +1,8 @@
 import pytest
 from app.services.lead_manager_service import LeadManager
-from app.services.workflow_service import handle_pro_text_command, determine_best_pro, whatsapp
+from app.services.pro_flow import handle_pro_text_command
+from app.services.matching_service import determine_best_pro
+from app.services.workflow_service import whatsapp, lead_manager
 from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 
@@ -126,7 +128,7 @@ async def test_pro_lifecycle_text_commands(integration_db):
     })
 
     # 3. Pro Sends "אשר" (Approve)
-    response_text = await handle_pro_text_command(pro_chat_id, "אשר")
+    response_text = await handle_pro_text_command(pro_chat_id, "אשר", whatsapp, lead_manager)
     
     # Verify Response and DB Update
     assert response_text is not None, "Pro text command returned None (Pro not found?)"
@@ -144,7 +146,7 @@ async def test_pro_lifecycle_text_commands(integration_db):
     workflow_service.whatsapp.send_message.reset_mock()
 
     # 4. Pro Sends "סיימתי" (Finish)
-    response_text_finish = await handle_pro_text_command(pro_chat_id, "סיימתי")
+    response_text_finish = await handle_pro_text_command(pro_chat_id, "סיימתי", whatsapp, lead_manager)
     
     # Verify Response and DB Update
     assert response_text_finish is not None

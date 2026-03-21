@@ -1,12 +1,15 @@
 import streamlit as st
 import os
 import time
+import secrets
 import extra_streamlit_components as stx
 import bcrypt
-import hashlib
 from datetime import datetime, timedelta
 from app.core.logger import logger
 from admin_panel.core.config import TRANS
+
+# In-memory session token store: {token: expiry_datetime}
+_active_sessions: dict[str, datetime] = {}
 
 # --- Security: Bcrypt Hash ---
 def make_hash(password):
@@ -58,19 +61,12 @@ def check_password(cookies):
         if st.session_state.get("authenticated", False):
             return True
 
-        # 2. Cookie Check (Secure)
+        # 2. Cookie Check — validate against active session tokens
         if cookie_token:
-            if admin_hash:
-                 # Verify hash of the hash (SHA256 of the bcrypt hash)
-                 # This allows us to verify the cookie without knowing the plain password
-                 expected_token = hashlib.sha256(admin_hash.encode()).hexdigest()
-                 if cookie_token == expected_token:
-                     st.session_state["authenticated"] = True
-                     return True
-            elif admin_plain:
-                 if check_hash(admin_plain, cookie_token):
-                     st.session_state["authenticated"] = True
-                     return True
+            _cleanup_expired_sessions()
+            if cookie_token in _active_sessions and _active_sessions[cookie_token] > datetime.now():
+                st.session_state["authenticated"] = True
+                return True
 
     # --- Login Screen ---
     col1, col2, col3 = st.columns([1, 2, 1])
@@ -105,15 +101,10 @@ def check_password(cookies):
                     st.session_state["authenticated"] = True
                     
                     if remember_me:
-                        # Store a secure token in the cookie
-                        if admin_hash:
-                            # Token is SHA256 of the admin_hash
-                            secure_token = hashlib.sha256(admin_hash.encode()).hexdigest()
-                        else:
-                            # Legacy: Token is bcrypt hash of the plain password
-                            secure_token = make_hash(password)
-                            
+                        # Generate a random session token
+                        secure_token = secrets.token_hex(32)
                         expires = datetime.now() + timedelta(days=7)
+                        _active_sessions[secure_token] = expires
                         cookie_manager.set("proli_auth_token", secure_token, expires_at=expires)
                     
                     st.success("Connected!")
@@ -128,15 +119,32 @@ def check_password(cookies):
 def logout(cookie_manager, T):
     if st.sidebar.button(T["disconnect"]):
         st.toast("Disconnecting...", icon="👋")
-        
+
+        # Invalidate server-side session token
+        try:
+            cookies = cookie_manager.get_all()
+            token = cookies.get("proli_auth_token") if cookies else None
+            if token and token in _active_sessions:
+                del _active_sessions[token]
+        except:
+            pass
+
         # Set flags to force logout state on next run
         st.session_state["authenticated"] = False
         st.session_state["logout_pending"] = True
-        
+
         try:
-            # Send command to frontend to delete cookie
             cookie_manager.delete("proli_auth_token")
-        except: pass
-        
+        except:
+            pass
+
         time.sleep(0.5)
         st.rerun()
+
+
+def _cleanup_expired_sessions():
+    """Remove expired tokens from the session store."""
+    now = datetime.now()
+    expired = [t for t, exp in _active_sessions.items() if exp <= now]
+    for t in expired:
+        del _active_sessions[t]

@@ -37,11 +37,11 @@
     - **Context:** `ContextManager` fetches chat history from Redis.
     - **State:** `StateManager` checks user state (Idle, Pro Mode, etc.).
     - **Dispatcher:** `AIEngine` analyzes input to route the lead or continue conversation.
-4.  **Routing Engine (`app.services.matching_service_service.determine_best_pro`):**
+4.  **Routing Engine (`app.services.matching_service.determine_best_pro`):**
     - **Filter:** Active Pros (`is_active: True`).
-    - **Location:** Checks if extracted `city` matches Pro's `service_areas`.
+    - **Location:** Geo-spatial `$near` query (10km radius) with fallback to regex `service_areas` match.
     - **Ranking:** Sorts by `social_proof.rating` (Descending).
-    - **Load Balancing:** Skips pros with > `WorkerConstants.MAX_PRO_LOAD` active ("booked") jobs.
+    - **Load Balancing:** Single `$group` aggregation pipeline counts active leads per pro; skips those with >= `WorkerConstants.MAX_PRO_LOAD` (3).
 5.  **Action & Notification:**
     - **Database:** Updates Lead with linked `pro_id`.
     - **Booking:** `matching_service.book_slot_for_lead` ensures atomic slot reservation.
@@ -63,13 +63,18 @@
 │   │   └── routes/
 │   │       └── webhook.py          # Green API Webhook Endpoint
 │   ├── services/
-│   │   ├── workflow_service.py         # Main Orchestrator (Business Logic)
-│   │   ├── matching_service.py         # Pro Routing & Booking Logic
+│   │   ├── workflow_service.py         # Central Orchestrator
+│   │   ├── customer_flow.py            # Customer completion, ratings, reviews
+│   │   ├── pro_flow.py                 # Professional text commands (approve/reject/finish)
+│   │   ├── media_handler.py            # Media type detection & download
+│   │   ├── matching_service.py         # Pro Routing & Booking Logic ($group aggregation)
 │   │   ├── notification_service.py     # WhatsApp Notification Logic
 │   │   ├── ai_engine_service.py        # Gemini Wrapper (Multimodal)
 │   │   ├── lead_manager_service.py     # DB Operations (CRUD)
 │   │   ├── monitor_service.py          # SOS Recovery & Stale Lead Monitor
 │   │   ├── whatsapp_client_service.py  # Green API Wrapper
+│   │   ├── cloudinary_client_service.py # Media upload/retrieval
+│   │   ├── security_service.py         # Rate limiting via Redis
 │   │   ├── context_manager_service.py  # Redis Chat History Manager
 │   │   └── state_manager_service.py    # Redis User State Manager
 │   └── core/
@@ -95,9 +100,10 @@
 │       └── components.py           # Widgets & Styles
 ├── tests/                          # Test Suite
 ├── scripts/                        # Operational Scripts
-├── Dockerfile                      # Container definition
-├── docker-compose.yml              # Multi-container orchestration
-└── entrypoint.sh                   # Startup script
+├── Dockerfile                      # Container definition (non-root user)
+├── docker-compose.yml              # Multi-container orchestration (6 services)
+├── docker-compose.override.yml     # Local dev overrides (Docker MongoDB/Redis)
+└── nginx/nginx.conf                # Reverse proxy configuration
 ```
 
 ## 4. Key Conventions & Rules
@@ -124,7 +130,7 @@
 4.  **Error Handling:** ✅ Improved. Background tasks (ARQ) used for heavy lifting.
 5.  **Infrastructure:** ✅ Resolved. Dockerized application with structured logging.
 6.  **AI Fallback:** ✅ Resolved. Implemented adaptive hierarchy via `settings.AI_MODELS`.
-7.  **Refactoring:** ✅ Resolved. Modularized `workflow.py` by extracting logic into `ai_engine_service`, `matching_service`, and `lead_manager_service`.
+7.  **Refactoring:** ✅ Resolved. Modularized `workflow_service.py` into `customer_flow.py`, `pro_flow.py`, `media_handler.py`, plus earlier extraction of `ai_engine_service`, `matching_service`, and `lead_manager_service`.
 8.  **New Features:** ✅ Implemented. Interactive buttons and calendar booking logic.
 9.  **SOS Recovery:** ✅ Implemented. Automated reassignment and admin reporting.
 10. **Test Coverage:** ✅ Improved. Added comprehensive suite for SOS monitor, AI parsing, and full lifecycle.
@@ -139,7 +145,9 @@
 # Core
 MONGO_URI=mongodb+srv://...
 MONGO_TEST_URI=mongodb+srv://... (Optional)
-ADMIN_PASSWORD=...
+ADMIN_PASSWORD_HASH=...  # Generate with: python scripts/generate_admin_hash.py
+ADMIN_PHONE=972501234567  # Admin WhatsApp for SOS alerts
+WEBHOOK_TOKEN=...  # Optional: enables webhook auth
 PROJECT_NAME="Proli Bot Server"
 ENVIRONMENT="development"
 
