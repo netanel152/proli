@@ -106,7 +106,8 @@ class LeadManager:
     async def get_lead_by_id(self, lead_id: str):
         try:
             return await leads_collection.find_one({"_id": ObjectId(lead_id)})
-        except:
+        except Exception as e:
+            logger.error(f"Error getting lead {lead_id}: {e}")
             return None
 
     async def update_lead_status(self, lead_id: str, status: str, pro_id: str = None):

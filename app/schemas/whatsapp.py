@@ -18,11 +18,31 @@ class FileMessageData(BaseSchema):
     mimeType: str
     fileName: Optional[str] = None
 
+class ButtonsResponseData(BaseSchema):
+    """Green API sends button clicks as buttonsResponseMessage."""
+    selectedButtonId: Optional[str] = None
+    selectedButtonText: Optional[str] = None
+
+class LocationMessageData(BaseSchema):
+    """Green API location message data."""
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    nameLocation: Optional[str] = None
+    address: Optional[str] = None
+
+class QuotedMessageData(BaseSchema):
+    """Quoted/reply message data."""
+    stanzaId: Optional[str] = None
+    participant: Optional[str] = None
+
 class MessageData(BaseSchema):
     typeMessage: Optional[str] = None
     textMessageData: Optional[TextMessageData] = None
     extendedTextMessageData: Optional[ExtendedTextMessageData] = None
-    fileMessageData: Optional[FileMessageData] = None 
+    fileMessageData: Optional[FileMessageData] = None
+    buttonsResponseMessage: Optional[ButtonsResponseData] = None
+    locationMessageData: Optional[LocationMessageData] = None
+    quotedMessage: Optional[QuotedMessageData] = None
 
 class SenderData(BaseSchema):
     chatId: str

@@ -4,7 +4,7 @@ from app.core.redis_client import get_redis_client
 from app.core.logger import logger
 
 class ContextManager:
-    TTL = 3600  # 1 hour expiration
+    TTL = 14400  # 4 hours expiration (allows longer conversations)
 
     @classmethod
     async def get_history(cls, chat_id: str) -> Optional[List[Dict[str, Any]]]:

@@ -1,0 +1,15 @@
+# Local development overrides - uses the Docker MongoDB instead of Atlas
+services:
+  api:
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/proli_db
+      - REDIS_URL=redis://redis:6379/0
+
+  worker:
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/proli_db
+      - REDIS_URL=redis://redis:6379/0
+
+  admin:
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/proli_db

@@ -193,8 +193,11 @@ def render_pro_form(T, pro_data=None):
                     st.success(T["success_update"])
                 else:
                     pro_payload.update({
-                        "plan": "basic", "created_at": datetime.now(timezone.utc),
-                        "social_proof": {"rating": 5.0}, "is_verified": True
+                        "role": "professional",
+                        "plan": "basic",
+                        "created_at": datetime.now(timezone.utc),
+                        "social_proof": {"rating": 5.0, "review_count": 0},
+                        "is_verified": True
                     })
                     res = users_collection.insert_one(pro_payload)
                     create_initial_schedule(res.inserted_id)
