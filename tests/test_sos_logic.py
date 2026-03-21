@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from app.core.constants import UserStates, LeadStatus, WorkerConstants
+from app.core.constants import UserStates, LeadStatus
+from app.core.config import settings
 from app.services.workflow_service import process_incoming_message
 import app.services.notification_service
 import app.services.workflow_service
@@ -29,7 +30,7 @@ async def test_sos_admin_alert(mock_db, monkeypatch):
     await process_incoming_message(chat_id, user_text)
     
     # Verify Admin Alert
-    admin_phone = WorkerConstants.ADMIN_PHONE
+    admin_phone = settings.ADMIN_PHONE
     expected_admin_chat = f"{admin_phone}@c.us"
     expected_msg_content = f"🚨 System SOS from {chat_id}. Msg: {user_text}"
     

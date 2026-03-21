@@ -2,8 +2,10 @@ import streamlit as st
 from pymongo import MongoClient
 import os
 import certifi
+import httpx
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
+from bson import ObjectId
 import pytz
 
 # Load environment variables
@@ -28,16 +30,50 @@ slots_collection = db.slots
 settings_collection = db.settings
 
 # עזרי לוגיקה
+PROFESSION_CONFIG = {
+    "plumber": {
+        "role": "אינסטלטור מומחה",
+        "safety": "סגור את השיבר הראשי מיד!",
+        "keywords": ["מים", "נזילה", "סתימה", "דוד", "כיור", "אסלה", "הצפה", "רטיבות", "ברז"],
+    },
+    "electrician": {
+        "role": "חשמלאי מוסמך",
+        "safety": "הורד את המפסק הראשי ואל תיגע בחוטים!",
+        "keywords": ["חשמל", "קצר", "אור", "שקע", "פחת", "נשרף", "חוטים"],
+    },
+    "handyman": {
+        "role": "איש תחזוקה כללי",
+        "safety": "ודא שהאזור בטוח לעבודה.",
+        "keywords": ["תיקון", "הרכבה", "מדף", "דלת", "צירים", "תחזוקה", "ריהוט"],
+    },
+    "locksmith": {
+        "role": "מנעולן מוסמך",
+        "safety": "אל תנסה לפרוץ בעצמך, זה עלול לגרום נזק.",
+        "keywords": ["מנעול", "מפתח", "דלת", "נעילה", "כספת", "פריצה", "צילינדר"],
+    },
+    "painter": {
+        "role": "צבעי מקצועי",
+        "safety": "אוורר את החדר היטב בזמן העבודה.",
+        "keywords": ["צבע", "קיר", "שיפוץ", "טפט", "סדקים", "לכה", "גבס"],
+    },
+    "cleaner": {
+        "role": "מומחה ניקיון",
+        "safety": "אל תערבב חומרי ניקוי שונים.",
+        "keywords": ["ניקיון", "עובש", "אבנית", "חיטוי", "שטיח", "ספה", "חלונות"],
+    },
+    "general": {
+        "role": "איש מקצוע כללי",
+        "safety": "ודא שהאזור בטוח לפני תחילת העבודה.",
+        "keywords": ["שירות", "תיקון", "בעיה", "עזרה", "ביקור"],
+    },
+}
+
 def generate_system_prompt(name, profession, areas, prices):
     """מייצר פרומפט ומילות מפתח לפי המקצוע"""
-    if profession == "plumber":
-        role = "אינסטלטור מומחה"
-        safety = "סגור את השיבר הראשי מיד!"
-        keywords = ["מים", "נזילה", "סתימה", "דוד", "כיור", "אסלה", "הצפה", "רטיבות", "ברז"]
-    else:
-        role = "חשמלאי מוסמך"
-        safety = "הורד את המפסק הראשי ואל תיגע בחוטים!"
-        keywords = ["חשמל", "קצר", "אור", "שקע", "פחת", "נשרף", "חוטים"]
+    config = PROFESSION_CONFIG.get(profession, PROFESSION_CONFIG["general"])
+    role = config["role"]
+    safety = config["safety"]
+    keywords = config["keywords"]
 
     prompt = f"""
 אתה 'פרולי', העוזר האישי של '{name}'.
@@ -60,25 +96,63 @@ def generate_system_prompt(name, profession, areas, prices):
 
 def create_initial_schedule(pro_id):
     """יוצר יומן לשבוע הקרוב (ימי חול בלבד, 08:00-18:00)"""
+    IL_TZ = pytz.timezone('Asia/Jerusalem')
     slots = []
-    now_utc = datetime.now(pytz.utc)
-    # מתחילים ממחר בבוקר
-    start_date = now_utc.replace(hour=6, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    
-    for i in range(7): 
-        current_day = start_date + timedelta(days=i)
+    # Start from tomorrow morning in Israel time, then convert to UTC
+    now_il = datetime.now(IL_TZ)
+    start_date_il = (now_il + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    for i in range(7):
+        current_day_il = start_date_il + timedelta(days=i)
         # דילוג על שישי-שבת (4=Fri, 5=Sat)
-        if current_day.weekday() in [4, 5]: continue
-        
-        # סלוטים של שעתיים: 08:00-18:00 (שעון ישראל = UTC+2/3)
-        # נניח 06:00 UTC = 08:00/09:00 IL
-        for hour in range(6, 16, 2): 
-            s_time = current_day.replace(hour=hour)
+        if current_day_il.weekday() in [4, 5]:
+            continue
+
+        # סלוטים של שעתיים: 08:00-18:00 Israel time
+        for hour in range(8, 18, 2):
+            s_time_il = IL_TZ.localize(current_day_il.replace(hour=hour))
+            s_time_utc = s_time_il.astimezone(pytz.utc)
             slots.append({
                 "pro_id": pro_id,
-                "start_time": s_time,
-                "end_time": s_time + timedelta(hours=2),
+                "start_time": s_time_utc,
+                "end_time": s_time_utc + timedelta(hours=2),
                 "is_taken": False
             })
     if slots:
         slots_collection.insert_many(slots)
+
+
+def send_completion_check_sync(lead_id: str):
+    """
+    Sync version of send_customer_completion_check for use in Streamlit.
+    Uses sync PyMongo + sync httpx instead of async Motor/httpx.
+    """
+    from app.core.constants import LeadStatus, Defaults
+    from app.core.messages import Messages
+
+    lead = leads_collection.find_one({"_id": ObjectId(lead_id)})
+    if not lead or lead.get("status") != LeadStatus.BOOKED:
+        raise ValueError(f"Lead {lead_id} not found or not in BOOKED status")
+
+    customer_chat_id = lead["chat_id"]
+    pro = users_collection.find_one({"_id": lead["pro_id"]})
+    pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME) if pro else Defaults.GENERIC_PRO_NAME
+
+    chat_id = f"{customer_chat_id}" if customer_chat_id.endswith("@c.us") else f"{customer_chat_id}@c.us"
+
+    instance_id = os.getenv("GREEN_API_INSTANCE_ID")
+    api_token = os.getenv("GREEN_API_TOKEN")
+
+    payload = {
+        "chatId": chat_id,
+        "message": Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name),
+        "buttons": [
+            {"buttonId": Messages.Keywords.BUTTON_CONFIRM_FINISH, "buttonText": {"displayText": Messages.Keywords.BUTTON_TITLE_YES_FINISHED}},
+            {"buttonId": Messages.Keywords.BUTTON_NOT_FINISHED, "buttonText": {"displayText": Messages.Keywords.BUTTON_TITLE_NO_NOT_YET}}
+        ]
+    }
+
+    url = f"https://api.green-api.com/waInstance{instance_id}/sendInteractiveMessage/{api_token}"
+    resp = httpx.post(url, json=payload, timeout=30.0)
+    resp.raise_for_status()
+    return resp.json()

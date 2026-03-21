@@ -14,7 +14,7 @@ IL_TZ = pytz.timezone('Asia/Jerusalem')
 async def send_daily_reminders():
     logger.info(f"⏰ [Scheduler] Starting daily reminders check at {datetime.now(IL_TZ)}")
     
-    active_pros = await users_collection.find({"is_active": True}).to_list(length=None)
+    active_pros = await users_collection.find({"is_active": True}).to_list(length=500)
     
     now_il = datetime.now(IL_TZ)
     today_start = now_il.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -30,7 +30,7 @@ async def send_daily_reminders():
             "created_at": {"$gte": start_utc, "$lt": end_utc}
         }).sort("created_at", 1)
         
-        booked_jobs = await booked_jobs_cursor.to_list(length=None)
+        booked_jobs = await booked_jobs_cursor.to_list(length=50)
         
         if booked_jobs:
             msg = f"☀️ *בוקר טוב {pro['business_name']}!* \nהנה העבודות שלך להיום ({today_start.strftime('%d/%m')}):"

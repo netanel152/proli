@@ -5,6 +5,7 @@ from app.core.constants import APIStatus
 from contextlib import asynccontextmanager
 from app.api.routes import webhook, health
 from app.core.redis_client import close_redis_client
+from app.core.http_client import close_http_client as _close_shared_http_client
 import uvicorn
 
 @asynccontextmanager
@@ -13,6 +14,7 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     await close_redis_client()
+    await _close_shared_http_client()
 
 app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
 

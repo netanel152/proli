@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Proli Bot Server"
     BACKEND_CORS_ORIGINS: list[str] = ["*"]
     MAX_CHAT_HISTORY: int = 20
+    ADMIN_PHONE: str = "972524828796"
+    WEBHOOK_TOKEN: str | None = None
     ENVIRONMENT: str = "development"  # "production" or "development"
     LOG_LEVEL: str = "INFO"
     

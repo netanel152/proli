@@ -14,7 +14,7 @@
 6. **Rated:** לאחר שהלקוח מדרג, הציון משוקלל בפרופיל איש המקצוע והליד נסגר סופית.
 7. **Rejected (נדחה):** איש המקצוע דחה את הליד (המערכת יכולה לנסות לנתב מחדש - לוגיקה עתידית).
 
-## 2. מוח ה-AI (קבצים: `ai_engine_service.py`, `workflow_service.py`)
+## 2. מוח ה-AI (קבצים: `ai_engine_service.py`, `workflow_service.py`, `customer_flow.py`, `pro_flow.py`, `media_handler.py`)
 
 המערכת משתמשת ב-Gemini 2.5 Flash Lite בתהליך דו-שלבי:
 

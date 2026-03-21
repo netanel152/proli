@@ -1,4 +1,5 @@
 import streamlit as st
+import html
 
 def load_css(lang_code, T):
     direction = T["dir"]
@@ -385,14 +386,11 @@ def render_chat_bubble(text, role, timestamp, T):
     is_user = role == 'user'
     cls = "user-msg" if is_user else "bot-msg"
     name = T["role_user"] if is_user else T["role_bot"]
-    
-    # Use Material Symbols with conditional class
+
     icon_name = "person" if is_user else "smart_toy"
     icon_html = f'<span class="material-symbols-rounded">{icon_name}</span>'
-    
+
     time_str = timestamp.strftime("%H:%M")
-    
-    # In RTL, we might want the icon on the right for user, left for bot? 
-    # Or just consistent. Let's keep it simple: Icon Name Time
-    
-    return f"<div class='chat-bubble {cls}'><span class='chat-meta'>{icon_html} {name} • {time_str}</span>{text}</div>"
+    safe_text = html.escape(text)
+
+    return f"<div class='chat-bubble {cls}'><span class='chat-meta'>{icon_html} {name} • {time_str}</span>{safe_text}</div>"

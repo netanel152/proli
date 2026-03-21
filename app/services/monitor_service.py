@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from app.core.database import leads_collection, users_collection
 from app.core.constants import LeadStatus, WorkerConstants
+from app.core.config import settings
 from app.core.logger import logger
 from app.services.whatsapp_client_service import WhatsAppClient
 from app.services import matching_service
@@ -27,7 +28,7 @@ async def check_and_reassign_stale_leads():
     
     try:
         cursor = leads_collection.find(query)
-        stale_leads = await cursor.to_list(length=None)
+        stale_leads = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
         
         if not stale_leads:
             logger.info("✅ [SOS Healer] No stale leads found.")
@@ -128,7 +129,7 @@ async def send_periodic_admin_report():
     
     try:
         cursor = leads_collection.find(query)
-        stuck_leads = await cursor.to_list(length=None)
+        stuck_leads = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
         
         if not stuck_leads:
             logger.info("✅ [SOS Reporter] No stuck leads to report.")
@@ -156,9 +157,9 @@ async def send_periodic_admin_report():
         full_message = "\n".join(message_lines)
         
         # Send to Admin
-        admin_chat_id = f"{WorkerConstants.ADMIN_PHONE}@c.us"
+        admin_chat_id = f"{settings.ADMIN_PHONE}@c.us"
         await whatsapp.send_message(admin_chat_id, full_message)
-        logger.info(f"✅ [SOS Reporter] Sent report to Admin: {WorkerConstants.ADMIN_PHONE}")
+        logger.info(f"✅ [SOS Reporter] Sent report to Admin: {settings.ADMIN_PHONE}")
 
     except Exception as e:
         logger.error(f"❌ [SOS Reporter] Error: {e}")

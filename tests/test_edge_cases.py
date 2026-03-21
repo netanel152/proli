@@ -68,17 +68,16 @@ async def test_bad_input_file_type(mock_dependencies):
     # Simulate media URL with PDF content type
     media_url = "http://example.com/file.pdf"
     
-    # We need to mock httpx to return a PDF content type
-    with patch("httpx.AsyncClient") as mock_client_cls:
-        mock_client = AsyncMock()
-        mock_client_cls.return_value.__aenter__.return_value = mock_client
-        
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.content = b"%PDF..."
-        mock_resp.headers = {"Content-Type": "application/pdf"}
-        mock_client.get.return_value = mock_resp
-        mock_client.head.return_value = mock_resp
+    # We need to mock the shared http client to return a PDF content type
+    mock_client = AsyncMock()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = b"%PDF..."
+    mock_resp.headers = {"Content-Type": "application/pdf"}
+    mock_client.get.return_value = mock_resp
+    mock_client.head.return_value = mock_resp
+
+    with patch("app.services.media_handler.get_http_client", new_callable=AsyncMock, return_value=mock_client):
         
         # We want to ensure it doesn't crash and maybe passes info to AI
         mock_ai.analyze_conversation.return_value = AIResponse(

@@ -4,33 +4,38 @@ This document provides a high-level overview of the Proli system architecture, c
 
 ## 1. High-Level Overview
 
-Proli acts as an intelligent intermediary between Clients (WhatsApp Users) and Professionals. It utilizes a microservices-like architecture (within a monorepo) orchestrated by Docker Compose.
+Proli acts as an intelligent intermediary between Clients (WhatsApp Users) and Professionals. It utilizes a microservices-like architecture (within a monorepo) orchestrated by Docker Compose or Railway.
 
 ### Core Components
 
 1.  **Backend API (FastAPI):**
-    *   **Role:** Entry point for external Webhooks (Green API) and internal health checks.
-    *   **Responsibility:** Rapid ingestion of messages, request validation, and queuing tasks to the Worker.
+    *   **Role:** Entry point for external Webhooks (Green API) and health checks.
+    *   **Responsibility:** Rapid ingestion of messages, request validation (idempotency, rate limiting, instance verification), and queuing tasks to the Worker via Redis/ARQ.
     *   **Scaling:** Stateless, can be horizontally scaled behind a load balancer.
 
 2.  **Background Worker (ARQ + APScheduler):**
     *   **Role:** The heavy lifter of the system.
     *   **Responsibilities:**
-        *   **Message Processing (ARQ):** Handles AI inference, DB operations, and WhatsApp API calls asynchronously.
-        *   **Periodic Tasks (APScheduler):** Runs "Good Morning" reminders, Stale Job Monitors, and SOS Auto-Healing.
-    *   **Scaling:** Can be scaled horizontally (multiple worker containers) pointing to the same Redis instance.
+        *   **Message Processing (ARQ):** Handles AI inference (Gemini), DB operations, and WhatsApp API calls asynchronously.
+        *   **Periodic Tasks (APScheduler):** Runs daily agenda reminders (08:00 IL), Stale Job Monitor (every 30 min), SOS Auto-Healer (every 10 min), and SOS Admin Reporter (every 4 hours).
+    *   **Scaling:** Can be scaled horizontally, BUT requires distributed locking for scheduler jobs to prevent duplicates.
 
 3.  **Admin Panel (Streamlit):**
     *   **Role:** Management Interface.
-    *   **Responsibility:** Visualization of leads, managing professionals, and system configuration.
-    *   **Security:** Protected by Cookie-based Auth with Bcrypt hashing.
+    *   **Responsibility:** Lead dashboard with inline editing, professional profile CRUD, schedule management (daily editor + bulk generator), system settings.
+    *   **Security:** Cookie-based Auth with Bcrypt hashing and random session tokens (`secrets.token_hex(32)`) with server-side validation and expiry. Bilingual (Hebrew/English).
+    *   **Database:** Uses synchronous PyMongo client (separate from the async Motor client used by the API/Worker).
 
 4.  **Database Layer:**
-    *   **MongoDB Atlas:** Primary data store (Users, Leads, Settings).
+    *   **MongoDB Atlas:** Primary data store.
+        *   Collections: `users`, `leads`, `messages`, `slots`, `settings`, `reviews`
+        *   Indexes: phone_number (unique), location (2dsphere), chat_id, status, pro_id+status (compound), status+created_at (compound)
     *   **Redis:** Fast-access layer for:
-        *   **Task Queue:** ARQ job backend.
-        *   **Context:** Recent chat history (for AI continuity).
-        *   **State:** User session state (Finite State Machine).
+        *   **Task Queue:** ARQ job backend
+        *   **Context:** Recent chat history per `chat_id` (last 20 messages, 4h TTL)
+        *   **State:** User session state via FSM (4h TTL)
+        *   **Rate Limiting:** Fixed-window per `chat_id` (10 req/60s)
+        *   **Idempotency:** Webhook deduplication via `idMessage` (24h TTL)
 
 ## 2. Detailed Data Flow
 
@@ -38,52 +43,85 @@ Proli acts as an intelligent intermediary between Clients (WhatsApp Users) and P
 1.  **User** sends WhatsApp message.
 2.  **Green API** pushes JSON webhook to `POST /webhook` on **Backend API**.
 3.  **Backend API:**
-    *   Validates payload (Security check).
+    *   Validates webhook token (`?token=<value>`) if `WEBHOOK_TOKEN` is configured.
+    *   Checks idempotency via Redis `SET NX` on `webhook:{idMessage}`.
+    *   Validates `idInstance` matches configured instance.
+    *   Filters group messages, applies rate limiting.
+    *   Extracts text/media URL from payload (supports: text, extended text, buttons, location, image, audio, video).
     *   Enqueues `process_message_task` to **Redis** via **ARQ**.
-    *   Returns `200 OK` immediately (preventing timeout).
+    *   Returns `200 OK` immediately (preventing webhook timeout).
 
 ### B. Message Processing (The "Smart Path")
 1.  **Worker** picks up `process_message_task`.
-2.  **State Manager** checks if user is in a specific flow (e.g., `REQUIRE_MORE_INFO`).
-3.  **Context Manager** fetches last 20 messages from Redis.
-4.  **AI Engine (Gemini 2.5)**:
-    *   Analyzes text/image/audio.
-    *   Decides whether to:
-        *   **Route:** Extract city/issue and find a Pro.
-        *   **Converse:** Ask clarifying questions.
-        *   **Book:** Confirm a time slot.
-5.  **Matching Service** (if routing):
-    *   Queries MongoDB for active Pros in the area.
-    *   Applies Load Balancing (Max 3 active jobs).
-    *   Selects the best Pro.
-6.  **Action:**
-    *   Updates MongoDB.
-    *   Sends WhatsApp reply to User.
-    *   Sends Notification to Pro (if applicable).
+2.  **Reset/SOS Check:** Checks for system commands (reset, SOS/human handoff).
+3.  **State Manager** checks if user is in a specific flow (PRO_MODE, AWAITING_ADDRESS, etc.).
+4.  **Pro Auto-Detection:** If IDLE, checks if sender's phone matches a professional.
+5.  **Message Logging:** Saves to MongoDB `messages` + Redis context cache.
+6.  **Completion/Rating/Review Flow (`customer_flow.py`):** Checks if user is responding to post-job prompts.
+7.  **Media Handling (`media_handler.py`):**
+    *   Images: Downloaded as bytes, passed inline to Gemini.
+    *   Audio/Video: Streamed to temp file, uploaded via Gemini File API, waited for processing.
+8.  **AI Engine (Gemini 2.5 Flash)** — Two-phase analysis:
+    *   **Phase 1 (Dispatcher):** Extracts city + issue from conversation.
+    *   **Phase 2 (Pro Persona):** If pro found, generates response using pro's custom system prompt, pricing, and social proof.
+    *   Adaptive fallback: Flash Lite 2.5 -> Flash 2.5 -> Flash 1.5.
+9.  **Matching Service** (if routing):
+    *   Geo-spatial `$near` query (10km radius) if city coordinates found.
+    *   Fallback to regex matching on `service_areas`.
+    *   Load balancing via `$group` aggregation pipeline: skip pros with >= 3 active leads.
+    *   Final fallback: all active pros sorted by rating.
+10. **Deal Detection:** Checks for `is_deal` flag or `[DEAL:...]` pattern.
+11. **Action:**
+    *   Updates lead in MongoDB.
+    *   Sends WhatsApp reply to customer.
+    *   If deal: Sends notification + Waze link to pro.
 
 ### C. Periodic Maintenance (The "Safety Net")
-*   **Every 10 mins:** `SOS Healer` checks for leads stuck in `NEW` state > 30 mins and reassigns them.
-*   **Every 30 mins:** `Stale Monitor` pings Pros about unfinished jobs.
-*   **Daily (08:00):** Sends daily agenda to Pros.
+*   **Every 10 mins:** `SOS Healer` checks for leads stuck in `NEW`/`CONTACTED` state > 60 mins and reassigns to new pro.
+*   **Every 30 mins:** `Stale Monitor` sends reminders to pros (4-6h old) and completion checks to customers (6-24h old). Flags >24h leads for admin.
+*   **Every 4 hours:** `SOS Reporter` sends batched summary of stuck leads to admin WhatsApp.
+*   **Daily (08:00 IL):** Sends daily agenda to each active pro with their booked jobs.
 
-## 3. Technology Stack Breakdown
+## 3. Technology Stack
 
-| Component | Technology | Reasoning |
-| :--- | :--- | :--- |
-| **Language** | Python 3.12+ | Rich ecosystem for AI and Async Web. |
-| **Web Framework** | FastAPI | High performance, native AsyncIO support. |
-| **Async Worker** | ARQ | Lightweight, built on Redis, perfect for simple job queues. |
-| **Scheduling** | APScheduler | Robust Cron-like scheduling for Python. |
-| **Database** | MongoDB (Motor) | Schema-less flexibility for evolving Lead structures. |
-| **Caching** | Redis | Low latency for context and state management. |
-| **AI Model** | Gemini 2.5 Flash | Multimodal, fast, and cost-effective. |
-| **Infrastructure** | Docker Compose | Simple orchestration for all services. |
+| Component | Technology | Version | Reasoning |
+|---|---|---|---|
+| **Language** | Python | 3.12+ | Rich ecosystem for AI and Async Web |
+| **Web Framework** | FastAPI | 0.109.2 | High performance, native AsyncIO |
+| **Async Worker** | ARQ | >=0.25.0 | Lightweight, built on Redis |
+| **Scheduling** | APScheduler | 3.10.4 | Cron-like scheduling for Python |
+| **Database** | MongoDB (Motor) | 6.0 / 3.3.2 | Schema-less flexibility |
+| **Caching** | Redis | >=5.0.1 | Low latency for context, state, queue |
+| **AI Model** | Gemini 2.5 Flash | via google-genai | Multimodal, fast, cost-effective |
+| **Media Storage** | Cloudinary | 1.38.0 | CDN-backed image hosting |
+| **Messaging** | WhatsApp | via Green API | WhatsApp Business API proxy |
+| **Admin Panel** | Streamlit | 1.31.1 | Rapid dashboard development |
+| **Infrastructure** | Docker Compose / Railway | - | Container orchestration |
 
-## 4. Directory Structure Mapping
+## 4. Directory Structure
 
-*   `app/api/`: Fast/Synchronous endpoints.
-*   `app/services/`: Business Logic (AI, Matching, Workflow).
-*   `app/core/`: Configuration & Infrastructure wrappers (DB, Redis, Logging).
+*   `app/api/routes/`: Webhook (with token auth) and health endpoints (fast, async).
+*   `app/services/`: Business logic layer:
+    *   `workflow_service.py`: Central orchestrator, delegates to sub-modules.
+    *   `customer_flow.py`: Customer completion checks, ratings, reviews.
+    *   `pro_flow.py`: Professional text commands (approve, reject, finish).
+    *   `media_handler.py`: Media type detection and download (images, audio, video).
+    *   `ai_engine_service.py`: Gemini 2.5 Flash with adaptive fallback.
+    *   `matching_service.py`: Geo-spatial routing with `$group` aggregation for load balancing.
+    *   `notification_service.py`, `monitor_service.py`, `lead_manager_service.py`, etc.
+*   `app/core/`: Infrastructure wrappers (DB, Redis, Config, Logger, Constants, Messages, Prompts).
+*   `app/schemas/`: Pydantic models for webhook payload validation.
 *   `app/worker.py`: Worker process entry point.
-*   `admin_panel/`: Streamlit UI code.
+*   `app/scheduler.py`: APScheduler jobs and configuration.
+*   `admin_panel/`: Streamlit UI (views, core auth/config/utils, UI components).
+*   `scripts/`: Database seeding, index creation, utilities.
+*   `docs/`: Project documentation.
+*   `nginx/`: Reverse proxy configuration for Docker Compose.
 
+## 5. Deployment
+
+### Docker Compose (Local/Self-Hosted)
+Six services: `api`, `worker`, `admin`, `mongo`, `redis`, `nginx`. Each app service gets its own container with proper health checks and dependency ordering.
+
+### Railway (Cloud)
+Split into 3 Railway services pointing to the same Dockerfile with different `command` overrides. Each service shares MongoDB Atlas and Redis via project-level env vars. See `docs/RAILWAY_SETUP.md` for full configuration guide.

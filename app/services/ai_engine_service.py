@@ -9,8 +9,8 @@ import traceback
 import json
 import os
 import tempfile
-import httpx
 import asyncio
+from app.core.http_client import get_http_client
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 class ExtractedData(BaseModel):
@@ -49,42 +49,37 @@ class AIEngine:
              # For Audio/Video, we must use the File API to avoid size limits and timeouts
              tmp_path = None
              try:
-                 # Download to temp file and upload to Gemini
-                 async with httpx.AsyncClient() as client:
-                     async with client.stream('GET', media_url) as resp:
-                         if resp.status_code == 200:
-                             with tempfile.NamedTemporaryFile(delete=False, suffix=f".{media_mime_type.split('/')[-1]}") as tmp:
-                                 tmp_path = tmp.name
-                                 async for chunk in resp.aiter_bytes():
-                                     tmp.write(chunk)
+                 http_client = await get_http_client()
+                 async with http_client.stream('GET', media_url) as resp:
+                     if resp.status_code == 200:
+                         with tempfile.NamedTemporaryFile(delete=False, suffix=f".{media_mime_type.split('/')[-1]}") as tmp:
+                             tmp_path = tmp.name
+                             async for chunk in resp.aiter_bytes():
+                                 tmp.write(chunk)
 
-                             # Upload to Gemini
-                             uploaded_file = await self.client.aio.files.upload(path=tmp_path, config=types.UploadFileConfig(mime_type=media_mime_type))
+                         uploaded_file = await self.client.aio.files.upload(path=tmp_path, config=types.UploadFileConfig(mime_type=media_mime_type))
 
-                             # Wait for processing if it's a video (with timeout)
-                             if "video" in media_mime_type:
-                                 max_wait_seconds = 120
-                                 waited = 0
-                                 while waited < max_wait_seconds:
-                                     file_status = await self.client.aio.files.get(name=uploaded_file.name)
-                                     if file_status.state.name == "ACTIVE":
-                                         break
-                                     elif file_status.state.name == "FAILED":
-                                         raise Exception("Gemini File Processing Failed")
-                                     logger.info(f"Waiting for video processing: {file_status.state.name}")
-                                     await asyncio.sleep(2)
-                                     waited += 2
-                                 else:
-                                     raise Exception(f"Gemini video processing timed out after {max_wait_seconds}s")
+                         if "video" in media_mime_type:
+                             max_wait_seconds = 120
+                             waited = 0
+                             while waited < max_wait_seconds:
+                                 file_status = await self.client.aio.files.get(name=uploaded_file.name)
+                                 if file_status.state.name == "ACTIVE":
+                                     break
+                                 elif file_status.state.name == "FAILED":
+                                     raise Exception("Gemini File Processing Failed")
+                                 logger.info(f"Waiting for video processing: {file_status.state.name}")
+                                 await asyncio.sleep(2)
+                                 waited += 2
+                             else:
+                                 raise Exception(f"Gemini video processing timed out after {max_wait_seconds}s")
 
-                             current_parts.append(types.Part.from_uri(file_uri=uploaded_file.uri, mime_type=media_mime_type))
-
-                         else:
-                             logger.error(f"Failed to download media for Gemini from {media_url}")
+                         current_parts.append(types.Part.from_uri(file_uri=uploaded_file.uri, mime_type=media_mime_type))
+                     else:
+                         logger.error(f"Failed to download media for Gemini from {media_url}")
              except Exception as e:
                  logger.error(f"Error handling media URL for Gemini: {e}")
              finally:
-                 # Ensure cleanup happens even if upload/processing fails
                  if tmp_path and os.path.exists(tmp_path):
                      os.unlink(tmp_path)
 

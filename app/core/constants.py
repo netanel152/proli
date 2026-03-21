@@ -25,7 +25,7 @@ class WorkerConstants:
     SLOT_SEARCH_WINDOW_HOURS = 2
     DEFAULT_CURRENCY = "ILS"
     SOS_TIMEOUT_MINUTES = 60
-    ADMIN_PHONE = "972524828796"
+    # ADMIN_PHONE moved to config.py / env var
 
 class APIStatus:
     RUNNING = "Proli is running! 🚀"

@@ -131,7 +131,14 @@ docker-compose logs -f admin  # Admin Panel
 
 - הסיסמאות לא נשמרות כטקסט גלוי.
 - המערכת משתמשת ב-**Bcrypt** עם Salt לייצור Hash.
-- האימות מול הדפדפן מתבצע באמצעות Cookie מאובטח (`proli_auth_token`).
+- האימות מול הדפדפן מתבצע באמצעות Cookie מאובטח (`proli_auth_token`) עם טוקן אקראי (`secrets.token_hex(32)`) שנשמר בזיכרון השרת עם תוקף.
+- Logout מבטל את הטוקן בצד השרת.
+
+### אבטחת Webhook
+
+- אם `WEBHOOK_TOKEN` מוגדר, כל בקשת Webhook חייבת לכלול את הטוקן כ-query parameter.
+- בקשות ללא טוקן תקין מוחזרות עם `403 Forbidden`.
+- יש להגדיר את כתובת ה-Webhook ב-Green API כ: `https://your-domain/webhook?token=<value>`.
 
 ## נספח: משתני סביבה (.env)
 
@@ -146,10 +153,12 @@ docker-compose logs -f admin  # Admin Panel
 - `CLOUDINARY_CLOUD_NAME`: שם ענן ב-Cloudinary.
 - `CLOUDINARY_API_KEY`: מפתח API ב-Cloudinary.
 - `CLOUDINARY_API_SECRET`: סוד API ב-Cloudinary.
-- `ADMIN_PASSWORD`: סיסמה לכניסה לממשק הניהול.
+- `ADMIN_PASSWORD_HASH`: Hash של סיסמת אדמין (יצירה: `python scripts/generate_admin_hash.py`).
 
 ### רשות (Optional)
 
+- `WEBHOOK_TOKEN`: טוקן אימות ל-Webhook. אם מוגדר, בקשות חייבות לכלול `?token=<value>` בכתובת ה-URL.
+- `ADMIN_PHONE`: מספר WhatsApp של המנהל לקבלת התראות SOS (ברירת מחדל: `972524828796`).
 - `MONGO_TEST_URI`: DB נפרד להרצת טסטים (מומלץ כדי לא למחוק מידע אמיתי).
 - `REDIS_HOST`: כתובת שרת Redis (ברירת מחדל: `redis`).
 - `REDIS_PORT`: פורט Redis (ברירת מחדל: `6379`).

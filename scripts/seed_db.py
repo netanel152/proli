@@ -103,7 +103,7 @@ async def create_leads(pro_ids):
     leads_to_create = []
     messages_to_create = []
     
-    # --- 1. Past Completed/Rated Leads (Revenue) ---
+    # --- Past Completed/Rated Leads (Revenue) ---
     print("   Generating 10 Completed/Rated leads...")
     for _ in range(10):
         pro_id = random.choice(pro_ids)
@@ -122,7 +122,7 @@ async def create_leads(pro_ids):
         }
         leads_to_create.append(lead)
     
-    # --- 2. Active Booking (Tomorrow) ---
+    # --- Active Booking (Tomorrow) ---
     print("   Generating 1 Active Booking...")
     pro_id = pro_ids[0] # Assign to Yossi
     tomorrow = datetime.now(timezone.utc) + timedelta(days=1)
@@ -140,7 +140,7 @@ async def create_leads(pro_ids):
     }
     leads_to_create.append(lead_booked)
     
-    # --- 3. The 'SOS' Test Case ---
+    # --- The 'SOS' Test Case ---
     print("   Generating 1 SOS Stale Lead (2 hours old, NEW)...")
     chat_id_sos = f"9725{fake.random_number(digits=8)}@c.us"
     
@@ -174,7 +174,7 @@ async def create_leads(pro_ids):
 def create_chat_history(chat_id, start_time):
     history = []
     
-    # 1. User: Hi
+    # User: Hi
     history.append({
         "chat_id": chat_id,
         "role": "user",
@@ -182,15 +182,15 @@ def create_chat_history(chat_id, start_time):
         "timestamp": start_time
     })
 
-    # 2. Assistant: details?
+    # Assistant: details?
     history.append({
         "chat_id": chat_id,
-        "role": "assistant",
+        "role": "model",
         "text": "היי! אני כאן לעזור. מה בדיוק הבעיה ואיפה?",
         "timestamp": start_time + timedelta(seconds=15)
     })
 
-    # 3. User: Issue
+    # User: Issue
     history.append({
         "chat_id": chat_id,
         "role": "user",
@@ -198,10 +198,10 @@ def create_chat_history(chat_id, start_time):
         "timestamp": start_time + timedelta(seconds=45)
     })
 
-    # 4. Assistant: searching
+    # Assistant: searching
     history.append({
         "chat_id": chat_id,
-        "role": "assistant",
+        "role": "model",
         "text": "הבנתי, אני בודק איזה אינסטלטור פנוי באזור שלך...",
         "timestamp": start_time + timedelta(seconds=60)
     })

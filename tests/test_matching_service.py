@@ -3,13 +3,24 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
 from app.services.matching_service import determine_best_pro, get_coordinates, WorkerConstants
 
+
+def _mock_aggregate(load_map):
+    """Returns a mock aggregate that yields load counts from a dict {pro_id: count}."""
+    async def _aiter(*args, **kwargs):
+        for pid, count in load_map.items():
+            yield {"_id": pid, "count": count}
+    mock = MagicMock()
+    mock.__aiter__ = _aiter
+    return mock
+
+
 @pytest.fixture
 def mock_matching_dependencies():
     with patch("app.services.matching_service.users_collection") as mock_users, \
          patch("app.services.matching_service.leads_collection") as mock_leads:
-         
-        # Default behavior
-        mock_leads.count_documents = AsyncMock(return_value=0)
+
+        # Default: aggregation returns no load counts (all pros have 0 active leads)
+        mock_leads.aggregate = MagicMock(return_value=_mock_aggregate({}))
         yield mock_users, mock_leads
 
 def test_get_coordinates():
@@ -101,15 +112,15 @@ async def test_load_balancing_filtering(mock_matching_dependencies):
     mock_cursor.to_list = AsyncMock(return_value=[pro_busy, pro_avail])
     mock_users.find.return_value = mock_cursor
     
-    # Mock Load Counts
-    # First call for pro_busy -> returns MAX_LOAD (e.g., 3)
-    # Second call for pro_avail -> returns 0
-    mock_leads.count_documents.side_effect = [WorkerConstants.MAX_PRO_LOAD, 0]
-    
+    # Mock Load Counts via aggregation
+    # pro_busy has MAX_LOAD active leads, pro_avail has 0 (not in results)
+    mock_leads.aggregate = MagicMock(return_value=_mock_aggregate({
+        pro_busy["_id"]: WorkerConstants.MAX_PRO_LOAD
+    }))
+
     result = await determine_best_pro(location="Unknown City")
-    
+
     assert result == pro_avail
-    assert mock_leads.count_documents.call_count == 2
 
 @pytest.mark.asyncio
 async def test_all_pros_overloaded_fallback(mock_matching_dependencies):
@@ -125,12 +136,14 @@ async def test_all_pros_overloaded_fallback(mock_matching_dependencies):
     mock_cursor.to_list = AsyncMock(return_value=[pro1])
     mock_users.find.return_value = mock_cursor
     
-    # Mock Load -> Overloaded
-    mock_leads.count_documents.return_value = WorkerConstants.MAX_PRO_LOAD + 1
-    
+    # Mock Load -> Overloaded via aggregation
+    mock_leads.aggregate = MagicMock(return_value=_mock_aggregate({
+        pro1["_id"]: WorkerConstants.MAX_PRO_LOAD + 1
+    }))
+
     result = await determine_best_pro(location="Unknown City")
-    
-    assert result == pro1 # Should still return pro1 rather than None
+
+    assert result == pro1  # Should still return pro1 rather than None
 
 @pytest.mark.asyncio
 async def test_exclude_pro_ids(mock_matching_dependencies):
