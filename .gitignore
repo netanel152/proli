@@ -28,3 +28,5 @@ Thumbs.db
 proli.log
 logs/
 .zip
+
+settings.local.json
