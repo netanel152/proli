@@ -23,12 +23,13 @@ Proli acts as an intelligent intermediary between Clients (WhatsApp Users) and P
 3.  **Admin Panel (Streamlit):**
     *   **Role:** Management Interface.
     *   **Responsibility:** Lead dashboard with inline editing, professional profile CRUD, schedule management (daily editor + bulk generator), system settings.
-    *   **Security:** Cookie-based Auth with Bcrypt hashing and random session tokens (`secrets.token_hex(32)`) with server-side validation and expiry. Bilingual (Hebrew/English).
+    *   **Security:** Cookie-based Auth with Bcrypt hashing and random session tokens (`secrets.token_hex(32)`) with server-side validation and expiry. Multi-admin RBAC (owner/editor/viewer roles). Bilingual (Hebrew/English).
     *   **Database:** Uses synchronous PyMongo client (separate from the async Motor client used by the API/Worker).
+    *   **Features:** Lead dashboard, professional profiles, schedule management (daily/bulk/weekly templates), analytics dashboard, admin user management, audit log viewer, system health monitoring.
 
 4.  **Database Layer:**
     *   **MongoDB Atlas:** Primary data store.
-        *   Collections: `users`, `leads`, `messages`, `slots`, `settings`, `reviews`
+        *   Collections: `users`, `leads`, `messages`, `slots`, `settings`, `reviews`, `consent`, `audit_log`, `admins`
         *   Indexes: phone_number (unique), location (2dsphere), chat_id, status, pro_id+status (compound), status+created_at (compound)
     *   **Redis:** Fast-access layer for:
         *   **Task Queue:** ARQ job backend
@@ -80,7 +81,9 @@ Proli acts as an intelligent intermediary between Clients (WhatsApp Users) and P
 *   **Every 10 mins:** `SOS Healer` checks for leads stuck in `NEW`/`CONTACTED` state > 60 mins and reassigns to new pro.
 *   **Every 30 mins:** `Stale Monitor` sends reminders to pros (4-6h old) and completion checks to customers (6-24h old). Flags >24h leads for admin.
 *   **Every 4 hours:** `SOS Reporter` sends batched summary of stuck leads to admin WhatsApp.
+*   **Daily (02:00 IL):** Automated MongoDB backup (mongodump + gzip, optional S3 upload).
 *   **Daily (08:00 IL):** Sends daily agenda to each active pro with their booked jobs.
+*   **Weekly (Sunday 01:00 IL):** Regenerates appointment slots from recurring weekly templates for all active pros.
 
 ## 3. Technology Stack
 
@@ -108,12 +111,19 @@ Proli acts as an intelligent intermediary between Clients (WhatsApp Users) and P
     *   `media_handler.py`: Media type detection and download (images, audio, video).
     *   `ai_engine_service.py`: Gemini 2.5 Flash with adaptive fallback.
     *   `matching_service.py`: Geo-spatial routing with `$group` aggregation for load balancing.
-    *   `notification_service.py`, `monitor_service.py`, `lead_manager_service.py`, etc.
+    *   `notification_service.py`: WhatsApp notifications with SMS fallback.
+    *   `sms_service.py`: SMS fallback via Israeli provider (InforUMobile).
+    *   `data_management_service.py`: Privacy compliance — consent, data export/deletion.
+    *   `audit_service.py`: Admin action audit logging.
+    *   `analytics_service.py`: Lead funnel, daily volume, pro performance aggregations.
+    *   `scheduling_service.py`: Recurring weekly templates, slot generation, no-show tracking.
+    *   `pro_onboarding_service.py`: WhatsApp-based self-signup flow for new professionals.
+    *   `monitor_service.py`, `lead_manager_service.py`, etc.
 *   `app/core/`: Infrastructure wrappers (DB, Redis, Config, Logger, Constants, Messages, Prompts).
 *   `app/schemas/`: Pydantic models for webhook payload validation.
 *   `app/worker.py`: Worker process entry point.
 *   `app/scheduler.py`: APScheduler jobs and configuration.
-*   `admin_panel/`: Streamlit UI (views, core auth/config/utils, UI components).
+*   `admin_panel/`: Streamlit UI (views, core auth/config/utils, UI components). Includes RBAC (owner/editor/viewer), analytics dashboard, and audit log viewer.
 *   `scripts/`: Database seeding, index creation, utilities.
 *   `docs/`: Project documentation.
 *   `nginx/`: Reverse proxy configuration for Docker Compose.

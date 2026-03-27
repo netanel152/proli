@@ -19,6 +19,7 @@ from admin_panel.views.home import view_leads_dashboard
 from admin_panel.views.professionals import view_professionals
 from admin_panel.views.schedule import view_schedule_editor
 from admin_panel.views.settings import view_system_settings
+from admin_panel.views.analytics import view_analytics
 
 # --- Page Config ---
 st.set_page_config(
@@ -70,7 +71,7 @@ with st.sidebar:
     st.divider()
     
     # --- Navigation ---
-    page_options = [T["nav_dashboard"], T["nav_professionals"], T["nav_schedule"], T["nav_settings"]]
+    page_options = [T["nav_dashboard"], T["nav_professionals"], T["nav_schedule"], T.get("nav_analytics", "📊 Analytics"), T["nav_settings"]]
     
     # Initialize navigation state if not present or invalid
     if "current_page" not in st.session_state:
@@ -106,5 +107,7 @@ elif current_selection == T["nav_professionals"]:
     view_professionals(T)
 elif current_selection == T["nav_schedule"]:
     view_schedule_editor(T)
+elif current_selection == T.get("nav_analytics", "📊 Analytics"):
+    view_analytics(T)
 elif current_selection == T["nav_settings"]:
     view_system_settings(T)

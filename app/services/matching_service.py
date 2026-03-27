@@ -1,6 +1,7 @@
 from app.core.database import users_collection, leads_collection, slots_collection
 from app.core.logger import logger
 from app.core.constants import LeadStatus, WorkerConstants, ISRAEL_CITIES_COORDS
+from app.services.scheduling_service import check_pro_availability
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 
@@ -102,12 +103,22 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
         for pro in matching_pros:
             current_load = load_counts.get(pro["_id"], 0)
             rating = pro.get("social_proof", {}).get("rating", 0)
+            no_shows = pro.get("no_show_count", 0)
 
             if current_load < WorkerConstants.MAX_PRO_LOAD:
+                # Check slot availability (non-blocking — skip if no slots system)
+                has_slots = True
+                try:
+                    has_slots = await check_pro_availability(pro["_id"])
+                except Exception:
+                    pass  # Don't block matching if scheduling service fails
+
                 candidates.append({
                     "pro": pro,
                     "load": current_load,
-                    "rating": rating
+                    "rating": rating,
+                    "has_slots": has_slots,
+                    "no_shows": no_shows,
                 })
             else:
                 logger.debug(f"Skipping Pro '{pro.get('business_name')}' - Overloaded ({current_load} active leads)")
@@ -129,14 +140,24 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
         # If Geo used -> Return closest qualified candidate.
         # If Text used -> Sort by Rating.
         
+        # Prefer pros with available slots, then by rating, penalize no-shows
+        def candidate_score(c):
+            slot_bonus = 10 if c.get("has_slots", True) else 0
+            no_show_penalty = c.get("no_shows", 0) * 0.5
+            return slot_bonus + c["rating"] - no_show_penalty
+
         if geo_enabled:
-            # Already sorted by distance by MongoDB
-            selected = candidates[0]
+            # Among geo-sorted candidates, prefer those with slots
+            candidates_with_slots = [c for c in candidates if c.get("has_slots", True)]
+            if candidates_with_slots:
+                selected = candidates_with_slots[0]
+            else:
+                selected = candidates[0]
             logger.info(f"✅ Geo-Routing: Selected '{selected['pro'].get('business_name')}' (Dist: Closest, Load: {selected['load']})")
             return selected['pro']
         else:
-            # Sort by Rating Descending
-            candidates.sort(key=lambda x: x["rating"], reverse=True)
+            # Sort by composite score
+            candidates.sort(key=candidate_score, reverse=True)
             selected = candidates[0]
             logger.info(f"✅ Text-Routing: Selected '{selected['pro'].get('business_name')}' (Rating: {selected['rating']}, Load: {selected['load']})")
             return selected['pro']

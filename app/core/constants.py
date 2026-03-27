@@ -16,7 +16,14 @@ class UserStates(str, Enum):
     AWAITING_ADDRESS = "awaiting_address"
     AWAITING_MEDIA = "awaiting_media"
     AWAITING_TIME = "awaiting_time"
+    AWAITING_CONSENT = "awaiting_consent"  # Waiting for privacy consent
     SOS = "sos"
+    # Pro onboarding flow
+    ONBOARDING_NAME = "onboarding_name"
+    ONBOARDING_TYPE = "onboarding_type"
+    ONBOARDING_AREAS = "onboarding_areas"
+    ONBOARDING_PRICES = "onboarding_prices"
+    ONBOARDING_CONFIRM = "onboarding_confirm"
 
 class WorkerConstants:
     MAX_PRO_LOAD = 3

@@ -36,6 +36,9 @@ def patch_dependencies(request, monkeypatch, mock_db):
     slots = mock_db.slots
     settings_col = mock_db.settings
     reviews = mock_db.reviews
+    consent = mock_db.consent
+    audit_log = mock_db.audit_log
+    admins = mock_db.admins
 
     import app.core.database
     monkeypatch.setattr(app.core.database, "users_collection", users)
@@ -44,6 +47,9 @@ def patch_dependencies(request, monkeypatch, mock_db):
     monkeypatch.setattr(app.core.database, "slots_collection", slots)
     monkeypatch.setattr(app.core.database, "settings_collection", settings_col)
     monkeypatch.setattr(app.core.database, "reviews_collection", reviews)
+    monkeypatch.setattr(app.core.database, "consent_collection", consent)
+    monkeypatch.setattr(app.core.database, "audit_log_collection", audit_log)
+    monkeypatch.setattr(app.core.database, "admins_collection", admins)
 
     # Patch Scheduler Collections
     import app.scheduler
@@ -81,6 +87,23 @@ def patch_dependencies(request, monkeypatch, mock_db):
     import app.services.notification_service
     monkeypatch.setattr(app.services.notification_service, "users_collection", users)
     monkeypatch.setattr(app.services.notification_service, "leads_collection", leads)
+
+    # Patch Pro Onboarding Service Collections
+    import app.services.pro_onboarding_service
+    monkeypatch.setattr(app.services.pro_onboarding_service, "users_collection", users)
+
+    # Patch Data Management Service Collections
+    import app.services.data_management_service
+    monkeypatch.setattr(app.services.data_management_service, "consent_collection", consent)
+    monkeypatch.setattr(app.services.data_management_service, "users_collection", users)
+    monkeypatch.setattr(app.services.data_management_service, "leads_collection", leads)
+    monkeypatch.setattr(app.services.data_management_service, "messages_collection", messages)
+    monkeypatch.setattr(app.services.data_management_service, "reviews_collection", reviews)
+    monkeypatch.setattr(app.services.data_management_service, "slots_collection", slots)
+
+    # Default: bypass consent check so existing tests pass
+    # Tests that specifically test consent flow can override this
+    monkeypatch.setattr(app.services.workflow_service, "has_consent", AsyncMock(return_value=True))
 
     # Patch New Services in Workflow
     mock_whatsapp = MagicMock()
@@ -123,6 +146,7 @@ async def integration_db(monkeypatch):
     slots = db.slots
     settings_col = db.settings
     reviews = db.reviews
+    consent = db.consent
 
     # CLEAR DB before test
     await users.delete_many({})
@@ -131,6 +155,7 @@ async def integration_db(monkeypatch):
     await slots.delete_many({})
     await settings_col.delete_many({})
     await reviews.delete_many({})
+    await consent.delete_many({})
 
     # Patch app.core.database
     import app.core.database
@@ -140,6 +165,7 @@ async def integration_db(monkeypatch):
     monkeypatch.setattr(app.core.database, "slots_collection", slots)
     monkeypatch.setattr(app.core.database, "settings_collection", settings_col)
     monkeypatch.setattr(app.core.database, "reviews_collection", reviews)
+    monkeypatch.setattr(app.core.database, "consent_collection", consent)
 
     # Patch Lead Manager
     import app.services.lead_manager_service
@@ -151,6 +177,9 @@ async def integration_db(monkeypatch):
     monkeypatch.setattr(app.services.workflow_service, "users_collection", users)
     monkeypatch.setattr(app.services.workflow_service, "leads_collection", leads)
     monkeypatch.setattr(app.services.workflow_service, "reviews_collection", reviews)
+
+    # Bypass consent for integration tests
+    monkeypatch.setattr(app.services.workflow_service, "has_consent", AsyncMock(return_value=True))
 
     import app.services.customer_flow
     monkeypatch.setattr(app.services.customer_flow, "users_collection", users)

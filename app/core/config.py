@@ -49,6 +49,17 @@ class Settings(BaseSettings):
     WEBHOOK_TOKEN: str | None = None
     ENVIRONMENT: str = "development"  # "production" or "development"
     LOG_LEVEL: str = "INFO"
+
+    # Backup (optional - S3 upload)
+    BACKUP_S3_BUCKET: str | None = None
+    AWS_ACCESS_KEY_ID: str | None = None
+    AWS_SECRET_ACCESS_KEY: str | None = None
+    AWS_REGION: str = "eu-west-1"
+
+    # SMS fallback (optional)
+    SMS_API_KEY: str | None = None
+    SMS_SENDER_ID: str = "Proli"
+    SMS_API_URL: str = "https://api.inforu.co.il/SendSMS/SendSMS"
     
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

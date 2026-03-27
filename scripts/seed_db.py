@@ -13,7 +13,10 @@ from app.core.database import (
     leads_collection,
     slots_collection,
     messages_collection,
-    reviews_collection
+    reviews_collection,
+    consent_collection,
+    audit_log_collection,
+    admins_collection,
 )
 from app.core.constants import LeadStatus
 
@@ -30,6 +33,9 @@ async def clear_db():
     await slots_collection.delete_many({})
     await messages_collection.delete_many({})
     await reviews_collection.delete_many({})
+    await consent_collection.delete_many({})
+    await audit_log_collection.delete_many({})
+    await admins_collection.delete_many({})
     print("✅ Database Cleared.")
 
 async def create_pros():
@@ -40,26 +46,38 @@ async def create_pros():
             "business_name": "יוסי אינסטלציה",
             "phone_number": "972500000001",
             "role": "professional",
+            "type": "plumber",
             "service_areas": AREAS_CENTER,
-            "categories": ["Plumber"],
+            "categories": ["plumber"],
             "is_active": True,
+            "is_verified": True,
             "social_proof": {"rating": 4.9, "review_count": 12},
-            "location": {"type": "Point", "coordinates": [34.7818, 32.0853]},  # Tel Aviv [lon, lat]
-            "system_prompt": "אתה יוסי, אינסטלטור מנוסה. היה אדיב ומקצועי.",
-            "price_list": {"ביקור": 250, "פתיחת סתימה": 400}
+            "location": {"type": "Point", "coordinates": [34.7818, 32.0853]},
+            "system_prompt": "אתה יוסי, אינסטלטור מנוסה עם 15 שנות ניסיון. היה אדיב ומקצועי. אזורי שירות: Tel Aviv, Ramat Gan, Givatayim",
+            "price_list": {"ביקור": 250, "פתיחת סתימה": 400},
+            "prices_for_prompt": "ביקור: 250₪\nפתיחת סתימה: 400₪",
+            "keywords": ["אינסטלטור", "שרברב", "נזילה", "סתימה", "ברז"],
+            "plan": "basic",
+            "created_at": datetime.now(timezone.utc) - timedelta(days=30),
         },
         {
             "business_name": "משה חשמל ומיזוג",
             "phone_number": "972500000002",
             "role": "professional",
+            "type": "electrician",
             "service_areas": AREAS_SOUTH,
-            "categories": ["Electrician"],
+            "categories": ["electrician"],
             "is_active": True,
+            "is_verified": True,
             "social_proof": {"rating": 4.7, "review_count": 8},
-            "location": {"type": "Point", "coordinates": [34.7742, 32.0158]},  # Holon [lon, lat]
-            "system_prompt": "אתה משה, חשמלאי מוסמך. תן דגש על בטיחות.",
-            "price_list": {"ביקור": 300, "התקנת שקע": 150}
-        }
+            "location": {"type": "Point", "coordinates": [34.7742, 32.0158]},
+            "system_prompt": "אתה משה, חשמלאי מוסמך. תן דגש על בטיחות. אזורי שירות: Holon, Bat Yam, Rishon LeTsiyon",
+            "price_list": {"ביקור": 300, "התקנת שקע": 150},
+            "prices_for_prompt": "ביקור: 300₪\nהתקנת שקע: 150₪",
+            "keywords": ["חשמלאי", "חשמל", "שקע", "תאורה", "קצר"],
+            "plan": "basic",
+            "created_at": datetime.now(timezone.utc) - timedelta(days=30),
+        },
     ]
     
     pro_ids = []

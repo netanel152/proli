@@ -49,6 +49,33 @@ This document explains the purpose and usage of the operational scripts located 
     python scripts/generate_admin_hash.py
     ```
 
+### `backup.py`
+**Purpose:** Creates a compressed MongoDB backup with optional S3 upload.
+*   **What it does:**
+    *   Runs `mongodump` with gzip compression to `backups/` directory.
+    *   Optionally uploads to S3 (requires `BACKUP_S3_BUCKET` + AWS credentials).
+    *   Retention policy: keeps 7 daily + 4 weekly backups.
+    *   Also runs automatically daily at 02:00 IL time via APScheduler.
+*   **Usage:**
+    ```bash
+    python scripts/backup.py              # Local backup only
+    python scripts/backup.py --upload-s3  # Backup + S3 upload
+    python scripts/backup.py --cleanup    # Clean old backups per retention policy
+    ```
+
+### `restore.py`
+**Purpose:** Restores a MongoDB backup from local file or S3.
+*   **What it does:**
+    *   Runs `mongorestore` from a gzipped backup archive.
+    *   Supports restoring the latest local backup or downloading from S3.
+    *   Safety confirmation prompt before destructive restore.
+*   **Usage:**
+    ```bash
+    python scripts/restore.py --latest          # Restore most recent local backup
+    python scripts/restore.py --from-s3 <key>   # Download and restore from S3
+    python scripts/restore.py --no-drop         # Restore without dropping existing data
+    ```
+
 ## 2. Testing & Simulation
 
 ### `simulate_webhook.py`
