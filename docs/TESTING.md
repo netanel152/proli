@@ -74,7 +74,9 @@ To keep tests fast and deterministic, we avoid calling external APIs (Green API,
 *   **AI Engine:** The `ai` instance in `workflow_service` is mocked via `monkeypatch` to return predefined `AIResponse` objects.
 *   **WhatsApp:** The `whatsapp` instance in `workflow_service` is mocked to verify messages without sending.
 *   **Redis:** Not mocked — Redis calls gracefully fail (logged as errors) since `StateManager` and `ContextManager` have fallback behavior.
-*   **Extracted modules:** `conftest.py` patches collections in `customer_flow`, `pro_flow`, `matching_service`, and `notification_service` (they use `from ... import` so each module needs its own patch).
+*   **Extracted modules:** `conftest.py` patches collections in `customer_flow`, `pro_flow`, `matching_service`, `notification_service`, and `data_management_service` (they use `from ... import` so each module needs its own patch).
+*   **Consent:** `has_consent` is mocked to return `True` by default so existing tests bypass the consent gate in `workflow_service`.
+*   **New collections:** `consent_collection`, `audit_log_collection`, and `admins_collection` are patched in conftest.
 *   **Integration tests:** Use a real `MONGO_TEST_URI` database. Marked with `@pytest.mark.integration` and skipped when `MONGO_TEST_URI` is not set.
 
 ## 4. Writing New Tests

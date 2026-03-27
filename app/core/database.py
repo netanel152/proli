@@ -24,6 +24,9 @@ leads_collection = db.leads
 slots_collection = db.slots
 settings_collection = db.settings
 reviews_collection = db.reviews
+consent_collection = db.consent
+audit_log_collection = db.audit_log
+admins_collection = db.admins
 
 # --- Sync Client (PyMongo) ---
 # Kept strictly for synchronous scripts or legacy tools if needed.

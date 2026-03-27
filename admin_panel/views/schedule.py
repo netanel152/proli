@@ -27,8 +27,8 @@ def view_schedule_editor(T):
     if selected_pro_name:
         pro = pro_map[selected_pro_name]
         tz = pytz.timezone(settings.TIMEZONE)
-        
-        tab_daily, tab_bulk = st.tabs([T["tab_daily"], T["tab_bulk"]])
+
+        tab_daily, tab_bulk, tab_template = st.tabs([T["tab_daily"], T["tab_bulk"], T.get("tab_template", "📋 Weekly Template")])
         
         # --- TAB 1: DAILY EDITOR ---
         with tab_daily:
@@ -186,3 +186,69 @@ def view_schedule_editor(T):
                     if cn.button(T["confirm_no"], key="confirm_clear_no"):
                         del st.session_state.confirm_clear_slots
                         st.rerun()
+
+        # --- TAB 3: WEEKLY TEMPLATE ---
+        with tab_template:
+            st.markdown("### " + T.get("template_title", "Recurring Weekly Schedule"))
+            st.caption(T.get("template_desc", "Set a recurring weekly template. Slots will be auto-generated every Sunday for the next 2 weeks."))
+
+            # Load existing template
+            existing_template = pro.get("schedule_template", {})
+            slot_duration = existing_template.get("slot_duration_minutes", 60)
+
+            day_names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
+            day_labels = {
+                "sunday": T.get("day_6", "Sun"), "monday": T.get("day_0", "Mon"),
+                "tuesday": T.get("day_1", "Tue"), "wednesday": T.get("day_2", "Wed"),
+                "thursday": T.get("day_3", "Thu"), "friday": T.get("day_4", "Fri"),
+                "saturday": T.get("day_5", "Sat"),
+            }
+
+            slot_dur = st.number_input(
+                T.get("template_slot_dur", "Slot Duration (minutes)"),
+                min_value=15, max_value=120, value=slot_duration, step=15,
+                key="template_duration",
+            )
+
+            template_data = {}
+            for day in day_names:
+                day_config = existing_template.get(day, {"start": "08:00", "end": "18:00", "enabled": day not in ["friday", "saturday"]})
+
+                with st.container(border=True):
+                    c_check, c_start, c_end = st.columns([1, 2, 2])
+
+                    enabled = c_check.checkbox(
+                        day_labels.get(day, day.capitalize()),
+                        value=day_config.get("enabled", False),
+                        key=f"tmpl_en_{day}",
+                    )
+
+                    try:
+                        start_t = datetime.strptime(day_config.get("start", "08:00"), "%H:%M").time()
+                        end_t = datetime.strptime(day_config.get("end", "18:00"), "%H:%M").time()
+                    except ValueError:
+                        start_t = time(8, 0)
+                        end_t = time(18, 0)
+
+                    start_val = c_start.time_input(
+                        T.get("sch_start_time", "Start"),
+                        value=start_t, key=f"tmpl_s_{day}",
+                    )
+                    end_val = c_end.time_input(
+                        T.get("sch_end_time", "End"),
+                        value=end_t, key=f"tmpl_e_{day}",
+                    )
+
+                    template_data[day] = {
+                        "enabled": enabled,
+                        "start": start_val.strftime("%H:%M"),
+                        "end": end_val.strftime("%H:%M"),
+                    }
+
+            if st.button(T.get("template_save", "Save Template"), type="primary", key="save_template"):
+                template_data["slot_duration_minutes"] = slot_dur
+                users_collection.update_one(
+                    {"_id": pro["_id"]},
+                    {"$set": {"schedule_template": template_data}},
+                )
+                st.success(T.get("template_saved", "Template saved! Slots will be generated automatically."))

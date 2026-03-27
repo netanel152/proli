@@ -57,7 +57,7 @@ async def test_sos_pro_alert(mock_db, monkeypatch):
     monkeypatch.setattr(app.services.workflow_service, "StateManager", mock_state_manager)
 
     # Setup Data
-    pro_id = "pro123"
+    pro_id = "65f0a1b2c3d4e5f678901234"
     chat_id = "customer123@c.us"
     pro_phone = "972500000000"
     

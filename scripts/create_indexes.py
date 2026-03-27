@@ -10,7 +10,10 @@ from app.core.database import (
     users_collection,
     leads_collection,
     messages_collection,
-    slots_collection
+    slots_collection,
+    audit_log_collection,
+    consent_collection,
+    admins_collection,
 )
 
 async def create_all_indexes():
@@ -94,6 +97,32 @@ async def create_all_indexes():
 
     except Exception as e:
         print(f"  ❌ Error indexing Slots: {e}")
+
+    # --- Audit Log Collection ---
+    try:
+        print("🔹 Indexing Audit Log Collection...")
+        await audit_log_collection.create_index([("timestamp", DESCENDING)])
+        print("  ✅ Created index: timestamp (descending)")
+        await audit_log_collection.create_index([("admin_user", ASCENDING)])
+        print("  ✅ Created index: admin_user")
+    except Exception as e:
+        print(f"  ❌ Error indexing Audit Log: {e}")
+
+    # --- Consent Collection ---
+    try:
+        print("🔹 Indexing Consent Collection...")
+        await consent_collection.create_index([("chat_id", ASCENDING)], unique=True)
+        print("  ✅ Created unique index: chat_id")
+    except Exception as e:
+        print(f"  ❌ Error indexing Consent: {e}")
+
+    # --- Admins Collection ---
+    try:
+        print("🔹 Indexing Admins Collection...")
+        await admins_collection.create_index([("username", ASCENDING)], unique=True)
+        print("  ✅ Created unique index: username")
+    except Exception as e:
+        print(f"  ❌ Error indexing Admins: {e}")
 
     print("✨ Index creation process completed.")
 

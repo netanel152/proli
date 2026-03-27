@@ -1,10 +1,19 @@
 import sys
 import os
+import re
 import logging
 import json
 from datetime import datetime
 from loguru import logger
 from app.core.config import settings
+
+# PII masking pattern: Israeli phone numbers (972XXXXXXXXX)
+_PHONE_PATTERN = re.compile(r"(972)(\d{2})(\d+)")
+
+
+def mask_pii(message: str) -> str:
+    """Mask phone numbers in log messages."""
+    return _PHONE_PATTERN.sub(r"\1\2***", message)
 
 # Create logs directory if it doesn't exist
 log_dir = os.path.join(os.getcwd(), "logs")
@@ -79,8 +88,15 @@ def setup_logging():
         )
 
     # File handler (always structured/archive)
+    # In production, apply PII masking filter
+    def _pii_filter(record):
+        if is_production:
+            record["message"] = mask_pii(record["message"])
+        return True
+
     logger.add(
         os.path.join(log_dir, "proli.log"),
+        filter=_pii_filter,
         rotation="10 MB",
         retention="10 days",
         level="DEBUG",

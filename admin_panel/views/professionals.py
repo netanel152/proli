@@ -2,6 +2,8 @@ import streamlit as st
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
 from admin_panel.core.utils import users_collection, slots_collection, create_initial_schedule, generate_system_prompt
+from admin_panel.core.auth import log_audit, get_current_role
+from admin_panel.core.rbac import can_edit, has_permission
 import re
 
 # Constants for Prompt Markers
@@ -22,12 +24,24 @@ def view_professionals(T):
     if 'pro_to_edit' not in st.session_state:
         st.session_state.pro_to_edit = None
 
-    if st.session_state.pro_view_mode == 'list':
-        render_pro_list(T)
-    elif st.session_state.pro_view_mode == 'add':
-        render_pro_form(T)
-    elif st.session_state.pro_view_mode == 'edit':
-        render_pro_form(T, pro_data=st.session_state.pro_to_edit)
+    # Check for pending approvals
+    pending_count = users_collection.count_documents({"pending_approval": True})
+
+    tab_list, tab_pending = st.tabs([
+        T.get("tab_professionals", "Professionals"),
+        f"{T.get('tab_pending_approval', 'Pending Approval')} ({pending_count})",
+    ])
+
+    with tab_list:
+        if st.session_state.pro_view_mode == 'list':
+            render_pro_list(T)
+        elif st.session_state.pro_view_mode == 'add':
+            render_pro_form(T)
+        elif st.session_state.pro_view_mode == 'edit':
+            render_pro_form(T, pro_data=st.session_state.pro_to_edit)
+
+    with tab_pending:
+        render_pending_approvals(T)
 
 def render_pro_list(T):
     """Renders the list of professionals with editing and deletion capabilities."""
@@ -81,7 +95,7 @@ def render_pro_list(T):
                     st.session_state.pro_to_edit = p
                     st.rerun()
                 
-                if st.button(T.get("delete_btn", "Delete"), key=f"del_{pro_id}", type="secondary"):
+                if has_permission(get_current_role(), "delete_pros") and st.button(T.get("delete_btn", "Delete"), key=f"del_{pro_id}", type="secondary"):
                     st.session_state[f"confirm_del_{pro_id}"] = True
             
             if st.session_state.get(f"confirm_del_{pro_id}"):
@@ -90,6 +104,7 @@ def render_pro_list(T):
                 if c_yes.button(T.get("confirm_yes", "Yes, Delete"), key=f"yes_del_{pro_id}"):
                     slots_collection.delete_many({"pro_id": p["_id"]})
                     users_collection.delete_one({"_id": p["_id"]})
+                    log_audit("delete_pro", {"pro_id": pro_id, "name": p.get("business_name")})
                     del st.session_state[f"confirm_del_{pro_id}"]
                     st.cache_data.clear() # Clear cache after deletion
                     st.rerun()
@@ -190,6 +205,7 @@ def render_pro_form(T, pro_data=None):
 
                 if is_edit:
                     users_collection.update_one({"_id": ObjectId(pro_id)}, {"$set": pro_payload})
+                    log_audit("edit_pro", {"pro_id": pro_id, "name": name})
                     st.success(T["success_update"])
                 else:
                     pro_payload.update({
@@ -201,10 +217,117 @@ def render_pro_form(T, pro_data=None):
                     })
                     res = users_collection.insert_one(pro_payload)
                     create_initial_schedule(res.inserted_id)
+                    log_audit("create_pro", {"pro_id": str(res.inserted_id), "name": name})
                     st.success(T["success_create"])
-                
+
                 st.session_state.pro_view_mode = 'list'
                 st.session_state.pro_to_edit = None
                 st.rerun()
             else:
                 st.error(T["error_fill_fields"])
+
+
+def render_pending_approvals(T):
+    """Renders the list of professionals pending admin approval (from WhatsApp onboarding)."""
+    pending = list(users_collection.find({"pending_approval": True}).sort("created_at", -1))
+
+    if not pending:
+        st.info(T.get("no_pending_pros", "No professionals pending approval."))
+        return
+
+    for p in pending:
+        pro_id = str(p["_id"])
+        pro_type_label = T.get(f"type_{p.get('type', 'general')}", p.get("type", "general")).capitalize()
+
+        with st.container(border=True):
+            c_info, c_actions = st.columns([3, 1])
+
+            with c_info:
+                st.subheader(f"🟡 {p.get('business_name', 'Unknown')}")
+                st.caption(f"{pro_type_label} | {p.get('phone_number', '')}")
+                st.write(f"**{T.get('new_areas', 'Areas')}:** {', '.join(p.get('service_areas', []))}")
+                if p.get("prices_for_prompt"):
+                    st.write(f"**{T.get('new_prices', 'Prices')}:** {p['prices_for_prompt']}")
+                if p.get("created_at"):
+                    st.write(f"**{T.get('registered_at', 'Registered')}:** {p['created_at'].strftime('%Y-%m-%d %H:%M')}")
+                st.caption(f"Source: WhatsApp onboarding")
+
+            with c_actions:
+                st.write(" ")
+                if can_edit(get_current_role()):
+                    if st.button(f"✅ {T.get('approve_btn', 'Approve')}", key=f"approve_{pro_id}", type="primary"):
+                        # Activate the pro and generate system prompt
+                        areas_str = ", ".join(p.get("service_areas", []))
+                        prompt, keywords = generate_system_prompt(
+                            p.get("business_name", ""),
+                            p.get("type", "general"),
+                            areas_str,
+                            p.get("prices_for_prompt", ""),
+                        )
+                        users_collection.update_one(
+                            {"_id": p["_id"]},
+                            {
+                                "$set": {
+                                    "is_active": True,
+                                    "pending_approval": False,
+                                    "system_prompt": prompt,
+                                    "keywords": keywords,
+                                },
+                            },
+                        )
+                        create_initial_schedule(p["_id"])
+                        log_audit("approve_pro", {"pro_id": pro_id, "name": p.get("business_name")})
+
+                        # Send WhatsApp notification
+                        _notify_pro_approved(p.get("phone_number"))
+
+                        st.success(f"{p.get('business_name')} approved!")
+                        st.cache_data.clear()
+                        st.rerun()
+
+                    if st.button(f"❌ {T.get('reject_btn', 'Reject')}", key=f"reject_{pro_id}", type="secondary"):
+                        st.session_state[f"confirm_reject_{pro_id}"] = True
+
+            if st.session_state.get(f"confirm_reject_{pro_id}"):
+                st.warning(T.get("confirm_reject_pro", "Reject this professional? They will be notified."))
+                c_yes, c_no, _ = st.columns([1, 1, 4])
+                if c_yes.button(T.get("confirm_yes", "Yes"), key=f"yes_reject_{pro_id}"):
+                    users_collection.delete_one({"_id": p["_id"]})
+                    log_audit("reject_pro", {"pro_id": pro_id, "name": p.get("business_name")})
+                    _notify_pro_rejected(p.get("phone_number"))
+                    del st.session_state[f"confirm_reject_{pro_id}"]
+                    st.cache_data.clear()
+                    st.rerun()
+                if c_no.button(T.get("confirm_no", "No"), key=f"no_reject_{pro_id}"):
+                    del st.session_state[f"confirm_reject_{pro_id}"]
+                    st.rerun()
+
+
+def _notify_pro_approved(phone_number: str):
+    """Send WhatsApp approval notification to a pro (best-effort, sync context)."""
+    if not phone_number:
+        return
+    try:
+        import httpx
+        from app.core.config import settings
+        chat_id = f"{phone_number}@c.us" if not phone_number.endswith("@c.us") else phone_number
+        from app.core.messages import Messages
+        url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}/sendMessage/{settings.GREEN_API_TOKEN}"
+        httpx.post(url, json={"chatId": chat_id, "message": Messages.Onboarding.APPROVED_NOTIFICATION}, timeout=10)
+    except Exception:
+        pass  # Best-effort notification
+
+
+def _notify_pro_rejected(phone_number: str):
+    """Send WhatsApp rejection notification to a pro (best-effort, sync context)."""
+    if not phone_number:
+        return
+    try:
+        import httpx
+        from app.core.config import settings
+        chat_id = f"{phone_number}@c.us" if not phone_number.endswith("@c.us") else phone_number
+        from app.core.messages import Messages
+        url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}/sendMessage/{settings.GREEN_API_TOKEN}"
+        httpx.post(url, json={"chatId": chat_id, "message": Messages.Onboarding.REJECTED_NOTIFICATION}, timeout=10)
+    except Exception:
+        pass  # Best-effort notification

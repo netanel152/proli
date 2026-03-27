@@ -104,9 +104,68 @@ docker-compose logs -f admin  # Admin Panel
 - **מה זה:** תהליך הרץ כל 4 שעות.
 - **פעולה:** אם ישנם לידים שעדיין תקועים (למשל, כי לא נמצא איש מקצוע חלופי), המערכת שולחת דו"ח מרוכז למנהל המערכת ב-WhatsApp עם רשימת הלידים והזמן שהם ממתינים.
 
+## גיבוי ושחזור (Backup & Restore)
+
+### גיבוי אוטומטי
+המערכת מבצעת גיבוי יומי אוטומטי בשעה 02:00 (שעון ישראל) באמצעות APScheduler:
+- `mongodump` עם דחיסת gzip
+- שמירה לתיקיית `backups/` עם חותמת זמן
+- העלאה אוטומטית ל-S3 אם מוגדרים `BACKUP_S3_BUCKET` ו-AWS credentials
+- מדיניות שמירה: 7 יומיים + 4 שבועיים
+
+### גיבוי ידני
+```bash
+python scripts/backup.py              # גיבוי מקומי
+python scripts/backup.py --upload-s3  # גיבוי + העלאה ל-S3
+python scripts/backup.py --cleanup    # ניקוי גיבויים ישנים
+```
+
+### שחזור
+```bash
+python scripts/restore.py --latest          # שחזור מגיבוי אחרון
+python scripts/restore.py --from-s3 <key>   # שחזור מ-S3
+python scripts/restore.py --no-drop         # שחזור ללא מחיקת נתונים קיימים
+```
+
+## ניהול משתמשי אדמין (RBAC)
+
+המערכת תומכת ב-3 רמות הרשאה:
+- **Owner:** גישה מלאה — ניהול אדמינים, צפייה ב-Audit Log, כל פעולות העריכה
+- **Editor:** עריכת לידים, אנשי מקצוע, לוחות זמנים
+- **Viewer:** צפייה בלבד בדשבורד
+
+ניהול אדמינים דרך לשונית "Admin Users" בהגדרות (נגיש רק ל-Owner).
+כל פעולה מתועדת ב-Audit Log.
+
+### Fallback אימות
+אם אין אדמינים ב-DB, המערכת חוזרת לאימות באמצעות `ADMIN_PASSWORD` ממשתני הסביבה.
+
+## תאימות ופרטיות (Consent & Privacy)
+
+### תהליך הסכמה
+- הודעה ראשונה מלקוח חדש → בקשת הסכמה לשמירת מידע
+- הלקוח מאשר → ממשיך לתהליך הרגיל
+- הלקוח מסרב → יציאה מנומסת, אין שמירת מידע
+
+### ניהול מידע
+מלשונית "Data Management" בהגדרות (Owner בלבד):
+- ייצוא כל המידע של משתמש (Export)
+- מחיקת כל המידע של משתמש (Delete)
+- צפייה בסטטוס הסכמות
+
+## הרשמת אנשי מקצוע (Pro Onboarding)
+
+אנשי מקצוע יכולים להירשם באופן עצמאי דרך WhatsApp:
+
+1. שולחים *הרשמה* לבוט
+2. עוברים שאלון של 5 שלבים: שם עסק → סוג מקצוע → ערים → מחירים → אישור
+3. הפרופיל נשלח לאישור מנהל
+4. המנהל מאשר/דוחה מלשונית "ממתינים לאישור" במסך אנשי מקצוע
+5. איש המקצוע מקבל הודעת WhatsApp על אישור/דחייה
+
 ## ניהול גרסאות ושחזור
 
-- **הוספת איש מקצוע:** דרך האדמין או `python scripts/seed_db.py`.
+- **הוספת איש מקצוע:** דרך האדמין, `python scripts/seed_db.py`, או הרשמה עצמית ב-WhatsApp.
 - **ניקוי נתונים:** `python scripts/clear_history.py` (זהירות!).
 
 ## אבטחה ומקביליות (Database Safety)
@@ -167,3 +226,16 @@ docker-compose logs -f admin  # Admin Panel
 - `ENVIRONMENT`: סביבת ריצה - `development` או `production`.
 - `LOG_LEVEL`: רמת פירוט לוגים (ברירת מחדל: `INFO`).
 - `MAX_CHAT_HISTORY`: כמות הודעות אחרונות לזכור בקונטקסט (ברירת מחדל: `20`).
+
+### גיבוי ו-S3 (Optional)
+
+- `BACKUP_S3_BUCKET`: שם ה-Bucket ב-S3 לגיבויים.
+- `AWS_ACCESS_KEY_ID`: מפתח AWS.
+- `AWS_SECRET_ACCESS_KEY`: סוד AWS.
+- `AWS_REGION`: אזור AWS (ברירת מחדל: `eu-west-1`).
+
+### SMS Fallback (Optional)
+
+- `SMS_API_KEY`: מפתח API לספק SMS (InforUMobile).
+- `SMS_SENDER_ID`: שם השולח ב-SMS (ברירת מחדל: `Proli`).
+- `SMS_API_URL`: כתובת API של ספק SMS (ברירת מחדל: InforUMobile).

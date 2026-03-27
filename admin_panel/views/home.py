@@ -4,6 +4,8 @@ from bson.objectid import ObjectId
 from datetime import datetime
 from admin_panel.core.utils import users_collection, leads_collection, messages_collection, send_completion_check_sync
 from admin_panel.ui.components import render_chat_bubble
+from admin_panel.core.auth import log_audit, get_current_role
+from admin_panel.core.rbac import can_edit, has_permission
 import pytz
 import os
 import sys
@@ -150,42 +152,43 @@ def view_leads_dashboard(T):
             )
 
             # --- Actions for Edited Data ---
-            if st.button(T.get("save_btn", "Save Changes"), type="primary", key="save_dashboard_changes"):
-                changes = st.session_state.leads_editor.get("edited_rows", {})
-                if not changes:
-                    st.toast(T.get("no_changes", "No changes."))
-                else:
-                    updated_count = 0
-                    for row_idx, changed_data in changes.items():
-                        lead_id = st.session_state.original_leads_df.iloc[row_idx]["id"]
-                        
-                        update_payload = {}
-                        
-                        # Handle Status Change
-                        if "status" in changed_data:
-                            update_payload["status"] = changed_data["status"]
-                        
-                        # Handle Details Change
-                        if "details_summary" in changed_data:
-                            update_payload["details"] = changed_data["details_summary"]
-                            # Also update issue_type field if possible
-                            update_payload["issue_type"] = changed_data["details_summary"]
+            if can_edit(get_current_role()):
+                if st.button(T.get("save_btn", "Save Changes"), type="primary", key="save_dashboard_changes"):
+                    changes = st.session_state.leads_editor.get("edited_rows", {})
+                    if not changes:
+                        st.toast(T.get("no_changes", "No changes."))
+                    else:
+                        updated_count = 0
+                        for row_idx, changed_data in changes.items():
+                            lead_id = st.session_state.original_leads_df.iloc[row_idx]["id"]
 
-                        # Handle Professional Change
-                        if "professional" in changed_data:
-                            new_pro_name = changed_data["professional"]
-                            if new_pro_name == T["unknown_pro"]:
-                                update_payload["pro_id"] = None
-                            else:
-                                update_payload["pro_id"] = pro_map_name_to_id.get(new_pro_name)
+                            update_payload = {}
 
-                        if update_payload:
-                            leads_collection.update_one({"_id": ObjectId(lead_id)}, {"$set": update_payload})
-                            updated_count += 1
-                    
-                    st.success(f"{updated_count} {T.get('msg_changes', 'changes saved')}!")
-                    st.cache_data.clear() 
-                    st.rerun()
+                            # Handle Status Change
+                            if "status" in changed_data:
+                                update_payload["status"] = changed_data["status"]
+
+                            # Handle Details Change
+                            if "details_summary" in changed_data:
+                                update_payload["details"] = changed_data["details_summary"]
+                                update_payload["issue_type"] = changed_data["details_summary"]
+
+                            # Handle Professional Change
+                            if "professional" in changed_data:
+                                new_pro_name = changed_data["professional"]
+                                if new_pro_name == T["unknown_pro"]:
+                                    update_payload["pro_id"] = None
+                                else:
+                                    update_payload["pro_id"] = pro_map_name_to_id.get(new_pro_name)
+
+                            if update_payload:
+                                leads_collection.update_one({"_id": ObjectId(lead_id)}, {"$set": update_payload})
+                                log_audit("edit_lead", {"lead_id": lead_id, "changes": update_payload})
+                                updated_count += 1
+
+                        st.success(f"{updated_count} {T.get('msg_changes', 'changes saved')}!")
+                        st.cache_data.clear()
+                        st.rerun()
 
             st.markdown("---")
 
@@ -200,23 +203,27 @@ def view_leads_dashboard(T):
                 c1, c2 = st.columns([1,3])
                 
                 with c1:
-                    # Delete Action
-                    if st.button(f"🗑️ {T.get('delete_btn', 'Delete Lead')}", key=f"delete_{selected_lead['id']}"):
-                         st.session_state[f"confirm_delete_{selected_lead['id']}"] = True
+                    # Delete Action (requires edit permission)
+                    if has_permission(get_current_role(), "delete_leads"):
+                        if st.button(f"🗑️ {T.get('delete_btn', 'Delete Lead')}", key=f"delete_{selected_lead['id']}"):
+                             st.session_state[f"confirm_delete_{selected_lead['id']}"] = True
 
                     # Manual Customer Check Action
-                    if st.button("📱 בדיקה מול לקוח", key=f"check_{selected_lead['id']}", help="Send WhatsApp verification"):
-                        try:
-                            send_completion_check_sync(selected_lead['id'])
-                            st.success("✅ Check sent!")
-                        except Exception as e:
-                            st.error(f"Failed: {e}")
+                    if can_edit(get_current_role()):
+                        if st.button("📱 בדיקה מול לקוח", key=f"check_{selected_lead['id']}", help="Send WhatsApp verification"):
+                            try:
+                                send_completion_check_sync(selected_lead['id'])
+                                log_audit("send_completion_check", {"lead_id": selected_lead['id']})
+                                st.success("✅ Check sent!")
+                            except Exception as e:
+                                st.error(f"Failed: {e}")
 
                     if st.session_state.get(f"confirm_delete_{selected_lead['id']}"):
                         st.warning(T.get("confirm_delete", "Are you sure?"))
                         cy, cn = st.columns(2)
                         if cy.button(T["confirm_yes"], key=f"yes_del_{selected_lead['id']}"):
                             leads_collection.delete_one({"_id": ObjectId(selected_lead['id'])})
+                            log_audit("delete_lead", {"lead_id": selected_lead['id']})
                             logger.info(f"Admin deleted lead {selected_lead['id']}")
                             st.success(T["success_delete"])
                             del st.session_state[f"confirm_delete_{selected_lead['id']}"]
@@ -243,6 +250,9 @@ def view_leads_dashboard(T):
 
     # --- TAB 2: CREATE LEAD ---
     with tab_create:
+        if not can_edit(get_current_role()):
+            st.warning("You don't have permission to create leads.")
+            return
         st.header(T.get("create_lead_title", "Create a New Lead"))
         
         with st.form("create_lead_form"):
@@ -295,6 +305,7 @@ def view_leads_dashboard(T):
                         }
                         
                         leads_collection.insert_one(new_lead_doc)
+                        log_audit("create_lead", {"chat_id": chat_id, "status": new_status})
                         logger.info(f"Admin manually created lead for {chat_id}")
                         st.success(T.get("create_lead_success", "Lead created successfully!"))
                         st.cache_data.clear() # Clear cache so dashboard updates

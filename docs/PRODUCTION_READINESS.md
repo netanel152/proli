@@ -58,14 +58,42 @@ All 19 issues from the March 2026 code review have been resolved. The codebase h
 - [ ] Set `ADMIN_PHONE` to the production admin number
 - [ ] Set `ENVIRONMENT=production` in env
 - [ ] Deploy as 3 separate Railway services (see `docs/RAILWAY_SETUP.md`)
-- [ ] Run `python scripts/create_indexes.py` against production MongoDB
-- [ ] Ensure MongoDB Atlas backups are configured
+- [ ] Run `python scripts/create_indexes.py` against production MongoDB (includes consent, audit_log, admins indexes)
+- [ ] Configure backup: set `BACKUP_S3_BUCKET` + AWS credentials for off-site backups
 - [ ] Verify SSL/HTTPS is enabled (Railway provides this automatically)
+- [ ] Create first admin user via admin panel (first login uses `ADMIN_PASSWORD` env var)
 
 ### Recommended Before Scaling
 - [ ] Add distributed lock for APScheduler jobs (Redis `SET NX`) — needed if running multiple worker replicas
-- [ ] Set up monitoring/alerting for worker process health
+- [ ] Configure `SMS_API_KEY` for SMS fallback notifications
+- [ ] Set up monitoring/alerting using `/health` endpoint (includes DB/Redis latency, worker heartbeat)
 - [ ] Configure log aggregation (Railway logs or external service)
 
+## Phase 1 Features (March 2026)
+
+| Feature | Status | Details |
+|---|---|---|
+| Automated Backups | Done | Daily mongodump at 02:00 IL, S3 upload, 7-day retention |
+| Privacy/Consent | Done | Consent gate on first contact, data export/delete |
+| Error Hardening | Done | Per-section try/except in workflow, user-friendly errors, ARQ max_retries=3 |
+| Admin RBAC | Done | Owner/Editor/Viewer roles, multi-admin auth, audit logging |
+| Monitoring | Done | Expanded /health (DB/Redis latency, worker heartbeat), PII masking in logs |
+
+## Phase 2 Features (March 2026)
+
+| Feature | Status | Details |
+|---|---|---|
+| Analytics | Done | Lead funnel, daily volume, pro performance, response times — admin dashboard |
+| Scheduling | Done | Recurring weekly templates, auto-regeneration, availability-aware matching, no-show tracking |
+| SMS Fallback | Done | WhatsApp-first with SMS fallback via InforUMobile API |
+
+## Phase 3 Features (March 2026)
+
+| Feature | Status | Details |
+|---|---|---|
+| Pro Onboarding | Done | WhatsApp self-signup flow (5 steps), admin approval tab with notifications |
+| Customer Portal | Not started | Magic-link web page for lead status, reschedule, photo upload |
+| Payments | Not started | Commission tracking, Stripe integration, PDF invoices |
+
 ## Verdict
-**System is GREEN for production deployment.** All code-level security, performance, and stability issues have been resolved. Follow the deployment checklist above.
+**System is GREEN for production deployment.** All code-level security, performance, and stability issues have been resolved. Phase 1 (backup, consent, error hardening, RBAC, monitoring) and Phase 2 (analytics, scheduling, SMS) features are implemented. Follow the deployment checklist above.

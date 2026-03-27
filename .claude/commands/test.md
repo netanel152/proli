@@ -1,0 +1,1 @@
+Run the full test suite with `pytest --tb=short`. Report results: number passed, failed, skipped. If there are NEW failures (not the 2 known-failing tests: test_sos_pro_alert and test_full_lifecycle), investigate and fix them. After fixing, re-run to confirm.

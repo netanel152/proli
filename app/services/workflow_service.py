@@ -10,6 +10,7 @@ from app.core.prompts import Prompts
 from app.core.constants import LeadStatus, Defaults, UserStates
 from app.services.matching_service import determine_best_pro
 from app.services.notification_service import send_sos_alert
+from app.services.data_management_service import has_consent, record_consent
 from app.services.customer_flow import (
     send_customer_completion_check as _send_completion_check,
     handle_customer_completion_text as _handle_completion,
@@ -17,6 +18,9 @@ from app.services.customer_flow import (
     handle_customer_review_comment,
 )
 from app.services.pro_flow import handle_pro_text_command as _handle_pro_cmd
+from app.services.pro_onboarding_service import (
+    start_onboarding, handle_onboarding_step, ONBOARDING_STATES,
+)
 from app.services.media_handler import detect_and_fetch_media
 import re
 
@@ -50,7 +54,45 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
          await whatsapp.send_message(chat_id, Messages.System.RESET_SUCCESS)
          return
 
-    # Get State
+    # Consent Check (skip for professionals — they're added by admin)
+    current_state = await StateManager.get_state(chat_id)
+
+    if current_state != UserStates.PRO_MODE:
+        phone = chat_id.replace("@c.us", "")
+        is_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional"})
+
+        if not is_pro:
+            consent_status = await has_consent(chat_id)
+
+            if consent_status is None:
+                # First contact — send consent request
+                await whatsapp.send_message(chat_id, Messages.Consent.REQUEST)
+                await StateManager.set_state(chat_id, UserStates.AWAITING_CONSENT)
+                return
+
+            if current_state == UserStates.AWAITING_CONSENT:
+                if normalized_text in Messages.Consent.ACCEPT_KEYWORDS:
+                    await record_consent(chat_id, accepted=True)
+                    await StateManager.clear_state(chat_id)
+                    await whatsapp.send_message(chat_id, Messages.Consent.ACCEPTED)
+                    return
+                elif normalized_text in Messages.Consent.DECLINE_KEYWORDS:
+                    await record_consent(chat_id, accepted=False)
+                    await StateManager.clear_state(chat_id)
+                    await whatsapp.send_message(chat_id, Messages.Consent.DECLINED)
+                    return
+                else:
+                    # Repeat consent request if unclear response
+                    await whatsapp.send_message(chat_id, Messages.Consent.REQUEST)
+                    return
+
+            if consent_status is False:
+                # User previously declined — re-ask on new contact
+                await whatsapp.send_message(chat_id, Messages.Consent.REQUEST)
+                await StateManager.set_state(chat_id, UserStates.AWAITING_CONSENT)
+                return
+
+    # Get State (refresh after potential consent state changes)
     current_state = await StateManager.get_state(chat_id)
     logger.info(f"🚦 User {chat_id} is in State: {current_state}")
 
@@ -82,6 +124,11 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             await whatsapp.send_message(chat_id, Messages.Pro.PRO_HELP_MENU)
         return
 
+    # Handle Pro Onboarding Flow
+    if current_state in ONBOARDING_STATES:
+        await handle_onboarding_step(chat_id, user_text or "", current_state, whatsapp)
+        return
+
     # Handle Awaiting Address
     if current_state == UserStates.AWAITING_ADDRESS:
         if user_text and len(user_text) > 3:
@@ -102,6 +149,11 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         else:
             await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_INVALID)
             return
+
+    # Pro Registration keyword check (before auto-detect)
+    if current_state == UserStates.IDLE and normalized_text in Messages.Keywords.REGISTER_COMMANDS:
+        await start_onboarding(chat_id, whatsapp)
+        return
 
     # Auto-detect Professional on first contact
     if current_state == UserStates.IDLE:
@@ -146,21 +198,29 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     media_data = None
     media_mime = None
     if media_url:
-        media_data, media_mime = await detect_and_fetch_media(media_url)
+        try:
+            media_data, media_mime = await detect_and_fetch_media(media_url)
+        except Exception as e:
+            logger.warning(f"Media fetch failed for {chat_id}: {e}")
 
     # 4. Smart Dispatcher Phase
     history = await lead_manager.get_chat_history(chat_id)
     dispatcher_prompt = Prompts.DISPATCHER_SYSTEM
 
-    dispatcher_response: AIResponse = await ai.analyze_conversation(
-        history=history,
-        user_text=user_text or "",
-        custom_system_prompt=dispatcher_prompt,
-        media_data=media_data,
-        media_mime_type=media_mime,
-        media_url=media_url,
-        require_json=True
-    )
+    try:
+        dispatcher_response: AIResponse = await ai.analyze_conversation(
+            history=history,
+            user_text=user_text or "",
+            custom_system_prompt=dispatcher_prompt,
+            media_data=media_data,
+            media_mime_type=media_mime,
+            media_url=media_url,
+            require_json=True
+        )
+    except Exception as e:
+        logger.error(f"AI dispatcher failed for {chat_id}: {e}")
+        await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
+        return
 
     extracted_city = dispatcher_response.extracted_data.city
     extracted_issue = dispatcher_response.extracted_data.issue
@@ -193,7 +253,10 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             if new_lead:
                 current_lead_id = new_lead["_id"]
 
-        best_pro = await determine_best_pro(issue_type=extracted_issue, location=extracted_city)
+        try:
+            best_pro = await determine_best_pro(issue_type=extracted_issue, location=extracted_city)
+        except Exception as e:
+            logger.error(f"Pro matching failed for {chat_id}: {e}")
 
         if best_pro:
             if current_lead_id:
@@ -202,13 +265,17 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                     {"$set": {"pro_id": best_pro["_id"]}}
                 )
 
-            pro_response_obj = await _build_pro_response(
-                best_pro, history, user_text,
-                extracted_city, extracted_issue, transcription
-            )
+            try:
+                pro_response_obj = await _build_pro_response(
+                    best_pro, history, user_text,
+                    extracted_city, extracted_issue, transcription
+                )
+            except Exception as e:
+                logger.error(f"Pro response build failed for {chat_id}: {e}")
+                pro_response_obj = None
 
     # Select which response to send
-    final_response = pro_response_obj if best_pro else dispatcher_response
+    final_response = pro_response_obj if (best_pro and pro_response_obj) else dispatcher_response
 
     # Send Message to User
     await whatsapp.send_message(chat_id, final_response.reply_to_user)
@@ -222,11 +289,14 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         is_deal = True
 
     if is_deal and best_pro:
-        await _finalize_deal(
-            chat_id, best_pro, final_response,
-            extracted_city, extracted_issue, transcription,
-            current_lead_id
-        )
+        try:
+            await _finalize_deal(
+                chat_id, best_pro, final_response,
+                extracted_city, extracted_issue, transcription,
+                current_lead_id
+            )
+        except Exception as e:
+            logger.error(f"Deal finalization failed for {chat_id}: {e}")
 
 
 # --- Private Helpers ---

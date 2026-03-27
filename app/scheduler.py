@@ -6,7 +6,9 @@ from app.services.workflow_service import send_pro_reminder, send_customer_compl
 from app.services.monitor_service import check_and_reassign_stale_leads, send_periodic_admin_report
 from datetime import datetime, timedelta
 from app.core.constants import LeadStatus
+import os
 import pytz
+from app.services.scheduling_service import regenerate_all_templates
 from app.core.logger import logger
 
 IL_TZ = pytz.timezone('Asia/Jerusalem')
@@ -107,6 +109,34 @@ async def run_sos_healer():
         return
     await check_and_reassign_stale_leads()
 
+async def run_slot_regeneration():
+    """Regenerate slots from recurring templates for all active pros."""
+    try:
+        count = await regenerate_all_templates()
+        if count > 0:
+            logger.info(f"✅ [Scheduler] Slot regeneration: {count} new slots")
+    except Exception as e:
+        logger.error(f"❌ [Scheduler] Slot regeneration error: {e}")
+
+
+async def run_daily_backup():
+    """Run automated daily backup via subprocess."""
+    import subprocess
+    import sys
+    script_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "scripts", "backup.py")
+    try:
+        result = subprocess.run(
+            [sys.executable, script_path, "--upload-s3"],
+            capture_output=True, text=True, timeout=600
+        )
+        if result.returncode == 0:
+            logger.info("✅ [Scheduler] Daily backup completed successfully.")
+        else:
+            logger.error(f"❌ [Scheduler] Backup failed: {result.stderr}")
+    except Exception as e:
+        logger.error(f"❌ [Scheduler] Backup error: {e}")
+
+
 async def run_sos_reporter():
     """Wrapper for SOS Admin Reporter with Toggle Check"""
     config = await settings_collection.find_one({"_id": "scheduler_config"})
@@ -188,6 +218,22 @@ def start_scheduler():
         run_sos_reporter,
         IntervalTrigger(hours=4),
         id="sos_admin_reporter",
+        replace_existing=True
+    )
+
+    # Job 5: Weekly Slot Regeneration (Sunday 01:00 Israel time)
+    scheduler.add_job(
+        run_slot_regeneration,
+        CronTrigger(day_of_week='sun', hour=1, minute=0, timezone=IL_TZ),
+        id="slot_regeneration",
+        replace_existing=True
+    )
+
+    # Job 6: Daily Backup (02:00 Israel time)
+    scheduler.add_job(
+        run_daily_backup,
+        CronTrigger(hour=2, minute=0, timezone=IL_TZ),
+        id="daily_backup",
         replace_existing=True
     )
 
