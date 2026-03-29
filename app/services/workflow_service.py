@@ -46,16 +46,19 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
 # --- Main Orchestrator ---
 
 async def process_incoming_message(chat_id: str, user_text: str, media_url: str = None):
-    # Global Reset Check
     normalized_text = (user_text or "").strip().lower()
-    if normalized_text in Messages.Keywords.RESET_COMMANDS:
-         await StateManager.clear_state(chat_id)
-         await ContextManager.clear_context(chat_id)
-         await whatsapp.send_message(chat_id, Messages.System.RESET_SUCCESS)
-         return
+
+    # Get state early — needed to skip global checks for pros
+    current_state = await StateManager.get_state(chat_id)
+
+    # Global Reset Check (skip for pros — they use "תפריט" to show their menu)
+    if normalized_text in Messages.Keywords.RESET_COMMANDS and current_state != UserStates.PRO_MODE:
+        await StateManager.clear_state(chat_id)
+        await ContextManager.clear_context(chat_id)
+        await whatsapp.send_message(chat_id, Messages.System.RESET_SUCCESS)
+        return
 
     # Consent Check (skip for professionals — they're added by admin)
-    current_state = await StateManager.get_state(chat_id)
 
     if current_state != UserStates.PRO_MODE:
         phone = chat_id.replace("@c.us", "")
@@ -92,13 +95,13 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 await StateManager.set_state(chat_id, UserStates.AWAITING_CONSENT)
                 return
 
-    # Get State (refresh after potential consent state changes)
+    # Refresh state after potential consent state changes
     current_state = await StateManager.get_state(chat_id)
     logger.info(f"🚦 User {chat_id} is in State: {current_state}")
 
-    # SOS / Human Handoff Check
+    # SOS / Human Handoff Check (customers only — pros have their own help menu)
     sos_keywords = Messages.Keywords.SOS_COMMANDS
-    if user_text and any(k in normalized_text for k in sos_keywords):
+    if user_text and current_state != UserStates.PRO_MODE and any(k in normalized_text for k in sos_keywords):
         await StateManager.set_state(chat_id, UserStates.SOS)
 
         active_lead = await leads_collection.find_one({
@@ -155,10 +158,10 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         await start_onboarding(chat_id, whatsapp)
         return
 
-    # Auto-detect Professional on first contact
+    # Auto-detect Professional on first contact (only active pros get PRO_MODE)
     if current_state == UserStates.IDLE:
         phone = chat_id.replace("@c.us", "")
-        is_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional"})
+        is_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional", "is_active": True})
         if is_pro:
             await StateManager.set_state(chat_id, UserStates.PRO_MODE)
             pro_resp = await _handle_pro_cmd(chat_id, user_text, whatsapp, lead_manager)
@@ -166,6 +169,12 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 await whatsapp.send_message(chat_id, pro_resp)
             else:
                 await whatsapp.send_message(chat_id, Messages.Pro.PRO_HELP_MENU)
+            return
+
+        # Pending pro (not yet approved) — remind them of their status
+        pending_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional", "pending_approval": True})
+        if pending_pro:
+            await whatsapp.send_message(chat_id, Messages.Onboarding.PENDING_ALREADY)
             return
 
     # 1. Log User Message
@@ -273,7 +282,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             else:
                 is_new_assignment = True
 
-            # Notify the actual pro when first matched to a new customer
+            # Notify the actual pro when first matched — informational only, no action needed yet
             if is_new_assignment:
                 try:
                     pro_phone = best_pro.get("phone_number")
@@ -281,13 +290,12 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                         if not pro_phone.endswith("@c.us"):
                             pro_phone = f"{pro_phone}@c.us"
                         notify_msg = (
-                            Messages.Pro.NEW_LEAD_HEADER + "\n\n"
-                            + Messages.Pro.NEW_LEAD_DETAILS.format(
-                                full_address=extracted_city,
+                            Messages.Pro.EARLY_LEAD_HEADER + "\n\n"
+                            + Messages.Pro.EARLY_LEAD_DETAILS.format(
                                 issue_type=extracted_issue,
-                                appointment_time=Defaults.PENDING_TIME
+                                city=extracted_city
                             )
-                            + Messages.Pro.NEW_LEAD_FOOTER
+                            + Messages.Pro.EARLY_LEAD_FOOTER
                         )
                         await whatsapp.send_message(pro_phone, notify_msg)
                         logger.info(f"📢 Notified pro {pro_phone} about new lead from {chat_id}")
@@ -411,3 +419,6 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
             await whatsapp.send_message(pro_phone, msg_to_pro)
 
             await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)
+
+        # Clear customer context so stale city/issue don't leak into future messages
+        await ContextManager.clear_context(chat_id)
