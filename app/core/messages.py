@@ -4,7 +4,20 @@ class Messages:
         COMPLETION_CHECK = "היי! 👋 אנחנו ב-Proli רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. האם העבודה הסתיימה?"
         COMPLETION_ACK = "מעולה! שמחים לשמוע. איך היה השירות עם {pro_name}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מעולה)."
         RATING_THANKS = "תודה רבה על הדירוג! ⭐"
-        PRO_FOUND = "🎉 נמצא איש מקצוע! {pro_name} בדרך אליך. 📞 טלפון: {pro_phone}"
+        PRO_FOUND = (
+            "🎉 *נמצא לך איש מקצוע!*\n\n"
+            "👷 *שם:* {pro_name}\n"
+            "📞 *טלפון:* {pro_phone}\n"
+            "{profession_line}"
+            "\n"
+            "📋 *פרטי העבודה:*\n"
+            "🛠️ תקלה: {issue_type}\n"
+            "📍 כתובת: {full_address}\n"
+            "⏰ זמן: {appointment_time}\n"
+            "{price_line}"
+            "{rating_line}"
+            "\n{pro_name} יצור איתך קשר בקרוב! 👍"
+        )
         RATE_SERVICE = "היי! 👋 איך היה השירות עם {pro_name}? נשמח לדירוג 1-5."
         REVIEW_REQUEST = "תודה על הדירוג! האם תרצה לכתוב ביקורת קצרה על החוויה? אם כן, פשוט כתוב אותה כעת."
         REVIEW_SAVED = "תודה רבה! הביקורת שלך נשמרה."
@@ -23,18 +36,48 @@ class Messages:
         NO_PENDING_REJECT = "לא מצאתי עבודה חדשה לדחייה."
         FINISH_SUCCESS = "✅ עודכן שהעבודה הסתיימה. תודה!"
         NO_ACTIVE_FINISH = "לא מצאתי עבודה פעילה לסיום."
+        # Sent when pro is first matched — conversation still in progress, no action needed yet
+        EARLY_LEAD_HEADER = "👀 *שיחה בתהליך*"
+        EARLY_LEAD_DETAILS = "🛠️ *תקלה:* {issue_type}\n📍 *עיר:* {city}"
+        EARLY_LEAD_FOOTER = "\n\nהבוט אוסף פרטים מהלקוח (כתובת + זמן).\nתקבל הודעה עם כל הפרטים לאישורך — *אין צורך לפעול עכשיו.*"
+        # Sent when deal closes — ready for approval
         DEAL_CONFIRMED_HEADER = "✅ *הלקוח אישר! פרטי העבודה:*"
         NEW_LEAD_HEADER = "📢 *הצעת עבודה חדשה*"
         NEW_LEAD_DETAILS = "📍 *כתובת:* {full_address}\n🛠️ *תקלה:* {issue_type}\n⏰ *זמן מועדף:* {appointment_time}"
         NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"
         NEW_LEAD_FOOTER = "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
         NAVIGATE_TO = "🚗 נווט לכתובת:"
-        PRO_HELP_MENU = """👋 שלום איש מקצוע!
-הנה הפקודות הזמינות לך:
-• 'אשר' / '1' - אישור העבודה האחרונה
-• 'דחה' / '2' - דחיית העבודה
-• 'סיימתי' / '3' - דיווח על סיום עבודה
-• 'תפריט' - הצגת עזרה זו"""
+        NO_ACTIVE_JOBS = "אין לך עבודות פעילות כרגע. 👍"
+        NO_HISTORY = "עדיין אין לך עבודות מושלמות."
+        NO_REVIEWS = "עדיין אין לך ביקורות."
+        ACTIVE_JOB_ROW = "  {num}. [{status}] {issue} — {address} | {time}"
+        HISTORY_ROW = "  {num}. {issue} — {address} | {date}"
+        REVIEW_ROW = "  ⭐{rating} — \"{comment}\""
+        STATS_HEADER = "📊 *הסטטיסטיקות שלך:*\n"
+        STATS_BODY = (
+            "✅ עבודות שהושלמו: {completed}\n"
+            "🔄 עבודות פעילות: {active}\n"
+            "⭐ דירוג ממוצע: {rating}\n"
+            "💬 ביקורות: {reviews}\n"
+            "📅 הצטרפת: {joined}"
+        )
+        PRO_HELP_MENU = (
+            "👷 *תפריט איש המקצוע*\n"
+            "──────────────────────\n\n"
+            "📋 *ניהול עבודות:*\n"
+            "  *1*  •  אשר  — קבל עבודה חדשה\n"
+            "  *2*  •  דחה  — דחה עבודה\n"
+            "  *3*  •  סיימתי  — סיים עבודה פעילה\n\n"
+            "📊 *מידע ודוחות:*\n"
+            "  *4*  •  עבודות  — עבודות פעילות כרגע\n"
+            "  *5*  •  היסטוריה  — 10 עבודות אחרונות\n"
+            "  *6*  •  דוח  — סטטיסטיקות ודירוג\n"
+            "  *7*  •  ביקורות  — ביקורות לקוחות\n\n"
+            "──────────────────────\n"
+            "💡 *איך להשתמש:*\n"
+            "שלח מספר *1–7* או את שם הפקודה.\n"
+            "לתפריט זה: שלח *תפריט* או *עזרה* בכל עת."
+        )
 
     class SOS:
         CUSTOMER_REASSIGNING = "מתנצלים על ההמתנה, אנו מאתרים עבורך איש מקצוע זמין יותר כעת... ⏳"
@@ -42,12 +85,29 @@ class Messages:
         ADMIN_REPORT_HEADER = "🚨 *דו\"ח לידים תקועים (Proli)*"
         ADMIN_REPORT_BODY = "נמצאו {count} לידים ללא מענה (> {timeout} דק'):\n"
         ADMIN_REPORT_FOOTER = "\nהמערכת ניסתה להעביר אותם אך ללא הצלחה. נדרשת התערבות ידנית."
-        
-        # New additions
-        TO_USER_WITH_PRO = "העברתי את הבקשה לאיש המקצוע שלך, הוא ייצור קשר בהקדם. 🛠️"
-        TO_USER_NO_PRO = "העברתי את הפרטים לצוות התמיכה, נחזור אליך בהקדם. 👨‍💻"
-        PRO_ALERT = "⚠️ Customer {chat_id} needs help. Msg: {last_message}"
-        ADMIN_ALERT = "🚨 System SOS from {chat_id}. Msg: {last_message}"
+
+        TO_USER_WITH_PRO = (
+            "✅ קיבלתי! העברתי את בקשתך לאיש המקצוע שלך.\n"
+            "הוא ייצור איתך קשר בהקדם האפשרי. 🛠️\n\n"
+            "אם לא קיבלת מענה תוך זמן קצר, תוכל/י לפנות אלינו שוב."
+        )
+        TO_USER_NO_PRO = (
+            "✅ קיבלתי! העברתי את פנייתך לצוות התמיכה שלנו.\n"
+            "נחזור אליך בהקדם האפשרי. 👨‍💻\n\n"
+            "אנחנו כאן בשבילך ונטפל בעניין בהקדם!"
+        )
+        PRO_ALERT = (
+            "⚠️ *הלקוח שלך צריך עזרה!*\n\n"
+            "📞 *טלפון:* {phone}\n"
+            "💬 *הודעה:* {last_message}\n\n"
+            "פנה/י אליו בהקדם האפשרי."
+        )
+        ADMIN_ALERT = (
+            "🚨 *קריאת SOS מלקוח — Proli*\n\n"
+            "📞 *טלפון:* {phone}\n"
+            "💬 *הודעה:* \"{last_message}\"\n\n"
+            "{lead_details}"
+        )
 
     class Consent:
         REQUEST = (
@@ -137,7 +197,11 @@ class Messages:
         APPROVE_COMMANDS = ["אשר", "1", "approve"]
         REJECT_COMMANDS = ["דחה", "2", "reject"]
         FINISH_COMMANDS = ["סיימתי", "3", "finish", "done"]
-        RESET_COMMANDS = ["תפריט", "reset", "menu", "התחלה"]
+        ACTIVE_JOBS_COMMANDS = ["עבודות", "4", "jobs", "active"]
+        HISTORY_COMMANDS = ["היסטוריה", "5", "history"]
+        STATS_COMMANDS = ["דוח", 'דו"ח', "6", "stats", "report"]
+        REVIEWS_COMMANDS = ["ביקורות", "7", "reviews", "ratings"]
+        RESET_COMMANDS = ["תפריט", "עזרה", "reset", "menu", "התחלה", "help"]
         SOS_COMMANDS = ["נציג", "אנושי", "עזרה", "מנהל", "human", "help", "admin", "sos"]
         REGISTER_COMMANDS = ["הרשמה", "להירשם", "register", "signup", "הצטרפות"]
         RATING_OPTIONS = ["1", "2", "3", "4", "5"]

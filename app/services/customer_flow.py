@@ -2,6 +2,7 @@ from app.core.database import users_collection, leads_collection, reviews_collec
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, Defaults
+from app.services.context_manager_service import ContextManager
 from bson import ObjectId
 from datetime import datetime, timezone
 
@@ -167,6 +168,9 @@ async def handle_customer_review_comment(chat_id: str, text: str):
         {"_id": lead["_id"]},
         {"$set": {"waiting_for_review_comment": False}}
     )
+
+    # Clear context so the next conversation starts fresh
+    await ContextManager.clear_context(chat_id)
 
     logger.success(f"📝 Review comment saved for lead {lead['_id']}")
     return Messages.Customer.REVIEW_SAVED
