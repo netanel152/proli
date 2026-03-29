@@ -100,17 +100,18 @@ def create_initial_schedule(pro_id):
     slots = []
     # Start from tomorrow morning in Israel time, then convert to UTC
     now_il = datetime.now(IL_TZ)
-    start_date_il = (now_il + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Strip tzinfo to get a naive date, then re-localize per slot
+    start_date_naive = (now_il + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
 
     for i in range(7):
-        current_day_il = start_date_il + timedelta(days=i)
+        current_day = start_date_naive + timedelta(days=i)
         # דילוג על שישי-שבת (4=Fri, 5=Sat)
-        if current_day_il.weekday() in [4, 5]:
+        if current_day.weekday() in [4, 5]:
             continue
 
         # סלוטים של שעתיים: 08:00-18:00 Israel time
         for hour in range(8, 18, 2):
-            s_time_il = IL_TZ.localize(current_day_il.replace(hour=hour))
+            s_time_il = IL_TZ.localize(current_day.replace(hour=hour))
             s_time_utc = s_time_il.astimezone(pytz.utc)
             slots.append({
                 "pro_id": pro_id,

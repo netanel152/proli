@@ -54,7 +54,11 @@ async def health_check(response: Response):
     # WhatsApp Check
     whatsapp_status = "down"
     try:
-        wa_resp = await whatsapp._send_request("getStateInstance", {})
+        client = await whatsapp._get_client()
+        url = f"{whatsapp.api_url}/getStateInstance/{whatsapp.api_token}"
+        resp = await client.get(url)
+        resp.raise_for_status()
+        wa_resp = resp.json()
         if wa_resp.get("stateInstance"):
             whatsapp_status = "up"
     except Exception as e:

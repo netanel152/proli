@@ -23,7 +23,7 @@ class AIResponse(BaseModel):
     reply_to_user: str = Field(description="The response message to be sent to the user (in Hebrew).")
     transcription: Optional[str] = Field(description="Full text transcription if the user sent an audio message.")
     extracted_data: ExtractedData = Field(description="Structured data extracted from the conversation.")
-    is_deal: bool = Field(default=False, description="Set to True ONLY if the user has provided specific Time AND Address and agreed to book.")
+    is_deal: bool = Field(description="Set to True ONLY if the user has provided specific Time AND Address and agreed to book. Otherwise False.")
 
 class AIEngine:
     """

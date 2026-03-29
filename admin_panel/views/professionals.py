@@ -12,19 +12,17 @@ PROMPT_AREA_MARKER_EN = "Service Areas"
 
 @st.cache_data(ttl=60)
 def get_professionals():
-    """Cached function to fetch all professionals."""
     return list(users_collection.find())
 
 def view_professionals(T):
     st.title(T["pros_title"])
-    st.caption(T.get("page_desc_professionals", "Manage the list of professionals, add new ones, edit their details, and set their availability."))
+    st.caption(T.get("page_desc_professionals", "Manage the list of professionals."))
 
     if 'pro_view_mode' not in st.session_state:
         st.session_state.pro_view_mode = 'list'
     if 'pro_to_edit' not in st.session_state:
         st.session_state.pro_to_edit = None
 
-    # Check for pending approvals
     pending_count = users_collection.count_documents({"pending_approval": True})
 
     tab_list, tab_pending = st.tabs([
@@ -44,79 +42,85 @@ def view_professionals(T):
         render_pending_approvals(T)
 
 def render_pro_list(T):
-    """Renders the list of professionals with editing and deletion capabilities."""
-    
-    c1, c2, c3 = st.columns([2, 2, 1])
     pros = get_professionals()
-    
+
+    # Metrics row
+    c1, c2, c3 = st.columns([2, 2, 1])
     with c1:
         st.metric(T["metric_pros"], len(pros))
     with c2:
         st.metric(T["status_active"], len([p for p in pros if p.get("is_active", True)]))
     with c3:
-        if st.button(f"＋ {T.get('action_add_new', 'Add New')}", type="primary"):
-            st.session_state.pro_view_mode = 'add'
-            st.rerun()
-            
-    st.markdown("---")
+        if can_edit(get_current_role()):
+            if st.button(T.get('action_add_new', 'Add New'), type="primary", use_container_width=True):
+                st.session_state.pro_view_mode = 'add'
+                st.rerun()
+
+    st.markdown("")
+
+    if not pros:
+        st.info(T.get("no_pros", "No professionals found."))
+        return
 
     for p in pros:
         pro_id = str(p["_id"])
         is_active = p.get('is_active', True)
-        status_icon = "🟢" if is_active else "🔴"
-        
+
         with st.container(border=True):
-            c_img, c_info, c_actions = st.columns([1, 3, 1])
-            
+            c_img, c_info, c_actions = st.columns([1, 4, 1])
+
             with c_img:
                 image_url = p.get('profile_image_url')
                 if image_url:
                     st.markdown(f'<img src="{image_url}" class="pro-circle-img">', unsafe_allow_html=True)
                 else:
-                    # Placeholder icon if no image
                     st.markdown("""
-                        <div style="width:80px; height:80px; border-radius:50%; background:#f1f5f9; display:flex; align-items:center; justify-content:center; border:2px solid #e2e8f0;">
-                            <span class="material-symbols-rounded" style="font-size:40px; color:#94a3b8;">person</span>
+                        <div style="width:72px; height:72px; border-radius:50%; background:var(--bg-secondary); display:flex; align-items:center; justify-content:center; border:2px solid var(--border-color);">
+                            <span class="material-symbols-rounded" style="font-size:36px; color:var(--text-muted);">person</span>
                         </div>
                     """, unsafe_allow_html=True)
 
             with c_info:
+                # Status + Name + Verified
+                status_dot = "🟢" if is_active else "🔴"
                 verified_badge = " ✅" if p.get('is_verified') else ""
-                st.subheader(f"{status_icon} {p['business_name']}{verified_badge}")
-                st.caption(f"{T.get(f'type_{p.get('type', 'general')}', p.get('type', 'general')).capitalize()} | {p.get('phone_number')}")
-                st.write(f"**{T['new_areas']}**: {', '.join(p.get('service_areas', []))}")
-                if p.get('license_number'):
-                    st.write(f"**License**: {p['license_number']}")
-            
+                st.markdown(f"**{status_dot} {p['business_name']}{verified_badge}**")
+
+                pro_type = T.get(f"type_{p.get('type', 'general')}", p.get('type', 'general')).capitalize()
+                st.caption(f"{pro_type} · {p.get('phone_number', '')}")
+
+                areas = ', '.join(p.get('service_areas', []))
+                if areas:
+                    st.markdown(f"<span style='font-size:0.85rem; color:var(--text-secondary);'>{T['new_areas']}: {areas}</span>", unsafe_allow_html=True)
+
             with c_actions:
-                st.write(" ") # Spacer
-                if st.button(T.get("edit_btn", "Edit"), key=f"edit_{pro_id}"):
+                if st.button(T.get("edit_btn", "Edit"), key=f"edit_{pro_id}", use_container_width=True):
                     st.session_state.pro_view_mode = 'edit'
                     st.session_state.pro_to_edit = p
                     st.rerun()
-                
-                if has_permission(get_current_role(), "delete_pros") and st.button(T.get("delete_btn", "Delete"), key=f"del_{pro_id}", type="secondary"):
-                    st.session_state[f"confirm_del_{pro_id}"] = True
-            
+
+                if has_permission(get_current_role(), "delete_pros"):
+                    if st.button(T.get("delete_btn", "Delete"), key=f"del_{pro_id}", type="secondary", use_container_width=True):
+                        st.session_state[f"confirm_del_{pro_id}"] = True
+
             if st.session_state.get(f"confirm_del_{pro_id}"):
-                st.warning(T.get("confirm_delete_pro", "Are you sure you want to delete this professional? This is irreversible."))
-                c_yes, c_no, c_spacer = st.columns([1, 1, 4])
-                if c_yes.button(T.get("confirm_yes", "Yes, Delete"), key=f"yes_del_{pro_id}"):
+                st.warning(T.get("confirm_delete_pro", "Are you sure you want to delete this professional?"))
+                c_yes, c_no, _ = st.columns([1, 1, 4])
+                if c_yes.button(T.get("confirm_yes", "Yes"), key=f"yes_del_{pro_id}"):
                     slots_collection.delete_many({"pro_id": p["_id"]})
                     users_collection.delete_one({"_id": p["_id"]})
                     log_audit("delete_pro", {"pro_id": pro_id, "name": p.get("business_name")})
                     del st.session_state[f"confirm_del_{pro_id}"]
-                    st.cache_data.clear() # Clear cache after deletion
+                    st.cache_data.clear()
                     st.rerun()
                 if c_no.button(T.get("confirm_no", "No"), key=f"no_del_{pro_id}"):
                     del st.session_state[f"confirm_del_{pro_id}"]
                     st.rerun()
 
 def render_pro_form(T, pro_data=None):
-    """Renders the form for adding or editing a professional."""
     is_edit = pro_data is not None
     pro_id = str(pro_data["_id"]) if is_edit else None
-    
+
     header = T["add_pro_title"] if not is_edit else f"{T.get('edit_pro_title', 'Edit Professional')}: {pro_data.get('business_name')}"
     st.header(header)
 
@@ -126,37 +130,46 @@ def render_pro_form(T, pro_data=None):
         st.rerun()
 
     with st.form(key=f"pro_form_{pro_id or 'new'}"):
+        # Basic Info Section
+        st.markdown(f"##### {T.get('basic_info', 'Basic Information')}")
         c1, c2 = st.columns(2)
         with c1:
             name = st.text_input(T["new_name"], value=pro_data.get("business_name", "") if is_edit else "")
             phone = st.text_input(T["new_phone"], value=pro_data.get("phone_number", "") if is_edit else "")
-            license_number = st.text_input("License / Business ID", value=pro_data.get("license_number", "") if is_edit else "")
+            license_number = st.text_input(T.get("license_number", "License / Business ID"), value=pro_data.get("license_number", "") if is_edit else "")
         with c2:
             ptype_options = ["plumber", "electrician", "handyman", "locksmith", "painter", "cleaner", "general"]
             default_type = pro_data.get("type", "general") if is_edit else "general"
             ptype_index = ptype_options.index(default_type) if default_type in ptype_options else ptype_options.index("general")
             ptype = st.selectbox(T["new_type"], ptype_options, index=ptype_index, format_func=lambda x: T.get(f"type_{x}", x.capitalize()))
-            active = st.checkbox(T["active"], value=pro_data.get("is_active", True) if is_edit else True)
-            is_verified = st.checkbox("Is Verified", value=pro_data.get("is_verified", False) if is_edit else False)
+
+            c_active, c_verified = st.columns(2)
+            with c_active:
+                active = st.checkbox(T["active"], value=pro_data.get("is_active", True) if is_edit else True)
+            with c_verified:
+                is_verified = st.checkbox(T.get("verified", "Verified"), value=pro_data.get("is_verified", False) if is_edit else False)
 
         # Image Upload
         existing_image_url = pro_data.get("profile_image_url", "") if is_edit else ""
         if existing_image_url:
-            st.image(existing_image_url, width=100, caption="Current Profile Image")
-        
-        uploaded_file = st.file_uploader("Upload Profile Image", type=['png', 'jpg', 'jpeg'])
+            st.image(existing_image_url, width=80, caption=T.get("current_image", "Current"))
 
+        uploaded_file = st.file_uploader(T.get("upload_image", "Profile Image"), type=['png', 'jpg', 'jpeg'])
+
+        # Service Details
+        st.markdown(f"##### {T.get('service_details', 'Service Details')}")
         st.text_input(T["new_areas"], value=", ".join(pro_data.get("service_areas", [])) if is_edit else "", key="pro_areas", help=T.get("areas_help", "Comma-separated list of cities"))
-        st.text_area(T["new_prices"], height=100, help=T.get("prices_help", "Optional. One item per line, e.g., 'Service call: $100'"), value=pro_data.get("prices_for_prompt", "") if is_edit else "", key="pro_prices")
-        
-        st.subheader(T.get("ai_settings_title", "AI Settings"))
-        st.text_area(T["prompt_title"], value=pro_data.get("system_prompt", "") if is_edit else "", height=250, key="pro_prompt", help=T.get("prompt_help", "Service areas will be added automatically from the list above."))
+        st.text_area(T["new_prices"], height=80, help=T.get("prices_help", "Optional."), value=pro_data.get("prices_for_prompt", "") if is_edit else "", key="pro_prices")
+
+        # AI Settings
+        st.markdown(f"##### {T.get('ai_settings_title', 'AI Settings')}")
+        st.text_area(T["prompt_title"], value=pro_data.get("system_prompt", "") if is_edit else "", height=200, key="pro_prompt", help=T.get("prompt_help", "Service areas will be added automatically."))
         st.text_input(T["keywords"], value=", ".join(pro_data.get("keywords", [])) if is_edit else "", key="pro_keywords")
 
         submit_label = T["btn_create"] if not is_edit else T["save_btn"]
         if st.form_submit_button(submit_label, type="primary"):
             if name and phone and st.session_state.pro_areas:
-                
+
                 # Handle Image Upload
                 final_image_url = existing_image_url
                 if uploaded_file:
@@ -166,29 +179,26 @@ def render_pro_form(T, pro_data=None):
                         if uploaded_url:
                             final_image_url = uploaded_url
                         else:
-                            st.error("Failed to upload image to Cloudinary.")
+                            st.error(T.get("upload_failed", "Failed to upload image."))
                             return
                     except ImportError:
-                        st.error("Cloudinary module not found. Please install requirements.")
+                        st.error(T.get("cloudinary_error", "Cloudinary module not found."))
                         return
                     except Exception as e:
-                        st.error(f"Upload error: {e}")
+                        st.error(f"{T.get('upload_error', 'Upload error')}: {e}")
                         return
 
                 # Auto-update service areas in the prompt
                 current_prompt = st.session_state.pro_prompt
                 service_areas_str = st.session_state.pro_areas
                 areas_line = f"{PROMPT_AREA_MARKER_HE}: {service_areas_str}"
-                
-                # Regex to find and replace the service areas line in Hebrew or English
-                # Use the constants in the regex
+
                 regex_pattern = f"({PROMPT_AREA_MARKER_HE}|{PROMPT_AREA_MARKER_EN}):.*"
                 if re.search(regex_pattern, current_prompt, re.IGNORECASE):
                     updated_prompt = re.sub(regex_pattern, areas_line, current_prompt, flags=re.IGNORECASE)
                 else:
                     updated_prompt = current_prompt + "\n" + areas_line
-                
-                # If the prompt was empty, generate a new one
+
                 if not updated_prompt.strip():
                     updated_prompt, final_keywords = generate_system_prompt(name, ptype, service_areas_str, st.session_state.pro_prices)
                 else:
@@ -228,7 +238,6 @@ def render_pro_form(T, pro_data=None):
 
 
 def render_pending_approvals(T):
-    """Renders the list of professionals pending admin approval (from WhatsApp onboarding)."""
     pending = list(users_collection.find({"pending_approval": True}).sort("created_at", -1))
 
     if not pending:
@@ -243,20 +252,17 @@ def render_pending_approvals(T):
             c_info, c_actions = st.columns([3, 1])
 
             with c_info:
-                st.subheader(f"🟡 {p.get('business_name', 'Unknown')}")
-                st.caption(f"{pro_type_label} | {p.get('phone_number', '')}")
-                st.write(f"**{T.get('new_areas', 'Areas')}:** {', '.join(p.get('service_areas', []))}")
+                st.markdown(f"**🟡 {p.get('business_name', 'Unknown')}**")
+                st.caption(f"{pro_type_label} · {p.get('phone_number', '')}")
+                st.markdown(f"<span style='font-size:0.85rem;'>{T.get('new_areas', 'Areas')}: {', '.join(p.get('service_areas', []))}</span>", unsafe_allow_html=True)
                 if p.get("prices_for_prompt"):
-                    st.write(f"**{T.get('new_prices', 'Prices')}:** {p['prices_for_prompt']}")
+                    st.caption(f"{T.get('new_prices', 'Prices')}: {p['prices_for_prompt']}")
                 if p.get("created_at"):
-                    st.write(f"**{T.get('registered_at', 'Registered')}:** {p['created_at'].strftime('%Y-%m-%d %H:%M')}")
-                st.caption(f"Source: WhatsApp onboarding")
+                    st.caption(f"{T.get('registered_at', 'Registered')}: {p['created_at'].strftime('%Y-%m-%d %H:%M')}")
 
             with c_actions:
-                st.write(" ")
                 if can_edit(get_current_role()):
-                    if st.button(f"✅ {T.get('approve_btn', 'Approve')}", key=f"approve_{pro_id}", type="primary"):
-                        # Activate the pro and generate system prompt
+                    if st.button(T.get('approve_btn', 'Approve'), key=f"approve_{pro_id}", type="primary", use_container_width=True):
                         areas_str = ", ".join(p.get("service_areas", []))
                         prompt, keywords = generate_system_prompt(
                             p.get("business_name", ""),
@@ -266,30 +272,25 @@ def render_pending_approvals(T):
                         )
                         users_collection.update_one(
                             {"_id": p["_id"]},
-                            {
-                                "$set": {
-                                    "is_active": True,
-                                    "pending_approval": False,
-                                    "system_prompt": prompt,
-                                    "keywords": keywords,
-                                },
-                            },
+                            {"$set": {
+                                "is_active": True,
+                                "pending_approval": False,
+                                "system_prompt": prompt,
+                                "keywords": keywords,
+                            }},
                         )
                         create_initial_schedule(p["_id"])
                         log_audit("approve_pro", {"pro_id": pro_id, "name": p.get("business_name")})
-
-                        # Send WhatsApp notification
                         _notify_pro_approved(p.get("phone_number"))
-
                         st.success(f"{p.get('business_name')} approved!")
                         st.cache_data.clear()
                         st.rerun()
 
-                    if st.button(f"❌ {T.get('reject_btn', 'Reject')}", key=f"reject_{pro_id}", type="secondary"):
+                    if st.button(T.get('reject_btn', 'Reject'), key=f"reject_{pro_id}", type="secondary", use_container_width=True):
                         st.session_state[f"confirm_reject_{pro_id}"] = True
 
             if st.session_state.get(f"confirm_reject_{pro_id}"):
-                st.warning(T.get("confirm_reject_pro", "Reject this professional? They will be notified."))
+                st.warning(T.get("confirm_reject_pro", "Reject this professional?"))
                 c_yes, c_no, _ = st.columns([1, 1, 4])
                 if c_yes.button(T.get("confirm_yes", "Yes"), key=f"yes_reject_{pro_id}"):
                     users_collection.delete_one({"_id": p["_id"]})
@@ -304,7 +305,6 @@ def render_pending_approvals(T):
 
 
 def _notify_pro_approved(phone_number: str):
-    """Send WhatsApp approval notification to a pro (best-effort, sync context)."""
     if not phone_number:
         return
     try:
@@ -315,11 +315,10 @@ def _notify_pro_approved(phone_number: str):
         url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}/sendMessage/{settings.GREEN_API_TOKEN}"
         httpx.post(url, json={"chatId": chat_id, "message": Messages.Onboarding.APPROVED_NOTIFICATION}, timeout=10)
     except Exception:
-        pass  # Best-effort notification
+        pass
 
 
 def _notify_pro_rejected(phone_number: str):
-    """Send WhatsApp rejection notification to a pro (best-effort, sync context)."""
     if not phone_number:
         return
     try:
@@ -330,4 +329,4 @@ def _notify_pro_rejected(phone_number: str):
         url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}/sendMessage/{settings.GREEN_API_TOKEN}"
         httpx.post(url, json={"chatId": chat_id, "message": Messages.Onboarding.REJECTED_NOTIFICATION}, timeout=10)
     except Exception:
-        pass  # Best-effort notification
+        pass
