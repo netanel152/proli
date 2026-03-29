@@ -23,6 +23,7 @@ class Messages:
         NO_PENDING_REJECT = "לא מצאתי עבודה חדשה לדחייה."
         FINISH_SUCCESS = "✅ עודכן שהעבודה הסתיימה. תודה!"
         NO_ACTIVE_FINISH = "לא מצאתי עבודה פעילה לסיום."
+        DEAL_CONFIRMED_HEADER = "✅ *הלקוח אישר! פרטי העבודה:*"
         NEW_LEAD_HEADER = "📢 *הצעת עבודה חדשה*"
         NEW_LEAD_DETAILS = "📍 *כתובת:* {full_address}\n🛠️ *תקלה:* {issue_type}\n⏰ *זמן מועדף:* {appointment_time}"
         NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"

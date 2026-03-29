@@ -1,8 +1,5 @@
 """
-Analytics Dashboard - Streamlit view for business metrics and reporting.
-
-Uses sync PyMongo wrappers around the async analytics_service pipelines,
-since Streamlit runs synchronously.
+Analytics Dashboard - Business metrics and reporting.
 """
 
 import streamlit as st
@@ -13,7 +10,6 @@ from app.core.config import settings
 from app.core.constants import LeadStatus
 import certifi
 
-# Sync MongoDB client for admin panel
 _ca = certifi.where() if "+srv" in settings.MONGO_URI else None
 _kwargs = {"tlsCAFile": _ca} if _ca else {}
 _sync_client = MongoClient(settings.MONGO_URI, **_kwargs)
@@ -71,7 +67,6 @@ def _get_pro_performance(days: int = 30) -> list[dict]:
         completed = doc["completed"]
         rate = round((completed / total * 100), 1) if total > 0 else 0
 
-        # Average rating
         avg_rating = None
         for r in _db.reviews.aggregate([
             {"$match": {"pro_id": pid}},
@@ -110,7 +105,7 @@ def _get_leads_by_type(days: int = 30) -> list[dict]:
 
 
 def view_analytics(T):
-    st.title(T.get("analytics_title", "📊 Analytics & Reporting"))
+    st.title(T.get("analytics_title", "Analytics & Reporting"))
     st.caption(T.get("analytics_desc", "Business metrics, lead funnels, and professional performance."))
 
     # Time range selector
@@ -122,8 +117,6 @@ def view_analytics(T):
     )
 
     # --- Overview Metrics ---
-    st.header(T.get("analytics_overview", "Overview"))
-
     total_leads = _db.leads.count_documents({})
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -138,7 +131,7 @@ def view_analytics(T):
     active_pros = _db.users.count_documents({"is_active": True, "role": "professional"})
     c5.metric(T.get("metric_pros", "Active Pros"), active_pros)
 
-    st.divider()
+    st.markdown("")
 
     # --- Tabs ---
     tab_funnel, tab_volume, tab_pros, tab_types = st.tabs([
@@ -148,19 +141,17 @@ def view_analytics(T):
         T.get("tab_by_type", "By Service Type"),
     ])
 
-    # --- Lead Funnel ---
     with tab_funnel:
         st.subheader(T.get("funnel_title", "Lead Conversion Funnel"))
 
         funnel = _get_lead_funnel(days)
         if any(v > 0 for v in funnel.values()):
-            # Order for funnel display
             funnel_order = ["new", "contacted", "booked", "completed", "rejected", "closed", "cancelled"]
             funnel_data = pd.DataFrame([
                 {"Status": s.capitalize(), "Count": funnel.get(s, 0)}
                 for s in funnel_order
             ])
-            st.bar_chart(funnel_data, x="Status", y="Count")
+            st.bar_chart(funnel_data, x="Status", y="Count", color="#2563EB")
 
             # Conversion metrics
             total = sum(funnel.values())
@@ -175,18 +166,16 @@ def view_analytics(T):
         else:
             st.info(T.get("no_data", "No data available for this period."))
 
-    # --- Daily Volume ---
     with tab_volume:
         st.subheader(T.get("volume_title", "Daily Lead Volume"))
 
         volume = _get_daily_volume(days)
         if volume:
             df = pd.DataFrame(volume)
-            st.line_chart(df, x="date", y="count")
+            st.line_chart(df, x="date", y="count", color="#2563EB")
         else:
             st.info(T.get("no_data", "No data available for this period."))
 
-    # --- Pro Performance ---
     with tab_pros:
         st.subheader(T.get("pro_perf_title", "Professional Performance"))
 
@@ -197,12 +186,12 @@ def view_analytics(T):
                 df,
                 column_config={
                     "name": st.column_config.TextColumn(T.get("col_pro_name", "Professional")),
-                    "total_leads": st.column_config.NumberColumn(T.get("col_total", "Total Leads")),
+                    "total_leads": st.column_config.NumberColumn(T.get("col_total", "Total")),
                     "completed": st.column_config.NumberColumn(T.get("col_completed", "Completed")),
                     "rejected": st.column_config.NumberColumn(T.get("col_rejected", "Rejected")),
                     "booked": st.column_config.NumberColumn(T.get("col_booked", "Booked")),
-                    "completion_rate": st.column_config.NumberColumn(T.get("col_rate", "Completion %"), format="%.1f%%"),
-                    "avg_rating": st.column_config.TextColumn(T.get("col_rating", "Avg Rating")),
+                    "completion_rate": st.column_config.ProgressColumn(T.get("col_rate", "Completion %"), min_value=0, max_value=100, format="%.1f%%"),
+                    "avg_rating": st.column_config.TextColumn(T.get("col_rating", "Rating")),
                 },
                 hide_index=True,
                 use_container_width=True,
@@ -210,13 +199,12 @@ def view_analytics(T):
         else:
             st.info(T.get("no_data", "No data available for this period."))
 
-    # --- By Service Type ---
     with tab_types:
         st.subheader(T.get("by_type_title", "Leads by Service Type"))
 
         types = _get_leads_by_type(days)
         if types:
             df = pd.DataFrame(types)
-            st.bar_chart(df, x="type", y="count")
+            st.bar_chart(df, x="type", y="count", color="#2563EB")
         else:
             st.info(T.get("no_data", "No data available for this period."))

@@ -146,11 +146,11 @@ def check_password(cookies):
     admin_plain = os.getenv("ADMIN_PASSWORD")
 
     if not has_db_admins and not admin_hash and not admin_plain:
-        st.error("FATAL: No admin accounts configured. Set ADMIN_PASSWORD_HASH or create admins in database.")
+        st.error(T_auth.get("fatal_no_admin", "FATAL: No admin accounts configured."))
         st.stop()
 
     if not has_db_admins and not admin_hash:
-        st.warning("⚠️ Using plain-text ADMIN_PASSWORD. Generate a hash with 'scripts/generate_admin_hash.py'.")
+        st.warning(T_auth.get("plain_password_warning", "Using plain-text ADMIN_PASSWORD."))
 
     # Check if we are in the process of logging out
     if st.session_state.get("logout_pending"):
@@ -221,7 +221,7 @@ def check_password(cookies):
                         }
                         cookie_manager.set("proli_auth_token", secure_token, expires_at=expires)
 
-                    st.success("Connected!")
+                    st.success(T_auth.get("connected", "Connected!"))
                     time.sleep(1)
                     st.rerun()
                 else:
@@ -233,7 +233,8 @@ def check_password(cookies):
 
 def logout(cookie_manager, T):
     if st.sidebar.button(T["disconnect"]):
-        st.toast("Disconnecting...", icon="👋")
+        T_logout = TRANS.get(st.session_state.get("lang_code", "EN"), TRANS["EN"])
+        st.toast(T_logout.get("disconnecting", "Disconnecting..."))
 
         username = st.session_state.get("admin_username", "unknown")
         _log_audit_sync(username, "logout")

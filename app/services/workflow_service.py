@@ -259,11 +259,40 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             logger.error(f"Pro matching failed for {chat_id}: {e}")
 
         if best_pro:
+            is_new_assignment = False
             if current_lead_id:
+                # Check if pro was already assigned to this lead
+                existing_lead = await leads_collection.find_one({"_id": current_lead_id})
+                had_pro = existing_lead and existing_lead.get("pro_id")
                 await leads_collection.update_one(
                     {"_id": current_lead_id},
                     {"$set": {"pro_id": best_pro["_id"]}}
                 )
+                if not had_pro:
+                    is_new_assignment = True
+            else:
+                is_new_assignment = True
+
+            # Notify the actual pro when first matched to a new customer
+            if is_new_assignment:
+                try:
+                    pro_phone = best_pro.get("phone_number")
+                    if pro_phone:
+                        if not pro_phone.endswith("@c.us"):
+                            pro_phone = f"{pro_phone}@c.us"
+                        notify_msg = (
+                            Messages.Pro.NEW_LEAD_HEADER + "\n\n"
+                            + Messages.Pro.NEW_LEAD_DETAILS.format(
+                                full_address=extracted_city,
+                                issue_type=extracted_issue,
+                                appointment_time=Defaults.PENDING_TIME
+                            )
+                            + Messages.Pro.NEW_LEAD_FOOTER
+                        )
+                        await whatsapp.send_message(pro_phone, notify_msg)
+                        logger.info(f"📢 Notified pro {pro_phone} about new lead from {chat_id}")
+                except Exception as e:
+                    logger.error(f"Failed to notify pro about new lead: {e}")
 
             try:
                 pro_response_obj = await _build_pro_response(
@@ -368,7 +397,7 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
             if not pro_phone.endswith("@c.us"):
                 pro_phone = f"{pro_phone}@c.us"
 
-            msg_to_pro = Messages.Pro.NEW_LEAD_HEADER + "\n\n"
+            msg_to_pro = Messages.Pro.DEAL_CONFIRMED_HEADER + "\n\n"
             msg_to_pro += Messages.Pro.NEW_LEAD_DETAILS.format(
                 full_address=lead['full_address'],
                 issue_type=lead['issue_type'],
