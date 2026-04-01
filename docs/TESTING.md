@@ -93,3 +93,12 @@ To keep tests fast and deterministic, we avoid calling external APIs (Green API,
         assert result == "expected"
     ```
 4.  **Use Fixtures**: Add `client` or `mock_db` as arguments to your test function if needed (defined in `conftest.py`).
+
+## 5. Manual & E2E Testing Tools
+
+In addition to `pytest`, the project includes tools for full environment testing:
+
+*   **Manual Test Plan:** See `docs/MANUAL_TEST_PLAN.md` for structured test cases to execute via the actual WhatsApp interface.
+*   **Automated Webhook Simulation:** Use `python scripts/simulate_test.py` to run automated functional flows over HTTP without requiring a live WhatsApp connection.
+*   **Environment Reset:** Use `python scripts/reset_test.py` to clear out test leads, chat history, and Redis states between test runs.
+*   **Demo Seeding:** Use `python scripts/seed_demo.py` to populate the database with dummy pros and historical leads to test the analytics and admin dashboard.

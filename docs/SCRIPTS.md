@@ -79,7 +79,7 @@ This document explains the purpose and usage of the operational scripts located 
 ## 2. Testing & Simulation
 
 ### `simulate_webhook.py`
-**Purpose:** Simulates an incoming WhatsApp message from Green API.
+**Purpose:** Simulates an incoming WhatsApp message from Green API (Interactive).
 *   **What it does:**
     *   Prompts for a message text (e.g., "I need a plumber in Tel Aviv").
     *   Constructs a valid JSON payload matching Green API's structure.
@@ -87,6 +87,41 @@ This document explains the purpose and usage of the operational scripts located 
 *   **Usage:**
     ```bash
     python scripts/simulate_webhook.py
+    ```
+
+### `simulate_test.py`
+**Purpose:** Runs automated end-to-end integration tests over HTTP.
+*   **What it does:**
+    *   Executes predefined test cases (TC1-TC12) including Consent Flow, Pro Reject, SOS Logic, Media Support, and Idempotency.
+    *   Simulates both customer and professional interactions via webhook calls.
+    *   Validates correct system state and transitions.
+*   **Usage:**
+    ```bash
+    python scripts/simulate_test.py          # Run all tests interactively
+    python scripts/simulate_test.py --auto   # Run all tests automatically (non-interactive)
+    ```
+
+### `reset_test.py`
+**Purpose:** Clears test data and cache states to provide a clean slate for testing.
+*   **What it does:**
+    *   Deletes leads, messages, and temporary metadata/pending pros from MongoDB.
+    *   Wipes state, context, and webhook keys in Redis.
+    *   Can reset a specific customer or perform a full environment wipe.
+*   **Usage:**
+    ```bash
+    python scripts/reset_test.py --all            # Full wipe
+    python scripts/reset_test.py 972501234567     # Wipe specific customer
+    ```
+
+### `seed_demo.py`
+**Purpose:** Rapidly provisions a rich demo environment.
+*   **What it does:**
+    *   Creates realistic demo professionals (with varied pricing and logic).
+    *   Generates a backlog of realistic completed/pending leads for dashboard testing.
+    *   Seeds schedules and historical metrics to test the Analytics and Admin panel.
+*   **Usage:**
+    ```bash
+    python scripts/seed_demo.py
     ```
 
 ### `test_connection.py`
