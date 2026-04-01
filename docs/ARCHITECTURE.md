@@ -62,10 +62,11 @@ Proli acts as an intelligent intermediary between Clients (WhatsApp Users) and P
 7.  **Media Handling (`media_handler.py`):**
     *   Images: Downloaded as bytes, passed inline to Gemini.
     *   Audio/Video: Streamed to temp file, uploaded via Gemini File API, waited for processing.
-8.  **AI Engine (Gemini 2.5 Flash)** — Two-phase analysis:
-    *   **Phase 1 (Dispatcher):** Extracts city + issue from conversation.
-    *   **Phase 2 (Pro Persona):** If pro found, generates response using pro's custom system prompt, pricing, and social proof.
+8.  **AI Engine (Gemini Adaptive Fallback)** — Two-phase analysis:
+    *   **Phase 1 (Dispatcher):** Extracts city + issue from the conversation. *Optimization: Only receives the last 8 messages of history.*
+    *   **Phase 2 (Pro Persona):** Generates a response using the pro's custom system prompt, pricing, and social proof. *Optimization: If a pro is already assigned to the active lead, Phase 1 is skipped entirely and processing goes straight to Phase 2.*
     *   Adaptive fallback: Flash Lite 2.5 -> Flash 2.5 -> Flash 1.5.
+    *   **Context Clearing:** Redis chat history is wiped upon job completion or rejection to ensure clean states for future requests.
 9.  **Matching Service** (if routing):
     *   Geo-spatial `$near` query (10km radius) if city coordinates found.
     *   Fallback to regex matching on `service_areas`.
