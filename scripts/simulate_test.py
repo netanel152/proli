@@ -261,9 +261,9 @@ async def tc9_sos(client: httpx.AsyncClient):
     await send_and_wait(client, CUSTOMER_CHAT_ID, "נציג", "עדי")
     info("Check logs: SOS state set, admin notified")
 
-    step(2, "Customer (virtual)", "עזרה")
-    await send_and_wait(client, CUSTOMER_CHAT_ID, "עזרה", "עדי")
-    info("Check logs: SOS triggered again")
+    step(2, "Customer (virtual)", "sos")
+    await send_and_wait(client, CUSTOMER_CHAT_ID, "sos", "עדי")
+    info("Check logs: SOS triggered again (note: 'עזרה' is now a reset command, use 'נציג' or 'sos' for SOS)")
 
 
 async def tc12_idempotency(client: httpx.AsyncClient):
@@ -498,8 +498,8 @@ async def full_lifecycle(client: httpx.AsyncClient):
 # ============================================================
 
 TESTS = {
-    "tc1":   ("Consent Flow",              tc1_consent_flow),
-    "tc2":   ("Consent Decline",           tc2_consent_decline),
+    "tc2":   ("Consent Decline",           tc2_consent_decline),   # runs first: no consent → decline
+    "tc1":   ("Consent Flow",              tc1_consent_flow),      # runs second: consent=False → re-ask → accept
     "tc3":   ("Full Happy Path",           tc3_full_happy_path),
     "tc4":   ("Pro Reject",                tc4_pro_reject),
     "tc5":   ("Pro Finish",                tc5_pro_finish),

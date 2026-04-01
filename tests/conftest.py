@@ -101,6 +101,23 @@ def patch_dependencies(request, monkeypatch, mock_db):
     monkeypatch.setattr(app.services.data_management_service, "reviews_collection", reviews)
     monkeypatch.setattr(app.services.data_management_service, "slots_collection", slots)
 
+    # Patch Analytics Service Collections
+    import app.services.analytics_service
+    monkeypatch.setattr(app.services.analytics_service, "leads_collection", leads)
+    monkeypatch.setattr(app.services.analytics_service, "messages_collection", messages)
+    monkeypatch.setattr(app.services.analytics_service, "users_collection", users)
+    monkeypatch.setattr(app.services.analytics_service, "reviews_collection", reviews)
+
+    # Patch Audit Service Collections
+    import app.services.audit_service
+    monkeypatch.setattr(app.services.audit_service, "audit_log_collection", audit_log)
+
+    # Patch Scheduling Service Collections
+    import app.services.scheduling_service
+    monkeypatch.setattr(app.services.scheduling_service, "users_collection", users)
+    monkeypatch.setattr(app.services.scheduling_service, "slots_collection", slots)
+    monkeypatch.setattr(app.services.scheduling_service, "leads_collection", leads)
+
     # Default: bypass consent check so existing tests pass
     # Tests that specifically test consent flow can override this
     monkeypatch.setattr(app.services.workflow_service, "has_consent", AsyncMock(return_value=True))
@@ -115,7 +132,8 @@ def patch_dependencies(request, monkeypatch, mock_db):
     mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
         reply_to_user="Mock AI Response",
         extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Tel Aviv, Rotshild 10", appointment_time="10:00"),
-        transcription=None
+        transcription=None,
+        is_deal=False
     ))
 
     import app.services.workflow_service
@@ -212,7 +230,8 @@ async def integration_db(monkeypatch):
     mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
         reply_to_user="Mock AI Response",
         extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Tel Aviv, Rotshild 10", appointment_time="10:00"),
-        transcription=None
+        transcription=None,
+        is_deal=False
     ))
     monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
 

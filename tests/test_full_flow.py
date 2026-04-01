@@ -51,14 +51,16 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     # 3. Pro AI: Says "Hello, I am Yossi".
     
     resp_dispatcher = AIResponse(
-        reply_to_user="...", 
+        reply_to_user="...",
         extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address=None, appointment_time=None),
-        transcription=None
+        transcription=None,
+        is_deal=False
     )
     resp_pro = AIResponse(
         reply_to_user="Hello! I am Yossi, how can I help?",
         extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address=None, appointment_time=None),
-        transcription=None
+        transcription=None,
+        is_deal=False
     )
     
     setup_mock_ai(monkeypatch, responses=[resp_dispatcher, resp_pro])
@@ -78,15 +80,17 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     
     # Dispatcher sees info again (or history carries it, but we mock response)
     resp_dispatcher_2 = AIResponse(
-        reply_to_user="...", 
+        reply_to_user="...",
         extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address="Dizengoff 1", appointment_time="tomorrow 10:00"),
-        transcription=None
+        transcription=None,
+        is_deal=False
     )
     # Pro sees it and closes deal
     resp_pro_deal = AIResponse(
         reply_to_user="Done. [DEAL: tomorrow 10:00 | Dizengoff 1 | plumber]",
         extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address="Dizengoff 1", appointment_time="tomorrow 10:00"),
-        transcription=None
+        transcription=None,
+        is_deal=True
     )
     
     setup_mock_ai(monkeypatch, responses=[resp_dispatcher_2, resp_pro_deal])

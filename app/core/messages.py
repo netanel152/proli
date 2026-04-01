@@ -202,7 +202,7 @@ class Messages:
         STATS_COMMANDS = ["דוח", 'דו"ח', "6", "stats", "report"]
         REVIEWS_COMMANDS = ["ביקורות", "7", "reviews", "ratings"]
         RESET_COMMANDS = ["תפריט", "עזרה", "reset", "menu", "התחלה", "help"]
-        SOS_COMMANDS = ["נציג", "אנושי", "עזרה", "מנהל", "human", "help", "admin", "sos"]
+        SOS_COMMANDS = ["נציג", "אנושי", "מנהל", "admin", "sos"]
         REGISTER_COMMANDS = ["הרשמה", "להירשם", "register", "signup", "הצטרפות"]
         RATING_OPTIONS = ["1", "2", "3", "4", "5"]
         

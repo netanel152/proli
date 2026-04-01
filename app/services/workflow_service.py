@@ -67,12 +67,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         if not is_pro:
             consent_status = await has_consent(chat_id)
 
-            if consent_status is None:
-                # First contact — send consent request
-                await whatsapp.send_message(chat_id, Messages.Consent.REQUEST)
-                await StateManager.set_state(chat_id, UserStates.AWAITING_CONSENT)
-                return
-
+            # Handle consent response first (state takes priority over DB status)
             if current_state == UserStates.AWAITING_CONSENT:
                 if normalized_text in Messages.Consent.ACCEPT_KEYWORDS:
                     await record_consent(chat_id, accepted=True)
@@ -88,6 +83,12 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                     # Repeat consent request if unclear response
                     await whatsapp.send_message(chat_id, Messages.Consent.REQUEST)
                     return
+
+            if consent_status is None:
+                # First contact — send consent request
+                await whatsapp.send_message(chat_id, Messages.Consent.REQUEST)
+                await StateManager.set_state(chat_id, UserStates.AWAITING_CONSENT)
+                return
 
             if consent_status is False:
                 # User previously declined — re-ask on new contact
@@ -158,7 +159,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         await start_onboarding(chat_id, whatsapp)
         return
 
-    # Auto-detect Professional on first contact (only active pros get PRO_MODE)
+    # Auto-detect Professional on first contact (only active/approved pros)
     if current_state == UserStates.IDLE:
         phone = chat_id.replace("@c.us", "")
         is_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional", "is_active": True})
@@ -169,12 +170,6 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 await whatsapp.send_message(chat_id, pro_resp)
             else:
                 await whatsapp.send_message(chat_id, Messages.Pro.PRO_HELP_MENU)
-            return
-
-        # Pending pro (not yet approved) — remind them of their status
-        pending_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional", "pending_approval": True})
-        if pending_pro:
-            await whatsapp.send_message(chat_id, Messages.Onboarding.PENDING_ALREADY)
             return
 
     # 1. Log User Message
@@ -212,13 +207,62 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         except Exception as e:
             logger.warning(f"Media fetch failed for {chat_id}: {e}")
 
-    # 4. Smart Dispatcher Phase
+    # 4. Check for existing active lead with assigned pro (skip dispatcher if so)
+    active_lead = await leads_collection.find_one({
+        "chat_id": chat_id,
+        "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}
+    }, sort=[("created_at", -1)])
+
+    existing_pro = None
+    if active_lead and active_lead.get("pro_id"):
+        existing_pro = await users_collection.find_one({"_id": active_lead["pro_id"], "is_active": True})
+
     history = await lead_manager.get_chat_history(chat_id)
+
+    # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
+    if existing_pro and active_lead:
+        logger.info(f"⚡ Skipping dispatcher — pro already assigned for {chat_id}")
+        await lead_manager.log_message(chat_id, "user", user_text or (f"[MEDIA: {media_url}]" if media_url else ""))
+
+        extracted_city = active_lead.get("full_address", "")
+        extracted_issue = active_lead.get("issue_type", "")
+        transcription = None
+
+        try:
+            pro_response_obj = await _build_pro_response(
+                existing_pro, history, user_text,
+                extracted_city, extracted_issue, transcription,
+                media_data=media_data, media_mime=media_mime, media_url=media_url,
+            )
+        except Exception as e:
+            logger.error(f"Pro response failed for {chat_id}: {e}")
+            await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
+            return
+
+        await whatsapp.send_message(chat_id, pro_response_obj.reply_to_user)
+        await lead_manager.log_message(chat_id, "model", pro_response_obj.reply_to_user)
+
+        # Check for deal
+        is_deal = pro_response_obj.is_deal or bool(re.search(r"\[DEAL:.*?\]", pro_response_obj.reply_to_user))
+        if is_deal:
+            try:
+                await _finalize_deal(
+                    chat_id, existing_pro, pro_response_obj,
+                    extracted_city, extracted_issue, transcription,
+                    active_lead["_id"]
+                )
+            except Exception as e:
+                logger.error(f"Deal finalization failed for {chat_id}: {e}")
+        return
+
+    # 5. Smart Dispatcher Phase (only when no pro assigned yet)
+    # OPTIMIZATION 2: Trim history — dispatcher only needs last 8 messages
+    dispatcher_history = history[-8:] if len(history) > 8 else history
     dispatcher_prompt = Prompts.DISPATCHER_SYSTEM
 
     try:
         dispatcher_response: AIResponse = await ai.analyze_conversation(
-            history=history,
+            history=dispatcher_history,
             user_text=user_text or "",
             custom_system_prompt=dispatcher_prompt,
             media_data=media_data,
@@ -237,18 +281,12 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
 
     logger.info(f"Dispatcher analysis: City={extracted_city}, Issue={extracted_issue}, Transcr={transcription}")
 
-    # 5. Logic Gate: Dispatcher vs Professional
+    # 6. Logic Gate: Dispatcher vs Professional
     best_pro = None
     pro_response_obj = None
     current_lead_id = None
 
     if extracted_city and extracted_issue:
-        # Check for existing active lead
-        active_lead = await leads_collection.find_one({
-            "chat_id": chat_id,
-            "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}
-        }, sort=[("created_at", -1)])
-
         if active_lead:
             current_lead_id = active_lead["_id"]
         else:
@@ -270,7 +308,6 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         if best_pro:
             is_new_assignment = False
             if current_lead_id:
-                # Check if pro was already assigned to this lead
                 existing_lead = await leads_collection.find_one({"_id": current_lead_id})
                 had_pro = existing_lead and existing_lead.get("pro_id")
                 await leads_collection.update_one(
@@ -282,7 +319,6 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             else:
                 is_new_assignment = True
 
-            # Notify the actual pro when first matched — informational only, no action needed yet
             if is_new_assignment:
                 try:
                     pro_phone = best_pro.get("phone_number")
@@ -305,7 +341,8 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             try:
                 pro_response_obj = await _build_pro_response(
                     best_pro, history, user_text,
-                    extracted_city, extracted_issue, transcription
+                    extracted_city, extracted_issue, transcription,
+                    media_data=media_data, media_mime=media_mime, media_url=media_url,
                 )
             except Exception as e:
                 logger.error(f"Pro response build failed for {chat_id}: {e}")
@@ -318,7 +355,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     await whatsapp.send_message(chat_id, final_response.reply_to_user)
     await lead_manager.log_message(chat_id, "model", final_response.reply_to_user)
 
-    # 6. Check for [DEAL] or Structured Booking
+    # 7. Check for [DEAL] or Structured Booking
     is_deal = final_response.is_deal
 
     deal_string_match = re.search(r"\[DEAL:.*?\]", final_response.reply_to_user)
@@ -338,7 +375,8 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
 
 # --- Private Helpers ---
 
-async def _build_pro_response(best_pro, history, user_text, extracted_city, extracted_issue, transcription):
+async def _build_pro_response(best_pro, history, user_text, extracted_city, extracted_issue, transcription,
+                               media_data=None, media_mime=None, media_url=None):
     """Build the pro persona AI response."""
     pro_name = best_pro.get("business_name", Defaults.PROLI_PRO_NAME)
     raw_price_list = best_pro.get("price_list", "")
@@ -367,6 +405,9 @@ async def _build_pro_response(best_pro, history, user_text, extracted_city, extr
         history=recent_history,
         user_text=user_text or "",
         custom_system_prompt=full_system_prompt,
+        media_data=media_data,
+        media_mime_type=media_mime,
+        media_url=media_url,
         require_json=True
     )
 
