@@ -23,28 +23,30 @@
 - **Interactive UI:** Uses native WhatsApp buttons for seamless confirmations and quick actions.
 - **Dynamic Personas:** The bot adopts the specific pricing, tone, and rules of the assigned professional.
 - **Availability Management:** Checks real-time calendar availability in MongoDB and books appointments autonomously using atomic locks.
+- **Pro Onboarding:** Self-service onboarding flow for new professionals via WhatsApp.
 - **Stale Job Monitor:** Automatically detects "stuck" leads (no completion after 4-24h) and follows up with the pro or customer.
-- **SOS Auto-Recovery (Healer):** Automatically reassigns leads to a new professional if the current one doesn't respond within the timeout (configurable, default 30 mins).
+- **SOS Auto-Recovery (Healer):** Automatically reassigns leads to a new professional if the current one doesn't respond within the timeout.
 - **SOS Admin Reporter:** Sends a batched summary of stuck leads to the administrator every 4 hours if reassignment fails.
 
 #### 📊 Admin Panel (Manager Facing)
 
+- **Bilingual Interface:** Full support for Hebrew and English via a language toggle.
 - **Live Dashboard:** Real-time metrics on leads, active professionals, and revenue.
-- **Lead Management:** Full CRUD capabilities (Create, Read, Update, Delete) with standardized fields.
-- **Smart Schedule:** Daily Editor and Bulk Generator for managing availability.
-- **Professional Profiles:** Manage system prompts, pricing, and service areas for each pro.
+- **Role-Based Access Control (RBAC):** Owner, Editor, and Viewer roles with comprehensive audit logging.
+- **Analytics:** Visual charts for lead funnels, daily volume, and professional performance.
+- **Lead Management:** Full CRUD capabilities with inline editing.
+- **Smart Schedule:** Daily Editor and Bulk Generator for managing recurring availability.
+- **Data Management:** Privacy compliance tools for user data export and deletion.
 
 ### 🛠️ Tech Stack
 
-- **Backend:** Python 3.12+, FastAPI, HTTPX
+- **Backend:** Python 3.12+, FastAPI, HTTPX, ARQ (Redis Task Queue)
 - **Frontend (Admin):** Streamlit
 - **AI Engine:** Google Gemini Adaptive (Flash Lite 2.5 → Flash 2.5 → Flash 1.5 Fallback)
-- **Database:** MongoDB Atlas (Async via `motor`)
-- **Cache:** Redis (Context & State)
-- **Media Storage:** Cloudinary
-- **Messaging:** WhatsApp (via Green API)
+- **Database:** MongoDB Atlas (Async via `motor`), Redis (Context & State)
+- **Media & Comms:** Cloudinary (Media), Green API (WhatsApp), InforUMobile (SMS Fallback)
 - **Security:** Bcrypt (Admin Auth), Webhook Token Verification, Session-based Cookies
-- **Testing:** Pytest with AsyncIO & Mocking (Comprehensive suite covering AI, DB, and Business Logic)
+- **Testing:** Pytest (AsyncIO & Mocking), E2E Webhook Simulation, Automated Reset & Seeding Scripts
 - **Deployment:** Docker Compose / Railway (multi-service)
 
 ---
@@ -69,10 +71,14 @@
   - **שמיעה:** מתמלל ומבין הודעות קוליות בזמן אמת.
 - **פרסונות דינמיות:** הבוט מאמץ את המחירון, הסגנון והחוקים של איש המקצוע הנבחר.
 - **ניהול יומן:** בדיקת זמינות וקביעת תורים אוטומטית.
+- **הרשמת אנשי מקצוע:** תהליך הצטרפות עצמאי דרך וואטסאפ.
 
 #### 📊 פאנל ניהול (מול המנהל)
 
+- **ממשק דו-לשוני:** תמיכה מלאה בעברית ובאנגלית.
 - **דשבורד בזמן אמת:** צפייה בלידים, סטטוסים ומדדים.
+- **הרשאות וניהול אדמינים (RBAC):** צופה, עורך ומנהל מערכת עם לוג פעולות (Audit).
+- **אנליטיקה:** גרפים המציגים ביצועים, משפכי המרה ונפח פעילות.
 - **ניהול לידים:** יצירה, עריכה ומחיקה של לידים עם שדות אחידים.
 - **ניהול יומן:** עורך יומי ומחולל אוטומטי.
 - **פרופילים:** הגדרת הנחיות AI ומחירונים לכל איש מקצוע.
