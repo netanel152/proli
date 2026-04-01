@@ -82,7 +82,8 @@ async def test_sdk_native_parsing(ai_engine):
     expected_response = AIResponse(
         reply_to_user="Native Parse",
         extracted_data=ExtractedData(city="Eilat", issue=None, full_address=None, appointment_time=None),
-        transcription=None
+        transcription=None,
+        is_deal=False
     )
     mock_response = MagicMock()
     mock_response.parsed = expected_response

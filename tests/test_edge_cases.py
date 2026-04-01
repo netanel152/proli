@@ -34,7 +34,8 @@ async def test_process_gemini_failure(mock_dependencies):
     fallback_resp = AIResponse(
         reply_to_user="Service Unavailable",
         extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None),
-        transcription=None
+        transcription=None,
+        is_deal=False
     )
     # Since mock_ai.analyze_conversation is AsyncMock, setting return_value works for await
     mock_ai.analyze_conversation.return_value = fallback_resp
@@ -52,7 +53,8 @@ async def test_process_whatsapp_down(mock_dependencies):
     mock_ai.analyze_conversation.return_value = AIResponse(
         reply_to_user="Hi there",
         extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None),
-        transcription=None
+        transcription=None,
+        is_deal=False
     )
     
     # Mock WhatsApp failure
@@ -83,7 +85,8 @@ async def test_bad_input_file_type(mock_dependencies):
         mock_ai.analyze_conversation.return_value = AIResponse(
             reply_to_user="I see a PDF",
             extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None),
-            transcription=None
+            transcription=None,
+            is_deal=False
         )
         
         await process_incoming_message("123", "Here is a file", media_url=media_url)

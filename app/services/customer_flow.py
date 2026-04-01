@@ -67,6 +67,9 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     )
     logger.success(f"✅ Lead {lead['_id']} marked as COMPLETED by customer.")
 
+    # Clear cached context — lead is done, next conversation starts fresh
+    await ContextManager.clear_context(chat_id)
+
     if pro and pro.get("phone_number"):
         pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
         await whatsapp.send_message(pro_chat_id, Messages.Pro.CUSTOMER_REPORTED_COMPLETION)

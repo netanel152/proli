@@ -154,6 +154,7 @@ class AIEngine:
             return AIResponse(
                     reply_to_user=Messages.Errors.AI_OVERLOAD,
                     transcription=None,
-                    extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None)
+                    extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None),
+                    is_deal=False
                 )
         return Messages.Errors.AI_OVERLOAD

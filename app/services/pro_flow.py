@@ -3,6 +3,7 @@ from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, Defaults
 from app.services.matching_service import book_slot_for_lead
+from app.services.context_manager_service import ContextManager
 from datetime import datetime, timezone
 
 STATUS_LABELS = {
@@ -127,6 +128,9 @@ async def _handle_reject(pro, lead_manager):
         return Messages.Pro.NO_PENDING_REJECT
 
     await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.REJECTED)
+    # Clear cached context so next conversation starts fresh
+    if lead.get("chat_id"):
+        await ContextManager.clear_context(lead["chat_id"])
     return Messages.Pro.REJECT_SUCCESS
 
 
@@ -146,6 +150,10 @@ async def _handle_finish(pro, whatsapp):
             "waiting_for_rating": True
         }}
     )
+
+    # Clear cached context — job is done, next conversation starts fresh
+    if lead.get("chat_id"):
+        await ContextManager.clear_context(lead["chat_id"])
 
     pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME)
     feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)

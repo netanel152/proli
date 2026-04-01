@@ -49,7 +49,8 @@ async def test_dispatcher_mode_missing_info(mock_workflow_dependencies):
     response = AIResponse(
         reply_to_user="Where are you located?",
         extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None),
-        transcription=None
+        transcription=None,
+        is_deal=False
     )
     mock_ai.analyze_conversation.return_value = response
     
@@ -74,14 +75,16 @@ async def test_handover_to_pro_success(mock_workflow_dependencies):
     dispatcher_resp = AIResponse(
         reply_to_user="Finding pro...",
         extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address=None, appointment_time=None),
-        transcription=None
+        transcription=None,
+        is_deal=False
     )
-    
+
     # 2. Pro Response (Persona Switch)
     pro_resp = AIResponse(
         reply_to_user="Hello, I am Mario the Plumber.",
         extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address=None, appointment_time=None),
-        transcription=None
+        transcription=None,
+        is_deal=False
     )
     
     # Set side_effect for sequential calls
@@ -119,7 +122,8 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
     dispatcher_resp = AIResponse(
         reply_to_user="...",
         extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address=None, appointment_time=None),
-        transcription="Water is flowing everywhere"
+        transcription="Water is flowing everywhere",
+        is_deal=False
     )
     
     # 2. Pro: Closes Deal (Mocking that Pro also sees transcription in context)
