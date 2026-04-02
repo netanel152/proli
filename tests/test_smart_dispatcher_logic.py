@@ -160,10 +160,11 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
     pro_chat = "972500000000@c.us"
     calls_to_pro = [call for call in mock_whatsapp.send_message.call_args_list if call[0][0] == pro_chat]
     
-    assert len(calls_to_pro) >= 1
-    msg_to_pro = calls_to_pro[0][0][1]
-    
-    assert "Mario Plumbing" not in msg_to_pro # Check logic of msg construction if needed
+    # Two messages are sent to the pro: early lead notification + final deal notification.
+    # Transcription and the approve instruction ("אשר") appear in the deal notification (last message).
+    assert len(calls_to_pro) >= 2
+    msg_to_pro = calls_to_pro[-1][0][1]  # deal notification, not early notification
+
     assert "תמליל" in msg_to_pro
     assert "Water is flowing everywhere" in msg_to_pro
-    assert "אשר" in msg_to_pro # Check for text instructions
+    assert "אשר" in msg_to_pro  # NEW_LEAD_FOOTER contains the approve instruction

@@ -102,29 +102,18 @@ async def handle_customer_rating_text(chat_id: str, text: str):
             logger.error(f"Pro {pro_id} not found for rating on lead {lead['_id']}")
             return None
 
-        # Atomic rating update using aggregation pipeline
+        # Compute new rating in Python to avoid $round aggregation pipeline (not supported by all drivers/mocks)
+        current_count = pro.get("social_proof", {}).get("review_count") or 0
+        current_rating = pro.get("social_proof", {}).get("rating") or 5.0
+        new_count = current_count + 1
+        new_rating = round((current_rating * current_count + rating) / new_count, 1)
+
         await users_collection.update_one(
             {"_id": pro_id},
-            [
-                {"$set": {
-                    "social_proof.rating": {
-                        "$round": [
-                            {"$divide": [
-                                {"$add": [
-                                    {"$multiply": [
-                                        {"$ifNull": ["$social_proof.rating", 5.0]},
-                                        {"$ifNull": ["$social_proof.review_count", 0]}
-                                    ]},
-                                    rating
-                                ]},
-                                {"$add": [{"$ifNull": ["$social_proof.review_count", 0]}, 1]}
-                            ]},
-                            1
-                        ]
-                    },
-                    "social_proof.review_count": {"$add": [{"$ifNull": ["$social_proof.review_count", 0]}, 1]}
-                }}
-            ]
+            {"$set": {
+                "social_proof.rating": new_rating,
+                "social_proof.review_count": new_count
+            }}
         )
 
         await leads_collection.update_one(

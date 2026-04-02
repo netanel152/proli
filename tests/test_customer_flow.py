@@ -151,13 +151,6 @@ async def test_rating_valid(flow_db, monkeypatch):
         "pro_id": pro_id,
     })
 
-    # mongomock doesn't support $round aggregation pipeline in update_one,
-    # so mock the users_collection.update_one for the rating update
-    import app.services.customer_flow
-    original_users = app.services.customer_flow.users_collection
-    mock_users_update = AsyncMock()
-    monkeypatch.setattr(original_users, "update_one", mock_users_update)
-
     result = await handle_customer_rating_text("972507777777@c.us", "4")
 
     assert result is not None
@@ -169,8 +162,10 @@ async def test_rating_valid(flow_db, monkeypatch):
     assert lead["rating_given"] == 4
     assert lead["waiting_for_review_comment"] is True
 
-    # Pro rating update was attempted
-    mock_users_update.assert_called_once()
+    # Pro rating updated in DB
+    pro = await flow_db.users.find_one({"_id": pro_id})
+    assert pro["social_proof"]["review_count"] == 1
+    assert pro["social_proof"]["rating"] == 4.0
 
 
 @pytest.mark.asyncio
@@ -181,7 +176,7 @@ async def test_rating_invalid_text(flow_db):
 
 @pytest.mark.asyncio
 async def test_rating_no_waiting_lead(flow_db):
-    result = await handle_customer_rating_text("972501111111@c.us", "5")
+    result = await handle_customer_rating_text("972509010101@c.us", "5")
     assert result is None
 
 
@@ -193,24 +188,18 @@ async def test_review_saved(flow_db, monkeypatch):
     lead_id = ObjectId()
     await flow_db.leads.insert_one({
         "_id": lead_id,
-        "chat_id": "972501111111@c.us",
+        "chat_id": "972509020202@c.us",
         "waiting_for_review_comment": True,
         "pro_id": pro_id,
         "rating_given": 5,
     })
 
-    # Mock ContextManager since it uses Redis
-    import app.services.customer_flow
-    mock_ctx = MagicMock()
-    mock_ctx.clear_context = AsyncMock()
-    monkeypatch.setattr(app.services.customer_flow, "ContextManager", mock_ctx)
-
-    result = await handle_customer_review_comment("972501111111@c.us", "שירות מעולה!")
+    result = await handle_customer_review_comment("972509020202@c.us", "שירות מעולה!")
 
     assert result == Messages.Customer.REVIEW_SAVED
 
     # Review inserted
-    review = await flow_db.reviews.find_one({"pro_id": pro_id})
+    review = await flow_db.reviews.find_one({"pro_id": pro_id, "comment": "שירות מעולה!"})
     assert review is not None
     assert review["comment"] == "שירות מעולה!"
     assert review["rating"] == 5
@@ -222,5 +211,5 @@ async def test_review_saved(flow_db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_review_no_waiting_lead(flow_db):
-    result = await handle_customer_review_comment("972501111111@c.us", "good service")
+    result = await handle_customer_review_comment("972509030303@c.us", "good service")
     assert result is None

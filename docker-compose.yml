@@ -10,8 +10,15 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/proli_db
+      - REDIS_HOST=redis
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=production
     depends_on:
       mongo:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - ./logs:/app/logs
@@ -28,6 +35,11 @@ services:
     command: python -m app.worker
     env_file:
       - .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/proli_db
+      - REDIS_HOST=redis
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=production
     depends_on:
       mongo:
         condition: service_healthy
@@ -47,12 +59,18 @@ services:
     build: .
     container_name: admin_panel
     command: streamlit run admin_panel/main.py --server.port 8501 --server.address 0.0.0.0
-    ports:
-      - "8501:8501"
+    # Port 8501 not exposed externally — admin is only reachable via nginx on port 8080
     env_file:
       - .env
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/proli_db
+      - REDIS_HOST=redis
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=production
     depends_on:
       mongo:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - ./logs:/app/logs

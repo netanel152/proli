@@ -77,6 +77,17 @@ def patch_dependencies(request, monkeypatch, mock_db):
     import app.services.pro_flow
     monkeypatch.setattr(app.services.pro_flow, "users_collection", users)
     monkeypatch.setattr(app.services.pro_flow, "leads_collection", leads)
+    monkeypatch.setattr(app.services.pro_flow, "reviews_collection", reviews)
+
+    # Mock ContextManager globally — all services that call clear_context hit Redis otherwise
+    mock_ctx = MagicMock()
+    mock_ctx.clear_context = AsyncMock()
+    mock_ctx.get_history = AsyncMock(return_value=None)
+    mock_ctx.update_history = AsyncMock()
+    import app.services.context_manager_service
+    monkeypatch.setattr(app.services.context_manager_service, "ContextManager", mock_ctx)
+    monkeypatch.setattr(app.services.pro_flow, "ContextManager", mock_ctx)
+    monkeypatch.setattr(app.services.customer_flow, "ContextManager", mock_ctx)
 
     # Patch Matching Service Collections
     import app.services.matching_service
