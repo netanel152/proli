@@ -265,7 +265,6 @@ async def _handle_reviews(pro):
     rated_leads = await cursor.to_list(length=50)
 
     # Build a map of lead_id → comment from reviews_collection
-    lead_ids = [l["_id"] for l in rated_leads]
     review_cursor = reviews_collection.find({"pro_id": pro_id})
     review_map = {}
     async for rev in review_cursor:

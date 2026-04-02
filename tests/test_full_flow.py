@@ -78,22 +78,16 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     # 1. Dispatcher: Extracts ...
     # 2. Pro AI: Returns [DEAL] or structured Deal
     
-    # Dispatcher sees info again (or history carries it, but we mock response)
-    resp_dispatcher_2 = AIResponse(
-        reply_to_user="...",
-        extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address="Dizengoff 1", appointment_time="tomorrow 10:00"),
-        transcription=None,
-        is_deal=False
-    )
-    # Pro sees it and closes deal
+    # Dispatcher is skipped (pro already assigned from first message — Optimization 1).
+    # Only the pro AI response is needed for this second message.
     resp_pro_deal = AIResponse(
         reply_to_user="Done. [DEAL: tomorrow 10:00 | Dizengoff 1 | plumber]",
         extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address="Dizengoff 1", appointment_time="tomorrow 10:00"),
         transcription=None,
         is_deal=True
     )
-    
-    setup_mock_ai(monkeypatch, responses=[resp_dispatcher_2, resp_pro_deal])
+
+    setup_mock_ai(monkeypatch, responses=[resp_pro_deal])
     
     await process_incoming_message(user_chat_id, "Book me for tomorrow 10:00 at Dizengoff 1")
     
