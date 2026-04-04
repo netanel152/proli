@@ -1,5 +1,6 @@
 from datetime import datetime, timezone
 from bson import ObjectId
+from pymongo import ReturnDocument
 from app.core.database import leads_collection, messages_collection
 from app.core.logger import logger
 from app.core.constants import LeadStatus
@@ -44,6 +45,8 @@ class LeadManager:
     async def create_lead_from_dict(self, chat_id: str, issue_type: str, full_address: str, appointment_time: str = "Pending", status: str = LeadStatus.NEW, pro_id: ObjectId = None) -> dict:
         """
         Creates a lead document directly from parameters.
+        For CONTACTED leads (no pro yet), uses an atomic upsert to prevent
+        race-condition duplicates when messages arrive in quick succession.
         """
         try:
             lead_doc = {
@@ -56,7 +59,18 @@ class LeadManager:
                 "history": [],
                 "pro_id": pro_id
             }
-            
+
+            if status == LeadStatus.CONTACTED and not pro_id:
+                # Atomic find-or-create: prevents duplicate active leads per customer
+                result = await leads_collection.find_one_and_update(
+                    {"chat_id": chat_id, "status": LeadStatus.CONTACTED, "pro_id": None},
+                    {"$setOnInsert": lead_doc},
+                    upsert=True,
+                    return_document=ReturnDocument.AFTER
+                )
+                logger.info(f"Lead found-or-created: {result['_id']} (Status: {status})")
+                return result
+
             result = await leads_collection.insert_one(lead_doc)
             lead_doc["_id"] = result.inserted_id
             logger.info(f"Lead created/inserted: {result.inserted_id} (Status: {status})")

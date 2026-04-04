@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     MONGO_MIN_POOL_SIZE: int = 10
     MONGO_MAX_IDLE_TIME_MS: int = 30000
     ADMIN_PASSWORD: str | None = None
+
+    @field_validator("ADMIN_PASSWORD", mode="before")
+    @classmethod
+    def validate_admin_password(cls, v: str | None) -> str | None:
+        if v is not None and len(v) < 8:
+            raise ValueError("ADMIN_PASSWORD must be at least 8 characters long")
+        return v
     
     # Redis
     REDIS_HOST: str = "redis"

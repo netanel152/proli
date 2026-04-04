@@ -55,7 +55,7 @@ def view_leads_dashboard(T):
                         appointment_time = parts[0].strip()
                         full_address = parts[1].strip()
                         issue_type = parts[2].strip()
-                except:
+                except (IndexError, KeyError, AttributeError):
                     pass
 
             display_details = l.get("details", "")

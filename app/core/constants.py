@@ -34,6 +34,7 @@ class WorkerConstants:
     SOS_TIMEOUT_MINUTES = 60
     MAX_REASSIGNMENTS = 3          # Max times a lead can be reassigned before closing
     UNASSIGNED_LEAD_TIMEOUT_HOURS = 24  # Auto-reject CONTACTED leads with no pro after this
+    MAX_PRO_REMINDERS = 3          # Max reminder messages sent to a pro for a stale booked lead
     # ADMIN_PHONE moved to config.py / env var
 
 class APIStatus:

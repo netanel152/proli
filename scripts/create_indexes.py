@@ -14,6 +14,7 @@ from app.core.database import (
     audit_log_collection,
     consent_collection,
     admins_collection,
+    db,
 )
 
 async def create_all_indexes():
@@ -67,6 +68,10 @@ async def create_all_indexes():
         await leads_collection.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
         print("  ✅ Created compound index: status + created_at")
 
+        # Compound: Active lead lookup per customer (workflow + duplicate prevention)
+        await leads_collection.create_index([("chat_id", ASCENDING), ("status", ASCENDING)])
+        print("  ✅ Created compound index: chat_id + status")
+
     except Exception as e:
         print(f"  ❌ Error indexing Leads: {e}")
 
@@ -76,10 +81,14 @@ async def create_all_indexes():
         # Lookup messages by chat
         await messages_collection.create_index([("chat_id", ASCENDING)])
         print("  ✅ Created index: chat_id")
-        
-        # Sort history by time
-        await messages_collection.create_index([("timestamp", ASCENDING)])
-        print("  ✅ Created index: timestamp")
+
+        # TTL index: auto-delete messages older than 90 days
+        await messages_collection.create_index(
+            [("timestamp", ASCENDING)],
+            expireAfterSeconds=7776000,  # 90 days
+            background=True
+        )
+        print("  ✅ Created TTL index: timestamp (90-day expiry)")
 
     except Exception as e:
         print(f"  ❌ Error indexing Messages: {e}")
@@ -123,6 +132,21 @@ async def create_all_indexes():
         print("  ✅ Created unique index: username")
     except Exception as e:
         print(f"  ❌ Error indexing Admins: {e}")
+
+    # --- Admin Sessions Collection ---
+    try:
+        print("🔹 Indexing Admin Sessions Collection...")
+        admin_sessions_col = db.admin_sessions
+        await admin_sessions_col.create_index([("_token", ASCENDING)], unique=True)
+        print("  ✅ Created unique index: _token")
+        # TTL index: auto-expire sessions after 7 days (belt-and-suspenders cleanup)
+        await admin_sessions_col.create_index(
+            [("expiry", ASCENDING)],
+            expireAfterSeconds=0  # MongoDB deletes when expiry datetime is reached
+        )
+        print("  ✅ Created TTL index: expiry")
+    except Exception as e:
+        print(f"  ❌ Error indexing Admin Sessions: {e}")
 
     print("✨ Index creation process completed.")
 

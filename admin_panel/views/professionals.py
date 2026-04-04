@@ -1,7 +1,7 @@
 import streamlit as st
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
-from admin_panel.core.utils import users_collection, slots_collection, create_initial_schedule, generate_system_prompt
+from admin_panel.core.utils import users_collection, leads_collection, slots_collection, create_initial_schedule, generate_system_prompt
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.rbac import can_edit, has_permission
 import re
@@ -107,6 +107,11 @@ def render_pro_list(T):
                 st.warning(T.get("confirm_delete_pro", "Are you sure you want to delete this professional?"))
                 c_yes, c_no, _ = st.columns([1, 1, 4])
                 if c_yes.button(T.get("confirm_yes", "Yes"), key=f"yes_del_{pro_id}"):
+                    # Cascade: unassign open leads so healer/janitor can re-route them
+                    leads_collection.update_many(
+                        {"pro_id": p["_id"], "status": {"$in": ["new", "contacted", "booked"]}},
+                        {"$set": {"pro_id": None}}
+                    )
                     slots_collection.delete_many({"pro_id": p["_id"]})
                     users_collection.delete_one({"_id": p["_id"]})
                     log_audit("delete_pro", {"pro_id": pro_id, "name": p.get("business_name")})

@@ -24,11 +24,17 @@ async def _send_with_sms_fallback(chat_id: str, message: str) -> bool:
 
 
 async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
-    """Sends a reminder to the pro to mark a job as finished."""
+    """Sends a reminder to the pro to mark a job as finished. Capped at MAX_PRO_REMINDERS."""
     try:
         lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
         if not lead or lead.get("status") != LeadStatus.BOOKED:
             logger.warning(f"send_pro_reminder called for invalid/non-booked lead: {lead_id}")
+            return
+
+        # Enforce reminder cap to avoid spamming the pro
+        reminder_count = lead.get("reminder_sent_count", 0)
+        if reminder_count >= WorkerConstants.MAX_PRO_REMINDERS:
+            logger.info(f"[Reminder] Lead {lead_id} already hit max reminders ({reminder_count}), skipping.")
             return
 
         pro = await users_collection.find_one({"_id": lead["pro_id"]})
@@ -40,7 +46,13 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
         message = Messages.Pro.REMINDER
 
         await _send_with_sms_fallback(pro_chat_id, message)
-        logger.success(f"Sent pro reminder for lead {lead_id} (Trigger: {triggered_by})")
+
+        # Increment counter atomically
+        await leads_collection.update_one(
+            {"_id": ObjectId(lead_id)},
+            {"$inc": {"reminder_sent_count": 1}}
+        )
+        logger.success(f"Sent pro reminder for lead {lead_id} ({reminder_count + 1}/{WorkerConstants.MAX_PRO_REMINDERS}, Trigger: {triggered_by})")
     except Exception as e:
         logger.error(f"Error in send_pro_reminder for lead {lead_id}: {e}")
 
