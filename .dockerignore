@@ -1,15 +1,33 @@
 **/.git
 **/.vscode
+**/.idea
 **/__pycache__
+**/*.pyc
+**/*.pyo
 **/.pytest_cache
 **/venv
+**/.venv
 **/node_modules
-logs/*.log
+
+# Secrets — never in image
 .env
+.env.local
+.env.*.local
+secrets.json
+
+# Logs and backups (runtime dirs, not source)
+logs/
+backups/
+
+# Dev/CI artefacts
 .dockerignore
-Dockerfile
 docker-compose.yml
+docker-compose.override.yml
 README.md
 GEMINI.md
 pytest.ini
 tests/
+
+# OS files
+.DS_Store
+Thumbs.db

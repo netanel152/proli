@@ -1,41 +1,50 @@
-# Base Image
-FROM python:3.12-slim
+# ============================================================
+# Stage 1: Builder — compile dependencies, keeps build tools
+# ============================================================
+FROM python:3.12-slim AS builder
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+WORKDIR /build
 
-# Set working directory
-WORKDIR /app
-
-# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+# ============================================================
+# Stage 2: Runtime — lean final image, no build tools
+# ============================================================
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/install/bin:$PATH" \
+    PYTHONPATH="/install/lib/python3.12/site-packages"
+
+# Only runtime system deps (curl for health-check)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Copy installed packages from builder
+COPY --from=builder /install /usr/local
 
-# Copy project files
+WORKDIR /app
+
+# Copy project source
 COPY . .
 
-# Create a non-root user
-RUN useradd -m appuser
-
-# Change ownership of the app directory to the new user
-RUN chown -R appuser:appuser /app
-
-# Switch to non-root user
+# Non-root user
+RUN useradd -m appuser && chown -R appuser:appuser /app
 USER appuser
 
-# Expose ports (API: 8000, Admin: 8501)
+# Docker health check — polls /health every 30s, fails if app is not responding
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
 EXPOSE 8000 8501
 
-# Default: run the API server.
-# Override per service:
-#   Worker: python -m app.worker
-#   Admin:  streamlit run admin_panel/main.py --server.port 8501 --server.address 0.0.0.0
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Default: API server (override per service in docker-compose)
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
