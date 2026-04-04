@@ -23,10 +23,11 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
     4. Rating (High to Low)
     """
     try:
-        # 1. Base Query
+        # 1. Base Query — only fully approved, active professionals
         query = {
             "is_active": True,
-            "role": "professional" # Ensure we only get pros
+            "role": "professional",
+            "pending_approval": {"$ne": True}
         }
         
         if excluded_pro_ids:

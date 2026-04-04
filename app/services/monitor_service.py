@@ -6,6 +6,7 @@ from app.core.logger import logger
 from app.services.whatsapp_client_service import WhatsAppClient
 from app.services import matching_service
 from app.core.messages import Messages
+from app.services.context_manager_service import ContextManager
 from bson import ObjectId
 
 whatsapp = WhatsAppClient()
@@ -57,28 +58,45 @@ async def check_and_reassign_stale_leads():
                 excluded_pro_ids=excluded_ids
             )
             
+            reassignment_count = lead.get("reassignment_count", 0)
+
+            # Hard stop: if max reassignments reached, close the lead
+            if reassignment_count >= WorkerConstants.MAX_REASSIGNMENTS:
+                await leads_collection.update_one(
+                    {"_id": lead_id},
+                    {"$set": {"status": LeadStatus.CLOSED, "closed_reason": "max_reassignments"}}
+                )
+                try:
+                    await whatsapp.send_message(chat_id, Messages.SOS.MAX_REASSIGNMENTS_REACHED)
+                except Exception as e:
+                    logger.error(f"Failed to notify customer {chat_id} of closure: {e}")
+                await ContextManager.clear_context(chat_id)
+                logger.warning(f"🚫 [SOS Healer] Lead {lead_id} closed after {reassignment_count} reassignments.")
+                continue
+
             if new_pro:
                 new_pro_id = new_pro["_id"]
-                
-                # 3. Update Lead
+
+                # 3. Update Lead — increment counter, reset timer
                 await leads_collection.update_one(
                     {"_id": lead_id},
                     {
                         "$set": {
                             "pro_id": new_pro_id,
                             "status": LeadStatus.NEW,
-                            "created_at": datetime.now(timezone.utc), # Reset timer
-                            "reassigned_from": current_pro_id
+                            "created_at": datetime.now(timezone.utc),
+                            "reassigned_from": current_pro_id,
+                            "reassignment_count": reassignment_count + 1
                         }
                     }
                 )
-                
+
                 # 4. Notify New Pro
                 pro_phone = new_pro.get("phone_number")
                 if pro_phone:
                     if not pro_phone.endswith("@c.us"):
                         pro_phone = f"{pro_phone}@c.us"
-                    
+
                     msg_to_pro = Messages.Pro.NEW_LEAD_HEADER + "\n\n"
                     msg_to_pro += Messages.Pro.NEW_LEAD_DETAILS.format(
                         full_address=lead.get('full_address', 'Unknown'),
@@ -86,10 +104,9 @@ async def check_and_reassign_stale_leads():
                         appointment_time=lead.get('appointment_time', 'Pending')
                     )
                     msg_to_pro += Messages.Pro.NEW_LEAD_FOOTER
-                    
+
                     await whatsapp.send_message(pro_phone, msg_to_pro)
-                    
-                    # Send location link if address exists
+
                     if lead.get('full_address'):
                         await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)
 
@@ -102,13 +119,63 @@ async def check_and_reassign_stale_leads():
                             old_phone = f"{old_phone}@c.us"
                         await whatsapp.send_message(old_phone, Messages.SOS.PRO_LOST_LEAD)
 
-                logger.info(f"✅ [SOS Healer] Lead {lead_id} reassigned from {current_pro_id} to {new_pro_id}")
-            
+                logger.info(f"✅ [SOS Healer] Lead {lead_id} reassigned from {current_pro_id} to {new_pro_id} (attempt {reassignment_count + 1})")
+
             else:
                 logger.warning(f"⚠️ [SOS Healer] Could not find replacement for lead {lead_id} (Stuck).")
 
     except Exception as e:
         logger.error(f"❌ [SOS Healer] Error: {e}")
+
+async def auto_reject_unassigned_leads():
+    """
+    AUTO-REJECTION ("The Janitor"):
+    Finds CONTACTED leads that have no assigned pro_id and are older than
+    UNASSIGNED_LEAD_TIMEOUT_HOURS. Closes them and notifies the customer.
+    Prevents leads from accumulating forever with no escape path.
+    """
+    logger.info("🧹 [Janitor] Checking for unassigned stale leads...")
+
+    timeout_hours = WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS
+    threshold_time = datetime.now(timezone.utc) - timedelta(hours=timeout_hours)
+
+    query = {
+        "status": LeadStatus.CONTACTED,
+        "pro_id": {"$exists": False},
+        "created_at": {"$lt": threshold_time}
+    }
+
+    try:
+        cursor = leads_collection.find(query)
+        stale_unassigned = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+
+        if not stale_unassigned:
+            logger.info("✅ [Janitor] No unassigned stale leads found.")
+            return
+
+        logger.warning(f"🧹 [Janitor] Closing {len(stale_unassigned)} unassigned leads.")
+
+        for lead in stale_unassigned:
+            lead_id = lead["_id"]
+            chat_id = lead.get("chat_id")
+
+            await leads_collection.update_one(
+                {"_id": lead_id},
+                {"$set": {"status": LeadStatus.CLOSED, "closed_reason": "no_pro_available"}}
+            )
+
+            if chat_id:
+                try:
+                    await whatsapp.send_message(chat_id, Messages.SOS.NO_PRO_AVAILABLE)
+                except Exception as e:
+                    logger.error(f"Failed to notify customer {chat_id} of closure: {e}")
+                await ContextManager.clear_context(chat_id)
+
+            logger.info(f"🧹 [Janitor] Closed unassigned lead {lead_id} (chat: {chat_id})")
+
+    except Exception as e:
+        logger.error(f"❌ [Janitor] Error: {e}")
+
 
 async def send_periodic_admin_report():
     """

@@ -14,7 +14,8 @@ from app.core.constants import AdminDefaults, Defaults
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-KANBAN_STATUSES = ["new", "contacted", "booked", "completed", "rejected", "closed"]
+KANBAN_STATUSES = ["new", "contacted", "booked", "completed", "rejected", "closed", "cancelled"]
+ALL_STATUSES = ["new", "contacted", "booked", "completed", "rejected", "closed", "cancelled"]
 
 
 def view_leads_dashboard(T):
@@ -149,7 +150,7 @@ def view_leads_dashboard(T):
         else:
             st.subheader(T["table_title"])
 
-            status_options = ["new", "contacted", "booked", "closed", "completed", "cancelled"]
+            status_options = ALL_STATUSES
 
             if 'original_leads_df' not in st.session_state:
                 st.session_state.original_leads_df = leads_df.copy()

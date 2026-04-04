@@ -143,7 +143,11 @@ async def handle_customer_review_comment(chat_id: str, text: str):
     if not lead:
         return None
 
-    pro_id = lead["pro_id"]
+    pro_id = lead.get("pro_id")
+    if not pro_id:
+        logger.warning(f"handle_customer_review_comment: lead {lead['_id']} has no pro_id, skipping review")
+        return None
+
     rating_given = lead.get("rating_given", 5)
 
     review_doc = {

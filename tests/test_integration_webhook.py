@@ -20,8 +20,9 @@ VALID_PAYLOAD = {
 
 @pytest.fixture
 def mock_background_tasks():
-    # Patch the settings to match the test payload ID
-    with patch("app.core.config.settings.GREEN_API_INSTANCE_ID", "7107387490"):
+    # Patch settings to match test payload and disable token auth
+    with patch("app.core.config.settings.GREEN_API_INSTANCE_ID", "7107387490"), \
+         patch("app.core.config.settings.WEBHOOK_TOKEN", None):
         # Mock ARQ pool
         with patch("app.api.routes.webhook.get_arq_pool") as mock_get_pool:
             mock_pool = AsyncMock()
@@ -66,7 +67,7 @@ def test_webhook_invalid_json():
     response = client.post("/webhook", content="{invalid_json}")
     assert response.status_code == 422 # Validation error
 
-def test_webhook_missing_fields():
+def test_webhook_missing_fields(mock_background_tasks):
     # Payload missing senderData
     payload = {
         "typeWebhook": "incomingMessageReceived",

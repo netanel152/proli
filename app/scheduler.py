@@ -3,7 +3,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 from app.core.database import users_collection, leads_collection, settings_collection
 from app.services.workflow_service import send_pro_reminder, send_customer_completion_check, whatsapp
-from app.services.monitor_service import check_and_reassign_stale_leads, send_periodic_admin_report
+from app.services.monitor_service import check_and_reassign_stale_leads, send_periodic_admin_report, auto_reject_unassigned_leads
 from datetime import datetime, timedelta
 from app.core.constants import LeadStatus
 import os
@@ -145,6 +145,11 @@ async def run_sos_reporter():
     await send_periodic_admin_report()
 
 
+async def run_lead_janitor():
+    """Auto-reject CONTACTED leads with no pro after timeout."""
+    await auto_reject_unassigned_leads()
+
+
 async def daily_reminders_job():
     """
     Daily Reminders Job (Cron).
@@ -221,7 +226,15 @@ def start_scheduler():
         replace_existing=True
     )
 
-    # Job 5: Weekly Slot Regeneration (Sunday 01:00 Israel time)
+    # Job 5: Lead Janitor — auto-reject unassigned CONTACTED leads (every 6 hours)
+    scheduler.add_job(
+        run_lead_janitor,
+        IntervalTrigger(hours=6),
+        id="lead_janitor",
+        replace_existing=True
+    )
+
+    # Job 6: Weekly Slot Regeneration (Sunday 01:00 Israel time)
     scheduler.add_job(
         run_slot_regeneration,
         CronTrigger(day_of_week='sun', hour=1, minute=0, timezone=IL_TZ),
