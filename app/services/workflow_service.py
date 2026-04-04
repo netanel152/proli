@@ -305,6 +305,20 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         except Exception as e:
             logger.error(f"Pro matching failed for {chat_id}: {e}")
 
+        # If no pro found and we just created a fresh lead (no previous pro), close it immediately.
+        # Don't leave orphaned CONTACTED leads with no escape path.
+        if not best_pro and current_lead_id:
+            existing_lead = await leads_collection.find_one({"_id": current_lead_id})
+            if existing_lead and not existing_lead.get("pro_id"):
+                await leads_collection.update_one(
+                    {"_id": current_lead_id},
+                    {"$set": {"status": LeadStatus.CLOSED, "closed_reason": "no_pro_available"}}
+                )
+                logger.warning(f"No pro available for {chat_id} — closed lead {current_lead_id}")
+                await whatsapp.send_message(chat_id, Messages.SOS.NO_PRO_AVAILABLE)
+                await lead_manager.log_message(chat_id, "model", Messages.SOS.NO_PRO_AVAILABLE)
+                return
+
         if best_pro:
             is_new_assignment = False
             if current_lead_id:

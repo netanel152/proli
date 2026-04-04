@@ -32,6 +32,8 @@ class WorkerConstants:
     SLOT_SEARCH_WINDOW_HOURS = 2
     DEFAULT_CURRENCY = "ILS"
     SOS_TIMEOUT_MINUTES = 60
+    MAX_REASSIGNMENTS = 3          # Max times a lead can be reassigned before closing
+    UNASSIGNED_LEAD_TIMEOUT_HOURS = 24  # Auto-reject CONTACTED leads with no pro after this
     # ADMIN_PHONE moved to config.py / env var
 
 class APIStatus:
