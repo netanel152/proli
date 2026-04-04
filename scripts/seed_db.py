@@ -43,8 +43,8 @@ async def create_pros():
     
     pros = [
         {
-            "business_name": "יוסי אינסטלציה",
-            "phone_number": "972500000001",
+            "business_name": 'נתנאל אינסטלציה',
+            "phone_number": '972524828796',
             "role": "professional",
             "type": "plumber",
             "service_areas": AREAS_CENTER,
@@ -53,7 +53,7 @@ async def create_pros():
             "is_verified": True,
             "social_proof": {"rating": 4.9, "review_count": 12},
             "location": {"type": "Point", "coordinates": [34.7818, 32.0853]},
-            "system_prompt": "אתה יוסי, אינסטלטור מנוסה עם 15 שנות ניסיון. היה אדיב ומקצועי. אזורי שירות: Tel Aviv, Ramat Gan, Givatayim",
+            "system_prompt": "אתה נתנאל, אינסטלטור מנוסה עם 15 שנות ניסיון. היה אדיב ומקצועי. אזורי שירות: Tel Aviv, Ramat Gan, Givatayim",
             "price_list": {"ביקור": 250, "פתיחת סתימה": 400},
             "prices_for_prompt": "ביקור: 250₪\nפתיחת סתימה: 400₪",
             "keywords": ["אינסטלטור", "שרברב", "נזילה", "סתימה", "ברז"],
