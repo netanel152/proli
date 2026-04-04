@@ -50,7 +50,8 @@ class Settings(BaseSettings):
     
     # New Configs
     PROJECT_NAME: str = "Proli Bot Server"
-    BACKEND_CORS_ORIGINS: list[str] = ["*"]
+    # In production, set to your actual domain(s). Defaults to localhost only.
+    BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:8501", "http://localhost:3000"]
     MAX_CHAT_HISTORY: int = 20
     ADMIN_PHONE: str = "972524828796"
     WEBHOOK_TOKEN: str | None = None

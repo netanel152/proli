@@ -96,5 +96,9 @@ class WorkerSettings:
     on_startup = startup
     on_shutdown = shutdown
     max_jobs = 10
-    job_timeout = 300  # 5 minutes
-    max_tries = 3  # Retry failed jobs up to 3 times
+    job_timeout = 300       # 5 minutes per job
+    max_tries = 5           # Retry transient failures up to 5 times
+    retry_jobs = True
+    # Keep results in Redis for 7 days so failed jobs are visible for debugging
+    keep_result = 604800    # 7 days in seconds
+    keep_result_forever = False
