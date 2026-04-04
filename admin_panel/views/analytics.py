@@ -55,24 +55,28 @@ def _get_pro_performance(days: int = 30) -> list[dict]:
             "booked": {"$sum": {"$cond": [{"$eq": ["$status", LeadStatus.BOOKED]}, 1, 0]}},
         }},
         {"$sort": {"total_leads": -1}},
+        # Batch join pro names — replaces per-pro find_one (N+1 eliminated)
+        {"$lookup": {"from": "users", "localField": "_id", "foreignField": "_id", "as": "pro"}},
+        {"$unwind": {"path": "$pro", "preserveNullAndEmptyArrays": True}},
     ]
 
-    results = []
-    for doc in _db.leads.aggregate(pipeline):
-        pid = doc["_id"]
-        pro = _db.users.find_one({"_id": pid})
-        pro_name = pro.get("business_name", "Unknown") if pro else "Unknown"
+    raw_results = list(_db.leads.aggregate(pipeline))
 
+    # Batch fetch all ratings in one aggregation instead of N per-pro queries
+    pro_ids = [doc["_id"] for doc in raw_results]
+    ratings: dict = {}
+    for r in _db.reviews.aggregate([
+        {"$match": {"pro_id": {"$in": pro_ids}}},
+        {"$group": {"_id": "$pro_id", "avg": {"$avg": "$rating"}}},
+    ]):
+        ratings[r["_id"]] = round(r["avg"], 1) if r["avg"] else None
+
+    results = []
+    for doc in raw_results:
+        pro_name = (doc.get("pro") or {}).get("business_name", "Unknown")
         total = doc["total_leads"]
         completed = doc["completed"]
         rate = round((completed / total * 100), 1) if total > 0 else 0
-
-        avg_rating = None
-        for r in _db.reviews.aggregate([
-            {"$match": {"pro_id": pid}},
-            {"$group": {"_id": None, "avg": {"$avg": "$rating"}, "count": {"$sum": 1}}},
-        ]):
-            avg_rating = round(r["avg"], 1) if r["avg"] else None
 
         results.append({
             "name": pro_name,
@@ -81,7 +85,7 @@ def _get_pro_performance(days: int = 30) -> list[dict]:
             "rejected": doc["rejected"],
             "booked": doc["booked"],
             "completion_rate": rate,
-            "avg_rating": avg_rating or "-",
+            "avg_rating": ratings.get(doc["_id"]) or "-",
         })
 
     return results

@@ -12,8 +12,9 @@ from admin_panel.core.config import TRANS
 from admin_panel.core.rbac import AdminRole
 import certifi
 
-# In-memory session token store: {token: {"expiry": datetime, "username": str, "role": str}}
-_active_sessions: dict[str, dict] = {}
+# MongoDB-backed session store — survives worker/Streamlit restarts
+# Falls back to in-memory if DB is unavailable
+_active_sessions: dict[str, dict] = {}  # local cache to avoid a DB hit on every rerun
 
 # Sync MongoDB client for admin panel (Streamlit is synchronous)
 _ca = certifi.where() if "+srv" in settings.MONGO_URI else None
@@ -22,6 +23,7 @@ _sync_client = MongoClient(settings.MONGO_URI, **_kwargs)
 _sync_db = _sync_client.proli_db
 _admins_col = _sync_db.admins
 _audit_col = _sync_db.audit_log
+_sessions_col = _sync_db.admin_sessions
 
 
 def _log_audit_sync(username: str, action: str, details: dict | None = None):
@@ -161,11 +163,12 @@ def check_password(cookies):
         if st.session_state.get("authenticated", False):
             return True
 
-        # 2. Cookie Check — validate against active session tokens
+        # 2. Cookie Check — validate against persisted session tokens
         if cookie_token:
             _cleanup_expired_sessions()
-            session = _active_sessions.get(cookie_token)
+            session = _active_sessions.get(cookie_token) or _load_session(cookie_token)
             if session and session["expiry"] > datetime.now():
+                _active_sessions[cookie_token] = session  # warm local cache
                 st.session_state["authenticated"] = True
                 st.session_state["admin_username"] = session["username"]
                 st.session_state["admin_role"] = session["role"]
@@ -214,11 +217,13 @@ def check_password(cookies):
                     if remember_me:
                         secure_token = secrets.token_hex(32)
                         expires = datetime.now() + timedelta(days=7)
-                        _active_sessions[secure_token] = {
+                        session_data = {
                             "expiry": expires,
                             "username": admin_username,
                             "role": admin_role,
                         }
+                        _active_sessions[secure_token] = session_data
+                        _persist_session(secure_token, session_data)
                         cookie_manager.set("proli_auth_token", secure_token, expires_at=expires)
 
                     st.success(T_auth.get("connected", "Connected!"))
@@ -242,8 +247,9 @@ def logout(cookie_manager, T):
         try:
             cookies = cookie_manager.get_all()
             token = cookies.get("proli_auth_token") if cookies else None
-            if token and token in _active_sessions:
-                del _active_sessions[token]
+            if token:
+                _active_sessions.pop(token, None)
+                _delete_session(token)
         except Exception:
             pass
 
@@ -261,8 +267,45 @@ def logout(cookie_manager, T):
         st.rerun()
 
 
+def _persist_session(token: str, session_data: dict):
+    """Persist a session to MongoDB so it survives restarts."""
+    try:
+        _sessions_col.update_one(
+            {"_token": token},
+            {"$set": {"_token": token, **session_data}},
+            upsert=True
+        )
+    except Exception as e:
+        logger.warning(f"Failed to persist admin session: {e}")
+
+
+def _load_session(token: str) -> dict | None:
+    """Load a session from MongoDB (used when local cache is cold after restart)."""
+    try:
+        doc = _sessions_col.find_one({"_token": token})
+        if doc:
+            return {"expiry": doc["expiry"], "username": doc["username"], "role": doc["role"]}
+    except Exception as e:
+        logger.warning(f"Failed to load admin session: {e}")
+    return None
+
+
+def _delete_session(token: str):
+    """Remove a session from MongoDB on logout."""
+    try:
+        _sessions_col.delete_one({"_token": token})
+    except Exception as e:
+        logger.warning(f"Failed to delete admin session: {e}")
+
+
 def _cleanup_expired_sessions():
     now = datetime.now()
-    expired = [t for t, s in _active_sessions.items() if s["expiry"] <= now]
+    # Clean local cache
+    expired = [t for t, s in list(_active_sessions.items()) if s["expiry"] <= now]
     for t in expired:
         del _active_sessions[t]
+    # Clean MongoDB
+    try:
+        _sessions_col.delete_many({"expiry": {"$lte": now}})
+    except Exception:
+        pass

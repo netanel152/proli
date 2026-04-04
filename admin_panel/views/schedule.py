@@ -135,7 +135,7 @@ def view_schedule_editor(T):
                             try:
                                 day_start = tz.localize(datetime.combine(curr_d, time(start_hour, 0)))
                                 day_end = tz.localize(datetime.combine(curr_d, time(end_hour, 0)))
-                            except:
+                            except (pytz.exceptions.AmbiguousTimeError, pytz.exceptions.NonExistentTimeError):
                                 curr_d += timedelta(days=1)
                                 continue
 
