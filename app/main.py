@@ -12,7 +12,6 @@ from app.core.redis_client import close_redis_client, get_redis_client
 from app.core.http_client import close_http_client as _close_shared_http_client
 from app.core.database import client as mongo_client
 from app.core.logger import logger
-import uvicorn
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -73,4 +72,6 @@ app.include_router(webhook.router)
 app.include_router(health.router)
 
 if __name__ == "__main__":
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    import os, uvicorn
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port)
