@@ -113,17 +113,6 @@ This document explains the purpose and usage of the operational scripts located 
     python scripts/reset_test.py 972501234567     # Wipe specific customer
     ```
 
-### `seed_demo.py`
-**Purpose:** Rapidly provisions a rich demo environment.
-*   **What it does:**
-    *   Creates realistic demo professionals (with varied pricing and logic).
-    *   Generates a backlog of realistic completed/pending leads for dashboard testing.
-    *   Seeds schedules and historical metrics to test the Analytics and Admin panel.
-*   **Usage:**
-    ```bash
-    python scripts/seed_demo.py
-    ```
-
 ### `test_connection.py`
 **Purpose:** Verifies connectivity to external services.
 *   **What it does:**

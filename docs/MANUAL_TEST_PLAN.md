@@ -4,7 +4,7 @@
 
 | Component | Status Check |
 |-----------|-------------|
-| FastAPI (uvicorn) | `curl http://localhost:8001/health` |
+| FastAPI (uvicorn) | `curl http://localhost:8000/health` |
 | ARQ Worker | Worker terminal shows "APScheduler Started" |
 | ngrok | Running, URL set in Green API dashboard |
 | Green API | Instance authorized, phone connected |
