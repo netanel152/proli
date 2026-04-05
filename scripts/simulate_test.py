@@ -22,10 +22,15 @@ import argparse
 import uuid
 import time
 import sys
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- Config ---
-BASE_URL = "http://localhost:8001"
-INSTANCE_ID = 7105567180
+BASE_URL = "http://localhost:8000"
+INSTANCE_ID = int(os.getenv("GREEN_API_INSTANCE_ID", "7105567180"))
+WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
 
 # Virtual customer (no real phone needed)
 CUSTOMER_PHONE = "972523651414"
@@ -67,10 +72,18 @@ def make_text_payload(chat_id: str, text: str, sender_name: str = "Test User") -
     }
 
 
+def _webhook_url() -> str:
+    """Webhook URL with token appended if configured."""
+    url = f"{BASE_URL}/webhook"
+    if WEBHOOK_TOKEN:
+        url += f"?token={WEBHOOK_TOKEN}"
+    return url
+
+
 async def send_message(client: httpx.AsyncClient, chat_id: str, text: str, sender_name: str = "Test User") -> dict:
     """Send a simulated webhook and return the response."""
     payload = make_text_payload(chat_id, text, sender_name)
-    resp = await client.post(f"{BASE_URL}/webhook", json=payload)
+    resp = await client.post(_webhook_url(), json=payload)
     return resp.json()
 
 
@@ -276,13 +289,13 @@ async def tc12_idempotency(client: httpx.AsyncClient):
     payload["idMessage"] = fixed_id
 
     step(1, "Customer (virtual)", "בדיקת כפילות (first send)")
-    r1 = await client.post(f"{BASE_URL}/webhook", json=payload)
+    r1 = await client.post(_webhook_url(), json=payload)
     info(f"Response 1: {r1.json()}")
 
     await asyncio.sleep(1)
 
     step(2, "Customer (virtual)", "בדיקת כפילות (duplicate)")
-    r2 = await client.post(f"{BASE_URL}/webhook", json=payload)
+    r2 = await client.post(_webhook_url(), json=payload)
     result = r2.json()
     info(f"Response 2: {result}")
     if result.get("detail") == "duplicate":
@@ -378,7 +391,7 @@ async def tc13_media(client: httpx.AsyncClient):
             }
         }
     }
-    r = await client.post(f"{BASE_URL}/webhook", json=payload)
+    r = await client.post(_webhook_url(), json=payload)
     info(f"Webhook response: {r.json()}")
     await asyncio.sleep(5)
     info("Check logs: media_url present, AI processes image+text")
@@ -395,7 +408,7 @@ async def tc13_media(client: httpx.AsyncClient):
             "fileName": "voice.ogg"
         }
     }
-    r = await client.post(f"{BASE_URL}/webhook", json=payload)
+    r = await client.post(_webhook_url(), json=payload)
     info(f"Webhook response: {r.json()}")
     await asyncio.sleep(5)
     info("Check logs: audio media_url present, AI attempts transcription")
@@ -525,6 +538,7 @@ async def main():
     parser.add_argument("--list", action="store_true", help="List available tests")
     parser.add_argument("--base-url", type=str, default=BASE_URL, help="Server URL")
     parser.add_argument("--instance-id", type=int, default=INSTANCE_ID, help="Green API instance ID")
+    parser.add_argument("--token", type=str, default=WEBHOOK_TOKEN, help="Webhook token (overrides .env)")
     args = parser.parse_args()
 
     if args.list:
@@ -536,8 +550,10 @@ async def main():
         print(f"         python scripts/simulate_test.py --test full")
         return
 
+    global BASE_URL, INSTANCE_ID, WEBHOOK_TOKEN
     BASE_URL = args.base_url
     INSTANCE_ID = args.instance_id
+    WEBHOOK_TOKEN = args.token
 
     # Determine which tests to run
     if args.test == "all":

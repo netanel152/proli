@@ -1,0 +1,59 @@
+# Production override — use with:
+#   docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# Key differences from base compose:
+#   - Uses Atlas (removes MONGO_URI override so .env Atlas URI is used)
+#   - Removes local mongo container
+#   - nginx on ports 80 + 443 with Let's Encrypt SSL
+#   - Certbot for automatic certificate renewal
+
+services:
+  api:
+    environment:
+      - MONGO_URI=         # unset — inherits Atlas URI from .env
+      - REDIS_HOST=redis
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=production
+      - LOG_LEVEL=WARNING
+
+  worker:
+    environment:
+      - MONGO_URI=         # unset — inherits Atlas URI from .env
+      - REDIS_HOST=redis
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=production
+      - LOG_LEVEL=WARNING
+
+  admin:
+    environment:
+      - MONGO_URI=         # unset — inherits Atlas URI from .env
+      - REDIS_HOST=redis
+      - REDIS_URL=redis://redis:6379/0
+      - ENVIRONMENT=production
+      - LOG_LEVEL=WARNING
+
+  nginx:
+    image: nginx:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ./certdata/conf:/etc/letsencrypt:ro
+      - ./certdata/www:/var/www/certbot:ro
+    depends_on:
+      - api
+      - admin
+
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - ./certdata/conf:/etc/letsencrypt
+      - ./certdata/www:/var/www/certbot
+    # Run manually: docker-compose ... run --rm certbot certonly ...
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done'"
+
+  # mongo service is intentionally absent — using Atlas
+  mongo:
+    profiles:
+      - local-only   # only starts if you explicitly run: --profile local-only
