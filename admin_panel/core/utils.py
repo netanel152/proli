@@ -14,7 +14,8 @@ load_dotenv()
 # Standalone MongoDB Connection for Admin Panel
 mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or os.getenv("MONGO_URL")
 if not mongo_uri:
-    # Fallback to local if env var is missing (safety)
+    if os.getenv("ENVIRONMENT") == "production":
+        raise ValueError("MONGO_URI environment variable is required in production")
     mongo_uri = "mongodb://localhost:27017/proli_db"
 
 ca_file = certifi.where() if "+srv" in mongo_uri else None
