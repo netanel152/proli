@@ -2,6 +2,7 @@ import asyncio
 import os
 import sys
 import random
+import bcrypt
 from datetime import datetime, timedelta, timezone
 from faker import Faker
 
@@ -226,15 +227,70 @@ def create_chat_history(chat_id, start_time):
     
     return history
 
+async def create_pending_pro():
+    print("👷 Creating Pending Professional (for approval flow testing)...")
+    pending_pro = {
+        "business_name": "דוד חשמל - ממתין לאישור",
+        "phone_number": "972500000099",
+        "role": "professional",
+        "type": "electrician",
+        "service_areas": ["Jerusalem"],
+        "categories": ["electrician"],
+        "is_active": False,
+        "is_verified": False,
+        "social_proof": {"rating": 0, "review_count": 0},
+        "plan": "basic",
+        "created_at": datetime.now(timezone.utc),
+    }
+    result = await users_collection.insert_one(pending_pro)
+    print(f"   Created Pending Pro: {pending_pro['business_name']} ({result.inserted_id})")
+
+
+async def create_consent_records(pro_phones: list[str]):
+    """Seed consent records for test pro phones so they skip the consent gate."""
+    print("✅ Creating Consent Records for test pros...")
+    records = [
+        {
+            "chat_id": f"{phone}@c.us",
+            "accepted": True,
+            "timestamp": datetime.now(timezone.utc),
+        }
+        for phone in pro_phones
+    ]
+    await consent_collection.insert_many(records)
+    print(f"   Created {len(records)} consent records.")
+
+
+async def create_staging_admin():
+    """Create a staging admin account in the DB (username: admin, password: admin123)."""
+    print("🔐 Creating Staging Admin Account...")
+    existing = await admins_collection.find_one({"username": "admin"})
+    if existing:
+        print("   Admin already exists, skipping.")
+        return
+    password_hash = bcrypt.hashpw(b"admin123", bcrypt.gensalt()).decode()
+    await admins_collection.insert_one({
+        "username": "admin",
+        "password_hash": password_hash,
+        "role": "owner",
+        "created_at": datetime.now(timezone.utc),
+    })
+    print("   Created admin / admin123 (staging only — change for production!)")
+
+
 async def seed():
-    print("🌱 Starting Seed Process...")
-    
+    print("Starting Seed Process...")
+
     await clear_db()
     pro_ids = await create_pros()
     await create_slots(pro_ids)
     await create_leads(pro_ids)
-    
-    print("🌳 Seed Complete! Environment is ready.")
+    await create_pending_pro()
+    await create_consent_records(["972524828796", "972500000002"])
+    await create_staging_admin()
+
+    print("Seed Complete! Staging environment is ready.")
+    print("  Admin login: username=admin  password=admin123")
 
 if __name__ == "__main__":
     if os.name == 'nt':
