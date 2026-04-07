@@ -530,7 +530,7 @@ TESTS = {
 
 
 async def main():
-    global BASE_URL, INSTANCE_ID
+    global BASE_URL, INSTANCE_ID, WEBHOOK_TOKEN
 
     parser = argparse.ArgumentParser(description="Simulate Proli test flow via webhook")
     parser.add_argument("--test", type=str, default="full",
@@ -550,7 +550,6 @@ async def main():
         print(f"         python scripts/simulate_test.py --test full")
         return
 
-    global BASE_URL, INSTANCE_ID, WEBHOOK_TOKEN
     BASE_URL = args.base_url
     INSTANCE_ID = args.instance_id
     WEBHOOK_TOKEN = args.token
