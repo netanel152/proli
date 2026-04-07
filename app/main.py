@@ -12,6 +12,7 @@ from app.core.redis_client import close_redis_client, get_redis_client
 from app.core.http_client import close_http_client as _close_shared_http_client
 from app.core.database import client as mongo_client
 from app.core.logger import logger
+from scripts.create_indexes import create_all_indexes
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -46,6 +47,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.critical(f"❌ API failed to connect to Redis on startup: {e}")
         raise
+
+    # Ensure all MongoDB indexes exist (idempotent — safe to run on every startup)
+    try:
+        await create_all_indexes(silent=True)
+        logger.info("✅ MongoDB indexes verified.")
+    except Exception as e:
+        logger.warning(f"⚠️ Index creation failed (non-fatal): {e}")
 
     yield
 
