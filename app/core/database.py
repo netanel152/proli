@@ -1,11 +1,15 @@
 from motor.motor_asyncio import AsyncIOMotorClient
-from pymongo import MongoClient
+from pymongo import MongoClient, uri_parser
 from app.core.config import settings
 import certifi
 
 # Determine if SSL is needed (usually for Atlas/Cloud)
 ca_file = certifi.where() if "+srv" in settings.MONGO_URI else None
 kwargs = {"tlsCAFile": ca_file} if ca_file else {}
+
+# Extract database name from URI (supports proli_db, proli_staging_db, etc.)
+_parsed_uri = uri_parser.parse_uri(settings.MONGO_URI)
+DB_NAME = _parsed_uri.get("database") or "proli_db"
 
 # --- Async Client (Motor) for FastAPI ---
 client = AsyncIOMotorClient(
@@ -15,7 +19,7 @@ client = AsyncIOMotorClient(
     maxIdleTimeMS=settings.MONGO_MAX_IDLE_TIME_MS,
     **kwargs
 )
-db = client.proli_db
+db = client[DB_NAME]
 
 # Async Collections
 users_collection = db.users
@@ -32,7 +36,7 @@ admins_collection = db.admins
 # Kept strictly for synchronous scripts or legacy tools if needed.
 # Use 'sync_client' explicitly if you need blocking calls.
 sync_client = MongoClient(settings.MONGO_URI, **kwargs)
-sync_db = sync_client.proli_db
+sync_db = sync_client[DB_NAME]
 
 def check_db_connection():
     try:

@@ -1,5 +1,5 @@
 import streamlit as st
-from pymongo import MongoClient
+from pymongo import MongoClient, uri_parser
 import os
 import certifi
 import httpx
@@ -21,8 +21,11 @@ if not mongo_uri:
 ca_file = certifi.where() if "+srv" in mongo_uri else None
 kwargs = {"tlsCAFile": ca_file} if ca_file else {}
 
+_parsed = uri_parser.parse_uri(mongo_uri)
+_db_name = _parsed.get("database") or "proli_db"
+
 client = MongoClient(mongo_uri, **kwargs)
-db = client.proli_db # Assuming 'proli_db' is your database name
+db = client[_db_name]
 
 users_collection = db.users
 leads_collection = db.leads
