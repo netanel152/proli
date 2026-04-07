@@ -19,8 +19,9 @@ _active_sessions: dict[str, dict] = {}  # local cache to avoid a DB hit on every
 # Sync MongoDB client for admin panel (Streamlit is synchronous)
 _ca = certifi.where() if "+srv" in settings.MONGO_URI else None
 _kwargs = {"tlsCAFile": _ca} if _ca else {}
+from pymongo import uri_parser as _uri_parser
 _sync_client = MongoClient(settings.MONGO_URI, **_kwargs)
-_sync_db = _sync_client.proli_db
+_sync_db = _sync_client[_uri_parser.parse_uri(settings.MONGO_URI).get("database") or "proli_db"]
 _admins_col = _sync_db.admins
 _audit_col = _sync_db.audit_log
 _sessions_col = _sync_db.admin_sessions
