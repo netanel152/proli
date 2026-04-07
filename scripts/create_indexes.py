@@ -17,138 +17,103 @@ from app.core.database import (
     db,
 )
 
-async def create_all_indexes():
+async def create_all_indexes(silent: bool = False):
     """
     Creates indexes for all collections to optimize query performance.
+    Safe to call on every startup -- MongoDB skips existing indexes.
+    Set silent=True to suppress print output (e.g. when called from app startup).
     """
-    print("🚀 Starting index creation...")
+    def log(msg):
+        if not silent:
+            print(msg)
+
+    log("Starting index creation...")
 
     # --- Users Collection ---
     try:
-        print("🔹 Indexing Users Collection...")
-        # Unique phone number
+        log("Indexing Users Collection...")
         await users_collection.create_index([("phone_number", ASCENDING)], unique=True)
-        print("  ✅ Created unique index: phone_number")
-        
-        # Text index for business name search
         await users_collection.create_index([("business_name", TEXT)])
-        print("  ✅ Created text index: business_name")
-        
-        # Index for service areas lookup
         await users_collection.create_index([("service_areas", ASCENDING)])
-        print("  ✅ Created index: service_areas")
-
-        # Geo-spatial index for location-based routing
         await users_collection.create_index([("location", "2dsphere")])
-        print("  ✅ Created 2dsphere index: location")
-
+        log("  Users: done")
     except Exception as e:
-        print(f"  ❌ Error indexing Users: {e}")
+        log(f"  Error indexing Users: {e}")
 
     # --- Leads Collection ---
     try:
-        print("🔹 Indexing Leads Collection...")
-        # Fast lookup by user
+        log("Indexing Leads Collection...")
         await leads_collection.create_index([("chat_id", ASCENDING)])
-        print("  ✅ Created index: chat_id")
-        
-        # Filter by status
         await leads_collection.create_index([("status", ASCENDING)])
-        print("  ✅ Created index: status")
-        
-        # Sort by date
         await leads_collection.create_index([("created_at", ASCENDING)])
-        print("  ✅ Created index: created_at")
-        
-        # Compound: Pro checking active jobs
         await leads_collection.create_index([("pro_id", ASCENDING), ("status", ASCENDING)])
-        print("  ✅ Created compound index: pro_id + status")
-
-        # Compound: Fast lookup for SOS monitor (Status + Date)
         await leads_collection.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
-        print("  ✅ Created compound index: status + created_at")
-
-        # Compound: Active lead lookup per customer (workflow + duplicate prevention)
         await leads_collection.create_index([("chat_id", ASCENDING), ("status", ASCENDING)])
-        print("  ✅ Created compound index: chat_id + status")
-
+        log("  Leads: done")
     except Exception as e:
-        print(f"  ❌ Error indexing Leads: {e}")
+        log(f"  Error indexing Leads: {e}")
 
     # --- Messages Collection ---
     try:
-        print("🔹 Indexing Messages Collection...")
-        # Lookup messages by chat
+        log("Indexing Messages Collection...")
         await messages_collection.create_index([("chat_id", ASCENDING)])
-        print("  ✅ Created index: chat_id")
-
-        # TTL index: auto-delete messages older than 90 days
         await messages_collection.create_index(
             [("timestamp", ASCENDING)],
-            expireAfterSeconds=7776000,  # 90 days
+            expireAfterSeconds=7776000,  # 90 days TTL
             background=True
         )
-        print("  ✅ Created TTL index: timestamp (90-day expiry)")
-
+        log("  Messages: done")
     except Exception as e:
-        print(f"  ❌ Error indexing Messages: {e}")
+        log(f"  Error indexing Messages: {e}")
 
     # --- Slots Collection ---
     try:
-        print("🔹 Indexing Slots Collection...")
-        # Lookup slots by pro
+        log("Indexing Slots Collection...")
         await slots_collection.create_index([("pro_id", ASCENDING)])
-        print("  ✅ Created index: pro_id")
-        
-        # Compound: Fetch schedule sorted
         await slots_collection.create_index([("pro_id", ASCENDING), ("start_time", ASCENDING)])
-        print("  ✅ Created compound index: pro_id + start_time")
-
+        log("  Slots: done")
     except Exception as e:
-        print(f"  ❌ Error indexing Slots: {e}")
+        log(f"  Error indexing Slots: {e}")
 
     # --- Audit Log Collection ---
     try:
-        print("🔹 Indexing Audit Log Collection...")
+        log("Indexing Audit Log Collection...")
         await audit_log_collection.create_index([("timestamp", DESCENDING)])
-        print("  ✅ Created index: timestamp (descending)")
         await audit_log_collection.create_index([("admin_user", ASCENDING)])
-        print("  ✅ Created index: admin_user")
+        log("  Audit Log: done")
     except Exception as e:
-        print(f"  ❌ Error indexing Audit Log: {e}")
+        log(f"  Error indexing Audit Log: {e}")
 
     # --- Consent Collection ---
     try:
-        print("🔹 Indexing Consent Collection...")
+        log("Indexing Consent Collection...")
         await consent_collection.create_index([("chat_id", ASCENDING)], unique=True)
-        print("  ✅ Created unique index: chat_id")
+        log("  Consent: done")
     except Exception as e:
-        print(f"  ❌ Error indexing Consent: {e}")
+        log(f"  Error indexing Consent: {e}")
 
     # --- Admins Collection ---
     try:
-        print("🔹 Indexing Admins Collection...")
+        log("Indexing Admins Collection...")
         await admins_collection.create_index([("username", ASCENDING)], unique=True)
-        print("  ✅ Created unique index: username")
+        log("  Admins: done")
     except Exception as e:
-        print(f"  ❌ Error indexing Admins: {e}")
+        log(f"  Error indexing Admins: {e}")
 
     # --- Admin Sessions Collection ---
     try:
-        print("🔹 Indexing Admin Sessions Collection...")
+        log("Indexing Admin Sessions Collection...")
         admin_sessions_col = db.admin_sessions
         await admin_sessions_col.create_index([("_token", ASCENDING)], unique=True)
-        print("  ✅ Created unique index: _token")
-        # TTL index: auto-expire sessions after 7 days (belt-and-suspenders cleanup)
         await admin_sessions_col.create_index(
             [("expiry", ASCENDING)],
-            expireAfterSeconds=0  # MongoDB deletes when expiry datetime is reached
+            expireAfterSeconds=0
         )
-        print("  ✅ Created TTL index: expiry")
+        log("  Admin Sessions: done")
     except Exception as e:
-        print(f"  ❌ Error indexing Admin Sessions: {e}")
+        log(f"  Error indexing Admin Sessions: {e}")
 
-    print("✨ Index creation process completed.")
+    log("Index creation completed.")
 
 if __name__ == "__main__":
     if os.name == 'nt':
