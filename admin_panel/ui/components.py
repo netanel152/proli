@@ -688,6 +688,8 @@ def load_css(lang_code, T):
             border-radius: var(--radius-md);
             padding: 12px;
             min-height: 200px;
+            min-width: 180px;
+            flex: 1 0 180px;
             border: 1px solid var(--border-color);
         }}
 

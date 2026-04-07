@@ -108,12 +108,16 @@ def view_leads_dashboard(T):
                 mask = leads_df["status"] == status
                 grouped[status] = leads_df[mask].to_dict('records')
 
-            # Render Kanban columns
-            cols = st.columns(len(KANBAN_STATUSES))
-            for i, status in enumerate(KANBAN_STATUSES):
-                with cols[i]:
-                    column_html = render_kanban_column(status, grouped.get(status, []), T)
-                    st.markdown(column_html, unsafe_allow_html=True)
+            # Render Kanban columns as horizontal scrollable row
+            all_columns_html = ""
+            for status in KANBAN_STATUSES:
+                all_columns_html += render_kanban_column(status, grouped.get(status, []), T)
+
+            st.markdown(f"""
+            <div style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px;">
+                {all_columns_html}
+            </div>
+            """, unsafe_allow_html=True)
 
         st.markdown("")
 
