@@ -1,104 +1,178 @@
 # Proli Testing Guide
 
-This document provides a comprehensive guide to testing the Proli Backend. The project uses `pytest` as the test runner and `pytest-asyncio` for handling asynchronous coroutines. `asyncio_mode = strict` is set in `pytest.ini`.
+The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-## 1. Test Suite Structure
+**Current status: 162 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
-The `tests/` directory is organized to cover Unit, Integration, and End-to-End (E2E) scenarios:
+---
 
-*   **`conftest.py`**: Global fixtures — auto-patches all DB collections (via `mongomock_motor`) and mocks `whatsapp`/`ai` instances for non-integration tests using `autouse=True`.
+## 1. Running Tests
 
-### Unit Tests
-*   **`test_unit_lead_manager.py`**: Tests CRUD operations for Leads in isolation.
-*   **`test_admin_auth.py`**: Verifies password hashing, cookie-based authentication, and session token logic.
-*   **`test_ai_parsing.py`**: Checks if the AI Prompt templates correctly format data (does not call live AI).
-*   **`test_edge_cases.py`**: Tests bad inputs (Gemini failure, WhatsApp down, unsupported file types).
-*   **`test_matching_service.py`**: Tests geo-spatial routing, load balancing ($group aggregation), and fallback logic.
-
-### Integration Tests
-*   **`test_db_integration.py`**: Verifies actual read/write operations against a real MongoDB (requires `MONGO_TEST_URI`). Tests lead persistence, status flow, chat history, pro lifecycle commands, pro assignment, and stale lead queries.
-*   **`test_scheduler.py`**: Tests the scheduling logic (Daily Reminders, Stale Monitor) using a sped-up clock.
-*   **`test_sos_monitor.py`**: Tests the auto-healing and admin reporting logic for stuck leads.
-*   **`test_sos_logic.py`**: Tests SOS alert routing and admin notification.
-*   **`test_smart_dispatcher_logic.py`**: Verifies the "Matching Service" logic (City + Issue -> Best Pro).
-
-### End-to-End (E2E) / Full Flow
-*   **`test_full_flow.py`**: Simulates a complete user journey (message -> AI -> Pro -> Booking -> Completion -> Rating).
-*   **`test_booking_and_messaging.py`**: Focuses on the "Booking" phase, interactive buttons, and slot locking.
-*   **`test_integration_webhook.py`**: Simulates HTTP POST requests to the `/webhook` endpoint.
-
-### Known Failures (Pre-existing)
-*   **`test_full_lifecycle`**: `StopAsyncIteration` — mock `side_effect` list exhausted (insufficient mock responses for multi-step flow).
-*   **`test_sos_pro_alert`**: Uses string `"pro123"` as ObjectId (invalid format).
-
-## 2. Running Tests
-
-### Prerequisites
-Make sure you have the test dependencies installed (included in `requirements.txt`):
 ```bash
-pip install pytest pytest-asyncio httpx mongomock
-```
-
-### Common Commands
-
-**Run All Tests:**
-```bash
+# All unit tests
 pytest
-```
 
-**Run with Verbose Output (Show individual tests):**
-```bash
+# Verbose (show each test name)
 pytest -v
-```
 
-**Run a Specific Test File:**
-```bash
-pytest tests/test_full_flow.py
-```
+# Short traceback
+pytest --tb=short
 
-**Run Tests Matching a Keyword:**
-```bash
-pytest -k "sos"  # Runs only SOS-related tests
-```
+# Single file
+pytest tests/test_matching_service.py
 
-**Stop on First Failure:**
-```bash
+# Filter by name
+pytest -k "sos"
+
+# Stop on first failure
 pytest -x
+
+# Integration tests (requires MONGO_TEST_URI in .env)
+pytest -m integration
 ```
+
+---
+
+## 2. Test File Index
+
+### Core Flow
+
+| File | What it covers |
+|------|---------------|
+| `test_workflow_orchestrator.py` | Central routing: reset commands, pro auto-detect, AWAITING_ADDRESS, AWAITING_PRO_APPROVAL, PAUSED_FOR_HUMAN, SOS→TTL, deal finalization, no-pro fallback |
+| `test_smart_dispatcher_logic.py` | Dispatcher AI: missing info → clarify, city+issue → handoff to pro, audio transcription flow |
+| `test_pro_flow.py` | Pro commands: approve, reject, finish, pause bot, resume, button handlers |
+| `test_customer_flow.py` | Post-job: completion checks, rating prompts, review collection |
+| `test_sos_logic.py` | SOS alerts: admin notification, pro notification, BOT_PAUSED_BY_CUSTOMER message |
+
+### Matching & Routing
+
+| File | What it covers |
+|------|---------------|
+| `test_matching_service.py` | `$geoNear` pipeline, progressive radius (10→20→30 km), no-pro-at-max-radius returns None, text fallback, load balancing, excluded pro IDs, rating sort |
+
+### Infrastructure
+
+| File | What it covers |
+|------|---------------|
+| `test_unit_lead_manager.py` | Lead CRUD in isolation |
+| `test_booking_and_messaging.py` | Slot booking, `send_interactive_buttons` payload (`sendButtons` endpoint) |
+| `test_security_service.py` | Rate limiting (Redis fixed-window) |
+| `test_consent_flow.py` | Privacy consent gate |
+| `test_media_handler.py` | Media type detection, image download, audio/video URL handling |
+| `test_notification_service.py` | WhatsApp + SMS notifications |
+| `test_analytics_service.py` | Lead funnel and performance aggregations |
+| `test_audit_service.py` | Admin action logging |
+| `test_scheduling_service.py` | Recurring templates, slot generation |
+| `test_pro_onboarding.py` | WhatsApp self-signup flow |
+| `test_data_management.py` | Consent, data export, deletion |
+| `test_admin_auth.py` | Password hashing, cookie auth, session tokens |
+| `test_ai_parsing.py` | Prompt template formatting (no live API calls) |
+| `test_edge_cases.py` | Bad inputs: Gemini failure, WhatsApp down, unsupported file types |
+
+### Integration & E2E
+
+| File | What it covers |
+|------|---------------|
+| `test_db_integration.py` | Real MongoDB read/write: lead persistence, status flow, chat history, pro lifecycle |
+| `test_full_flow.py` | Complete journey: message → AI → Pro → Booking → Completion → Rating |
+| `test_integration_webhook.py` | HTTP POST to `/webhook` endpoint |
+| `test_scheduler.py` | Daily reminders, stale monitor timing |
+| `test_sos_monitor.py` | Auto-healing and admin reporting for stuck leads |
+
+---
 
 ## 3. Mocking Strategy
 
-To keep tests fast and deterministic, we avoid calling external APIs (Green API, Google Gemini) during testing.
+### `conftest.py` (autouse for all non-integration tests)
 
-*   **Database:** `mongomock_motor` (`AsyncMongoMockClient`) simulates MongoDB in memory for unit tests.
-*   **AI Engine:** The `ai` instance in `workflow_service` is mocked via `monkeypatch` to return predefined `AIResponse` objects.
-*   **WhatsApp:** The `whatsapp` instance in `workflow_service` is mocked to verify messages without sending.
-*   **Redis:** Not mocked — Redis calls gracefully fail (logged as errors) since `StateManager` and `ContextManager` have fallback behavior.
-*   **Extracted modules:** `conftest.py` patches collections in `customer_flow`, `pro_flow`, `matching_service`, `notification_service`, and `data_management_service` (they use `from ... import` so each module needs its own patch).
-*   **Consent:** `has_consent` is mocked to return `True` by default so existing tests bypass the consent gate in `workflow_service`.
-*   **New collections:** `consent_collection`, `audit_log_collection`, and `admins_collection` are patched in conftest.
-*   **Integration tests:** Use a real `MONGO_TEST_URI` database. Marked with `@pytest.mark.integration` and skipped when `MONGO_TEST_URI` is not set.
+- **MongoDB:** `mongomock_motor` (`AsyncMongoMockClient`) — in-memory, no real DB
+- **WhatsApp:** `whatsapp` module-level instance mocked with `AsyncMock` for `send_message`, `send_location_link`, `send_interactive_buttons`
+- **AI Engine:** `ai.analyze_conversation` returns a predefined `AIResponse` (city=Tel Aviv, issue=Leak, is_deal=False)
+- **Consent:** `has_consent` patched to return `True` by default
+- **ContextManager:** mocked globally (clears Redis dependency)
+- **Redis:** not mocked — `StateManager` / `ContextManager` fail gracefully with logged errors
+
+### Per-test overrides (common patterns)
+
+```python
+# Override AI response for a specific test
+mock_ai.analyze_conversation.return_value = AIResponse(
+    reply_to_user="...", is_deal=True,
+    extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", ...),
+    transcription=None,
+)
+
+# Sequence of responses (dispatcher then pro)
+mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
+
+# Override settings flag
+monkeypatch.setattr(settings, "WHATSAPP_BUTTONS_ENABLED", True)
+
+# Override state
+mock_state.get_state = AsyncMock(return_value=UserStates.AWAITING_PRO_APPROVAL)
+```
+
+### Collection patching
+
+Each service that uses `from app.core.database import X_collection` imports the collection at load time, so each module needs its own patch:
+
+```python
+monkeypatch.setattr(app.services.matching_service, "users_collection", mock_db.users)
+monkeypatch.setattr(app.services.workflow_service, "leads_collection", mock_db.leads)
+# etc.
+```
+
+`conftest.py` handles all standard services. Tests that need non-standard overrides (e.g., specific aggregate behavior) add their own `monkeypatch.setattr` calls.
+
+---
 
 ## 4. Writing New Tests
 
-1.  **Create a file** starting with `test_` in the `tests/` folder.
-2.  **Import `pytest`**.
-3.  **Use `async` functions**:
-    ```python
-    import pytest
+```python
+import pytest
+from unittest.mock import AsyncMock
 
-    @pytest.mark.asyncio
-    async def test_something_cool():
-        result = await my_async_function()
-        assert result == "expected"
-    ```
-4.  **Use Fixtures**: Add `client` or `mock_db` as arguments to your test function if needed (defined in `conftest.py`).
+@pytest.mark.asyncio
+async def test_something(mock_db, monkeypatch):
+    # mock_db is the in-memory MongoDB (mongomock_motor)
+    # conftest.py autouse fixture already patches all standard collections
 
-## 5. Manual & E2E Testing Tools
+    # Insert test data
+    await mock_db.leads.insert_one({
+        "chat_id": "972501111111@c.us",
+        "status": "new",
+        ...
+    })
 
-In addition to `pytest`, the project includes tools for full environment testing:
+    # Override AI response if needed
+    import app.services.workflow_service
+    mock_ai = app.services.workflow_service.ai
+    mock_ai.analyze_conversation = AsyncMock(return_value=...)
 
-*   **Manual Test Plan:** See `docs/MANUAL_TEST_PLAN.md` for structured test cases to execute via the actual WhatsApp interface.
-*   **Automated Webhook Simulation:** Use `python scripts/simulate_test.py` to run automated functional flows over HTTP without requiring a live WhatsApp connection.
-*   **Environment Reset:** Use `python scripts/reset_test.py` to clear out test leads, chat history, and Redis states between test runs.
-*   **Demo Seeding:** Use `python scripts/seed_db.py` to populate the database with sample professionals for testing.
+    # Run
+    result = await my_function(...)
+
+    # Assert
+    assert result == expected
+    updated = await mock_db.leads.find_one({"chat_id": "972501111111@c.us"})
+    assert updated["status"] == "booked"
+```
+
+**Key rules:**
+- Always use `@pytest.mark.asyncio`
+- Use `mock_db` fixture for DB access in unit tests
+- Use `monkeypatch` (not `unittest.mock.patch`) to stay compatible with the autouse fixture
+- For `$geoNear` tests, mock `users_collection.aggregate` as an async generator (mongomock does not support `$geoNear`)
+
+---
+
+## 5. Manual & E2E Tools
+
+| Tool | Command | Purpose |
+|------|---------|---------|
+| Webhook simulator | `python scripts/simulate_webhook.py` | Interactive — craft any message and POST to local backend |
+| Automated scenarios | `python scripts/simulate_test.py` | Runs TC1–TC12: consent, rejection, SOS, media, idempotency |
+| Environment reset | `python scripts/reset_test.py` | Clear test leads, Redis state/context/webhook keys |
+| DB seeding | `python scripts/seed_db.py` | Populate with sample professionals |
+| Manual test plan | `docs/MANUAL_TEST_PLAN.md` | Step-by-step via real WhatsApp |

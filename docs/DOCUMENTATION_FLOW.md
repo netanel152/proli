@@ -1,61 +1,154 @@
-# Proli - זרימת נתונים ולוגיקה עסקית
+# Proli — Logic Flow & Lead Lifecycle
 
-## 1. מחזור חיי הליד (Lead Lifecycle)
+## 1. Lead Lifecycle
 
-כך המערכת מטפלת בליד מרגע הכניסה ועד הסגירה:
+```
+CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
+              ↓       ↓
+          REJECTED  CANCELLED
+              ↓
+    PENDING_ADMIN_REVIEW
+```
 
-1. **Contacted (נוצר קשר):** שלב ראשוני. ה-AI מזהה עיר/בעיה ויוצר רשומה זמנית, עוד לפני שיוך סופי לאיש מקצוע.
-2. **New (חדש/ממתין לאישור):** הליד שויך לאיש מקצוע ספציפי (לאחר זיהוי [DEAL] או פרטים מלאים) ונשלחה אליו הודעה לאישור ('אשר'/'דחה').
-3. **Booked (נקבע):** הסטטוס משתנה כאשר איש המקצוע מאשר את העבודה.
-    *   המערכת מבצעת **נעילת חלון זמן (Slot Booking)** ביומן באופן אטומי.
-    *   הליד "נעול" לאיש המקצוע.
-4. **Completed (הושלם):** איש המקצוע או הלקוח מאשרים שהעבודה הסתיימה (באמצעות כפתורים אינטראקטיביים או טקסט).
-5. **Waiting for Rating:** סטטוס ביניים הממתין לדירוג (1-5) מהלקוח.
-6. **Rated:** לאחר שהלקוח מדרג, הציון משוקלל בפרופיל איש המקצוע והליד נסגר סופית.
-7. **Rejected (נדחה):** איש המקצוע דחה את הליד (המערכת יכולה לנסות לנתב מחדש - לוגיקה עתידית).
+| Status | When set | Who sets it |
+|--------|----------|------------|
+| `contacted` | AI extracts city + issue, opens conversation | Dispatcher (Phase 1) |
+| `new` | Pro matched and approval message sent | `_finalize_deal` |
+| `booked` | Pro taps "Approve" button | `_handle_approve` in `pro_flow.py` |
+| `completed` | Pro or customer confirms work done | `customer_flow.py` |
+| `rejected` | Pro taps "Reject" button | `_handle_reject` in `pro_flow.py` |
+| `cancelled` | Customer cancels | `pro_flow.py` |
+| `closed` | Max reassignments reached | `monitor_service.py` |
+| `pending_admin_review` | No replacement pro found at any radius | `monitor_service.py` / `workflow_service.py` |
 
-## 2. מוח ה-AI (קבצים: `ai_engine_service.py`, `workflow_service.py`, `customer_flow.py`, `pro_flow.py`, `media_handler.py`)
+---
 
-המערכת משתמשת ב-Gemini (Adaptive Fallback) בתהליך חכם וחסכוני במשאבים:
+## 2. AI Engine — Two-Phase Architecture
 
-1.  **Dispatcher (סדרן):**
-    *   **אופטימיזציה:** ה-Dispatcher מופעל **רק** כאשר טרם שויך איש מקצוע לליד. המערכת שולחת לו רק את 8 ההודעות האחרונות (Trim History) כדי לחסוך טוקנים וזמן.
-    *   מנתח את הודעת המשתמש (טקסט/מדיה).
-    *   מחלץ `City` ו-`Issue`.
-    *   מחפש את איש המקצוע המתאים ביותר (Matching Service).
+### Phase 1: Dispatcher
 
-2.  **Pro Persona (פרסונה):**
-    *   **אופטימיזציה:** אם כבר שויך איש מקצוע פעיל (יש `pro_id`), המערכת **מדלגת לחלוטין על ה-Dispatcher** ומעבירה את השיחה ישירות לפרסונה של איש המקצוע, מה שמשפר משמעותית את זמן התגובה.
-    *   ה-AI מקבל את ה-System Prompt הייחודי של איש המקצוע (טון, מחירים, כללים).
-    *   מנהל את השיחה מול הלקוח כאילו הוא איש המקצוע.
-    *   כאשר כל הפרטים סגורים, מזהה דיל סגור (`is_deal=True` או תגית `[DEAL:...]`).
+Activated when no pro is assigned to the active lead.
 
-3.  **ניהול קונטקסט (Context Management):**
-    *   כדי למנוע בלבול בשיחות עתידיות, המערכת מנקה את ההיסטוריה השמורה ב-Redis (`ContextManager.clear_context`) בכל פעם שליד נסגר (Completed) או נדחה (Rejected).
+- Receives the last **5 conversational turns** (10 messages max — centrally trimmed in `ai_engine_service.py`)
+- Extracts `city`, `issue`, `full_address`, `appointment_time` from the conversation
+- If `city` + `issue` are found → calls `matching_service.determine_best_pro()`
+- If `city` or `issue` missing → sends a clarifying reply, waits for next message
+- If pro found → calls Phase 2 immediately
+- If no pro found after all radius steps → escalates lead to `PENDING_ADMIN_REVIEW`, sends `Messages.Customer.PENDING_REVIEW`
 
-## 3. תהליך התזמון (רץ ב-Worker)
+### Phase 2: Pro Persona
 
-ה-`Scheduler` (קובץ `app/scheduler.py`) מנוהל כעת על ידי תהליך ה-**Worker** (`app/worker.py`), ולא על ידי ה-API.
+Activated when a pro is assigned (either from Phase 1 or an existing `pro_id` on the lead).
 
-- **Daily Reminders (בכל בוקר ב-08:00):**
-    - פועל באמצעות `CronTrigger`.
-    - בודק ומבצע נעילה אטומית ב-MongoDB (`settings_collection`) כדי להבטיח ריצה יחידה.
-    - שולח לכל איש מקצוע רשימה מרוכזת של הלידים בסטטוס `Booked` לאותו יום דרך `WhatsAppClient`.
+- Builds a system prompt from the pro's: `business_name`, `price_list`, `system_prompt`, `social_proof`
+- Follows a structured conversation flow:
+  1. Introduce pro and service
+  2. Ask for photo/video of the issue (skipped if media already received)
+  3. Provide estimate based on price list
+  4. Confirm appointment time and full address
+  5. Close deal when all details are confirmed (`is_deal=True`)
+- Token usage is incremented on the pro's `users` document after each call (`$inc total_tokens_used`) as a non-blocking background task
 
-- **Stale Job Monitor (כל 30 דקות):**
-    - **ניטור עבודות תקועות:** בודק לידים שנפתחו לפני זמן רב ולא נסגרו, ושולח תזכורות יזומות (כפתורים) לאיש המקצוע וללקוח.
+### Phase Skip Optimization
 
-- **SOS Recovery (כל 10 דקות):**
-    - מפעיל את `check_and_reassign_stale_leads` כדי לנתב מחדש לידים שלא טופלו בזמן.
+If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatcher) is skipped entirely and the message goes directly to Phase 2. This eliminates a full AI call per message during ongoing conversations.
 
-- **SOS Admin Reporter (כל 4 שעות):**
-    - שולח דו"ח מרוכז למנהל המערכת על לידים שעדיין תקועים לאחר ניסיונות התיקון.
+---
 
-## 4. מנגנון SOS Recovery (קובץ: `monitor_service.py`)
+## 3. Deal Finalization (`_finalize_deal`)
 
-המערכת מבטיחה רציפות שירות גם כאשר אנשי המקצוע אינם זמינים:
+When Phase 2 returns `is_deal=True`:
 
-1.  **זיהוי סטגנציה:** ה-Scheduler מפעיל את `check_and_reassign_stale_leads`.
-2.  **ניתוב מחדש:** אם ליד ממתין מעבר לזמן המוגדר, המערכת מחפשת איש מקצוע אחר המתאים לאותה עיר ותחום.
-3.  **עדכון סטטוס:** הליד מעודכן עם איש המקצוע החדש, ה-Timer מתאפס, ונשלחות הודעות עדכון לכל הצדדים.
-4.  **אסקלציה:** אם לא נמצא מחליף, הליד נכלל בדו"ח המנהל שנשלח מדי 4 שעות.
+1. Create or update lead with `status=new`, `pro_id`, `full_address`, `issue_type`, `appointment_time`, `media_url`
+2. Set customer state to `AWAITING_PRO_APPROVAL` (customer sees a soft-hold message on next message)
+3. Send customer `Messages.Customer.AWAITING_APPROVAL`
+4. Send pro an approval request with lead summary + 3 interactive buttons:
+   - **Approve** (`btn_approve_lead`) → lead → `BOOKED`, customer state cleared
+   - **Pause** (`btn_pause_bot`) → customer set to `PAUSED_FOR_HUMAN` (2 h TTL), direct chat begins
+   - **Reject** (`btn_reject_lead`) → lead → `REJECTED`, customer state cleared, system may re-route
+
+---
+
+## 4. Customer State Machine (Key States)
+
+| State | Trigger | Bot behavior |
+|-------|---------|-------------|
+| `IDLE` | Default | Full AI flow runs |
+| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI |
+| `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged silently, nothing sent — auto-expires in 2 h |
+| `AWAITING_ADDRESS` | Address needed | Next message saved as address, state cleared |
+| `PRO_MODE` | Sender is an active pro | `pro_flow.handle_pro_text_command()` called |
+
+### SOS / Human Handoff
+
+When the customer sends a trigger phrase (e.g., "אני צריך נציג"):
+
+1. Customer state set to `PAUSED_FOR_HUMAN` with `ttl=7200` (2 h)
+2. `send_sos_alert()` sends alerts to both the assigned pro (if any) and admin
+3. Customer receives `Messages.Customer.BOT_PAUSED_BY_CUSTOMER`
+4. All subsequent messages are logged but not processed until TTL expires
+
+---
+
+## 5. SOS Auto-Recovery ("The Healer")
+
+Runs every 10 minutes via APScheduler.
+
+Queries leads with status `new`, `contacted`, or `pending_admin_review` older than `WorkerConstants.SOS_TIMEOUT_MINUTES` (60 min).
+
+For each stale lead:
+
+```
+notify customer (CUSTOMER_REASSIGNING)
+    │
+    ├─ reassignment_count >= MAX_REASSIGNMENTS (3)?
+    │      → status = CLOSED, notify customer, clear context
+    │
+    ├─ determine_best_pro() returns a pro?
+    │      → update lead (new pro_id, reset created_at, increment reassignment_count)
+    │        notify new pro
+    │        notify old pro (lost lead)
+    │        clear customer state
+    │
+    └─ no pro found?
+           → status = PENDING_ADMIN_REVIEW
+             notify customer (PENDING_REVIEW)
+             clear context
+```
+
+---
+
+## 6. Scheduling Jobs
+
+All jobs run inside the Worker process via APScheduler.
+
+| Job | Schedule | What it does |
+|-----|----------|-------------|
+| Daily agendas | 08:00 IL (daily) | Sends each pro a list of their booked jobs for the day |
+| Stale monitor | Every 30 min | Tier 1 (4–6 h): reminder to pro. Tier 2 (6–24 h): completion check to customer. Tier 3 (>24 h): flag for admin |
+| SOS Healer | Every 10 min | Reassigns stuck leads or escalates to `PENDING_ADMIN_REVIEW` |
+| SOS Reporter | Every 4 h | Sends batched admin report of all still-stuck leads |
+| Lead Janitor | Every 6 h | Closes `CONTACTED` leads with no assigned pro after 24 h |
+| Slot Regeneration | Sunday 01:00 IL | Generates appointment slots from recurring weekly templates |
+
+Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "scheduler_config"}` with fields `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`.
+
+---
+
+## 7. Context Management
+
+- Chat history stored in Redis per `chat_id` (last 20 messages, 4 h TTL)
+- AI calls receive the last **5 turns** (10 messages) after trimming — centralized in `ai_engine_service.analyze_conversation`
+- Context is cleared (`ContextManager.clear_context`) when:
+  - Lead is completed or rejected
+  - Max reassignments reached (lead closed)
+  - Lead escalated to `PENDING_ADMIN_REVIEW` (healer path)
+  - Customer resets with "התחלה" / "תפריט"
+
+---
+
+## 8. PII and Privacy
+
+- **Log masking:** All log sinks (stdout + file) apply a regex filter that masks Israeli phone numbers: `972521234567` → `97252****567` (country code + first 2 digits + last 3 digits preserved). Applied unconditionally in all environments.
+- **Consent gate:** `has_consent(chat_id)` is checked before processing customer messages. Non-consented users receive a privacy notice.
+- **Data management:** `data_management_service.py` provides GDPR-compliant data export and user deletion.

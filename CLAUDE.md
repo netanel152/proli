@@ -50,6 +50,8 @@ pytest -m integration
 pytest -v
 ```
 
+Expected: **162 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
+
 ### Linting / Formatting
 
 ```bash
@@ -77,44 +79,44 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 
 | Service | Responsibility |
 |---|---|
-| `workflow_service.py` | Central orchestrator — routes messages, delegates to customer/pro flows |
+| `workflow_service.py` | Central orchestrator — routes messages, manages FSM states, delegates to customer/pro flows |
 | `customer_flow.py` | Customer completion checks, ratings, reviews |
-| `pro_flow.py` | Professional text commands (approve, reject, finish) |
+| `pro_flow.py` | Professional text commands and button handlers (approve, reject, pause, resume, finish) |
 | `media_handler.py` | Media type detection and download (images, audio, video) |
-| `ai_engine_service.py` | Gemini 2.5 Flash with adaptive fallback (Flash Lite → Flash → Flash 1.5); multimodal (text/image/audio/video) |
-| `matching_service.py` | Geo-spatial routing via MongoDB `$near` (10km radius); falls back to regex city match; load-balances by max 3 active leads per pro |
-| `state_manager_service.py` | Redis-backed finite state machine per `chat_id` (`UserStates` enum) |
+| `ai_engine_service.py` | Gemini 2.5 Flash with adaptive fallback (Flash Lite → Flash → Flash 1.5); multimodal; 5-turn context window; non-blocking token accounting |
+| `matching_service.py` | Progressive `$geoNear` aggregation (10 km → 20 km → 30 km); falls back to regex city match; load-balances by max 3 active leads per pro |
+| `state_manager_service.py` | Redis-backed FSM per `chat_id` (`UserStates` enum); supports custom TTL per state |
 | `context_manager_service.py` | Stores last 20 messages per `chat_id` in Redis |
 | `lead_manager_service.py` | CRUD for leads in MongoDB |
 | `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts |
-| `monitor_service.py` | Stale job detection logic |
-| `whatsapp_client_service.py` | Green API HTTP client (persistent connection pool) |
+| `monitor_service.py` | Stale job detection, reassignment, and escalation to PENDING_ADMIN_REVIEW |
+| `whatsapp_client_service.py` | Green API HTTP client with `sendButtons` support and text fallback |
 | `cloudinary_client_service.py` | Media upload/retrieval |
 | `security_service.py` | Rate limiting via Redis |
 
 ### Data Layer
 
-- **MongoDB**: Primary store — `users` (pros + customers), `leads`, `slots`, `messages`, `settings` collections
-- **Redis**: ARQ task queue + context cache (chat history) + state machine
+- **MongoDB**: Primary store — `users` (pros + customers), `leads`, `slots`, `messages`, `settings`, `reviews`, `consent`, `audit_log`, `admins`
+- **Redis**: ARQ task queue + context cache (chat history) + state machine (FSM)
 
 ### Key Constants (`app/core/constants.py`)
 
-- `LeadStatus`: `new → contacted → booked → completed/rejected/closed/cancelled`
-- `UserStates`: FSM states per chat session
+- `LeadStatus`: `contacted → new → booked → completed/rejected/closed/cancelled/pending_admin_review`
+- `UserStates`: `IDLE`, `PRO_MODE`, `AWAITING_ADDRESS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `ONBOARDING_*`
 - `WorkerConstants.MAX_PRO_LOAD = 3`: max concurrent leads per professional
 - `WorkerConstants.SOS_TIMEOUT_MINUTES = 60`: reassignment trigger threshold
+- `WorkerConstants.GEO_RADIUS_STEPS = [10000, 20000, 30000]`: progressive geo search radii
+- `WorkerConstants.PAUSE_TTL_SECONDS = 7200`: 2-hour TTL for PAUSED_FOR_HUMAN state
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions
 
 Unit tests use `mongomock_motor` (in-memory MongoDB) and mock `whatsapp` and `ai` instances via `monkeypatch`. Integration tests (marked `@pytest.mark.integration`) connect to a real `MONGO_TEST_URI` test database and clear it before each run. `conftest.py` auto-applies the mock fixtures to all non-integration tests via `autouse=True`. `asyncio_mode = strict` is set in `pytest.ini`.
 
+`$geoNear` is not supported by mongomock — matching service geo tests mock `users_collection.aggregate` as async generators directly.
+
+`customer_flow.py` and `pro_flow.py` functions receive `whatsapp`/`lead_manager` as parameters (dependency injection) so `workflow_service.py` passes its shared instances.
+
 ### Configuration
 
-All config is in `app/core/config.py` via `pydantic-settings`. Required env vars: `GREEN_API_INSTANCE_ID`, `GREEN_API_TOKEN`, `GEMINI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Optional: `MONGO_URI` (defaults to localhost), `REDIS_URL`, `MONGO_TEST_URI` (for integration tests), `ADMIN_PASSWORD`, `ADMIN_PHONE` (defaults to hardcoded), `WEBHOOK_TOKEN` (enables webhook auth).
-
-### Notes
-
-- `test_sos_pro_alert` and `test_full_lifecycle` are known-failing tests (pre-existing bugs: invalid ObjectId and insufficient mock side_effects)
-- `matching_service.py` uses `$group` aggregation for load balancing — `mongomock` partially supports this, tests mock the aggregate call directly
-- `customer_flow.py` and `pro_flow.py` functions receive `whatsapp`/`lead_manager` as parameters (dependency injection) so `workflow_service.py` passes its shared instances
+All config is in `app/core/config.py` via `pydantic-settings`. Required env vars: `GREEN_API_INSTANCE_ID`, `GREEN_API_TOKEN`, `GEMINI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Optional: `MONGO_URI` (defaults to localhost), `REDIS_URL`, `MONGO_TEST_URI` (for integration tests), `ADMIN_PASSWORD`, `ADMIN_PHONE` (defaults to hardcoded), `WEBHOOK_TOKEN` (enables webhook auth), `WHATSAPP_BUTTONS_ENABLED` (default: `True`).
