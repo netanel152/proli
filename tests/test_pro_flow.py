@@ -7,9 +7,10 @@ import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock
 from bson import ObjectId
 from datetime import datetime, timezone
-from app.core.constants import LeadStatus
+from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
 from app.services.pro_flow import handle_pro_text_command
+import app.services.pro_flow
 
 PRO_ID = ObjectId()
 PRO_PHONE = "972500000000"
@@ -298,3 +299,125 @@ async def test_non_pro_returns_none(mock_db, mock_wa, mock_lm):
     """Non-pro phone number -> returns None."""
     result = await handle_pro_text_command("972501111111@c.us", "אשר", mock_wa, mock_lm)
     assert result is None
+
+
+# --- Interactive Button Handlers (Pro Approval Flow) ---
+
+@pytest.mark.asyncio
+async def test_btn_approve_lead(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Pro clicks BTN_APPROVE_LEAD -> lead becomes BOOKED, customer state cleared."""
+    pro_doc, db = pro_setup
+    monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=True))
+
+    mock_state = MagicMock()
+    mock_state.clear_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    lead_id = ObjectId()
+    await db.leads.insert_one({
+        "_id": lead_id,
+        "pro_id": pro_doc["_id"],
+        "status": LeadStatus.NEW,
+        "chat_id": "972501111111@c.us",
+        "issue_type": "נזילה",
+        "full_address": "רחוב הרצל 5",
+        "appointment_time": "10:00",
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", Messages.Keywords.BTN_APPROVE_LEAD, mock_wa, mock_lm)
+
+    assert Messages.Pro.APPROVE_SUCCESS in result
+    mock_lm.update_lead_status.assert_called_once()
+    # Customer state should be cleared
+    mock_state.clear_state.assert_called_with("972501111111@c.us")
+
+
+@pytest.mark.asyncio
+async def test_btn_pause_bot(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Pro clicks BTN_PAUSE_BOT -> customer state set to PAUSED_FOR_HUMAN with TTL."""
+    pro_doc, db = pro_setup
+
+    mock_state = MagicMock()
+    mock_state.set_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    lead_id = ObjectId()
+    await db.leads.insert_one({
+        "_id": lead_id,
+        "pro_id": pro_doc["_id"],
+        "status": LeadStatus.NEW,
+        "chat_id": "972501111111@c.us",
+        "issue_type": "נזילה",
+        "full_address": "רחוב הרצל 5",
+        "appointment_time": "10:00",
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", Messages.Keywords.BTN_PAUSE_BOT, mock_wa, mock_lm)
+
+    assert result == Messages.Pro.PAUSE_ACK
+    # Customer state should be set with 2h TTL
+    mock_state.set_state.assert_called_once_with(
+        "972501111111@c.us",
+        UserStates.PAUSED_FOR_HUMAN,
+        ttl=WorkerConstants.PAUSE_TTL_SECONDS,
+    )
+    # Customer notified
+    mock_wa.send_message.assert_called_with("972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_PRO)
+
+
+@pytest.mark.asyncio
+async def test_btn_reject_lead(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Pro clicks BTN_REJECT_LEAD -> lead rejected, customer state cleared."""
+    pro_doc, db = pro_setup
+
+    mock_state = MagicMock()
+    mock_state.clear_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    lead_id = ObjectId()
+    await db.leads.insert_one({
+        "_id": lead_id,
+        "pro_id": pro_doc["_id"],
+        "status": LeadStatus.NEW,
+        "chat_id": "972501111111@c.us",
+        "issue_type": "נזילה",
+        "full_address": "רחוב הרצל 5",
+        "appointment_time": "10:00",
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", Messages.Keywords.BTN_REJECT_LEAD, mock_wa, mock_lm)
+
+    assert result == Messages.Pro.REJECT_SUCCESS
+    mock_lm.update_lead_status.assert_called_once()
+    mock_state.clear_state.assert_called_with("972501111111@c.us")
+
+
+@pytest.mark.asyncio
+async def test_resume_clears_pause(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Pro sends 'המשך' -> customer pause state cleared."""
+    pro_doc, db = pro_setup
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=UserStates.PAUSED_FOR_HUMAN)
+    mock_state.clear_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    lead_id = ObjectId()
+    await db.leads.insert_one({
+        "_id": lead_id,
+        "pro_id": pro_doc["_id"],
+        "status": LeadStatus.BOOKED,
+        "chat_id": "972501111111@c.us",
+        "issue_type": "נזילה",
+        "full_address": "רחוב הרצל 5",
+        "appointment_time": "10:00",
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "המשך", mock_wa, mock_lm)
+
+    assert "חזר לפעולה" in result
+    mock_state.clear_state.assert_called_with("972501111111@c.us")

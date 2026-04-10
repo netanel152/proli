@@ -23,6 +23,24 @@ class Messages:
         REVIEW_SAVED = "תודה רבה! הביקורת שלך נשמרה."
         ADDRESS_SAVED = "✅ הכתובת עודכנה בהצלחה!"
         ADDRESS_INVALID = "❌ לא הצלחתי לזהות את הכתובת. אנא נסה לשלוח מיקום (Location Pin) או הקלד עיר ורחוב בצורה ברורה."
+        PENDING_REVIEW = (
+            "קיבלתי את הפנייה שלך! 👍\n"
+            "כרגע אנחנו מחפשים את איש המקצוע המתאים ביותר.\n"
+            "צוות Proli יחזור אליך בהקדם עם עדכון."
+        )
+        AWAITING_APPROVAL = (
+            "מעולה, העברתי את הפרטים והוידאו לאיש המקצוע לאישור. "
+            "אעדכן אותך ממש בקרוב. 👍"
+        )
+        STILL_WAITING = "הפנייה שלך נמצאת עכשיו אצל איש המקצוע לאישור. נעדכן אותך ברגע שנקבל תשובה! 🙏"
+        BOT_PAUSED_BY_PRO = (
+            "איש המקצוע ביקש לדבר איתך ישירות. 📞\n"
+            "הבוט מושהה כרגע — איש המקצוע ידבר איתך בהודעות."
+        )
+        BOT_PAUSED_BY_CUSTOMER = (
+            "✅ קיבלתי! מעביר אותך לנציג אנושי.\n"
+            "הבוט מושהה לשעתיים הקרובות. 🙏"
+        )
 
     class Pro:
         # Messages sent to professionals
@@ -46,6 +64,22 @@ class Messages:
         NEW_LEAD_DETAILS = "📍 *כתובת:* {full_address}\n🛠️ *תקלה:* {issue_type}\n⏰ *זמן מועדף:* {appointment_time}"
         NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"
         NEW_LEAD_FOOTER = "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
+        APPROVAL_REQUEST = (
+            "📋 *פרטי עבודה חדשה לאישורך:*\n\n"
+            "👤 *לקוח:* {customer_phone}\n"
+            "📍 *כתובת:* {full_address}\n"
+            "🛠️ *תקלה:* {issue_type}\n"
+            "⏰ *זמן:* {appointment_time}"
+        )
+        APPROVAL_MEDIA = "\n📸 *מדיה:* {media_url}"
+        PAUSE_ACK = (
+            "⏸️ הבוט הושהה. תוכל לדבר עם הלקוח ישירות.\n"
+            "הבוט יחזור לפעולה אוטומטית בעוד שעתיים או כשתשלח 'המשך'."
+        )
+        PAUSE_NOTIFICATION = (
+            "🚨 הלקוח מבקש מענה אנושי (או שהשהית את הבוט).\n"
+            "כנס לשיחה בוואטסאפ. הבוט יחזור לפעולה אוטומטית בעוד שעתיים."
+        )
         NAVIGATE_TO = "🚗 נווט לכתובת:"
         NO_ACTIVE_JOBS = "אין לך עבודות פעילות כרגע. 👍"
         NO_HISTORY = "עדיין אין לך עבודות מושלמות."
@@ -212,8 +246,9 @@ class Messages:
         RESET_COMMANDS = ["תפריט", "עזרה", "reset", "menu", "התחלה", "help"]
         SOS_COMMANDS = ["נציג", "אנושי", "מנהל", "admin", "sos"]
         REGISTER_COMMANDS = ["הרשמה", "להירשם", "register", "signup", "הצטרפות"]
+        RESUME_COMMANDS = ["המשך", "resume", "חזור"]
         RATING_OPTIONS = ["1", "2", "3", "4", "5"]
-        
+
         # Interactive Button IDs & Titles
         CUSTOMER_COMPLETION_INDICATOR = "כן, הסתיים"
         BUTTON_CONFIRM_FINISH = "confirm_finish"
@@ -221,6 +256,13 @@ class Messages:
         TEXT_YES_FINISHED = "כן, הסתיים"
         BUTTON_TITLE_YES_FINISHED = "✅ כן, הסתיים"
         BUTTON_TITLE_NO_NOT_YET = "❌ עדיין לא"
+        # Pro Approval Buttons
+        BTN_APPROVE_LEAD = "btn_approve_lead"
+        BTN_PAUSE_BOT = "btn_pause_bot"
+        BTN_REJECT_LEAD = "btn_reject_lead"
+        BUTTON_TITLE_APPROVE = "✅ אשר עבודה"
+        BUTTON_TITLE_PAUSE = "⏸️ השהה בוט"
+        BUTTON_TITLE_REJECT = "❌ דחה קריאה"
 
     class Errors:
         AI_OVERLOAD = "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."

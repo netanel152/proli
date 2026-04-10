@@ -7,7 +7,7 @@ from app.core.logger import logger
 from app.core.database import users_collection, leads_collection, reviews_collection
 from app.core.messages import Messages
 from app.core.prompts import Prompts
-from app.core.constants import LeadStatus, Defaults, UserStates
+from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
 from app.services.matching_service import determine_best_pro
 from app.services.notification_service import send_sos_alert
 from app.services.data_management_service import has_consent, record_consent
@@ -103,7 +103,9 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # SOS / Human Handoff Check (customers only — pros have their own help menu)
     sos_keywords = Messages.Keywords.SOS_COMMANDS
     if user_text and current_state != UserStates.PRO_MODE and any(k in normalized_text for k in sos_keywords):
-        await StateManager.set_state(chat_id, UserStates.SOS)
+        # Pause bot with 2-hour auto-expiry
+        await StateManager.set_state(chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
+        logger.info(f"Bot paused for {chat_id} (triggered by: customer_sos, TTL: {WorkerConstants.PAUSE_TTL_SECONDS}s)")
 
         active_lead = await leads_collection.find_one({
             "chat_id": chat_id,
@@ -113,10 +115,27 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         pro_id = active_lead["pro_id"] if active_lead and "pro_id" in active_lead else None
         await send_sos_alert(chat_id, user_text, pro_id)
 
+        # Notify the pro about the pause (if assigned)
         if pro_id:
-            await whatsapp.send_message(chat_id, Messages.SOS.TO_USER_WITH_PRO)
-        else:
-            await whatsapp.send_message(chat_id, Messages.SOS.TO_USER_NO_PRO)
+            pro = await users_collection.find_one({"_id": pro_id})
+            if pro and pro.get("phone_number"):
+                pro_phone = pro["phone_number"]
+                if not pro_phone.endswith("@c.us"):
+                    pro_phone = f"{pro_phone}@c.us"
+                await whatsapp.send_message(pro_phone, Messages.Pro.PAUSE_NOTIFICATION)
+
+        await whatsapp.send_message(chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER)
+        return
+
+    # Soft Hold — customer is waiting for pro approval
+    if current_state == UserStates.AWAITING_PRO_APPROVAL:
+        await whatsapp.send_message(chat_id, Messages.Customer.STILL_WAITING)
+        return
+
+    # Bot Paused — pro or customer triggered human handoff (auto-expires via Redis TTL)
+    if current_state == UserStates.PAUSED_FOR_HUMAN:
+        await lead_manager.log_message(chat_id, "user", user_text or "")
+        logger.info(f"Bot paused for {chat_id} — message logged but not processed")
         return
 
     # Handle Pro Mode
@@ -249,15 +268,15 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 await _finalize_deal(
                     chat_id, existing_pro, pro_response_obj,
                     extracted_city, extracted_issue, transcription,
-                    active_lead["_id"]
+                    active_lead["_id"], media_url=media_url
                 )
             except Exception as e:
                 logger.error(f"Deal finalization failed for {chat_id}: {e}")
         return
 
     # 5. Smart Dispatcher Phase (only when no pro assigned yet)
-    # OPTIMIZATION 2: Trim history — dispatcher only needs last 8 messages
-    dispatcher_history = history[-8:] if len(history) > 8 else history
+    # Context window trimming is centralized in ai_engine_service.py
+    dispatcher_history = history
     dispatcher_prompt = Prompts.DISPATCHER_SYSTEM
 
     try:
@@ -305,18 +324,17 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         except Exception as e:
             logger.error(f"Pro matching failed for {chat_id}: {e}")
 
-        # If no pro found and we just created a fresh lead (no previous pro), close it immediately.
-        # Don't leave orphaned CONTACTED leads with no escape path.
+        # If no pro found, escalate to admin review instead of closing.
         if not best_pro and current_lead_id:
             existing_lead = await leads_collection.find_one({"_id": current_lead_id})
             if existing_lead and not existing_lead.get("pro_id"):
                 await leads_collection.update_one(
                     {"_id": current_lead_id},
-                    {"$set": {"status": LeadStatus.CLOSED, "closed_reason": "no_pro_available"}}
+                    {"$set": {"status": LeadStatus.PENDING_ADMIN_REVIEW}}
                 )
-                logger.warning(f"No pro available for {chat_id} — closed lead {current_lead_id}")
-                await whatsapp.send_message(chat_id, Messages.SOS.NO_PRO_AVAILABLE)
-                await lead_manager.log_message(chat_id, "model", Messages.SOS.NO_PRO_AVAILABLE)
+                logger.critical(f"Lead {current_lead_id} for {chat_id} requires admin review — no pro available")
+                await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+                await lead_manager.log_message(chat_id, "model", Messages.Customer.PENDING_REVIEW)
                 return
 
         if best_pro:
@@ -381,7 +399,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             await _finalize_deal(
                 chat_id, best_pro, final_response,
                 extracted_city, extracted_issue, transcription,
-                current_lead_id
+                current_lead_id, media_url=media_url
             )
         except Exception as e:
             logger.error(f"Deal finalization failed for {chat_id}: {e}")
@@ -414,34 +432,38 @@ async def _build_pro_response(best_pro, history, user_text, extracted_city, extr
         transcription=transcription or Defaults.DEFAULT_TRANSCRIPTION
     )
 
-    recent_history = history[-4:] if len(history) > 4 else history
     return await ai.analyze_conversation(
-        history=recent_history,
+        history=history,
         user_text=user_text or "",
         custom_system_prompt=full_system_prompt,
         media_data=media_data,
         media_mime_type=media_mime,
         media_url=media_url,
-        require_json=True
+        require_json=True,
+        pro_id=str(best_pro["_id"]),
     )
 
 
-async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extracted_issue, transcription, current_lead_id):
-    """Finalize a deal: update/create lead and notify pro."""
+async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extracted_issue, transcription, current_lead_id, media_url=None):
+    """Finalize a deal: create/update lead, set customer to AWAITING_PRO_APPROVAL, send pro interactive buttons."""
     d_time = final_response.extracted_data.appointment_time or Defaults.ASAP_TIME
     d_address = final_response.extracted_data.full_address or extracted_city or Defaults.UNKNOWN_ADDRESS
     d_issue = final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
 
+    lead_update = {
+        "status": LeadStatus.NEW,
+        "appointment_time": d_time,
+        "full_address": d_address,
+        "issue_type": d_issue,
+        "pro_id": best_pro["_id"],
+    }
+    if media_url:
+        lead_update["media_url"] = media_url
+
     if current_lead_id:
         await leads_collection.update_one(
             {"_id": current_lead_id},
-            {"$set": {
-                "status": LeadStatus.NEW,
-                "appointment_time": d_time,
-                "full_address": d_address,
-                "issue_type": d_issue,
-                "pro_id": best_pro["_id"]
-            }}
+            {"$set": lead_update}
         )
         lead = await leads_collection.find_one({"_id": current_lead_id})
     else:
@@ -455,25 +477,42 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
         )
 
     if lead:
+        # 1. Set customer state to AWAITING_PRO_APPROVAL
+        await StateManager.set_state(chat_id, UserStates.AWAITING_PRO_APPROVAL)
+        await whatsapp.send_message(chat_id, Messages.Customer.AWAITING_APPROVAL)
+        logger.info(f"Customer {chat_id} entered AWAITING_PRO_APPROVAL state")
+
+        # 2. Send pro approval request with interactive buttons
         pro_phone = best_pro.get("phone_number")
         if pro_phone:
             if not pro_phone.endswith("@c.us"):
                 pro_phone = f"{pro_phone}@c.us"
 
-            msg_to_pro = Messages.Pro.DEAL_CONFIRMED_HEADER + "\n\n"
-            msg_to_pro += Messages.Pro.NEW_LEAD_DETAILS.format(
+            customer_phone = chat_id.replace("@c.us", "")
+            approval_msg = Messages.Pro.APPROVAL_REQUEST.format(
+                customer_phone=customer_phone,
                 full_address=lead['full_address'],
                 issue_type=lead['issue_type'],
-                appointment_time=lead['appointment_time']
+                appointment_time=lead['appointment_time'],
             )
 
             if transcription:
-                msg_to_pro += Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(transcription=transcription)
+                approval_msg += Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(transcription=transcription)
 
-            msg_to_pro += Messages.Pro.NEW_LEAD_FOOTER
-            await whatsapp.send_message(pro_phone, msg_to_pro)
+            lead_media_url = lead.get("media_url") or media_url
+            if lead_media_url:
+                approval_msg += Messages.Pro.APPROVAL_MEDIA.format(media_url=lead_media_url)
+
+            await whatsapp.send_message(pro_phone, approval_msg)
+
+            await whatsapp.send_interactive_buttons(
+                to_number=pro_phone,
+                text="מה תרצה לעשות?",
+                buttons=[
+                    {"id": Messages.Keywords.BTN_APPROVE_LEAD, "title": Messages.Keywords.BUTTON_TITLE_APPROVE},
+                    {"id": Messages.Keywords.BTN_PAUSE_BOT, "title": Messages.Keywords.BUTTON_TITLE_PAUSE},
+                    {"id": Messages.Keywords.BTN_REJECT_LEAD, "title": Messages.Keywords.BUTTON_TITLE_REJECT},
+                ]
+            )
 
             await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)
-
-        # Clear customer context so stale city/issue don't leak into future messages
-        await ContextManager.clear_context(chat_id)

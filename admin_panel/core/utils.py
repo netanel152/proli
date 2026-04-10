@@ -136,8 +136,8 @@ def send_completion_check_sync(lead_id: str):
     from app.core.messages import Messages
 
     lead = leads_collection.find_one({"_id": ObjectId(lead_id)})
-    if not lead or lead.get("status") != LeadStatus.BOOKED:
-        raise ValueError(f"Lead {lead_id} not found or not in BOOKED status")
+    if not lead:
+        raise ValueError(f"Lead {lead_id} not found")
 
     customer_chat_id = lead["chat_id"]
     pro = users_collection.find_one({"_id": lead["pro_id"]})

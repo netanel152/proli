@@ -113,11 +113,9 @@ def view_leads_dashboard(T):
             for status in KANBAN_STATUSES:
                 all_columns_html += render_kanban_column(status, grouped.get(status, []), T)
 
-            st.markdown(f"""
-            <div style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px;">
-                {all_columns_html}
-            </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"""<div style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px;">
+{all_columns_html}
+</div>""", unsafe_allow_html=True)
 
         st.markdown("")
 
@@ -311,10 +309,10 @@ def _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id):
 
     if selected_idx is not None:
         selected_lead = leads_df.iloc[selected_idx]
-        _render_selected_lead_actions(selected_lead, T)
+        _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id)
 
 
-def _render_selected_lead_actions(selected_lead, T):
+def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id):
     """Render actions for a selected lead (shared between Kanban and Table views)."""
     c1, c2 = st.columns([1, 3])
 
@@ -339,6 +337,43 @@ def _render_selected_lead_actions(selected_lead, T):
                     st.success(T.get("check_sent", "Check sent!"))
                 except Exception as e:
                     st.error(f"Failed: {e}")
+
+        # Edit Lead Form
+        if can_edit(get_current_role()):
+            with st.expander(T.get("edit_lead_btn", "Edit Lead")):
+                with st.form(key=f"edit_lead_form_{selected_lead['id']}"):
+                    new_status = st.selectbox(
+                        T.get("status_label", "Status"), 
+                        ALL_STATUSES, 
+                        index=ALL_STATUSES.index(selected_lead.get("status", "new")),
+                        format_func=lambda x: T.get(x, x.capitalize())
+                    )
+                    new_client = st.text_input(T.get("client_name_label", "Client Name"), value=selected_lead.get("client", ""))
+                    new_phone = st.text_input(T.get("phone_number_label", "Phone Number"), value=selected_lead.get("phone_number", ""))
+                    new_details = st.text_area(T.get("details_label", "Details"), value=selected_lead.get("details_summary", ""))
+                    
+                    pro_names = ["Unassigned"] + list(pro_map_name_to_id.keys())
+                    current_pro_name = selected_lead.get("professional", "Unassigned")
+                    if current_pro_name not in pro_names:
+                        pro_names.append(current_pro_name)
+                    new_pro = st.selectbox(T.get("professional_label", "Professional"), pro_names, index=pro_names.index(current_pro_name))
+                    
+                    if st.form_submit_button(T.get("save_changes_btn", "Save Changes")):
+                        update_data = {
+                            "status": new_status,
+                            "client": new_client,
+                            "phone_number": new_phone,
+                            "details_summary": new_details,
+                            "professional": new_pro
+                        }
+                        if new_pro != "Unassigned" and new_pro in pro_map_name_to_id:
+                            update_data["pro_id"] = ObjectId(pro_map_name_to_id[new_pro])
+                        
+                        leads_collection.update_one({"_id": ObjectId(selected_lead['id'])}, {"$set": update_data})
+                        log_audit("edit_lead", {"lead_id": selected_lead['id']})
+                        st.success(T.get("lead_updated", "Lead updated successfully!"))
+                        st.cache_data.clear()
+                        st.rerun()
 
         # Delete confirmation
         if st.session_state.get(f"confirm_delete_{selected_lead['id']}"):

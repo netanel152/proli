@@ -23,13 +23,15 @@ class StateManager:
             return UserStates.IDLE
 
     @classmethod
-    async def set_state(cls, chat_id: str, state_value: str):
+    async def set_state(cls, chat_id: str, state_value: str, ttl: int = None):
         """
         Sets key state:{chat_id} with TTL.
+        Optional ttl overrides the default (e.g. 7200s for PAUSED_FOR_HUMAN).
         """
         try:
             redis = await get_redis_client()
-            await redis.set(f"state:{chat_id}", state_value, ex=cls.TTL)
+            effective_ttl = ttl if ttl is not None else cls.TTL
+            await redis.set(f"state:{chat_id}", state_value, ex=effective_ttl)
         except Exception as e:
              logger.error(f"Error setting state for {chat_id}: {e}")
 

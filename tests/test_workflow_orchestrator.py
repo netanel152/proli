@@ -18,6 +18,7 @@ def wf_mocks(monkeypatch, mock_db):
     mock_wa = MagicMock()
     mock_wa.send_message = AsyncMock()
     mock_wa.send_location_link = AsyncMock()
+    mock_wa.send_interactive_buttons = AsyncMock(return_value={})
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_wa)
 
     mock_state = MagicMock()
@@ -247,3 +248,55 @@ async def test_no_pro_found_dispatcher_response_only(wf_mocks, monkeypatch):
     # AI called only once (dispatcher, no pro phase)
     assert mock_ai.analyze_conversation.call_count == 1
     mock_wa.send_message.assert_any_call("972501111111@c.us", "לא מצאתי בעל מקצוע, אבל אני מחפש")
+
+
+# --- Soft Hold & Pause State Tests ---
+
+@pytest.mark.asyncio
+async def test_awaiting_pro_approval_blocks_ai(wf_mocks):
+    """When customer is in AWAITING_PRO_APPROVAL, AI should not be called."""
+    mock_wa, mock_state, _, mock_ai, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.AWAITING_PRO_APPROVAL)
+
+    await process_incoming_message("972501111111@c.us", "Hello, any update?")
+
+    # AI should NOT be called
+    mock_ai.analyze_conversation.assert_not_called()
+    # Customer should get the waiting message
+    mock_wa.send_message.assert_any_call("972501111111@c.us", Messages.Customer.STILL_WAITING)
+
+
+@pytest.mark.asyncio
+async def test_paused_for_human_bypasses_ai(wf_mocks):
+    """When bot is paused, messages are logged but AI is not invoked."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.PAUSED_FOR_HUMAN)
+
+    await process_incoming_message("972501111111@c.us", "I need help")
+
+    # AI should NOT be called
+    mock_ai.analyze_conversation.assert_not_called()
+    # Message should be logged silently
+    mock_lm.log_message.assert_called_once_with("972501111111@c.us", "user", "I need help")
+    # No WhatsApp message sent (silent bypass)
+    mock_wa.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sos_sets_paused_state_with_custom_ttl(wf_mocks):
+    """SOS keyword should set PAUSED_FOR_HUMAN state with 2-hour TTL."""
+    mock_wa, mock_state, _, _, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
+
+    from app.core.constants import WorkerConstants
+    await process_incoming_message("972501111111@c.us", "אני צריך נציג")
+
+    # Verify PAUSED_FOR_HUMAN state with correct TTL
+    mock_state.set_state.assert_called_once_with(
+        "972501111111@c.us",
+        UserStates.PAUSED_FOR_HUMAN,
+        ttl=WorkerConstants.PAUSE_TTL_SECONDS
+    )
+
+    # Customer gets bot paused message
+    mock_wa.send_message.assert_any_call("972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_CUSTOMER)

@@ -57,33 +57,40 @@ class WhatsAppClient:
         message = f"{text_prefix}\n{waze_url}"
         await self.send_message(chat_id, message)
 
-    @retry(
-        retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
-    )
     async def send_interactive_buttons(self, to_number: str, text: str, buttons: list[dict]) -> dict:
         """
-        Sends an interactive message with buttons.
+        Sends a message with buttons via sendButtons.
+        Falls back to plain text if buttons are disabled in config or the plan doesn't support them.
         buttons: list of dicts with 'id' and 'title'.
         """
         chat_id = f"{to_number}@c.us" if not to_number.endswith("@c.us") else to_number
+
+        if not settings.WHATSAPP_BUTTONS_ENABLED:
+            options = "\n".join(f"• {b['title']}" for b in buttons)
+            await self.send_message(chat_id, f"{text}\n\n{options}")
+            return {}
 
         buttons_payload = [
             {"buttonId": b["id"], "buttonText": {"displayText": b["title"]}}
             for b in buttons
         ]
-
-        payload = {
-            "chatId": chat_id,
-            "message": text,
-            "buttons": buttons_payload
-        }
+        payload = {"chatId": chat_id, "message": text, "buttons": buttons_payload}
 
         try:
-            resp = await self._send_request("sendInteractiveMessage", payload)
+            resp = await self._send_request("sendButtons", payload)
             logger.info(f"Interactive buttons sent to {chat_id}")
             return resp
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 403:
+                logger.warning(
+                    f"sendButtons returned 403 for {chat_id} — plan may not support buttons. "
+                    "Set WHATSAPP_BUTTONS_ENABLED=false in .env to skip this call. Falling back to text."
+                )
+                options = "\n".join(f"• {b['title']}" for b in buttons)
+                await self.send_message(chat_id, f"{text}\n\n{options}")
+                return {}
+            logger.error(f"Failed to send interactive buttons to {chat_id}: {e}")
+            raise
         except Exception as e:
             logger.error(f"Failed to send interactive buttons to {chat_id}: {e}")
             raise

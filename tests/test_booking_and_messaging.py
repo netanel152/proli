@@ -84,10 +84,14 @@ async def test_book_slot_for_lead_already_taken(mock_db, monkeypatch):
 # --- Task 2: Test WhatsApp Buttons Payload ---
 
 @pytest.mark.asyncio
-async def test_send_interactive_buttons_payload():
+async def test_send_interactive_buttons_payload(monkeypatch):
     """
-    Verify that send_interactive_buttons constructs the correct JSON payload.
+    Verify that send_interactive_buttons constructs the correct JSON payload
+    when WHATSAPP_BUTTONS_ENABLED is True.
     """
+    from app.core.config import settings
+    monkeypatch.setattr(settings, "WHATSAPP_BUTTONS_ENABLED", True)
+
     client = whatsapp_client_service.WhatsAppClient()
     
     # Mock data
@@ -117,7 +121,7 @@ async def test_send_interactive_buttons_payload():
     endpoint = call_args.args[0]
     payload = call_args.args[1]
 
-    assert endpoint == "sendInteractiveMessage"
+    assert endpoint == "sendButtons"
     assert payload["chatId"] == "123456789@c.us"
     assert payload["message"] == text
     assert payload["buttons"] == expected_buttons_payload

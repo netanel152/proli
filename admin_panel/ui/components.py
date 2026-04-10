@@ -939,28 +939,26 @@ def render_kanban_card(lead, T):
     safe_client = html.escape(str(client))
     safe_pro = html.escape(str(pro))
 
-    return f"""
-    <div class="kanban-card">
-        <div class="kanban-card-title">
-            <span class="material-symbols-rounded" style="font-size:1rem; color:var(--text-secondary)">person</span>
-            {safe_client}
+    return f"""<div class="kanban-card">
+    <div class="kanban-card-title">
+        <span class="material-symbols-rounded" style="font-size:1rem; color:var(--text-secondary)">person</span>
+        {safe_client}
+    </div>
+    <div class="kanban-card-meta">
+        <div class="kanban-card-detail">
+            <span class="material-symbols-rounded" style="font-size:0.85rem">handyman</span>
+            {safe_details or '—'}
         </div>
-        <div class="kanban-card-meta">
-            <div class="kanban-card-detail">
-                <span class="material-symbols-rounded" style="font-size:0.85rem">handyman</span>
-                {safe_details or '—'}
-            </div>
-            <div class="kanban-card-detail">
-                <span class="material-symbols-rounded" style="font-size:0.85rem">engineering</span>
-                {safe_pro}
-            </div>
-            <div class="kanban-card-detail">
-                <span class="material-symbols-rounded" style="font-size:0.85rem">schedule</span>
-                {date_str}
-            </div>
+        <div class="kanban-card-detail">
+            <span class="material-symbols-rounded" style="font-size:0.85rem">engineering</span>
+            {safe_pro}
+        </div>
+        <div class="kanban-card-detail">
+            <span class="material-symbols-rounded" style="font-size:0.85rem">schedule</span>
+            {date_str}
         </div>
     </div>
-    """
+</div>"""
 
 
 def render_kanban_column(status, leads, T):
@@ -972,20 +970,16 @@ def render_kanban_column(status, leads, T):
     cards_html = "".join(render_kanban_card(l, T) for l in leads)
 
     if not leads:
-        cards_html = f"""
-        <div class="empty-state" style="padding: 1.5rem 0.5rem;">
-            <span class="material-symbols-rounded" style="font-size: 1.5rem;">inbox</span>
-            <div style="font-size: 0.8rem;">—</div>
-        </div>
-        """
+        cards_html = """<div class="empty-state" style="padding: 1.5rem 0.5rem;">
+    <span class="material-symbols-rounded" style="font-size: 1.5rem;">inbox</span>
+    <div style="font-size: 0.8rem;">—</div>
+</div>"""
 
-    return f"""
-    <div class="kanban-column">
-        <div class="kanban-header" style="background-color: {colors['bg']}; color: {colors['text']}; border: 1px solid {colors['border']};">
-            <span class="material-symbols-rounded" style="font-size:1rem">{colors['icon']}</span>
-            {label}
-            <span class="kanban-count">{count}</span>
-        </div>
-        {cards_html}
+    return f"""<div class="kanban-column">
+    <div class="kanban-header" style="background-color: {colors['bg']}; color: {colors['text']}; border: 1px solid {colors['border']};">
+        <span class="material-symbols-rounded" style="font-size:1rem">{colors['icon']}</span>
+        {label}
+        <span class="kanban-count">{count}</span>
     </div>
-    """
+    {cards_html}
+</div>"""

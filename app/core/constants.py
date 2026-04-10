@@ -8,6 +8,7 @@ class LeadStatus(str, Enum):
     REJECTED = "rejected"
     CLOSED = "closed"
     CANCELLED = "cancelled"
+    PENDING_ADMIN_REVIEW = "pending_admin_review"
 
 class UserStates(str, Enum):
     IDLE = "idle"                      # Default state
@@ -18,6 +19,8 @@ class UserStates(str, Enum):
     AWAITING_TIME = "awaiting_time"
     AWAITING_CONSENT = "awaiting_consent"  # Waiting for privacy consent
     SOS = "sos"
+    AWAITING_PRO_APPROVAL = "awaiting_pro_approval"
+    PAUSED_FOR_HUMAN = "paused_for_human"
     # Pro onboarding flow
     ONBOARDING_NAME = "onboarding_name"
     ONBOARDING_TYPE = "onboarding_type"
@@ -35,6 +38,8 @@ class WorkerConstants:
     MAX_REASSIGNMENTS = 3          # Max times a lead can be reassigned before closing
     UNASSIGNED_LEAD_TIMEOUT_HOURS = 24  # Auto-reject CONTACTED leads with no pro after this
     MAX_PRO_REMINDERS = 3          # Max reminder messages sent to a pro for a stale booked lead
+    GEO_RADIUS_STEPS = [10000, 20000, 30000]  # Progressive search radius in meters (10km, 20km, 30km)
+    PAUSE_TTL_SECONDS = 7200       # 2 hours — auto-expiry for PAUSED_FOR_HUMAN state
     # ADMIN_PHONE moved to config.py / env var
 
 class APIStatus:

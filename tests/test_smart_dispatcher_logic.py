@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.workflow_service import process_incoming_message
 from app.services.ai_engine_service import AIResponse, ExtractedData
+from app.core.constants import UserStates
 
 @pytest.fixture
 def mock_workflow_dependencies():
@@ -11,7 +12,8 @@ def mock_workflow_dependencies():
          patch("app.services.workflow_service.lead_manager") as mock_lm, \
          patch("app.services.workflow_service.leads_collection") as mock_leads, \
          patch("app.services.matching_service.users_collection", new=mock_users), \
-         patch("app.services.matching_service.leads_collection", new=mock_leads):
+         patch("app.services.matching_service.leads_collection", new=mock_leads), \
+         patch("app.services.workflow_service.StateManager") as mock_state:
         
         # Async methods setup
         mock_ai.analyze_conversation = AsyncMock()
@@ -21,6 +23,7 @@ def mock_workflow_dependencies():
         mock_lm.create_lead_from_dict = AsyncMock(return_value={"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id"})
         mock_whatsapp.send_message = AsyncMock()
         mock_whatsapp.send_location_link = AsyncMock()
+        mock_whatsapp.send_interactive_buttons = AsyncMock(return_value={})
         mock_users.find_one = AsyncMock(return_value=None)
         
         mock_lead_data = {"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id", "status": "new"}
@@ -32,8 +35,24 @@ def mock_workflow_dependencies():
         mock_cursor.to_list = AsyncMock(return_value=[])
         mock_users.find.return_value = mock_cursor
 
+        # Default aggregate response (for $geoNear and load balancing)
+        async def _empty_aggregate(*args, **kwargs):
+            return
+            yield  # noqa: make it an async generator
+        mock_users.aggregate = MagicMock(side_effect=_empty_aggregate)
+
+        async def _empty_leads_agg(*args, **kwargs):
+            return
+            yield
+        mock_leads.aggregate = MagicMock(side_effect=_empty_leads_agg)
+
         # Fix: Mock count_documents for determine_best_pro
         mock_leads.count_documents = AsyncMock(return_value=0)
+
+        # StateManager defaults
+        mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
+        mock_state.set_state = AsyncMock()
+        mock_state.clear_state = AsyncMock()
 
         yield mock_ai, mock_users, mock_whatsapp, mock_lm, mock_leads
 
@@ -69,7 +88,7 @@ async def test_handover_to_pro_success(mock_workflow_dependencies):
     Scenario: User provides City & Issue.
     Expected: System finds Pro, switches persona, and replies as Pro.
     """
-    mock_ai, mock_users, mock_whatsapp, _, _ = mock_workflow_dependencies
+    mock_ai, mock_users, mock_whatsapp, _, mock_leads = mock_workflow_dependencies
     
     # 1. Dispatcher Response (Found Info)
     dispatcher_resp = AIResponse(
@@ -98,17 +117,24 @@ async def test_handover_to_pro_success(mock_workflow_dependencies):
         "is_active": True,
         "phone_number": "972500000000"
     }
-    # Mock find().to_list()
-    mock_cursor = MagicMock()
-    mock_cursor.to_list = AsyncMock(return_value=[pro_doc])
-    mock_users.find.return_value = mock_cursor
-    
+
+    # Geo queries use aggregate ($geoNear) — return pro on first radius step
+    async def _geo_agg(*args, **kwargs):
+        yield pro_doc
+    mock_users.aggregate = MagicMock(side_effect=_geo_agg)
+
+    # Load balancing aggregate on leads — return empty (no active leads)
+    async def _leads_agg(*args, **kwargs):
+        return
+        yield
+    mock_leads.aggregate = MagicMock(side_effect=_leads_agg)
+
     await process_incoming_message("user123", "I have a leak in Tel Aviv")
-    
+
     # Assertions
-    mock_users.find.assert_called() # Should search for pro
+    mock_users.aggregate.assert_called()  # Should search for pro via $geoNear
     mock_whatsapp.send_message.assert_any_call("user123", "Hello, I am Mario the Plumber.")
-    assert mock_ai.analyze_conversation.call_count == 2 # Dispatcher + Pro
+    assert mock_ai.analyze_conversation.call_count == 2  # Dispatcher + Pro
 
 @pytest.mark.asyncio
 async def test_audio_transcription_flow(mock_workflow_dependencies):
@@ -116,8 +142,8 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
     Scenario: User sends Audio. Dispatcher transcribes it. User books deal.
     Expected: Transcription text is passed to the Pro via WhatsApp text.
     """
-    mock_ai, mock_users, mock_whatsapp, mock_lm, _ = mock_workflow_dependencies
-    
+    mock_ai, mock_users, mock_whatsapp, mock_lm, mock_leads = mock_workflow_dependencies
+
     # 1. Dispatcher: Extracts info + Transcription
     dispatcher_resp = AIResponse(
         reply_to_user="...",
@@ -144,27 +170,34 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
         "is_active": True,
         "phone_number": "972500000000"
     }
-    mock_cursor = MagicMock()
-    mock_cursor.to_list = AsyncMock(return_value=[pro_doc])
-    mock_users.find.return_value = mock_cursor
-    
+
+    # Geo queries use aggregate ($geoNear) — return pro on first radius step
+    async def _geo_agg(*args, **kwargs):
+        yield pro_doc
+    mock_users.aggregate = MagicMock(side_effect=_geo_agg)
+
+    # Load balancing aggregate on leads — return empty (no active leads)
+    async def _leads_agg(*args, **kwargs):
+        return
+        yield
+    mock_leads.aggregate = MagicMock(side_effect=_leads_agg)
+
     await process_incoming_message("user123", "", media_url="http://audio.mp3")
-    
+
     # Verify Lead Creation
     assert mock_lm.create_lead.called or mock_lm.create_lead_from_dict.called
-    
+
     # Verify Message to Pro contains Transcription
-    # We expect multiple calls to send_message. We look for the one to the Pro.
     # Pro phone: 972500000000 -> 972500000000@c.us
-    
     pro_chat = "972500000000@c.us"
     calls_to_pro = [call for call in mock_whatsapp.send_message.call_args_list if call[0][0] == pro_chat]
-    
-    # Two messages are sent to the pro: early lead notification + final deal notification.
-    # Transcription and the approve instruction ("אשר") appear in the deal notification (last message).
-    assert len(calls_to_pro) >= 2
-    msg_to_pro = calls_to_pro[-1][0][1]  # deal notification, not early notification
+
+    # Messages to pro: early lead notification + deal/approval notification
+    assert len(calls_to_pro) >= 1
+    # Find the message that contains the transcription
+    transcription_msgs = [c[0][1] for c in calls_to_pro if "Water is flowing everywhere" in c[0][1]]
+    assert len(transcription_msgs) >= 1
+    msg_to_pro = transcription_msgs[0]
 
     assert "תמליל" in msg_to_pro
     assert "Water is flowing everywhere" in msg_to_pro
-    assert "אשר" in msg_to_pro  # NEW_LEAD_FOOTER contains the approve instruction
