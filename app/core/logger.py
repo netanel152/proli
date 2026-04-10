@@ -8,12 +8,20 @@ from loguru import logger
 from app.core.config import settings
 
 # PII masking pattern: Israeli phone numbers (972XXXXXXXXX)
-_PHONE_PATTERN = re.compile(r"(972)(\d{2})(\d+)")
+# Keeps country code + first 2 digits + last 3 digits, masks the middle.
+# Example: 972521234567 → 97252****567
+_PHONE_PATTERN = re.compile(r"(972\d{2})(\d+)(\d{3})")
 
 
 def mask_pii(message: str) -> str:
-    """Mask phone numbers in log messages."""
-    return _PHONE_PATTERN.sub(r"\1\2***", message)
+    """Mask Israeli phone numbers in log messages."""
+    return _PHONE_PATTERN.sub(r"\1****\3", message)
+
+
+def _pii_filter(record):
+    """Loguru sink filter: always mask PII before writing."""
+    record["message"] = mask_pii(record["message"])
+    return True
 
 # Create logs directory if it doesn't exist
 log_dir = os.path.join(os.getcwd(), "logs")
@@ -74,9 +82,10 @@ def setup_logging():
         # Structured JSON logging for production
         logger.add(
             sys.stdout,
-            format="{message}", # message is pre-formatted in json_formatter if used as sink
+            format="{message}",
             level=settings.LOG_LEVEL,
-            serialize=True # Loguru built-in serialization is often sufficient, but custom can be better
+            filter=_pii_filter,
+            serialize=True,
         )
     else:
         # Human-readable for development
@@ -84,16 +93,11 @@ def setup_logging():
             sys.stdout,
             format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
             level=settings.LOG_LEVEL,
-            colorize=True
+            filter=_pii_filter,
+            colorize=True,
         )
 
-    # File handler (always structured/archive)
-    # In production, apply PII masking filter
-    def _pii_filter(record):
-        if is_production:
-            record["message"] = mask_pii(record["message"])
-        return True
-
+    # File handler (always structured/archive, always PII-masked)
     logger.add(
         os.path.join(log_dir, "proli.log"),
         filter=_pii_filter,
@@ -103,7 +107,7 @@ def setup_logging():
         compression="zip",
         enqueue=True,
         backtrace=True,
-        diagnose=not is_production
+        diagnose=not is_production,
     )
 
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)

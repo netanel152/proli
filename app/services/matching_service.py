@@ -16,77 +16,87 @@ def get_coordinates(city_name: str):
 
 async def determine_best_pro(issue_type: str = None, location: str = None, excluded_pro_ids: list = None) -> dict:
     """
-    Intelligent Routing Engine with Geo-Spatial Support:
+    Intelligent Routing Engine with Progressive Geo-Spatial Search:
     1. Active Status
-    2. Location Match (Geo-Spatial $near or Fallback Regex)
-    3. Load Balancing (Check active leads)
+    2. Location Match ($geoNear with expanding radius 10→20→30km, or Regex fallback)
+    3. Load Balancing (Skip pros with >= MAX_PRO_LOAD active leads)
     4. Rating (High to Low)
+    Returns None if no qualified pro is found (caller should set PENDING_ADMIN_REVIEW).
     """
     try:
-        # 1. Base Query — only fully approved, active professionals
-        query = {
+        # 1. Base query filter — only fully approved, active professionals
+        base_filter = {
             "is_active": True,
             "role": "professional",
             "pending_approval": {"$ne": True}
         }
-        
+
         if excluded_pro_ids:
-            query["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
-        
+            base_filter["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
+
         # 2. Location Filtering
         coordinates = get_coordinates(location)
         geo_enabled = False
+        matching_pros = []
 
         if coordinates:
-            # Use MongoDB $near operator (Legacy Coordinate Pairs)
-            # Finds pros within 10km (10000 meters)
-            query["location"] = {
-                "$near": {
-                    "$geometry": {
-                        "type": "Point",
-                        "coordinates": coordinates
-                    },
-                    "$maxDistance": 10000 
-                }
-            }
             geo_enabled = True
-            logger.info(f"📍 Geo-Spatial query enabled for '{location}' at {coordinates}")
+            # Progressive $geoNear — expand radius until we find candidates
+            for radius in WorkerConstants.GEO_RADIUS_STEPS:
+                logger.info(f"📍 Geo-Spatial search at {radius // 1000}km for '{location}' at {coordinates}")
+                pipeline = [
+                    {
+                        "$geoNear": {
+                            "near": {"type": "Point", "coordinates": coordinates},
+                            "distanceField": "dist_meters",
+                            "maxDistance": radius,
+                            "spherical": True,
+                            "query": base_filter,
+                        }
+                    },
+                    {"$sort": {"social_proof.rating": -1}},
+                    {"$limit": WorkerConstants.DB_QUERY_LIMIT},
+                ]
+                matching_pros = []
+                async for doc in users_collection.aggregate(pipeline):
+                    matching_pros.append(doc)
+
+                if matching_pros:
+                    logger.info(f"✅ Found {len(matching_pros)} pros within {radius // 1000}km")
+                    break
+                logger.info(f"No pros found within {radius // 1000}km, expanding radius...")
+
+            if not matching_pros:
+                logger.critical(
+                    f"No professional found within {WorkerConstants.GEO_RADIUS_STEPS[-1] // 1000}km "
+                    f"for '{location}'. Lead requires admin review."
+                )
+                return None
         elif location:
             # Fallback to Regex on service_areas
-            query["service_areas"] = {"$regex": location, "$options": "i"}
+            query = {**base_filter, "service_areas": {"$regex": location, "$options": "i"}}
             logger.info(f"🔍 Text-based location query for '{location}'")
+            cursor = users_collection.find(query)
+            matching_pros = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+
+            # Reverse match (only if text-based search found nothing)
+            if not matching_pros:
+                logger.info(f"No direct location match for '{location}', trying reverse match...")
+                all_pros_cursor = users_collection.find({"is_active": True, "role": "professional"})
+                all_pros = await all_pros_cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+
+                for pro in all_pros:
+                    areas = pro.get("service_areas", [])
+                    if any(area.lower() in location.lower() for area in areas):
+                        matching_pros.append(pro)
         else:
             logger.info("⚠️ No location provided for routing.")
 
-        # Execute Query
-        # Note: $near sorts by distance automatically.
-        cursor = users_collection.find(query)
-        matching_pros = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
-        
-        # Fallback: Reverse match (only if using text-based search and no results)
-        if not matching_pros and location and not geo_enabled:
-             logger.info(f"No direct location match for '{location}', trying reverse match...")
-             # Warning: This is expensive, use sparingly
-             all_pros_cursor = users_collection.find({"is_active": True, "role": "professional"})
-             all_pros = await all_pros_cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
-             
-             for pro in all_pros:
-                 areas = pro.get("service_areas", [])
-                 # Check if any of the pro's areas are substrings of the location or vice versa
-                 if any(area.lower() in location.lower() for area in areas):
-                     matching_pros.append(pro)
-        
         if not matching_pros:
-             # Final Fallback: All active pros (Emergency Catch-all)
-            logger.warning("No pros found matching location. Fallback to all active pros.")
-            fallback_query = {"is_active": True, "role": "professional"}
-            if excluded_pro_ids:
-                fallback_query["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
-            
-            matching_pros = await users_collection.find(fallback_query).to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+            logger.warning(f"No pros found for location '{location}'. Lead requires admin review.")
+            return None
 
-        # 3. Load Balancing & Sorting
-        # Batch-fetch active lead counts for all matching pros in a single query
+        # 3. Load Balancing — batch-fetch active lead counts
         pro_ids = [pro["_id"] for pro in matching_pros]
         load_pipeline = [
             {"$match": {
@@ -107,12 +117,11 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
             no_shows = pro.get("no_show_count", 0)
 
             if current_load < WorkerConstants.MAX_PRO_LOAD:
-                # Check slot availability (non-blocking — skip if no slots system)
                 has_slots = True
                 try:
                     has_slots = await check_pro_availability(pro["_id"])
                 except Exception:
-                    pass  # Don't block matching if scheduling service fails
+                    pass
 
                 candidates.append({
                     "pro": pro,
@@ -125,43 +134,23 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
                 logger.debug(f"Skipping Pro '{pro.get('business_name')}' - Overloaded ({current_load} active leads)")
 
         if not candidates:
-             logger.warning("All matching pros are overloaded. Returning highest rated from original matches.")
-             # Fallback to just rating if everyone is busy
-             def get_rating_simple(p):
-                return p.get("social_proof", {}).get("rating", 0)
-             matching_pros.sort(key=get_rating_simple, reverse=True)
-             return matching_pros[0] if matching_pros else None
+            logger.warning("All matching pros are overloaded. No qualified pro available.")
+            return None
 
-        # 4. Final Selection Logic
-        # If Geo-Spatial was used, candidates are already sorted by distance (roughly).
-        # We might want to pick the highest rated among the top closest, or just the closest.
-        # Let's prioritize:
-        # - If Geo used: Keep order (Distance), but maybe boost if rating is significantly higher? 
-        # For now, let's keep it simple:
-        # If Geo used -> Return closest qualified candidate.
-        # If Text used -> Sort by Rating.
-        
-        # Prefer pros with available slots, then by rating, penalize no-shows
+        # 4. Final Selection — sort by composite score (rating + slots - no-shows)
         def candidate_score(c):
             slot_bonus = 10 if c.get("has_slots", True) else 0
             no_show_penalty = c.get("no_shows", 0) * 0.5
             return slot_bonus + c["rating"] - no_show_penalty
 
-        if geo_enabled:
-            # Among geo-sorted candidates, prefer those with slots
-            candidates_with_slots = [c for c in candidates if c.get("has_slots", True)]
-            if candidates_with_slots:
-                selected = candidates_with_slots[0]
-            else:
-                selected = candidates[0]
-            logger.info(f"✅ Geo-Routing: Selected '{selected['pro'].get('business_name')}' (Dist: Closest, Load: {selected['load']})")
-            return selected['pro']
-        else:
-            # Sort by composite score
-            candidates.sort(key=candidate_score, reverse=True)
-            selected = candidates[0]
-            logger.info(f"✅ Text-Routing: Selected '{selected['pro'].get('business_name')}' (Rating: {selected['rating']}, Load: {selected['load']})")
-            return selected['pro']
+        candidates.sort(key=candidate_score, reverse=True)
+        selected = candidates[0]
+        route_type = "Geo" if geo_enabled else "Text"
+        logger.info(
+            f"✅ {route_type}-Routing: Selected '{selected['pro'].get('business_name')}' "
+            f"(Rating: {selected['rating']}, Load: {selected['load']})"
+        )
+        return selected['pro']
 
     except Exception as e:
         logger.error(f"Error in determine_best_pro: {e}")

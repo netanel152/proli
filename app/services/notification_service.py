@@ -80,6 +80,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                 "completed": "הושלם",
                 "rejected": "נדחה",
                 "cancelled": "בוטל",
+                "pending_admin_review": "ממתין לבדיקת מנהל",
             }
             issue = active_lead.get("issue_type", "לא ידוע")
             address = active_lead.get("full_address", "לא ידוע")

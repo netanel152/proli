@@ -45,8 +45,8 @@ async def test_sos_admin_alert(mock_db, monkeypatch):
     assert "קריאת SOS" in admin_msg
     assert "נציג אנושי" in admin_msg
 
-    # Verify User Response (no pro assigned)
-    mock_whatsapp_wf.send_message.assert_any_call(chat_id, Messages.SOS.TO_USER_NO_PRO)
+    # Verify User Response — bot paused message
+    mock_whatsapp_wf.send_message.assert_any_call(chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER)
 
 @pytest.mark.asyncio
 async def test_sos_pro_alert(mock_db, monkeypatch):
@@ -112,5 +112,5 @@ async def test_sos_pro_alert(mock_db, monkeypatch):
     assert "קריאת SOS" in admin_msg
     assert "נזילה" in admin_msg  # Lead details included
 
-    # Verify User Response (pro assigned)
-    mock_whatsapp_wf.send_message.assert_any_call(chat_id, Messages.SOS.TO_USER_WITH_PRO)
+    # Verify User Response — bot paused message
+    mock_whatsapp_wf.send_message.assert_any_call(chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER)

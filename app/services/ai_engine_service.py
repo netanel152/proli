@@ -12,6 +12,8 @@ import tempfile
 import asyncio
 from app.core.http_client import get_http_client
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from app.core.database import users_collection
+from bson import ObjectId
 
 class ExtractedData(BaseModel):
     city: Optional[str] = Field(description="The extracted city/location from the user's input.")
@@ -25,6 +27,20 @@ class AIResponse(BaseModel):
     extracted_data: ExtractedData = Field(description="Structured data extracted from the conversation.")
     is_deal: bool = Field(description="Set to True ONLY if the user has provided specific Time AND Address and agreed to book. Otherwise False.")
 
+MAX_CONVERSATION_TURNS = 5  # 5 turns = 10 messages (user + model)
+
+
+async def _track_token_usage(pro_id: str, token_count: int) -> None:
+    """Fire-and-forget: increment total_tokens_used for a pro in MongoDB."""
+    try:
+        await users_collection.update_one(
+            {"_id": ObjectId(pro_id)},
+            {"$inc": {"total_tokens_used": token_count}}
+        )
+    except Exception as e:
+        logger.warning(f"Token tracking failed for pro {pro_id}: {e}")
+
+
 class AIEngine:
     """
     Handles interactions with Google Gemini API.
@@ -36,12 +52,15 @@ class AIEngine:
         # Define the fallback hierarchy from settings
         self.model_hierarchy = settings.AI_MODELS
 
-    async def analyze_conversation(self, history: list, user_text: str, custom_system_prompt: str, media_data: bytes = None, media_mime_type: str = None, require_json: bool = True, media_url: str = None) -> AIResponse | str:
+    async def analyze_conversation(self, history: list, user_text: str, custom_system_prompt: str, media_data: bytes = None, media_mime_type: str = None, require_json: bool = True, media_url: str = None, pro_id: str = None) -> AIResponse | str:
         contents = []
         for msg in history:
             parts = [types.Part(text=p) for p in msg.get("parts", [])]
             contents.append(types.Content(role=msg["role"], parts=parts))
-        
+
+        # Limit to last N turns to prevent token bloat / hallucination
+        contents = contents[-(MAX_CONVERSATION_TURNS * 2):]
+
         current_parts = []
         
         # Handle media: URL takes precedence for large files (audio/video), bytes for small (images)
@@ -128,10 +147,16 @@ class AIEngine:
                     config=types.GenerateContentConfig(**config_args)
                 )
                 
+                # Non-blocking token accounting (pro-phase calls only)
+                if pro_id and hasattr(response, "usage_metadata") and response.usage_metadata:
+                    token_count = getattr(response.usage_metadata, "total_token_count", 0)
+                    if token_count:
+                        asyncio.create_task(_track_token_usage(pro_id, token_count))
+
                 if require_json:
                     try:
                         if hasattr(response, 'parsed') and response.parsed:
-                            return response.parsed 
+                            return response.parsed
                         else:
                                 data = json.loads(response.text)
                                 return AIResponse(**data)

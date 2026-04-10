@@ -268,28 +268,31 @@ def render_pending_approvals(T):
             with c_actions:
                 if can_edit(get_current_role()):
                     if st.button(T.get('approve_btn', 'Approve'), key=f"approve_{pro_id}", type="primary", use_container_width=True):
-                        areas_str = ", ".join(p.get("service_areas", []))
-                        prompt, keywords = generate_system_prompt(
-                            p.get("business_name", ""),
-                            p.get("type", "general"),
-                            areas_str,
-                            p.get("prices_for_prompt", ""),
-                        )
-                        users_collection.update_one(
-                            {"_id": p["_id"]},
-                            {"$set": {
-                                "is_active": True,
-                                "pending_approval": False,
-                                "system_prompt": prompt,
-                                "keywords": keywords,
-                            }},
-                        )
-                        create_initial_schedule(p["_id"])
-                        log_audit("approve_pro", {"pro_id": pro_id, "name": p.get("business_name")})
-                        _notify_pro_approved(p.get("phone_number"))
-                        st.success(f"{p.get('business_name')} approved!")
-                        st.cache_data.clear()
-                        st.rerun()
+                        try:
+                            areas_str = ", ".join(p.get("service_areas", []))
+                            prompt, keywords = generate_system_prompt(
+                                p.get("business_name", ""),
+                                p.get("type", "general"),
+                                areas_str,
+                                p.get("prices_for_prompt", ""),
+                            )
+                            users_collection.update_one(
+                                {"_id": p["_id"]},
+                                {"$set": {
+                                    "is_active": True,
+                                    "pending_approval": False,
+                                    "system_prompt": prompt,
+                                    "keywords": keywords,
+                                }},
+                            )
+                            create_initial_schedule(p["_id"])
+                            log_audit("approve_pro", {"pro_id": pro_id, "name": p.get("business_name")})
+                            _notify_pro_approved(p.get("phone_number"))
+                            st.success(f"{p.get('business_name')} approved!")
+                            st.cache_data.clear()
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Error approving: {e}")
 
                     if st.button(T.get('reject_btn', 'Reject'), key=f"reject_{pro_id}", type="secondary", use_container_width=True):
                         st.session_state[f"confirm_reject_{pro_id}"] = True

@@ -1,9 +1,10 @@
 from app.core.database import users_collection, leads_collection, reviews_collection
 from app.core.logger import logger
 from app.core.messages import Messages
-from app.core.constants import LeadStatus, Defaults
+from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
 from app.services.matching_service import book_slot_for_lead
 from app.services.context_manager_service import ContextManager
+from app.services.state_manager_service import StateManager
 from datetime import datetime, timezone
 
 STATUS_LABELS = {
@@ -14,6 +15,7 @@ STATUS_LABELS = {
     LeadStatus.REJECTED: "נדחה",
     LeadStatus.CANCELLED: "בוטל",
     LeadStatus.CLOSED: "סגור",
+    LeadStatus.PENDING_ADMIN_REVIEW: "ממתין לבדיקת מנהל",
 }
 
 
@@ -35,6 +37,19 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
         return None
 
     text = _normalize(text)
+
+    # Interactive button responses (Pro Approval flow)
+    if text == Messages.Keywords.BTN_APPROVE_LEAD:
+        return await _handle_approve(pro, lead_manager, whatsapp)
+
+    if text == Messages.Keywords.BTN_PAUSE_BOT:
+        return await _handle_pause_bot(pro, whatsapp)
+
+    if text == Messages.Keywords.BTN_REJECT_LEAD:
+        return await _handle_reject(pro, lead_manager)
+
+    if text in Messages.Keywords.RESUME_COMMANDS:
+        return await _handle_resume(pro)
 
     if text in Messages.Keywords.APPROVE_COMMANDS:
         return await _handle_approve(pro, lead_manager, whatsapp)
@@ -116,6 +131,9 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         rating_line=rating_line,
     )
     await whatsapp.send_message(lead["chat_id"], customer_msg)
+    # Clear AWAITING_PRO_APPROVAL state so customer can continue normally
+    await StateManager.clear_state(lead["chat_id"])
+    logger.info(f"Pro {pro['_id']} approved lead {lead['_id']}")
     return response_text
 
 
@@ -128,10 +146,45 @@ async def _handle_reject(pro, lead_manager):
         return Messages.Pro.NO_PENDING_REJECT
 
     await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.REJECTED)
-    # Clear cached context so next conversation starts fresh
+    # Clear cached context and customer state so next conversation starts fresh
     if lead.get("chat_id"):
         await ContextManager.clear_context(lead["chat_id"])
+        await StateManager.clear_state(lead["chat_id"])
     return Messages.Pro.REJECT_SUCCESS
+
+
+async def _handle_pause_bot(pro, whatsapp):
+    """Pro clicked 'Pause Bot' — pause AI for the customer's chat."""
+    lead = await leads_collection.find_one(
+        {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
+        sort=[("created_at", -1)]
+    )
+    if not lead:
+        return Messages.Pro.NO_PENDING_APPROVE
+
+    customer_chat_id = lead["chat_id"]
+    await StateManager.set_state(customer_chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
+    await whatsapp.send_message(customer_chat_id, Messages.Customer.BOT_PAUSED_BY_PRO)
+    logger.info(f"Pro {pro['_id']} paused bot for customer {customer_chat_id}")
+    return Messages.Pro.PAUSE_ACK
+
+
+async def _handle_resume(pro):
+    """Pro resumes the bot after a pause."""
+    lead = await leads_collection.find_one(
+        {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
+        sort=[("created_at", -1)]
+    )
+    if not lead:
+        return "אין שיחה מושהית כרגע."
+
+    customer_chat_id = lead["chat_id"]
+    current_state = await StateManager.get_state(customer_chat_id)
+    if current_state == UserStates.PAUSED_FOR_HUMAN:
+        await StateManager.clear_state(customer_chat_id)
+        logger.info(f"Pro {pro['_id']} resumed bot for customer {customer_chat_id}")
+        return "✅ הבוט חזר לפעולה."
+    return "הבוט כבר פעיל."
 
 
 async def _handle_finish(pro, whatsapp):

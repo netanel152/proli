@@ -7,6 +7,7 @@ from app.services.whatsapp_client_service import WhatsAppClient
 from app.services import matching_service
 from app.core.messages import Messages
 from app.services.context_manager_service import ContextManager
+from app.services.state_manager_service import StateManager
 from bson import ObjectId
 
 whatsapp = WhatsAppClient()
@@ -23,14 +24,14 @@ async def check_and_reassign_stale_leads():
     threshold_time = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
     
     query = {
-        "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
+        "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.PENDING_ADMIN_REVIEW]},
         "created_at": {"$lt": threshold_time}
     }
-    
+
     try:
         cursor = leads_collection.find(query)
         stale_leads = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
-        
+
         if not stale_leads:
             logger.info("✅ [SOS Healer] No stale leads found.")
             return
@@ -119,10 +120,21 @@ async def check_and_reassign_stale_leads():
                             old_phone = f"{old_phone}@c.us"
                         await whatsapp.send_message(old_phone, Messages.SOS.PRO_LOST_LEAD)
 
+                # Clear any stuck customer state (e.g. AWAITING_PRO_APPROVAL)
+                await StateManager.clear_state(chat_id)
                 logger.info(f"✅ [SOS Healer] Lead {lead_id} reassigned from {current_pro_id} to {new_pro_id} (attempt {reassignment_count + 1})")
 
             else:
-                logger.warning(f"⚠️ [SOS Healer] Could not find replacement for lead {lead_id} (Stuck).")
+                logger.warning(f"⚠️ [SOS Healer] Could not find replacement for lead {lead_id} — escalating to PENDING_ADMIN_REVIEW.")
+                await leads_collection.update_one(
+                    {"_id": lead_id},
+                    {"$set": {"status": LeadStatus.PENDING_ADMIN_REVIEW}}
+                )
+                try:
+                    await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+                except Exception as e:
+                    logger.error(f"Failed to notify customer {chat_id} of pending review: {e}")
+                await ContextManager.clear_context(chat_id)
 
     except Exception as e:
         logger.error(f"❌ [SOS Healer] Error: {e}")
@@ -190,7 +202,7 @@ async def send_periodic_admin_report():
     
     # Same query as Healer - if they are still here, it means Healer failed or no one accepted.
     query = {
-        "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
+        "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.PENDING_ADMIN_REVIEW]},
         "created_at": {"$lt": threshold_time}
     }
     
