@@ -1,4 +1,4 @@
-# Proli - AI Automation for Professionals 🛠️🤖
+# Proli — AI Automation for Service Professionals
 
 **[English](#english) | [עברית](#hebrew)**
 
@@ -6,48 +6,154 @@
 
 <a name="english"></a>
 
-**Proli** is a smart CRM and scheduling automation platform designed for service professionals (plumbers, electricians, technicians). It seamlessly combines a **Multimodal WhatsApp AI Bot** for customer interaction with a robust **Admin Panel** for business management.
+**Proli** is an AI-powered WhatsApp CRM and scheduling platform for Israeli service professionals (plumbers, electricians, technicians). It combines a multimodal WhatsApp bot for customer interactions with a full-featured admin panel for business management.
 
-### 🚀 Core Features
+## Core Features
 
-#### 🤖 Intelligent WhatsApp Bot (User Facing)
+### WhatsApp Bot (Customer-facing)
 
-- **Smart Routing Engine:** Automatically routes leads to the _best_ professional based on:
-  - **Location:** Matches user city with Pro service areas.
-  - **Rating:** Prioritizes top-rated professionals.
-  - **Load Balancing:** Distributes work to avoid overloading busy pros.
-- **Multimodal AI:**
-  - **Vision:** Analyzes photos of issues (e.g., a leaking pipe) to understand the problem.
-  - **Video:** Watches clips to identify dynamic issues (e.g., flickering lights, strange noises).
-  - **Audio:** Transcribes and interprets voice notes in real-time.
-- **Interactive UI:** Uses native WhatsApp buttons for seamless confirmations and quick actions.
-- **Dynamic Personas:** The bot adopts the specific pricing, tone, and rules of the assigned professional.
-- **Availability Management:** Checks real-time calendar availability in MongoDB and books appointments autonomously using atomic locks.
-- **Pro Onboarding:** Self-service onboarding flow for new professionals via WhatsApp.
-- **Stale Job Monitor:** Automatically detects "stuck" leads (no completion after 4-24h) and follows up with the pro or customer.
-- **SOS Auto-Recovery (Healer):** Automatically reassigns leads to a new professional if the current one doesn't respond within the timeout.
-- **SOS Admin Reporter:** Sends a batched summary of stuck leads to the administrator every 4 hours if reassignment fails.
+- **Progressive Geo Routing** — Finds the best pro within 10 km, expanding to 20 km then 30 km if needed. Falls back to city-name matching for non-geo queries.
+- **Rating + Load Balancing** — Prioritizes highest-rated pros; skips any pro carrying 3 or more active leads.
+- **Pro Approval Flow** — Every deal requires explicit pro consent. Customers wait in a soft-hold state (`AWAITING_PRO_APPROVAL`) while the pro reviews and approves, pauses, or rejects via interactive WhatsApp buttons.
+- **Live Handoff** — Customer or pro can pause the bot for direct conversation (`PAUSED_FOR_HUMAN`, 2-hour auto-expiry via Redis TTL). Bot resumes automatically when the TTL expires.
+- **Multimodal AI** — Analyzes photos, transcribes voice notes, and watches video clips. Mandatory media collection step before estimates.
+- **Dynamic Pro Personas** — The AI adopts the assigned pro's pricing, tone, and custom rules during the booking conversation.
+- **SOS Auto-Recovery (Healer)** — Detects leads stuck > 60 min and reassigns to a new pro. If no replacement is found, escalates to `PENDING_ADMIN_REVIEW` and notifies the customer.
+- **Stale Monitor** — Follows up with pros (4–6 h) and customers (6–24 h) on open leads.
+- **Pro Onboarding** — Self-service WhatsApp signup flow for new professionals.
 
-#### 📊 Admin Panel (Manager Facing)
+### Admin Panel (Manager-facing)
 
-- **Bilingual Interface:** Full support for Hebrew and English via a language toggle.
-- **Live Dashboard:** Real-time metrics on leads, active professionals, and revenue.
-- **Role-Based Access Control (RBAC):** Owner, Editor, and Viewer roles with comprehensive audit logging.
-- **Analytics:** Visual charts for lead funnels, daily volume, and professional performance.
-- **Lead Management:** Full CRUD capabilities with inline editing.
-- **Smart Schedule:** Daily Editor and Bulk Generator for managing recurring availability.
-- **Data Management:** Privacy compliance tools for user data export and deletion.
+- **Live Dashboard** — Real-time metrics on leads, professionals, and revenue.
+- **RBAC** — Owner, Editor, and Viewer roles with full audit logging.
+- **Analytics** — Lead funnels, daily volume, pro performance charts.
+- **Lead Management** — Full CRUD with inline editing.
+- **Schedule Management** — Daily editor, bulk generator, and recurring weekly templates.
+- **Privacy Tools** — GDPR data export and user deletion.
 
-### 🛠️ Tech Stack
+## Tech Stack
 
-- **Backend:** Python 3.12+, FastAPI, HTTPX, ARQ (Redis Task Queue)
-- **Frontend (Admin):** Streamlit
-- **AI Engine:** Google Gemini Adaptive (Flash Lite 2.5 → Flash 2.5 → Flash 1.5 Fallback)
-- **Database:** MongoDB Atlas (Async via `motor`), Redis (Context & State)
-- **Media & Comms:** Cloudinary (Media), Green API (WhatsApp), InforUMobile (SMS Fallback)
-- **Security:** Bcrypt (Admin Auth), Webhook Token Verification, Session-based Cookies
-- **Testing:** Pytest (AsyncIO & Mocking), E2E Webhook Simulation, Automated Reset & Seeding Scripts
-- **Deployment:** Docker Compose / Railway (multi-service)
+| Layer | Technology |
+|-------|-----------|
+| Language | Python 3.12+ |
+| API | FastAPI + Uvicorn |
+| Worker | ARQ (Redis task queue) + APScheduler |
+| AI | Google Gemini (Flash Lite 2.5 → Flash 2.5 → Flash 1.5 fallback) |
+| Database | MongoDB Atlas (async Motor) |
+| Cache / State | Redis |
+| Admin UI | Streamlit |
+| Media | Cloudinary |
+| WhatsApp | Green API |
+| SMS Fallback | InforUMobile |
+| Security | Bcrypt, webhook token verification, session cookies |
+| Infrastructure | Docker Compose / Railway |
+
+---
+
+## Installation & Setup
+
+### 1. Clone and create environment
+
+```bash
+git clone https://github.com/netanel152/proli.git
+cd proli
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Configure `.env`
+
+```env
+# Required
+GREEN_API_INSTANCE_ID=...
+GREEN_API_TOKEN=...
+GEMINI_API_KEY=...
+CLOUDINARY_CLOUD_NAME=...
+CLOUDINARY_API_KEY=...
+CLOUDINARY_API_SECRET=...
+
+# Optional
+MONGO_URI=mongodb+srv://...          # default: mongodb://localhost:27017/proli_db
+MONGO_TEST_URI=mongodb+srv://...     # required only for integration tests
+ADMIN_PASSWORD=...                   # generate hash: python scripts/generate_admin_hash.py
+ADMIN_PHONE=972501234567             # WhatsApp number for SOS alerts
+WEBHOOK_TOKEN=...                    # enables ?token=<value> webhook auth
+WHATSAPP_BUTTONS_ENABLED=true        # set false if your Green API plan lacks button support
+ENVIRONMENT=development              # production | development
+```
+
+### 3. Seed the database
+
+```bash
+python scripts/seed_db.py
+python scripts/create_indexes.py
+```
+
+---
+
+## Running the App
+
+### Option A: Docker (recommended)
+
+```bash
+docker-compose up --build -d
+```
+
+| Service | URL |
+|---------|-----|
+| API | http://localhost:8000 |
+| Admin Panel | http://localhost:8501 |
+| Worker logs | `docker-compose logs -f worker` |
+
+### Option B: Local development (three terminals)
+
+```bash
+# Terminal 1 — FastAPI backend
+uvicorn app.main:app --reload --port 8000
+
+# Terminal 2 — Background worker
+python -m app.worker
+
+# Terminal 3 — Admin panel
+streamlit run admin_panel/main.py
+```
+
+---
+
+## Testing
+
+```bash
+# All unit tests (no real DB required)
+pytest
+
+# Verbose output
+pytest -v
+
+# Single file
+pytest tests/test_matching_service.py
+
+# Integration tests (requires MONGO_TEST_URI)
+pytest -m integration
+```
+
+Expected result: **162 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+
+---
+
+## Documentation
+
+| Doc | Description |
+|-----|-------------|
+| [Architecture](docs/ARCHITECTURE.md) | System design, data flow, component overview |
+| [Logic Flow](docs/DOCUMENTATION_FLOW.md) | Lead lifecycle, AI phases, scheduling |
+| [API Docs](docs/API_DOCS.md) | Webhook and health endpoints |
+| [Testing Guide](docs/TESTING.md) | Test structure, mocking strategy, writing tests |
+| [Operations Guide](docs/OPERATIONS_GUIDE.md) | Running, monitoring, troubleshooting |
+| [Scripts](docs/SCRIPTS.md) | Database and simulation scripts |
+| [Railway Setup](docs/RAILWAY_SETUP.md) | Cloud deployment guide |
+| [Production Readiness](docs/PRODUCTION_READINESS.md) | Pre-launch checklist |
+| [Scaling Guide](docs/SCALING_GUIDE.md) | Horizontal scaling strategies |
 
 ---
 
@@ -55,117 +161,22 @@
 
 <div dir="rtl">
 
-**Proli** היא פלטפורמת אוטומציה וניהול יומן חכמה המיועדת לבעלי מקצוע (אינסטלטורים, חשמלאים, טכנאים). המערכת משלבת בוט וואטסאפ מולטי-מודאלי חכם לשיחה עם לקוחות יחד עם פאנל ניהול מתקדם.
+## סקירה בעברית
 
-### 🚀 פיצ'רים מרכזיים
+**Proli** היא פלטפורמת CRM ואוטומציה מבוססת AI לבעלי מקצוע ישראלים (אינסטלטורים, חשמלאים, טכנאים). המערכת משלבת בוט וואטסאפ חכם לשיחה עם לקוחות ופאנל ניהול מלא.
 
-#### 🤖 בוט וואטסאפ חכם (מול הלקוח)
+### פיצ'רים מרכזיים
 
-- **מנוע ניתוב חכם:** מנתב לידים לאיש המקצוע המתאים ביותר לפי:
-  - **מיקום:** התאמת עיר הלקוח לאזורי השירות.
-  - **דירוג:** עדיפות לבעלי מקצוע עם דירוג גבוה.
-  - **עומס:** איזון עבודה למניעת עומס יתר.
-- **בינה מלאכותית מולטי-מודאלית:**
-  - **ראייה:** מנתח תמונות של תקלות (למשל נזילה) כדי להבין את הבעיה.
-  - **וידאו:** צופה בסרטונים כדי לזהות תקלות דינמיות (רעשים, הבהובים).
-  - **שמיעה:** מתמלל ומבין הודעות קוליות בזמן אמת.
-- **פרסונות דינמיות:** הבוט מאמץ את המחירון, הסגנון והחוקים של איש המקצוע הנבחר.
-- **ניהול יומן:** בדיקת זמינות וקביעת תורים אוטומטית.
-- **הרשמת אנשי מקצוע:** תהליך הצטרפות עצמאי דרך וואטסאפ.
+#### בוט וואטסאפ
 
-#### 📊 פאנל ניהול (מול המנהל)
+- **ניתוב גיאוגרפי פרוגרסיבי** — מחפש איש מקצוע ברדיוס 10 ק"מ, ומרחיב ל-20 ו-30 ק"מ בהתאם לצורך.
+- **אישור איש מקצוע** — כל עסקה מחייבת אישור מפורש של איש המקצוע דרך כפתורי וואטסאפ (אשר/השהה/דחה).
+- **מעבר אנושי** — לקוח או איש מקצוע יכולים להשהות את הבוט לשיחה ישירה (פג תוקף אוטומטי לאחר שעתיים).
+- **AI מולטי-מודאלי** — ניתוח תמונות, תמלול הודעות קוליות, צפייה בסרטונים.
+- **SOS Healer** — ניתוב מחדש אוטומטי של לידים תקועים, ואסקלציה למנהל אם לא נמצא מחליף.
 
-- **ממשק דו-לשוני:** תמיכה מלאה בעברית ובאנגלית.
-- **דשבורד בזמן אמת:** צפייה בלידים, סטטוסים ומדדים.
-- **הרשאות וניהול אדמינים (RBAC):** צופה, עורך ומנהל מערכת עם לוג פעולות (Audit).
-- **אנליטיקה:** גרפים המציגים ביצועים, משפכי המרה ונפח פעילות.
-- **ניהול לידים:** יצירה, עריכה ומחיקה של לידים עם שדות אחידים.
-- **ניהול יומן:** עורך יומי ומחולל אוטומטי.
-- **פרופילים:** הגדרת הנחיות AI ומחירונים לכל איש מקצוע.
+#### פאנל ניהול
+
+- דשבורד בזמן אמת, ניהול לידים ואנשי מקצוע, ניהול יומן, אנליטיקה, הרשאות RBAC.
 
 </div>
-
----
-
-## ⚙️ Installation & Setup
-
-1.  **Clone & Environment:**
-
-    ```bash
-    git clone <url>
-    cd proli-backend
-    python -m venv venv
-    source venv/bin/activate  # Windows: venv\Scripts\activate
-    pip install -r requirements.txt
-    ```
-
-2.  **Configuration (`.env`):**
-    Create a `.env` file with the following:
-
-    ```env
-    MONGO_URI=mongodb+srv://...
-    MONGO_TEST_URI=mongodb+srv://... (Optional, for running tests)
-    GEMINI_API_KEY=...
-    GREEN_API_INSTANCE_ID=...
-    GREEN_API_TOKEN=...
-    CLOUDINARY_CLOUD_NAME=...
-    CLOUDINARY_API_KEY=...
-    CLOUDINARY_API_SECRET=...
-    ADMIN_PASSWORD_HASH=...  # Generate with: python scripts/generate_admin_hash.py
-    ADMIN_PHONE=972501234567  # Admin WhatsApp number for SOS alerts
-    WEBHOOK_TOKEN=...  # Optional: enables webhook auth (?token=<value>)
-    ```
-
-3.  **Seed Database:**
-    ```bash
-    python scripts/seed_db.py
-    ```
-
-## ▶️ Running the App
-
-### Option A: Docker (Recommended)
-
-This will spin up the Backend, Worker, and Admin Panel in isolated containers.
-
-```bash
-docker-compose up --build -d
-```
-
-- **Backend:** http://localhost:8000
-- **Admin Panel:** http://localhost:8501
-- **Worker:** Runs in background (logs via `docker-compose logs -f worker`)
-
-### Option B: Local Development
-
-**1. Backend Server (FastAPI):**
-
-```bash
-uvicorn app.main:app --reload --port 8000
-```
-
-**2. Worker (Background Jobs):**
-
-```bash
-python -m app.worker
-```
-
-**3. Admin Panel (Streamlit):**
-
-```bash
-streamlit run admin_panel/main.py
-```
-
-## 📚 Documentation
-
-For more detailed information, please refer to the `docs/` folder:
-
-- **[API Documentation](docs/API_DOCS.md)**: API Endpoints and Webhook structure.
-- **[Logic Flow](docs/DOCUMENTATION_FLOW.md)**: Detailed explanation of the lead lifecycle and AI decision making.
-- **[Operations Guide](docs/OPERATIONS_GUIDE.md)**: Manual for running, monitoring, and troubleshooting the system.
-- **[Gemini Context](docs/GEMINI.md)**: Technical architecture and AI context for developers.
-- **[Scaling Guide](docs/SCALING_GUIDE.md)**: Strategies for scaling the application.
-- **[Architecture](docs/ARCHITECTURE.md)**: System architecture and component interactions.
-- **[Railway Setup](docs/RAILWAY_SETUP.md)**: Multi-service Railway deployment guide.
-- **[Testing Guide](docs/TESTING.md)**: Test suite structure, mocking strategy, and how to run tests.
-- **[Production Readiness](docs/PRODUCTION_READINESS.md)**: Checklist for going to production.
-- **[Analysis Report](docs/ANALYSIS_REPORT.md)**: March 2026 code review — all 19 issues resolved.

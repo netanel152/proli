@@ -1,242 +1,275 @@
-# מדריך תפעול ותקלות - Proli
+# Proli Operations Guide
 
-## ארכיטקטורת ריצה
+## Running the System
 
-המערכת יכולה לרוץ בשני אופנים:
-
-**אפשרות א' (מומלץ): Docker Containers**
-
-- **Web (Backend):** קונטיינר המריץ את `uvicorn`.
-- **Worker:** קונטיינר המריץ את תהליכי הרקע (`arq` + `scheduler`).
-- **Admin:** קונטיינר המריץ את `streamlit`.
-- כולם מנוהלים דרך `docker-compose.yml` ומשתפים רשת פנימית.
-
-**אפשרות ב': ריצה מקומית (Local)**
-
-1. **שרת ה-Backend (`uvicorn`):** אחראי על קבלת Webhooks וניהול התקשורת עם Gemini.
-2. **ה-Worker (`python -m app.worker`):** אחראי על עיבוד הודעות כבד, תזמון משימות (Scheduler), ומערכת ה-SOS.
-3. **ממשק הניהול (`streamlit`):** דשבורד ויזואלי למנהל המערכת.
-
-## ניהול וניטור (Logs & Monitoring)
-
-### צפייה בלוגים (Docker)
-
-המערכת משתמשת ב-`Loguru` לניהול לוגים מובנה.
+### Docker (recommended)
 
 ```bash
-# צפייה בלוגים של כל השירותים בזמן אמת
-docker-compose logs -f
+docker-compose up --build -d
 
-# צפייה בלוגים של שירות ספציפי
-docker-compose logs -f web    # Backend
-docker-compose logs -f worker # Background Worker
-docker-compose logs -f admin  # Admin Panel
+# View logs
+docker-compose logs -f          # all services
+docker-compose logs -f worker   # worker only
+docker-compose logs -f api      # API only
+
+# Restart a service
+docker-compose restart worker
+
+# Stop everything
+docker-compose down
 ```
 
-### קבצי לוג (Local/Archive)
+### Local development (three terminals)
 
-הלוגים נשמרים גם לקבצים בתיקיית `logs/`:
-
-- `proli.log`: לוג ראשי (מתגלגל כל 10MB).
-- הלוגים נשמרים למשך 10 ימים ונדחסים אוטומטית.
-
-## ניהול שוטף (Dashboard)
-
-### יצירת ליד חדש (Create Lead)
-
-לשונית חדשה בלוח הבקרה מאפשרת יצירה ידנית של לידים:
-
-1. עבור לטאב **"Create New Lead"**.
-2. הזן מספר טלפון (חובה - משמש כמזהה ייחודי).
-3. בחר איש מקצוע משויך (אופציונלי).
-4. הזן פרטי תקלה וסטטוס התחלתי.
-5. לחץ **"Create Lead"**. הליד יופיע מיד בטבלה הראשית.
-
-### עריכת לידים
-
-ניתן לערוך פרטים ישירות בטבלה (Data Editor):
-
-- **Status:** שינוי סטטוס הטיפול.
-- **Professional:** שינוי השיוך לאיש מקצוע (ניתן להעביר ליד מאחד לשני).
-- **Issue/Details:** עדכון תיאור התקלה.
-- **שמירה:** יש ללחוץ על **"Save Changes"** כדי לשמור את השינויים ב-DB.
-
-## פתרון תקלות נפוצות
-
-### 1. הבוט עונה כ-"Proli Support" (ברירת מחדל)
-
-זה קורה כאשר מנוע הניתוב לא מוצא איש מקצוע מתאים.
-
-- **בדיקה:** האם יש אנשי מקצוע עם `is_active: True` ב-DB?
-- **בדיקה:** האם הלקוח ציין עיר שלא נמצאת ב-`service_areas` של אף אחד?
-- **פתרון:** הוסף אזורי שירות או הפעל אנשי מקצוע דרך מסך "Professionals".
-
-### 2. הבוט לא מגיב לתמונות/סרטונים/הודעות קוליות
-
-- **בדיקה:** האם `httpx` מותקן? (נסה `pip install httpx`).
-- **בדיקה:** האם הקובץ נגיש ציבורית (URL תקין)?
-- **לוגים:** חפש שגיאות `Error downloading media` בלוג.
-
-### 3. הלידים לא מופיעים בדשבורד
-
-- נסה ללחוץ על כפתור "Refresh Leads".
-- וודא שאתה מחובר ל-Database הנכון.
-
-### 4. ניטור ביצועי AI (Fallback Monitoring)
-
-המערכת מנסה באופן אוטומטי לעבור מודלים במקרה של כשל.
-
-- **לוגים:** חפש `Model ... failed` בלוגים כדי לראות אם המערכת נאלצה לעבור למודל גיבוי.
-- **כשל מוחלט:** אם כל המודלים נכשלים, תופיע שגיאה `All AI models failed`. בדוק את ה-API Key ואת המכסות (Quota) בגוגל.
-
-## מערכת ה-SOS (תיקון ודיווח אוטומטי)
-
-כדי להבטיח ששום ליד לא "ייפול בין הכיסאות", המערכת כוללת שני מנגנוני הגנה:
-
-### 1. SOS Healer (תיקון אוטומטי)
-
-- **מה זה:** תהליך הרץ כל 10 דקות ובודק לידים בסטטוס `NEW` או `CONTACTED` שנוצרו לפני יותר מ-30 דקות (ניתן להגדרה ב-`WorkerConstants.SOS_TIMEOUT_MINUTES`).
-- **פעולה:** המערכת מודיעה ללקוח על העיכוב, ומנסה למצוא איש מקצוע חלופי (תוך החרגת איש המקצוע המקורי).
-- **הודעה למקצוען:** איש המקצוע המקורי מקבל הודעה שהליד הועבר עקב חוסר מענה.
-
-### 2. SOS Admin Reporter (דיווח למנהל)
-
-- **מה זה:** תהליך הרץ כל 4 שעות.
-- **פעולה:** אם ישנם לידים שעדיין תקועים (למשל, כי לא נמצא איש מקצוע חלופי), המערכת שולחת דו"ח מרוכז למנהל המערכת ב-WhatsApp עם רשימת הלידים והזמן שהם ממתינים.
-
-## גיבוי ושחזור (Backup & Restore)
-
-### גיבוי אוטומטי
-המערכת מבצעת גיבוי יומי אוטומטי בשעה 02:00 (שעון ישראל) באמצעות APScheduler:
-- `mongodump` עם דחיסת gzip
-- שמירה לתיקיית `backups/` עם חותמת זמן
-- העלאה אוטומטית ל-S3 אם מוגדרים `BACKUP_S3_BUCKET` ו-AWS credentials
-- מדיניות שמירה: 7 יומיים + 4 שבועיים
-
-### גיבוי ידני
 ```bash
-python scripts/backup.py              # גיבוי מקומי
-python scripts/backup.py --upload-s3  # גיבוי + העלאה ל-S3
-python scripts/backup.py --cleanup    # ניקוי גיבויים ישנים
+# Terminal 1 — API
+uvicorn app.main:app --reload --port 8000
+
+# Terminal 2 — Worker (ARQ + APScheduler)
+python -m app.worker
+
+# Terminal 3 — Admin panel
+streamlit run admin_panel/main.py
 ```
 
-### שחזור
+---
+
+## Logs & Monitoring
+
+Proli uses **Loguru** with PII masking applied to all sinks.
+
+- **Console:** Human-readable colored output in development; JSON in production.
+- **File:** `logs/proli.log` — rotating at 10 MB, retained 10 days, gzip-compressed.
+- **PII masking:** Israeli phone numbers are masked in all environments: `972521234567` → `97252****567`.
+
+Log patterns to watch:
+
+| Pattern | Meaning |
+|---------|---------|
+| `Model ... failed` | AI fallback triggered |
+| `All AI models failed` | All Gemini models exhausted — check API key and quota |
+| `$geoNear` / `Expanding search radius` | Geo search expanding to next radius step |
+| `No professional found within 30km` | Escalating to PENDING_ADMIN_REVIEW |
+| `[SOS Healer]` | Auto-recovery running |
+| `[Janitor]` | Cleaning up unassigned stale leads |
+| `worker:heartbeat` | Worker liveness key (120 s expiry) |
+
+---
+
+## Scheduler Jobs
+
+All jobs run in the Worker process. Individual jobs can be toggled via MongoDB:
+
+```python
+# Disable the SOS healer (e.g. during maintenance)
+db.settings.update_one(
+    {"_id": "scheduler_config"},
+    {"$set": {"sos_healer_active": False}},
+    upsert=True
+)
+```
+
+Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`.
+
+---
+
+## SOS & Healer System
+
+### How it works
+
+The **SOS Healer** (every 10 min) finds leads in `new`, `contacted`, or `pending_admin_review` status older than 60 minutes:
+
+1. Notifies customer of the delay
+2. Searches for a replacement pro (excluding the current one)
+3. If found → reassigns the lead, notifies both pros, clears customer state
+4. If not found → sets lead to `PENDING_ADMIN_REVIEW`, sends customer a `PENDING_REVIEW` message, clears context
+5. If max reassignments (3) reached → closes the lead, notifies customer
+
+The **SOS Reporter** (every 4 h) sends a batched WhatsApp summary of all still-stuck leads to the admin number (`ADMIN_PHONE`).
+
+### Customer-triggered pause
+
+A customer sending "אני צריך נציג" (or similar):
+1. Sets their state to `PAUSED_FOR_HUMAN` (2-hour auto-expiry via Redis TTL)
+2. Alerts admin and the assigned pro
+3. Sends customer `BOT_PAUSED_BY_CUSTOMER` message
+4. All subsequent messages are logged silently — no bot response
+5. Bot auto-resumes when TTL expires, or when the pro sends "המשך"
+
+---
+
+## Pro Approval Flow
+
+When a deal is finalized by the AI:
+
+1. Customer enters `AWAITING_PRO_APPROVAL` state — bot replies with "still waiting" if they message again
+2. Pro receives an approval message with 3 buttons:
+   - **Approve** → lead becomes `BOOKED`, customer state cleared
+   - **Pause** → customer enters `PAUSED_FOR_HUMAN` (2 h), direct chat begins
+   - **Reject** → lead becomes `REJECTED`, system may re-route
+3. Pro can resume the bot with "המשך" → clears customer pause state
+
+---
+
+## Admin Panel
+
+Access at `http://localhost:8501` (local) or via nginx proxy at port 8080 (Docker).
+
+### RBAC Roles
+
+| Role | Permissions |
+|------|------------|
+| Owner | Full access — manage admins, view audit log, all edits |
+| Editor | Edit leads, professionals, schedules |
+| Viewer | Read-only dashboard |
+
+Manage admins under **Settings → Admin Users** (Owner only). All actions are logged to the audit log.
+
+**Fallback auth:** If no admins exist in the DB, the system accepts the `ADMIN_PASSWORD` env var.
+
+### Lead Management
+
+- Edit lead fields directly in the data table
+- Change status, assigned pro, issue details
+- Click **Save Changes** to persist to MongoDB
+
+### Professional Management
+
+- View all pros, toggle `is_active`, edit profiles
+- Approve pending registrations (from WhatsApp self-signup)
+- Set `system_prompt`, `price_list`, `service_areas`
+
+---
+
+## Pro Onboarding (Self-Signup)
+
+Professionals can register directly via WhatsApp:
+
+1. Send "הרשמה" to the bot
+2. Complete 5-step questionnaire: business name → service type → service areas → pricing → confirm
+3. Profile submitted for admin approval
+4. Admin approves/rejects from the "Pending Approval" section in the admin panel
+5. Pro receives WhatsApp notification of the decision
+
+---
+
+## Backup & Restore
+
+### Automated backup
+
+Runs daily at 02:00 IL via APScheduler. Creates a gzipped `mongodump`, saved to `backups/`. Optionally uploads to S3 if `BACKUP_S3_BUCKET` and AWS credentials are configured.
+
+Retention: 7 daily + 4 weekly backups.
+
+### Manual commands
+
 ```bash
-python scripts/restore.py --latest          # שחזור מגיבוי אחרון
-python scripts/restore.py --from-s3 <key>   # שחזור מ-S3
-python scripts/restore.py --no-drop         # שחזור ללא מחיקת נתונים קיימים
+# Create backup
+python scripts/backup.py
+
+# Create and upload to S3
+python scripts/backup.py --upload-s3
+
+# Restore from latest local backup
+python scripts/restore.py --latest
+
+# Restore from S3
+python scripts/restore.py --from-s3 <key>
+
+# Restore without dropping existing data
+python scripts/restore.py --no-drop
 ```
 
-## ניהול משתמשי אדמין (RBAC)
+---
 
-המערכת תומכת ב-3 רמות הרשאה:
-- **Owner:** גישה מלאה — ניהול אדמינים, צפייה ב-Audit Log, כל פעולות העריכה
-- **Editor:** עריכת לידים, אנשי מקצוע, לוחות זמנים
-- **Viewer:** צפייה בלבד בדשבורד
+## Troubleshooting
 
-ניהול אדמינים דרך לשונית "Admin Users" בהגדרות (נגיש רק ל-Owner).
-כל פעולה מתועדת ב-Audit Log.
+### Bot responds as "Proli Support" (default persona)
 
-### Fallback אימות
-אם אין אדמינים ב-DB, המערכת חוזרת לאימות באמצעות `ADMIN_PASSWORD` ממשתני הסביבה.
+The routing engine found no matching pro.
 
-## תאימות ופרטיות (Consent & Privacy)
+- Check: are any pros with `is_active: True` in the DB?
+- Check: does the customer's city match any pro's `service_areas`?
+- Fix: add service areas or activate pros in the admin panel.
 
-### תהליך הסכמה
-- הודעה ראשונה מלקוח חדש → בקשת הסכמה לשמירת מידע
-- הלקוח מאשר → ממשיך לתהליך הרגיל
-- הלקוח מסרב → יציאה מנומסת, אין שמירת מידע
+### Bot doesn't respond to images / audio / video
 
-### ניהול מידע
-מלשונית "Data Management" בהגדרות (Owner בלבד):
-- ייצוא כל המידע של משתמש (Export)
-- מחיקת כל המידע של משתמש (Delete)
-- צפייה בסטטוס הסכמות
+- Check: is the media URL publicly accessible?
+- Check logs for: `Error downloading media` or `Gemini File Processing Failed`
+- For video: Gemini waits up to 120 s for processing — timeouts are logged as errors.
 
-## הרשמת אנשי מקצוע (Pro Onboarding)
+### Leads not appearing in the dashboard
 
-אנשי מקצוע יכולים להירשם באופן עצמאי דרך WhatsApp:
+- Click **Refresh Leads** in the admin panel.
+- Verify you're connected to the correct MongoDB instance.
 
-1. שולחים *הרשמה* לבוט
-2. עוברים שאלון של 5 שלבים: שם עסק → סוג מקצוע → ערים → מחירים → אישור
-3. הפרופיל נשלח לאישור מנהל
-4. המנהל מאשר/דוחה מלשונית "ממתינים לאישור" במסך אנשי מקצוע
-5. איש המקצוע מקבל הודעת WhatsApp על אישור/דחייה
+### AI always failing
 
-## ניהול נתונים, דיבאג וסביבות (Seeding & Resetting)
+- Check logs for: `All AI models failed`
+- Verify `GEMINI_API_KEY` is valid and has quota remaining
+- Check available models: `python scripts/check_models.py`
 
-- **הוספת איש מקצוע (סביבה נקייה):** דרך האדמין, `python scripts/seed_db.py`, או הרשמה עצמית ב-WhatsApp.
-- **ניקוי נתוני טסטים בלבד:** `python scripts/reset_test.py` (למשל `python scripts/reset_test.py --customer 972501234567`) - מנקה מצבי טסט מ-Redis ולידים של לקוח ספציפי.
-- **ניקוי נתונים מלא:** `python scripts/reset_test.py --all` או `python scripts/clear_history.py` (זהירות!).
+### Buttons not working
 
-## אבטחה ומקביליות (Database Safety)
+- If `WHATSAPP_BUTTONS_ENABLED=false` in `.env`, the bot falls back to text options
+- Green API plans may not support the `sendButtons` endpoint — set `WHATSAPP_BUTTONS_ENABLED=false` if you see 403 errors in logs
 
-### מנגנון הנעילה של ה-Scheduler
+---
 
-כדי למנוע שליחת הודעות כפולות (Race Conditions) כאשר רצים מספר תהליכים:
+## Security
 
-- ה-Scheduler משתמש בפקודה `find_one_and_update` של MongoDB.
-- פעולה זו היא **אטומית** (Atomic): היא בודקת ונועלת את הריצה בפעולה אחת.
-- הלוגיקה נמצאת ב-`app.scheduler.scheduler_manager`.
+### Webhook
 
-### Slot Booking Safety (נעילת תורים)
+If `WEBHOOK_TOKEN` is set, configure the full URL in Green API: `https://your-domain/webhook?token=<value>`. Requests without a valid token receive `403 Forbidden`.
 
-בדומה ל-Scheduler, גם קביעת התורים ביומן משתמשת במנגנון אטומי למניעת כפילויות (Double Booking):
+### Admin authentication
 
-- הפונקציה `book_slot_for_lead` משתמשת ב-`find_one_and_update` על קולקציית `slots`.
-- היא מחפשת חלון זמן פנוי (`is_taken: False`) ונועלת אותו (`is_taken: True`) בפעולה אחת.
-- זה מבטיח שגם אם שני לידים מנסים לתפוס את אותו תור באותה מילי-שנייה, רק אחד יצליח.
+Passwords are never stored in plaintext. The system uses bcrypt with a random salt. Sessions use `secrets.token_hex(32)` tokens validated server-side on each request. Logout invalidates the token immediately.
 
-### אבטחת Admin Panel
+Generate a password hash:
+```bash
+python scripts/generate_admin_hash.py
+```
 
-- הסיסמאות לא נשמרות כטקסט גלוי.
-- המערכת משתמשת ב-**Bcrypt** עם Salt לייצור Hash.
-- האימות מול הדפדפן מתבצע באמצעות Cookie מאובטח (`proli_auth_token`) עם טוקן אקראי (`secrets.token_hex(32)`) שנשמר בזיכרון השרת עם תוקף.
-- Logout מבטל את הטוקן בצד השרת.
+### Slot booking atomicity
 
-### אבטחת Webhook
+`book_slot_for_lead` uses MongoDB `find_one_and_update` to atomically find a free slot and mark it taken — preventing double-booking even under concurrent requests.
 
-- אם `WEBHOOK_TOKEN` מוגדר, כל בקשת Webhook חייבת לכלול את הטוקן כ-query parameter.
-- בקשות ללא טוקן תקין מוחזרות עם `403 Forbidden`.
-- יש להגדיר את כתובת ה-Webhook ב-Green API כ: `https://your-domain/webhook?token=<value>`.
+---
 
-## נספח: משתני סביבה (.env)
+## Environment Variables Reference
 
-להלן רשימה מלאה של המשתנים הנתמכים:
+### Required
 
-### חובה (Required)
+| Variable | Description |
+|----------|------------|
+| `GREEN_API_INSTANCE_ID` | WhatsApp Business API instance ID |
+| `GREEN_API_TOKEN` | Green API authentication token |
+| `GEMINI_API_KEY` | Google Gemini API key |
+| `CLOUDINARY_CLOUD_NAME` | Cloudinary account name |
+| `CLOUDINARY_API_KEY` | Cloudinary API key |
+| `CLOUDINARY_API_SECRET` | Cloudinary API secret |
 
-- `MONGO_URI`: מחרוזת התחברות ל-MongoDB Atlas.
-- `GEMINI_API_KEY`: מפתח API של Google Gemini.
-- `GREEN_API_INSTANCE_ID`: מזהה מופע (Instance ID) ב-Green API.
-- `GREEN_API_TOKEN`: טוקן אימות ב-Green API.
-- `CLOUDINARY_CLOUD_NAME`: שם ענן ב-Cloudinary.
-- `CLOUDINARY_API_KEY`: מפתח API ב-Cloudinary.
-- `CLOUDINARY_API_SECRET`: סוד API ב-Cloudinary.
-- `ADMIN_PASSWORD_HASH`: Hash של סיסמת אדמין (יצירה: `python scripts/generate_admin_hash.py`). מינימום 8 תווים.
+### Optional
 
-### רשות (Optional)
-
-- `WEBHOOK_TOKEN`: טוקן אימות ל-Webhook. אם מוגדר, בקשות חייבות לכלול `?token=<value>` בכתובת ה-URL.
-- `ADMIN_PHONE`: מספר WhatsApp של המנהל לקבלת התראות SOS (ברירת מחדל: `972524828796`).
-- `MONGO_TEST_URI`: DB נפרד להרצת טסטים (מומלץ כדי לא למחוק מידע אמיתי).
-- `REDIS_HOST`: כתובת שרת Redis (ברירת מחדל: `redis`).
-- `REDIS_PORT`: פורט Redis (ברירת מחדל: `6379`).
-- `REDIS_DB`: אינדקס ה-DB ב-Redis (ברירת מחדל: `0`).
-- `PROJECT_NAME`: שם הפרויקט (ברירת מחדל: "Proli Bot Server").
-- `ENVIRONMENT`: סביבת ריצה - `development` או `production`.
-- `LOG_LEVEL`: רמת פירוט לוגים (ברירת מחדל: `INFO`).
-- `MAX_CHAT_HISTORY`: כמות הודעות אחרונות לזכור בקונטקסט (ברירת מחדל: `20`).
-
-### גיבוי ו-S3 (Optional)
-
-- `BACKUP_S3_BUCKET`: שם ה-Bucket ב-S3 לגיבויים.
-- `AWS_ACCESS_KEY_ID`: מפתח AWS.
-- `AWS_SECRET_ACCESS_KEY`: סוד AWS.
-- `AWS_REGION`: אזור AWS (ברירת מחדל: `eu-west-1`).
-
-### SMS Fallback (Optional)
-
-- `SMS_API_KEY`: מפתח API לספק SMS (InforUMobile).
-- `SMS_SENDER_ID`: שם השולח ב-SMS (ברירת מחדל: `Proli`).
-- `SMS_API_URL`: כתובת API של ספק SMS (ברירת מחדל: InforUMobile).
+| Variable | Default | Description |
+|----------|---------|------------|
+| `MONGO_URI` | `mongodb://localhost:27017/proli_db` | MongoDB connection string |
+| `MONGO_TEST_URI` | — | Separate DB for integration tests |
+| `REDIS_HOST` | `redis` | Redis hostname |
+| `REDIS_PORT` | `6379` | Redis port |
+| `REDIS_URL` | — | Full Redis DSN (overrides HOST/PORT) |
+| `ADMIN_PASSWORD` | — | Plain-text password (hashed on startup) |
+| `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts |
+| `WEBHOOK_TOKEN` | — | Enables `?token=<value>` webhook auth |
+| `WHATSAPP_BUTTONS_ENABLED` | `true` | Disable if your Green API plan lacks button support |
+| `ENVIRONMENT` | `development` | `production` enables JSON logs + PII masking on stdout |
+| `LOG_LEVEL` | `INFO` | Loguru log level |
+| `MAX_CHAT_HISTORY` | `20` | Max messages stored per chat in Redis |
+| `AI_MODELS` | Flash Lite 2.5, Flash 2.5, Flash 1.5 | Gemini model fallback chain |
+| `BACKUP_S3_BUCKET` | — | S3 bucket for automated backup upload |
+| `AWS_ACCESS_KEY_ID` | — | AWS credentials for S3 |
+| `AWS_SECRET_ACCESS_KEY` | — | AWS credentials for S3 |
+| `AWS_REGION` | `eu-west-1` | AWS region |
+| `SMS_API_KEY` | — | InforUMobile SMS API key (optional fallback) |
+| `SMS_SENDER_ID` | `Proli` | SMS sender name |
