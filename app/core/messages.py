@@ -2,7 +2,7 @@ class Messages:
     class Customer:
         # User-facing messages
         COMPLETION_CHECK = "היי! 👋 אנחנו ב-Proli רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. האם העבודה הסתיימה?"
-        COMPLETION_ACK = "מעולה! שמחים לשמוע. איך היה השירות עם {pro_name}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מעולה)."
+        COMPLETION_ACK = "מעולה! שמחים לשמוע. איך היה השירות עם {pro_name}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מצוין)."
         RATING_THANKS = "תודה רבה על הדירוג! ⭐"
         PRO_FOUND = (
             "🎉 *נמצא לך איש מקצוע!*\n\n"
@@ -13,7 +13,7 @@ class Messages:
             "📋 *פרטי העבודה:*\n"
             "🛠️ תקלה: {issue_type}\n"
             "📍 כתובת: {full_address}\n"
-            "⏰ זמן: {appointment_time}\n"
+            "⏰ תאריך ושעה: {appointment_time}\n"
             "{price_line}"
             "{rating_line}"
             "\n{pro_name} יצור איתך קשר בקרוב! 👍"
@@ -29,7 +29,7 @@ class Messages:
             "צוות Proli יחזור אליך בהקדם עם עדכון."
         )
         AWAITING_APPROVAL = (
-            "מעולה, העברתי את הפרטים והוידאו לאיש המקצוע לאישור. "
+            "מעולה, העברתי את הפרטים והמדיה לאיש המקצוע לאישור. "
             "אעדכן אותך ממש בקרוב. 👍"
         )
         STILL_WAITING = "הפנייה שלך נמצאת עכשיו אצל איש המקצוע לאישור. נעדכן אותך ברגע שנקבל תשובה! 🙏"
@@ -38,8 +38,7 @@ class Messages:
             "הבוט מושהה כרגע — איש המקצוע ידבר איתך בהודעות."
         )
         BOT_PAUSED_BY_CUSTOMER = (
-            "✅ קיבלתי! מעביר אותך לנציג אנושי.\n"
-            "הבוט מושהה לשעתיים הקרובות. 🙏"
+            "✅ קיבלתי! מעביר אותך לנציג אנושי.\n"            
         )
 
     class Pro:
@@ -57,11 +56,11 @@ class Messages:
         # Sent when pro is first matched — conversation still in progress, no action needed yet
         EARLY_LEAD_HEADER = "👀 *שיחה בתהליך*"
         EARLY_LEAD_DETAILS = "🛠️ *תקלה:* {issue_type}\n📍 *עיר:* {city}"
-        EARLY_LEAD_FOOTER = "\n\nהבוט אוסף פרטים מהלקוח (כתובת + זמן).\nתקבל הודעה עם כל הפרטים לאישורך — *אין צורך לפעול עכשיו.*"
+        EARLY_LEAD_FOOTER = "\n\nהבוט אוסף פרטים מהלקוח (כתובת + תאריך ושעה).\nתקבל הודעה עם כל הפרטים לאישורך — *אין צורך לפעול עכשיו.*"
         # Sent when deal closes — ready for approval
         DEAL_CONFIRMED_HEADER = "✅ *הלקוח אישר! פרטי העבודה:*"
         NEW_LEAD_HEADER = "📢 *הצעת עבודה חדשה*"
-        NEW_LEAD_DETAILS = "📍 *כתובת:* {full_address}\n🛠️ *תקלה:* {issue_type}\n⏰ *זמן מועדף:* {appointment_time}"
+        NEW_LEAD_DETAILS = "📍 *כתובת:* {full_address}\n🛠️ *תקלה:* {issue_type}\n⏰ *תאריך ושעה מועדפים:* {appointment_time}"
         NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"
         NEW_LEAD_FOOTER = "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
         APPROVAL_REQUEST = (
@@ -69,7 +68,7 @@ class Messages:
             "👤 *לקוח:* {customer_phone}\n"
             "📍 *כתובת:* {full_address}\n"
             "🛠️ *תקלה:* {issue_type}\n"
-            "⏰ *זמן:* {appointment_time}"
+            "⏰ *תאריך ושעה:* {appointment_time}"
         )
         APPROVAL_MEDIA = "\n📸 *מדיה:* {media_url}"
         PAUSE_ACK = (
@@ -77,7 +76,7 @@ class Messages:
             "הבוט יחזור לפעולה אוטומטית בעוד שעתיים או כשתשלח 'המשך'."
         )
         PAUSE_NOTIFICATION = (
-            "🚨 הלקוח מבקש מענה אנושי (או שהשהית את הבוט).\n"
+            "🚨 הלקוח מבקש מענה אנושי.\n"
             "כנס לשיחה בוואטסאפ. הבוט יחזור לפעולה אוטומטית בעוד שעתיים."
         )
         NAVIGATE_TO = "🚗 נווט לכתובת:"

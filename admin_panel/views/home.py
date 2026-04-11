@@ -15,7 +15,7 @@ from app.core.constants import AdminDefaults, Defaults
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 KANBAN_STATUSES = ["new", "contacted", "booked", "completed", "rejected", "closed", "cancelled"]
-ALL_STATUSES = ["new", "contacted", "booked", "completed", "rejected", "closed", "cancelled"]
+ALL_STATUSES = ["new", "contacted", "booked", "completed", "rejected", "closed", "cancelled", "pending_admin_review"]
 
 
 def view_leads_dashboard(T):
