@@ -121,7 +121,7 @@ def view_leads_dashboard(T):
 
         # Quick actions on selected lead (below Kanban)
         if not leads_df.empty:
-            _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id)
+            _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id, tab_key="kanban")
 
     # ==========================================
     # TAB 2: TABLE VIEW
@@ -225,7 +225,7 @@ def view_leads_dashboard(T):
             st.markdown("")
 
             # Lead selection and actions (below table)
-            _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id)
+            _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id, tab_key="table")
 
     # ==========================================
     # TAB 3: CREATE LEAD
@@ -288,7 +288,7 @@ def view_leads_dashboard(T):
                         st.error(f"Error creating lead: {e}")
 
 
-def _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id):
+def _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id, tab_key="kanban"):
     """Render the lead detail / quick-action section below the Kanban board."""
     st.markdown("---")
     st.subheader(T.get("lead_quick_actions", "Lead Details"))
@@ -298,16 +298,18 @@ def _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id):
         T.get("select_lead", "Select Lead"),
         range(len(lead_options)),
         format_func=lambda i: lead_options[i],
-        key="kanban_lead_select"
+        key=f"{tab_key}_lead_select"
     )
 
     if selected_idx is not None:
         selected_lead = leads_df.iloc[selected_idx]
-        _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id)
+        _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id, tab_key=tab_key)
 
 
-def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id):
+def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id, tab_key="kanban"):
     """Render actions for a selected lead (shared between Kanban and Table views)."""
+    lid = selected_lead['id']
+    k = f"{tab_key}_{lid}"
     c1, c2 = st.columns([1, 3])
 
     with c1:
@@ -319,15 +321,15 @@ def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id):
 
         # Delete action
         if has_permission(get_current_role(), "delete_leads"):
-            if st.button(T.get('delete_btn', 'Delete Lead'), key=f"delete_{selected_lead['id']}", type="secondary"):
-                st.session_state[f"confirm_delete_{selected_lead['id']}"] = True
+            if st.button(T.get('delete_btn', 'Delete Lead'), key=f"delete_{k}", type="secondary"):
+                st.session_state[f"confirm_delete_{k}"] = True
 
         # Manual customer check
         if can_edit(get_current_role()):
-            if st.button(T.get("check_customer_btn", "Customer Check"), key=f"check_{selected_lead['id']}"):
+            if st.button(T.get("check_customer_btn", "Customer Check"), key=f"check_{k}"):
                 try:
-                    send_completion_check_sync(selected_lead['id'])
-                    log_audit("send_completion_check", {"lead_id": selected_lead['id']})
+                    send_completion_check_sync(lid)
+                    log_audit("send_completion_check", {"lead_id": lid})
                     st.success(T.get("check_sent", "Check sent!"))
                 except Exception as e:
                     st.error(f"Failed: {e}")
@@ -335,7 +337,7 @@ def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id):
         # Edit Lead Form
         if can_edit(get_current_role()):
             with st.expander(T.get("edit_lead_btn", "Edit Lead")):
-                with st.form(key=f"edit_lead_form_{selected_lead['id']}"):
+                with st.form(key=f"edit_lead_form_{k}"):
                     current_status = selected_lead.get("status", "new")
                     status_options = ALL_STATUSES if current_status in ALL_STATUSES else ALL_STATUSES + [current_status]
                     new_status = st.selectbox(
@@ -347,13 +349,13 @@ def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id):
                     new_client = st.text_input(T.get("client_name_label", "Client Name"), value=selected_lead.get("client", ""))
                     new_phone = st.text_input(T.get("phone_number_label", "Phone Number"), value=selected_lead.get("phone_number", ""))
                     new_details = st.text_area(T.get("details_label", "Details"), value=selected_lead.get("details_summary", ""))
-                    
+
                     pro_names = ["Unassigned"] + list(pro_map_name_to_id.keys())
                     current_pro_name = selected_lead.get("professional", "Unassigned")
                     if current_pro_name not in pro_names:
                         pro_names.append(current_pro_name)
                     new_pro = st.selectbox(T.get("professional_label", "Professional"), pro_names, index=pro_names.index(current_pro_name))
-                    
+
                     if st.form_submit_button(T.get("save_changes_btn", "Save Changes")):
                         update_data = {
                             "status": new_status,
@@ -364,27 +366,27 @@ def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id):
                         }
                         if new_pro != "Unassigned" and new_pro in pro_map_name_to_id:
                             update_data["pro_id"] = ObjectId(pro_map_name_to_id[new_pro])
-                        
-                        leads_collection.update_one({"_id": ObjectId(selected_lead['id'])}, {"$set": update_data})
-                        log_audit("edit_lead", {"lead_id": selected_lead['id']})
+
+                        leads_collection.update_one({"_id": ObjectId(lid)}, {"$set": update_data})
+                        log_audit("edit_lead", {"lead_id": lid})
                         st.success(T.get("lead_updated", "Lead updated successfully!"))
                         st.cache_data.clear()
                         st.rerun()
 
         # Delete confirmation
-        if st.session_state.get(f"confirm_delete_{selected_lead['id']}"):
+        if st.session_state.get(f"confirm_delete_{k}"):
             st.warning(T.get("confirm_delete", "Are you sure?"))
             cy, cn = st.columns(2)
-            if cy.button(T["confirm_yes"], key=f"yes_del_{selected_lead['id']}"):
-                leads_collection.delete_one({"_id": ObjectId(selected_lead['id'])})
-                log_audit("delete_lead", {"lead_id": selected_lead['id']})
-                logger.info(f"Admin deleted lead {selected_lead['id']}")
+            if cy.button(T["confirm_yes"], key=f"yes_del_{k}"):
+                leads_collection.delete_one({"_id": ObjectId(lid)})
+                log_audit("delete_lead", {"lead_id": lid})
+                logger.info(f"Admin deleted lead {lid}")
                 st.success(T["success_delete"])
-                del st.session_state[f"confirm_delete_{selected_lead['id']}"]
+                del st.session_state[f"confirm_delete_{k}"]
                 st.cache_data.clear()
                 st.rerun()
-            if cn.button(T["confirm_no"], key=f"no_del_{selected_lead['id']}"):
-                del st.session_state[f"confirm_delete_{selected_lead['id']}"]
+            if cn.button(T["confirm_no"], key=f"no_del_{k}"):
+                del st.session_state[f"confirm_delete_{k}"]
                 st.rerun()
 
     with c2:
