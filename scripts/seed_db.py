@@ -126,7 +126,7 @@ async def create_leads(pro_ids):
     print("   Generating 10 Completed/Rated leads...")
     for _ in range(10):
         pro_id = random.choice(pro_ids)
-        status = random.choice([LeadStatus.COMPLETED, "rated"]) # 'rated' usually maps to completed with review
+        status = LeadStatus.COMPLETED
         created_at = datetime.now(timezone.utc) - timedelta(days=random.randint(1, 7))
         chat_id = f"9725{fake.random_number(digits=8)}@c.us"
         
