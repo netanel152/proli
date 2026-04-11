@@ -187,7 +187,6 @@ def view_leads_dashboard(T):
                 use_container_width=True,
                 hide_index=True,
                 num_rows="dynamic",
-                selection_mode="single-row",
             )
 
             # Save changes button
@@ -225,14 +224,8 @@ def view_leads_dashboard(T):
 
             st.markdown("")
 
-            # Row selection actions
-            selected_rows = st.session_state.leads_editor.get("selection", {}).get("rows", [])
-            if selected_rows:
-                selected_row_index = selected_rows[0]
-                selected_lead = edited_df.iloc[selected_row_index]
-                _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id)
-            else:
-                st.info(T.get("select_row_prompt", "Select a row to see actions."))
+            # Lead selection and actions (below table)
+            _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id)
 
     # ==========================================
     # TAB 3: CREATE LEAD
