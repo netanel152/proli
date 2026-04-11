@@ -9,17 +9,11 @@ from admin_panel.core.rbac import (
     can_edit_settings, can_manage_admins, can_view_audit_log, AdminRole,
 )
 
-from pymongo import MongoClient
+from admin_panel.core.auth import _audit_col
 from app.core.config import settings as app_settings
-import certifi
 import pytz
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")
-
-_ca = certifi.where() if "+srv" in app_settings.MONGO_URI else None
-_kwargs = {"tlsCAFile": _ca} if _ca else {}
-_sync_client = MongoClient(app_settings.MONGO_URI, **_kwargs)
-_audit_col = _sync_client.proli_db.audit_log
 
 
 def view_system_settings(T):

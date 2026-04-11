@@ -10,12 +10,12 @@ import pytz
 import os
 import sys
 from app.core.logger import logger
-from app.core.constants import AdminDefaults, Defaults
+from app.core.constants import AdminDefaults, Defaults, LeadStatus
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 KANBAN_STATUSES = ["new", "contacted", "booked", "completed", "rejected", "closed", "cancelled"]
-ALL_STATUSES = ["new", "contacted", "booked", "completed", "rejected", "closed", "cancelled", "pending_admin_review"]
+ALL_STATUSES = [s.value for s in LeadStatus]
 
 
 def view_leads_dashboard(T):
@@ -186,7 +186,8 @@ def view_leads_dashboard(T):
                 },
                 use_container_width=True,
                 hide_index=True,
-                num_rows="dynamic"
+                num_rows="dynamic",
+                selection_mode="single-row",
             )
 
             # Save changes button
@@ -229,7 +230,7 @@ def view_leads_dashboard(T):
             if selected_rows:
                 selected_row_index = selected_rows[0]
                 selected_lead = edited_df.iloc[selected_row_index]
-                _render_selected_lead_actions(selected_lead, T)
+                _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id)
             else:
                 st.info(T.get("select_row_prompt", "Select a row to see actions."))
 
@@ -342,10 +343,12 @@ def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id):
         if can_edit(get_current_role()):
             with st.expander(T.get("edit_lead_btn", "Edit Lead")):
                 with st.form(key=f"edit_lead_form_{selected_lead['id']}"):
+                    current_status = selected_lead.get("status", "new")
+                    status_options = ALL_STATUSES if current_status in ALL_STATUSES else ALL_STATUSES + [current_status]
                     new_status = st.selectbox(
-                        T.get("status_label", "Status"), 
-                        ALL_STATUSES, 
-                        index=ALL_STATUSES.index(selected_lead.get("status", "new")),
+                        T.get("status_label", "Status"),
+                        status_options,
+                        index=status_options.index(current_status),
                         format_func=lambda x: T.get(x, x.capitalize())
                     )
                     new_client = st.text_input(T.get("client_name_label", "Client Name"), value=selected_lead.get("client", ""))
