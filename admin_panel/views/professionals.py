@@ -12,7 +12,7 @@ PROMPT_AREA_MARKER_EN = "Service Areas"
 
 @st.cache_data(ttl=60)
 def get_professionals():
-    return list(users_collection.find())
+    return list(users_collection.find({"pending_approval": {"$ne": True}}))
 
 def view_professionals(T):
     st.title(T["pros_title"])
