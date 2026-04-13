@@ -209,11 +209,6 @@ The routing engine found no matching pro.
 - Verify `GEMINI_API_KEY` is valid and has quota remaining
 - Check available models: `python scripts/check_models.py`
 
-### Buttons not working
-
-- If `WHATSAPP_BUTTONS_ENABLED=false` in `.env`, the bot falls back to text options
-- Green API plans may not support the `sendButtons` endpoint — set `WHATSAPP_BUTTONS_ENABLED=false` if you see 403 errors in logs
-
 ---
 
 ## Security
@@ -262,7 +257,6 @@ python scripts/generate_admin_hash.py
 | `ADMIN_PASSWORD` | — | Plain-text password (hashed on startup) |
 | `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts |
 | `WEBHOOK_TOKEN` | — | Enables `?token=<value>` webhook auth |
-| `WHATSAPP_BUTTONS_ENABLED` | `true` | Disable if your Green API plan lacks button support |
 | `ENVIRONMENT` | `development` | `production` enables JSON logs + PII masking on stdout |
 | `LOG_LEVEL` | `INFO` | Loguru log level |
 | `MAX_CHAT_HISTORY` | `20` | Max messages stored per chat in Redis |

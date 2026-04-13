@@ -301,11 +301,11 @@ async def test_non_pro_returns_none(mock_db, mock_wa, mock_lm):
     assert result is None
 
 
-# --- Interactive Button Handlers (Pro Approval Flow) ---
+# --- Text-Based Pro Approval Handlers ---
 
 @pytest.mark.asyncio
-async def test_btn_approve_lead(pro_setup, mock_wa, mock_lm, monkeypatch):
-    """Pro clicks BTN_APPROVE_LEAD -> lead becomes BOOKED, customer state cleared."""
+async def test_approve_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Pro types 'אשר' -> lead becomes BOOKED, customer state cleared."""
     pro_doc, db = pro_setup
     monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=True))
 
@@ -325,7 +325,7 @@ async def test_btn_approve_lead(pro_setup, mock_wa, mock_lm, monkeypatch):
         "created_at": datetime.now(timezone.utc),
     })
 
-    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", Messages.Keywords.BTN_APPROVE_LEAD, mock_wa, mock_lm)
+    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "אשר", mock_wa, mock_lm)
 
     assert Messages.Pro.APPROVE_SUCCESS in result
     mock_lm.update_lead_status.assert_called_once()
@@ -334,8 +334,8 @@ async def test_btn_approve_lead(pro_setup, mock_wa, mock_lm, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_btn_pause_bot(pro_setup, mock_wa, mock_lm, monkeypatch):
-    """Pro clicks BTN_PAUSE_BOT -> customer state set to PAUSED_FOR_HUMAN with TTL."""
+async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Pro types 'השהה' -> customer state set to PAUSED_FOR_HUMAN with TTL."""
     pro_doc, db = pro_setup
 
     mock_state = MagicMock()
@@ -354,7 +354,7 @@ async def test_btn_pause_bot(pro_setup, mock_wa, mock_lm, monkeypatch):
         "created_at": datetime.now(timezone.utc),
     })
 
-    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", Messages.Keywords.BTN_PAUSE_BOT, mock_wa, mock_lm)
+    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "השהה", mock_wa, mock_lm)
 
     assert result == Messages.Pro.PAUSE_ACK
     # Customer state should be set with 2h TTL
@@ -368,8 +368,8 @@ async def test_btn_pause_bot(pro_setup, mock_wa, mock_lm, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_btn_reject_lead(pro_setup, mock_wa, mock_lm, monkeypatch):
-    """Pro clicks BTN_REJECT_LEAD -> lead rejected, customer state cleared."""
+async def test_reject_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Pro types 'דחה' -> lead rejected, customer state cleared."""
     pro_doc, db = pro_setup
 
     mock_state = MagicMock()
@@ -388,7 +388,7 @@ async def test_btn_reject_lead(pro_setup, mock_wa, mock_lm, monkeypatch):
         "created_at": datetime.now(timezone.utc),
     })
 
-    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", Messages.Keywords.BTN_REJECT_LEAD, mock_wa, mock_lm)
+    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "דחה", mock_wa, mock_lm)
 
     assert result == Messages.Pro.REJECT_SUCCESS
     mock_lm.update_lead_status.assert_called_once()
@@ -421,3 +421,70 @@ async def test_resume_clears_pause(pro_setup, mock_wa, mock_lm, monkeypatch):
 
     assert "חזר לפעולה" in result
     mock_state.clear_state.assert_called_with("972501111111@c.us")
+
+
+# --- Zero-Touch Intent Detection ---
+
+@pytest.mark.asyncio
+async def test_intent_detected_prompts_switch(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Free-text service request from Pro -> sends INTENT_DETECTED message and sets AWAITING state."""
+    mock_state = MagicMock()
+    mock_state.set_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    mock_ai = MagicMock()
+    mock_ai.detect_service_intent = AsyncMock(return_value=True)
+
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "המזגן שלי דולף", mock_wa, mock_lm, ai=mock_ai
+    )
+
+    # Returns empty sentinel
+    assert result == ""
+    # INTENT_DETECTED sent as text message
+    mock_wa.send_message.assert_called_once()
+    call_text = mock_wa.send_message.call_args[0][1]
+    assert "השב *1*" in call_text
+    # State set to AWAITING_INTENT_CONFIRMATION with 5-min TTL
+    mock_state.set_state.assert_called_once_with(
+        f"{PRO_PHONE}@c.us",
+        UserStates.AWAITING_INTENT_CONFIRMATION,
+        ttl=300,
+    )
+
+
+@pytest.mark.asyncio
+async def test_intent_not_detected_returns_none(pro_setup, mock_wa, mock_lm):
+    """Classifier returns False -> function returns None (caller sends help menu)."""
+    mock_ai = MagicMock()
+    mock_ai.detect_service_intent = AsyncMock(return_value=False)
+
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "סתם הודעה", mock_wa, mock_lm, ai=mock_ai
+    )
+
+    assert result is None
+    mock_ai.detect_service_intent.assert_called_once_with("סתם הודעה")
+
+
+@pytest.mark.asyncio
+async def test_known_command_skips_intent_detection(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Text 'אשר' always matches APPROVE_COMMANDS -> detect_service_intent is never called."""
+    mock_ai = MagicMock()
+    mock_ai.detect_service_intent = AsyncMock(return_value=True)
+
+    # Even if the result varies (depends on DB state), classifier must NOT be called
+    await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "אשר", mock_wa, mock_lm, ai=mock_ai
+    )
+
+    mock_ai.detect_service_intent.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_intent_detection_no_ai_returns_none(pro_setup, mock_wa, mock_lm):
+    """When ai=None (default), unmatched text returns None (backward compat)."""
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "שאלה כלשהי", mock_wa, mock_lm
+    )
+    assert result is None

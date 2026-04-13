@@ -1,7 +1,12 @@
 class Messages:
     class Customer:
         # User-facing messages
-        COMPLETION_CHECK = "היי! 👋 אנחנו ב-Proli רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. האם העבודה הסתיימה?"
+        COMPLETION_CHECK = (
+            "היי! 👋 אנחנו ב-Proli רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. "
+            "האם העבודה הסתיימה?\n\n"
+            "השב *1* — כן, הסתיים ✅\n"
+            "השב *2* — עדיין לא ❌"
+        )
         COMPLETION_ACK = "מעולה! שמחים לשמוע. איך היה השירות עם {pro_name}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מצוין)."
         RATING_THANKS = "תודה רבה על הדירוג! ⭐"
         PRO_FOUND = (
@@ -68,7 +73,9 @@ class Messages:
             "👤 *לקוח:* {customer_phone}\n"
             "📍 *כתובת:* {full_address}\n"
             "🛠️ *תקלה:* {issue_type}\n"
-            "⏰ *תאריך ושעה:* {appointment_time}"
+            "⏰ *תאריך ושעה:* {appointment_time}\n\n"
+            "כדי לאשר השב: *אשר*\n"
+            "כדי לדחות השב: *דחה*"
         )
         APPROVAL_MEDIA = "\n📸 *מדיה:* {media_url}"
         PAUSE_ACK = (
@@ -110,6 +117,17 @@ class Messages:
             "💡 *איך להשתמש:*\n"
             "שלח מספר *1–7* או את שם הפקודה.\n"
             "לתפריט זה: שלח *תפריט* או *עזרה* בכל עת."
+        )
+        INTENT_DETECTED = (
+            "🛠️ זיהיתי שאתה מדווח על תקלה. האם תרצה לעבור למצב לקוח כדי שאזמין לך איש מקצוע?\n\n"
+            "השב *1* — כן, עבור למצב לקוח 👤\n"
+            "השב *2* — לא, אני ממשיך כטכנאי 🛠️"
+        )
+        SWITCHED_TO_CUSTOMER = "מעולה, עברת למצב לקוח 👤. כעת אטפל בך כמו בכל לקוח שלנו. ספר לי שוב, מה התקלה?"
+        SWITCH_CANCELLED = "👍 ממשיכים כרגיל במצב טכנאי."
+        AUTO_RETURNED_TO_PRO = (
+            "הקריאה שלך הועברה לאיש המקצוע לאישור. בינתיים, החזרתי אותך למצב טכנאי 🛠️ "
+            "כדי שתוכל להמשיך לנהל את העסק כרגיל."
         )
 
     class SOS:
@@ -246,22 +264,11 @@ class Messages:
         SOS_COMMANDS = ["נציג", "אנושי", "מנהל", "admin", "sos"]
         REGISTER_COMMANDS = ["הרשמה", "להירשם", "register", "signup", "הצטרפות"]
         RESUME_COMMANDS = ["המשך", "resume", "חזור"]
+        PAUSE_COMMANDS = ["השהה", "pause", "hold"]
         RATING_OPTIONS = ["1", "2", "3", "4", "5"]
 
-        # Interactive Button IDs & Titles
+        # Completion check text tokens (used in handle_customer_completion_text)
         CUSTOMER_COMPLETION_INDICATOR = "כן, הסתיים"
-        BUTTON_CONFIRM_FINISH = "confirm_finish"
-        BUTTON_NOT_FINISHED = "not_finished"
-        TEXT_YES_FINISHED = "כן, הסתיים"
-        BUTTON_TITLE_YES_FINISHED = "✅ כן, הסתיים"
-        BUTTON_TITLE_NO_NOT_YET = "❌ עדיין לא"
-        # Pro Approval Buttons
-        BTN_APPROVE_LEAD = "btn_approve_lead"
-        BTN_PAUSE_BOT = "btn_pause_bot"
-        BTN_REJECT_LEAD = "btn_reject_lead"
-        BUTTON_TITLE_APPROVE = "✅ אשר עבודה"
-        BUTTON_TITLE_PAUSE = "⏸️ השהה בוט"
-        BUTTON_TITLE_REJECT = "❌ דחה קריאה"
 
     class Errors:
         AI_OVERLOAD = "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."

@@ -106,9 +106,6 @@ mock_ai.analyze_conversation.return_value = AIResponse(
 # Sequence of responses (dispatcher then pro)
 mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
 
-# Override settings flag
-monkeypatch.setattr(settings, "WHATSAPP_BUTTONS_ENABLED", True)
-
 # Override state
 mock_state.get_state = AsyncMock(return_value=UserStates.AWAITING_PRO_APPROVAL)
 ```

@@ -18,7 +18,6 @@ def wf_mocks(monkeypatch, mock_db):
     mock_wa = MagicMock()
     mock_wa.send_message = AsyncMock()
     mock_wa.send_location_link = AsyncMock()
-    mock_wa.send_interactive_buttons = AsyncMock(return_value={})
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_wa)
 
     mock_state = MagicMock()
@@ -40,6 +39,7 @@ def wf_mocks(monkeypatch, mock_db):
         extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None),
         transcription=None, is_deal=False,
     ))
+    mock_ai.detect_service_intent = AsyncMock(return_value=False)
     monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
 
     mock_lm = MagicMock()
@@ -300,3 +300,78 @@ async def test_sos_sets_paused_state_with_custom_ttl(wf_mocks):
 
     # Customer gets bot paused message
     mock_wa.send_message.assert_any_call("972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_CUSTOMER)
+
+
+# --- Zero-Touch Intent Confirmation Tests ---
+
+@pytest.mark.asyncio
+async def test_intent_confirmation_yes_sets_customer_mode(wf_mocks, mock_db):
+    """State=AWAITING_INTENT_CONFIRMATION, reply '1' -> CUSTOMER_MODE set, context cleared."""
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.AWAITING_INTENT_CONFIRMATION)
+
+    # Insert a pro in DB so find_one won't fail in consent check
+    pro_phone = "972501111111"
+    await mock_db.users.insert_one({"phone_number": pro_phone, "role": "professional"})
+
+    await process_incoming_message(f"{pro_phone}@c.us", "1")
+
+    mock_state.set_state.assert_called_with(f"{pro_phone}@c.us", UserStates.CUSTOMER_MODE)
+    mock_ctx.clear_context.assert_called_once()
+    mock_wa.send_message.assert_called_with(f"{pro_phone}@c.us", Messages.Pro.SWITCHED_TO_CUSTOMER)
+
+
+@pytest.mark.asyncio
+async def test_intent_confirmation_no_clears_state(wf_mocks, mock_db):
+    """State=AWAITING_INTENT_CONFIRMATION, reply '2' -> state cleared, SWITCH_CANCELLED sent."""
+    mock_wa, mock_state, _, _, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.AWAITING_INTENT_CONFIRMATION)
+
+    pro_phone = "972501111112"
+    await mock_db.users.insert_one({"phone_number": pro_phone, "role": "professional"})
+
+    await process_incoming_message(f"{pro_phone}@c.us", "2")
+
+    mock_state.clear_state.assert_called_once_with(f"{pro_phone}@c.us")
+    mock_wa.send_message.assert_called_with(f"{pro_phone}@c.us", Messages.Pro.SWITCH_CANCELLED)
+
+
+@pytest.mark.asyncio
+async def test_intent_confirmation_other_falls_through(wf_mocks, mock_db):
+    """State=AWAITING_INTENT_CONFIRMATION, other text -> state cleared, falls through to routing."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+
+    call_count = [0]
+    async def get_state_side_effect(chat_id):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return UserStates.AWAITING_INTENT_CONFIRMATION
+        return UserStates.IDLE
+
+    mock_state.get_state = get_state_side_effect
+
+    pro_phone = "972501111113"
+    # Not a pro so it falls through to dispatcher after state clear
+    await process_incoming_message(f"{pro_phone}@c.us", "לא יודע")
+
+    mock_state.clear_state.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_safety_bypass_from_customer_mode(wf_mocks, mock_db):
+    """Pro in CUSTOMER_MODE types 'אשר' -> snapped back to PRO_MODE, pro_flow called."""
+    mock_wa, mock_state, _, mock_ai, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.CUSTOMER_MODE)
+
+    pro_phone = "972501111114"
+    await mock_db.users.insert_one({
+        "phone_number": pro_phone,
+        "role": "professional",
+        "is_active": True,
+    })
+
+    # We'll verify by checking state.set_state was called with PRO_MODE
+    await process_incoming_message(f"{pro_phone}@c.us", "אשר")
+
+    # Safety bypass: state should have been snapped to PRO_MODE
+    mock_state.set_state.assert_any_call(f"{pro_phone}@c.us", UserStates.PRO_MODE)

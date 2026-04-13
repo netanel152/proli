@@ -130,11 +130,9 @@ def create_initial_schedule(pro_id):
 def send_completion_check_sync(lead_id: str):
     """
     Sync version of send_customer_completion_check for use in Streamlit.
-    Uses sync PyMongo + sync httpx instead of async Motor/httpx.
-    Falls back to plain text if buttons are disabled or the plan doesn't support them.
+    Uses sync PyMongo + sync httpx. Sends a text-only message (no buttons).
     """
     from app.core.constants import LeadStatus, Defaults
-    from app.core.config import settings
     from app.core.messages import Messages
 
     lead = leads_collection.find_one({"_id": ObjectId(lead_id)})
@@ -152,30 +150,7 @@ def send_completion_check_sync(lead_id: str):
     base_url = f"https://api.green-api.com/waInstance{instance_id}"
 
     message_text = Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name)
-    buttons = [
-        {"buttonId": Messages.Keywords.BUTTON_CONFIRM_FINISH, "buttonText": {"displayText": Messages.Keywords.BUTTON_TITLE_YES_FINISHED}},
-        {"buttonId": Messages.Keywords.BUTTON_NOT_FINISHED, "buttonText": {"displayText": Messages.Keywords.BUTTON_TITLE_NO_NOT_YET}}
-    ]
-
-    if not settings.WHATSAPP_BUTTONS_ENABLED:
-        return _send_text_fallback(base_url, api_token, chat_id, message_text, buttons)
-
-    payload = {"chatId": chat_id, "message": message_text, "buttons": buttons}
-    url = f"{base_url}/sendButtons/{api_token}"
-    try:
-        resp = httpx.post(url, json=payload, timeout=30.0)
-        resp.raise_for_status()
-        return resp.json()
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 403:
-            return _send_text_fallback(base_url, api_token, chat_id, message_text, buttons)
-        raise
-
-
-def _send_text_fallback(base_url: str, api_token: str, chat_id: str, text: str, buttons: list[dict]):
-    """Send completion check as plain text when buttons aren't supported."""
-    options = "\n".join(f"• {b['buttonText']['displayText']}" for b in buttons)
-    payload = {"chatId": chat_id, "message": f"{text}\n\n{options}"}
+    payload = {"chatId": chat_id, "message": message_text}
     url = f"{base_url}/sendMessage/{api_token}"
     resp = httpx.post(url, json=payload, timeout=30.0)
     resp.raise_for_status()

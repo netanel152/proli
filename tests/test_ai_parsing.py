@@ -102,9 +102,52 @@ async def test_sdk_failure_exception(ai_engine):
     Expected: Return "System Overload" fallback response.
     """
     ai_engine.client.aio.models.generate_content = AsyncMock(side_effect=Exception("API Timeout"))
-    
+
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
-    
+
     assert isinstance(result, AIResponse)
     assert "עומס" in result.reply_to_user
     assert result.extracted_data.city is None
+
+
+# --- detect_service_intent tests ---
+
+@pytest.mark.asyncio
+async def test_detect_service_intent_true(ai_engine):
+    """Gemini returns 'True' -> method returns True."""
+    mock_response = MagicMock()
+    mock_response.text = "True"
+    ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+    result = await ai_engine.detect_service_intent("יש לי נזילה במטבח")
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_detect_service_intent_false(ai_engine):
+    """Gemini returns 'False' -> method returns False."""
+    mock_response = MagicMock()
+    mock_response.text = "False"
+    ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+    result = await ai_engine.detect_service_intent("מה שלומך?")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_detect_service_intent_error_returns_false(ai_engine):
+    """Any exception from Gemini -> method returns False (never raises)."""
+    ai_engine.client.aio.models.generate_content = AsyncMock(side_effect=Exception("Network error"))
+
+    result = await ai_engine.detect_service_intent("יש לי בעיה עם הברז")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_detect_service_intent_short_text_shortcircuits(ai_engine):
+    """Very short text -> returns False without calling Gemini."""
+    ai_engine.client.aio.models.generate_content = AsyncMock()
+
+    result = await ai_engine.detect_service_intent("hi")
+    assert result is False
+    ai_engine.client.aio.models.generate_content.assert_not_called()

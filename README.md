@@ -79,7 +79,6 @@ MONGO_TEST_URI=mongodb+srv://...     # required only for integration tests
 ADMIN_PASSWORD=...                   # generate hash: python scripts/generate_admin_hash.py
 ADMIN_PHONE=972501234567             # WhatsApp number for SOS alerts
 WEBHOOK_TOKEN=...                    # enables ?token=<value> webhook auth
-WHATSAPP_BUTTONS_ENABLED=true        # set false if your Green API plan lacks button support
 ENVIRONMENT=development              # production | development
 ```
 
