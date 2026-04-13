@@ -8,12 +8,13 @@ from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient
 from app.core.config import settings
 from app.core.constants import LeadStatus
+from app.core.database import DB_NAME
 import certifi
 
 _ca = certifi.where() if "+srv" in settings.MONGO_URI else None
 _kwargs = {"tlsCAFile": _ca} if _ca else {}
 _sync_client = MongoClient(settings.MONGO_URI, **_kwargs)
-_db = _sync_client.proli_db
+_db = _sync_client[DB_NAME]
 
 
 def _get_lead_funnel(days: int = 30) -> dict:
