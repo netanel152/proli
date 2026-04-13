@@ -3,7 +3,12 @@ from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 from app.core.database import users_collection, leads_collection, settings_collection
 from app.services.workflow_service import send_pro_reminder, send_customer_completion_check, whatsapp
-from app.services.monitor_service import check_and_reassign_stale_leads, send_periodic_admin_report, auto_reject_unassigned_leads
+from app.services.monitor_service import (
+    check_and_reassign_stale_leads, 
+    send_periodic_admin_report, 
+    auto_reject_unassigned_leads,
+    check_sla_deflection
+)
 from datetime import datetime, timedelta
 from app.core.constants import LeadStatus
 import os
@@ -150,6 +155,11 @@ async def run_lead_janitor():
     await auto_reject_unassigned_leads()
 
 
+async def run_sla_monitor():
+    """Check for silent handoffs and deflect if necessary."""
+    await check_sla_deflection()
+
+
 async def daily_reminders_job():
     """
     Daily Reminders Job (Cron).
@@ -242,11 +252,19 @@ def start_scheduler():
         replace_existing=True
     )
 
-    # Job 6: Daily Backup (02:00 Israel time)
+    # Job 7: Daily Backup (02:00 Israel time)
     scheduler.add_job(
         run_daily_backup,
         CronTrigger(hour=2, minute=0, timezone=IL_TZ),
         id="daily_backup",
+        replace_existing=True
+    )
+
+    # Job 8: SLA Deflection Monitor (every 5 minutes)
+    scheduler.add_job(
+        run_sla_monitor,
+        IntervalTrigger(minutes=5),
+        id="sla_deflection_monitor",
         replace_existing=True
     )
 

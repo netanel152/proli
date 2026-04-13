@@ -242,3 +242,59 @@ async def send_periodic_admin_report():
 
     except Exception as e:
         logger.error(f"❌ [SOS Reporter] Error: {e}")
+
+
+async def check_sla_deflection():
+    """
+    SLA MONITOR:
+    Finds leads where bot is paused for human, checks if it's been silent for 15 mins.
+    """
+    logger.info("🕵️ [SLA Monitor] Checking for silent human handoffs...")
+    
+    # We use WorkerConstants.PAUSE_TTL_SECONDS as the inactivity threshold (currently 900s / 15m)
+    threshold_time = datetime.now(timezone.utc) - timedelta(seconds=WorkerConstants.PAUSE_TTL_SECONDS)
+    
+    # Find leads that are paused and haven't had activity for the threshold time
+    query = {
+        "is_paused": True,
+        "paused_at": {"$lt": threshold_time},
+        "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}
+    }
+
+    try:
+        cursor = leads_collection.find(query)
+        paused_leads = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+
+        if not paused_leads:
+            logger.info("✅ [SLA Monitor] No silent handoffs found.")
+            return
+
+        for lead in paused_leads:
+            chat_id = lead["chat_id"]
+            
+            # Double check with Redis state
+            state = await StateManager.get_state(chat_id)
+            if state != UserStates.PAUSED_FOR_HUMAN:
+                # State already cleared or changed, just cleanup the DB flag
+                await leads_collection.update_one({"_id": lead["_id"]}, {"$set": {"is_paused": False}})
+                continue
+
+            # It's been 15 mins of silence. Trigger deflection.
+            logger.warning(f"⏰ [SLA Monitor] SLA exceeded for {chat_id}. Deflecting to phone check.")
+
+            # 1. Clear state
+            await StateManager.clear_state(chat_id)
+            
+            # 2. Update lead doc
+            await leads_collection.update_one(
+                {"_id": lead["_id"]}, 
+                {"$set": {"is_paused": False, "sla_deflected": True}}
+            )
+
+            # 3. Send Deflection Message
+            await whatsapp.send_message(chat_id, Messages.Customer.SLA_DEFLECTION_MESSAGE)
+            
+            logger.info(f"✅ [SLA Monitor] Deflected customer {chat_id} after inactivity.")
+
+    except Exception as e:
+        logger.error(f"❌ [SLA Monitor] Error: {e}")

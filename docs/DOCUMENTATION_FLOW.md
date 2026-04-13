@@ -14,9 +14,9 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 |--------|----------|------------|
 | `contacted` | AI extracts city + issue, opens conversation | Dispatcher (Phase 1) |
 | `new` | Pro matched and approval message sent | `_finalize_deal` |
-| `booked` | Pro taps "Approve" button | `_handle_approve` in `pro_flow.py` |
+| `booked` | Pro approves via text ("אשר"/"1") | `_handle_approve` in `pro_flow.py` |
 | `completed` | Pro or customer confirms work done | `customer_flow.py` |
-| `rejected` | Pro taps "Reject" button | `_handle_reject` in `pro_flow.py` |
+| `rejected` | Pro rejects via text ("דחה"/"2") | `_handle_reject` in `pro_flow.py` |
 | `cancelled` | Customer cancels | `pro_flow.py` |
 | `closed` | Max reassignments reached | `monitor_service.py` |
 | `pending_admin_review` | No replacement pro found at any radius | `monitor_service.py` / `workflow_service.py` |
@@ -62,10 +62,7 @@ When Phase 2 returns `is_deal=True`:
 1. Create or update lead with `status=new`, `pro_id`, `full_address`, `issue_type`, `appointment_time`, `media_url`
 2. Set customer state to `AWAITING_PRO_APPROVAL` (customer sees a soft-hold message on next message)
 3. Send customer `Messages.Customer.AWAITING_APPROVAL`
-4. Send pro an approval request with lead summary + 3 interactive buttons:
-   - **Approve** (`btn_approve_lead`) → lead → `BOOKED`, customer state cleared
-   - **Pause** (`btn_pause_bot`) → customer set to `PAUSED_FOR_HUMAN` (2 h TTL), direct chat begins
-   - **Reject** (`btn_reject_lead`) → lead → `REJECTED`, customer state cleared, system may re-route
+4. Send pro a text-based approval request (e.g., "Reply 'אשר' or '1' to approve")
 
 ---
 
@@ -74,19 +71,22 @@ When Phase 2 returns `is_deal=True`:
 | State | Trigger | Bot behavior |
 |-------|---------|-------------|
 | `IDLE` | Default | Full AI flow runs |
-| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI |
-| `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged silently, nothing sent — auto-expires in 2 h |
-| `AWAITING_ADDRESS` | Address needed | Next message saved as address, state cleared |
 | `PRO_MODE` | Sender is an active pro | `pro_flow.handle_pro_text_command()` called |
+| `CUSTOMER_MODE` | Pro needs a service (Zero-Touch) | Pro treated as customer, context cleared |
+| `AWAITING_INTENT_CONFIRMATION` | AI detects pro needs service | Prompt pro to switch modes |
+| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI |
+| `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged, 15m rolling TTL resets |
+| `AWAITING_ADDRESS` | Address needed | Next message saved as address, state cleared |
 
 ### SOS / Human Handoff
 
 When the customer sends a trigger phrase (e.g., "אני צריך נציג"):
 
-1. Customer state set to `PAUSED_FOR_HUMAN` with `ttl=7200` (2 h)
+1. Customer state set to `PAUSED_FOR_HUMAN` with `ttl=900` (15 min)
 2. `send_sos_alert()` sends alerts to both the assigned pro (if any) and admin
 3. Customer receives `Messages.Customer.BOT_PAUSED_BY_CUSTOMER`
-4. All subsequent messages are logged but not processed until TTL expires
+4. All subsequent messages reset the 15-minute TTL.
+5. If 15 minutes of silence pass, the **SLA Monitor** triggers `SLA_DEFLECTION_MESSAGE`.
 
 ---
 

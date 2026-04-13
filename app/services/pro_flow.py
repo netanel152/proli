@@ -84,6 +84,24 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
             logger.info(f"Pro {chat_id} received intent-switch prompt for: {text[:60]}")
             return ""  # sentinel: handled internally, caller must not send PRO_HELP_MENU
 
+    # Task 2: Pro-side Dynamic Timeout Reset
+    # If the Pro sends a message and there's a lead in PAUSED_FOR_HUMAN, reset the TTL.
+    latest_lead = await leads_collection.find_one(
+        {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
+        sort=[("created_at", -1)]
+    )
+    if latest_lead and latest_lead.get("chat_id"):
+        customer_chat_id = latest_lead["chat_id"]
+        customer_state = await StateManager.get_state(customer_chat_id)
+        if customer_state == UserStates.PAUSED_FOR_HUMAN:
+            await StateManager.set_state(customer_chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
+            # Update paused_at for SLA monitor
+            await leads_collection.update_one(
+                {"_id": latest_lead["_id"]},
+                {"$set": {"paused_at": datetime.now(timezone.utc)}}
+            )
+            logger.info(f"Pro {chat_id} sent a message; reset PAUSED_FOR_HUMAN TTL and updated paused_at for customer {customer_chat_id}")
+
     return None
 
 
@@ -176,6 +194,13 @@ async def _handle_pause_bot(pro, whatsapp):
 
     customer_chat_id = lead["chat_id"]
     await StateManager.set_state(customer_chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
+
+    # Set is_paused flag and paused_at for SLA monitor
+    await leads_collection.update_one(
+        {"_id": lead["_id"]},
+        {"$set": {"is_paused": True, "paused_at": datetime.now(timezone.utc)}}
+    )
+
     await whatsapp.send_message(customer_chat_id, Messages.Customer.BOT_PAUSED_BY_PRO)
     logger.info(f"Pro {pro['_id']} paused bot for customer {customer_chat_id}")
     return Messages.Pro.PAUSE_ACK
@@ -194,6 +219,11 @@ async def _handle_resume(pro):
     current_state = await StateManager.get_state(customer_chat_id)
     if current_state == UserStates.PAUSED_FOR_HUMAN:
         await StateManager.clear_state(customer_chat_id)
+        # Clear is_paused flag
+        await leads_collection.update_one(
+            {"_id": lead["_id"]},
+            {"$set": {"is_paused": False}}
+        )
         logger.info(f"Pro {pro['_id']} resumed bot for customer {customer_chat_id}")
         return "✅ הבוט חזר לפעולה."
     return "הבוט כבר פעיל."
@@ -212,7 +242,8 @@ async def _handle_finish(pro, whatsapp):
         {"$set": {
             "status": LeadStatus.COMPLETED,
             "completed_at": datetime.now(timezone.utc),
-            "waiting_for_rating": True
+            "waiting_for_rating": True,
+            "is_paused": False
         }}
     )
 
