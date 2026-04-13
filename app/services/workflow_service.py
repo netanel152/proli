@@ -23,6 +23,7 @@ from app.services.pro_onboarding_service import (
 )
 from app.services.media_handler import detect_and_fetch_media
 import re
+from datetime import datetime, timezone
 
 # Initialize services
 whatsapp = WhatsAppClient()
@@ -131,7 +132,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # SOS / Human Handoff Check (customers only — pros have their own help menu)
     sos_keywords = Messages.Keywords.SOS_COMMANDS
     if user_text and current_state != UserStates.PRO_MODE and any(k in normalized_text for k in sos_keywords):
-        # Pause bot with 2-hour auto-expiry
+        # Pause bot with 15-minute auto-expiry (Task 1 updated constants)
         await StateManager.set_state(chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
         logger.info(f"Bot paused for {chat_id} (triggered by: customer_sos, TTL: {WorkerConstants.PAUSE_TTL_SECONDS}s)")
 
@@ -139,6 +140,12 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             "chat_id": chat_id,
             "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]}
         }, sort=[("created_at", -1)])
+
+        if active_lead:
+            await leads_collection.update_one(
+                {"_id": active_lead["_id"]},
+                {"$set": {"is_paused": True, "paused_at": datetime.now(timezone.utc)}}
+            )
 
         pro_id = active_lead["pro_id"] if active_lead and "pro_id" in active_lead else None
         await send_sos_alert(chat_id, user_text, pro_id)
@@ -163,7 +170,17 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # Bot Paused — pro or customer triggered human handoff (auto-expires via Redis TTL)
     if current_state == UserStates.PAUSED_FOR_HUMAN:
         await lead_manager.log_message(chat_id, "user", user_text or "")
-        logger.info(f"Bot paused for {chat_id} — message logged but not processed")
+        # Task 2: Reset 15-minute rolling window
+        await StateManager.set_state(chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
+
+        # Update paused_at in lead doc to track activity for SLA monitor
+        await leads_collection.update_one(
+            {"chat_id": chat_id, "is_paused": True, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]}},
+            {"$set": {"paused_at": datetime.now(timezone.utc)}},
+            sort=[("created_at", -1)]
+        )
+
+        logger.info(f"Bot paused for {chat_id} — message logged and timeout reset to {WorkerConstants.PAUSE_TTL_SECONDS}s")
         return
 
     # Safety Bypass: a registered pro typing a business keyword always routes to pro_flow,

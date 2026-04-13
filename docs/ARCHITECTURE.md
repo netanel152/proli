@@ -33,7 +33,7 @@ Customer (WhatsApp)
 **Role:** Stateless HTTP ingestion layer.
 
 - Validates incoming Green API webhook (token, instance ID, idempotency via Redis `SET NX`, rate limiting 10 req/60 s per `chat_id`)
-- Extracts text/media from payload (text, extended text, buttons, location, image, audio, video)
+- Extracts text/media from payload (text, extended text, numeric/keyword replies, location, image, audio, video)
 - Enqueues `process_message_task` to Redis via ARQ
 - Returns `200 OK` immediately (prevents Green API webhook timeout)
 - Health endpoint (`GET /health`) checks MongoDB, Redis, WhatsApp, and worker heartbeat
@@ -46,13 +46,14 @@ Customer (WhatsApp)
 
 **ARQ task:** `process_message_task` → `workflow_service.process_incoming_message`
 
-**APScheduler jobs (6 total):**
+**APScheduler jobs (7 total):**
 
 | Job | Schedule | Function |
 |-----|----------|----------|
 | Daily agendas | 08:00 IL (daily) | Send each pro their booked jobs for the day |
 | Stale monitor | Every 30 min | Remind pros (4–6 h), check customers (6–24 h), flag >24 h for admin |
 | SOS Healer | Every 10 min | Reassign leads stuck > 60 min; escalate to `PENDING_ADMIN_REVIEW` if no replacement |
+| SLA Monitor | Every 5 min | Wake up silent `PAUSED_FOR_HUMAN` chats after 15m; offer phone call |
 | SOS Reporter | Every 4 h | Send batched summary of stuck leads to admin WhatsApp |
 | Lead Janitor | Every 6 h | Auto-reject `CONTACTED` leads with no assigned pro after 24 h |
 | Slot Regeneration | Sunday 01:00 IL | Regenerate appointment slots from recurring weekly templates |
@@ -86,23 +87,29 @@ process_incoming_message(chat_id, text, media_url)
         ├─ Reset keyword? → clear state + context → RESET_SUCCESS
         │
         ├─ SOS / human handoff keyword?
-        │      └─ set PAUSED_FOR_HUMAN (TTL 7200 s)
+        │      └─ set PAUSED_FOR_HUMAN (TTL 900 s)
+        │         set lead.is_paused = True
         │         send_sos_alert(admin + pro)
         │         notify customer BOT_PAUSED_BY_CUSTOMER
         │
         ├─ State == PAUSED_FOR_HUMAN?
-        │      └─ log message silently, return (bot offline, direct chat)
+        │      └─ log message, reset TTL to 900 s, update lead.paused_at, return
         │
         ├─ State == AWAITING_PRO_APPROVAL?
         │      └─ send STILL_WAITING, return
         │
         ├─ State == PRO_MODE?
         │      └─ handle_pro_text_command(pro, text)
-        │            ├─ btn_approve_lead → lead BOOKED, clear customer state
-        │            ├─ btn_pause_bot   → customer PAUSED_FOR_HUMAN (TTL 7200 s)
-        │            ├─ btn_reject_lead → lead REJECTED, clear customer state
-        │            ├─ "המשך"/"resume" → clear PAUSED_FOR_HUMAN
-        │            └─ other commands  → approve/reject/finish/status
+        │            ├─ "אשר" / "1" → lead BOOKED, clear customer state
+        │            ├─ "השהה" / "pause" → customer PAUSED_FOR_HUMAN (TTL 900 s)
+        │            ├─ "דחה" / "2" → lead REJECTED, clear customer state
+        │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN
+        │            └─ other commands (3-7) → finish/status/history/etc.
+        │            └─ detect_service_intent() → if True, prompt for CUSTOMER_MODE
+        │
+        ├─ State == AWAITING_INTENT_CONFIRMATION?
+        │      └─ "1" → set CUSTOMER_MODE, clear context
+        │      └─ "2" → back to PRO_MODE
         │
         ├─ State == AWAITING_ADDRESS? → save address, clear state
         │
@@ -128,7 +135,7 @@ process_incoming_message(chat_id, text, media_url)
                       create/update lead (status=NEW)
                       set customer state AWAITING_PRO_APPROVAL
                       send customer AWAITING_APPROVAL
-                      send pro 3-button approval message (approve/pause/reject)
+                      send pro text-based approval request (reply "אשר" or "1")
 ```
 
 ---
@@ -173,15 +180,17 @@ Checks if the city name appears in any pro's `service_areas` string (broader fuz
 
 ## 5. State Machine (UserStates)
 
-Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a custom 2-hour TTL.
+Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a custom 15-minute rolling TTL.
 
 | State | Description |
 |-------|-------------|
 | `IDLE` | Default — no active flow |
 | `PRO_MODE` | Sender is an active professional |
+| `CUSTOMER_MODE` | Professional temporarily acting as a customer (Zero-Touch) |
+| `AWAITING_INTENT_CONFIRMATION` | Prompting Pro to switch to `CUSTOMER_MODE` |
 | `AWAITING_ADDRESS` | Waiting for customer to provide street address |
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold |
-| `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (2 h auto-expiry) |
+| `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
 
 ---

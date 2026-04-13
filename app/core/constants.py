@@ -41,7 +41,7 @@ class WorkerConstants:
     UNASSIGNED_LEAD_TIMEOUT_HOURS = 24  # Auto-reject CONTACTED leads with no pro after this
     MAX_PRO_REMINDERS = 3          # Max reminder messages sent to a pro for a stale booked lead
     GEO_RADIUS_STEPS = [10000, 20000, 30000]  # Progressive search radius in meters (10km, 20km, 30km)
-    PAUSE_TTL_SECONDS = 7200       # 2 hours — auto-expiry for PAUSED_FOR_HUMAN state
+    PAUSE_TTL_SECONDS = 900        # 15 minutes — auto-expiry for PAUSED_FOR_HUMAN state
     # ADMIN_PHONE moved to config.py / env var
 
 class APIStatus:

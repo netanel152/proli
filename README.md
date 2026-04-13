@@ -12,10 +12,13 @@
 
 ### WhatsApp Bot (Customer-facing)
 
+- **Bulletproof Text-Based Menus** — All interactions use simple numeric (e.g., "1", "2") or keyword (e.g., "אשר", "דחה") replies. No reliance on fragile interactive buttons.
+- **Zero-Touch Intent Detection** — AI automatically detects if a registered professional needs a service for their own home and seamlessly toggles them into `CUSTOMER_MODE` without manual switching.
 - **Progressive Geo Routing** — Finds the best pro within 10 km, expanding to 20 km then 30 km if needed. Falls back to city-name matching for non-geo queries.
 - **Rating + Load Balancing** — Prioritizes highest-rated pros; skips any pro carrying 3 or more active leads.
-- **Pro Approval Flow** — Every deal requires explicit pro consent. Customers wait in a soft-hold state (`AWAITING_PRO_APPROVAL`) while the pro reviews and approves, pauses, or rejects via interactive WhatsApp buttons.
-- **Live Handoff** — Customer or pro can pause the bot for direct conversation (`PAUSED_FOR_HUMAN`, 2-hour auto-expiry via Redis TTL). Bot resumes automatically when the TTL expires.
+- **Pro Approval Flow** — Every deal requires explicit pro consent via text reply. Customers wait in a soft-hold state (`AWAITING_PRO_APPROVAL`) while the pro reviews and approves, pauses, or rejects.
+- **Live Handoff (SOS)** — Customer can request a human representative. The bot pauses for a **15-Minute Dynamic Idle Timeout** that resets on every message.
+- **SLA Deflection** — If a Pro remains silent for 15 minutes during a handoff, the bot proactively "wakes up" to offer the customer a direct phone call escalation.
 - **Multimodal AI** — Analyzes photos, transcribes voice notes, and watches video clips. Mandatory media collection step before estimates.
 - **Dynamic Pro Personas** — The AI adopts the assigned pro's pricing, tone, and custom rules during the booking conversation.
 - **SOS Auto-Recovery (Healer)** — Detects leads stuck > 60 min and reassigns to a new pro. If no replacement is found, escalates to `PENDING_ADMIN_REVIEW` and notifies the customer.
@@ -168,9 +171,12 @@ Expected result: **162 passed, 6 skipped** (integration tests skipped when `MONG
 
 #### בוט וואטסאפ
 
+- **תפריטי טקסט חסינים** — כל האינטראקציות מבוססות על תשובות טקסט פשוטות (מספרים כמו "1", "2" או מילות מפתח כמו "אשר", "דחה"). ללא הסתמכות על כפתורי וואטסאפ שבירים.
+- **זיהוי כוונות אוטומטי (Zero-Touch)** — ה-AI מזהה באופן אוטומטי אם איש מקצוע רשום זקוק לשירות עבור עצמו ומעביר אותו למצב לקוח (`CUSTOMER_MODE`) בצורה חלקה.
 - **ניתוב גיאוגרפי פרוגרסיבי** — מחפש איש מקצוע ברדיוס 10 ק"מ, ומרחיב ל-20 ו-30 ק"מ בהתאם לצורך.
-- **אישור איש מקצוע** — כל עסקה מחייבת אישור מפורש של איש המקצוע דרך כפתורי וואטסאפ (אשר/השהה/דחה).
-- **מעבר אנושי** — לקוח או איש מקצוע יכולים להשהות את הבוט לשיחה ישירה (פג תוקף אוטומטי לאחר שעתיים).
+- **אישור איש מקצוע** — כל עסקה מחייבת אישור מפורש של איש המקצוע דרך תשובת טקסט (אשר/השהה/דחה).
+- **מעבר אנושי (SOS)** — לקוח יכול לבקש מענה אנושי. הבוט מושהה לחלון זמן דינמי של 15 דקות שמתאפס עם כל הודעה.
+- **SLA Deflection** — אם איש המקצוע לא עונה תוך 15 דקות בזמן שיחה ישירה, הבוט יתעורר ויציע ללקוח מעבר לשיחה טלפונית.
 - **AI מולטי-מודאלי** — ניתוח תמונות, תמלול הודעות קוליות, צפייה בסרטונים.
 - **SOS Healer** — ניתוב מחדש אוטומטי של לידים תקועים, ואסקלציה למנהל אם לא נמצא מחליף.
 

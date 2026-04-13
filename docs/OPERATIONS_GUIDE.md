@@ -41,6 +41,7 @@ Proli uses **Loguru** with PII masking applied to all sinks.
 - **Console:** Human-readable colored output in development; JSON in production.
 - **File:** `logs/proli.log` — rotating at 10 MB, retained 10 days, gzip-compressed.
 - **PII masking:** Israeli phone numbers are masked in all environments: `972521234567` → `97252****567`.
+- **Token Accounting (FinOps):** AI token usage is tracked per `pro_id` and stored in the `total_tokens_used` field of the `users` collection. This is handled by a fire-and-forget background task.
 
 Log patterns to watch:
 
@@ -85,15 +86,19 @@ The **SOS Healer** (every 10 min) finds leads in `new`, `contacted`, or `pending
 4. If not found → sets lead to `PENDING_ADMIN_REVIEW`, sends customer a `PENDING_REVIEW` message, clears context
 5. If max reassignments (3) reached → closes the lead, notifies customer
 
+The **SLA Monitor** (every 5 min) checks chats in the `PAUSED_FOR_HUMAN` state:
+1. If 15 minutes of silence pass, the bot sends `Messages.Customer.SLA_DEFLECTION_MESSAGE`.
+2. This proactive "wake up" offers the customer a telephone call escalation if the Pro is unresponsive.
+
 The **SOS Reporter** (every 4 h) sends a batched WhatsApp summary of all still-stuck leads to the admin number (`ADMIN_PHONE`).
 
 ### Customer-triggered pause
 
 A customer sending "אני צריך נציג" (or similar):
-1. Sets their state to `PAUSED_FOR_HUMAN` (2-hour auto-expiry via Redis TTL)
+1. Sets their state to `PAUSED_FOR_HUMAN` (15-minute dynamic rolling window)
 2. Alerts admin and the assigned pro
 3. Sends customer `BOT_PAUSED_BY_CUSTOMER` message
-4. All subsequent messages are logged silently — no bot response
+4. All subsequent messages reset the 15-minute timer.
 5. Bot auto-resumes when TTL expires, or when the pro sends "המשך"
 
 ---
@@ -103,10 +108,10 @@ A customer sending "אני צריך נציג" (or similar):
 When a deal is finalized by the AI:
 
 1. Customer enters `AWAITING_PRO_APPROVAL` state — bot replies with "still waiting" if they message again
-2. Pro receives an approval message with 3 buttons:
-   - **Approve** → lead becomes `BOOKED`, customer state cleared
-   - **Pause** → customer enters `PAUSED_FOR_HUMAN` (2 h), direct chat begins
-   - **Reject** → lead becomes `REJECTED`, system may re-route
+2. Pro receives a text-based approval request (reply "אשר" or "1"):
+   - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared
+   - **Pause** (reply "השהה") → customer enters `PAUSED_FOR_HUMAN` (15m rolling), direct chat begins
+   - **Reject** (reply "2" or "דחה") → lead becomes `REJECTED`, system may re-route
 3. Pro can resume the bot with "המשך" → clears customer pause state
 
 ---

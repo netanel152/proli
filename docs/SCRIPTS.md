@@ -80,7 +80,28 @@ Interactive webhook simulator. Prompts for a message, builds a valid Green API J
 python scripts/simulate_webhook.py
 ```
 
+### `simulate_sla_deflection.py`
+
+Simulates a 15-minute silence for a specific `chat_id` by setting its Redis state to `PAUSED_FOR_HUMAN` and backdating its `paused_at` timestamp in MongoDB. This triggers the SLA Monitor on its next run.
+
+```bash
+python scripts/simulate_sla_deflection.py 972501234567
+```
+
 ### `simulate_test.py`
+...
+
+---
+
+## Analytics & Reports
+
+### `finops_report.py`
+
+Generates a summary of total Google Gemini tokens used per professional, sorted by highest consumption.
+
+```bash
+python scripts/finops_report.py
+```
 
 Automated E2E scenarios (TC1–TC12) over HTTP. Covers consent flow, pro rejection, SOS logic, media handling, and idempotency. Requires the backend to be running locally.
 
