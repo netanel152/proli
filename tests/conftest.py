@@ -146,6 +146,8 @@ def patch_dependencies(request, monkeypatch, mock_db):
         transcription=None,
         is_deal=False
     ))
+    # Default False so existing tests don't accidentally trigger the intent-detection path
+    mock_ai.detect_service_intent = AsyncMock(return_value=False)
 
     import app.services.workflow_service
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_whatsapp)
@@ -244,6 +246,7 @@ async def integration_db(monkeypatch):
         transcription=None,
         is_deal=False
     ))
+    mock_ai.detect_service_intent = AsyncMock(return_value=False)
     monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
 
     # Provide client and db to the test

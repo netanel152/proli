@@ -25,14 +25,13 @@ def flow_db(mock_db):
 def mock_whatsapp():
     wa = MagicMock()
     wa.send_message = AsyncMock()
-    wa.send_interactive_buttons = AsyncMock()
     return wa
 
 
 # --- send_customer_completion_check ---
 
 @pytest.mark.asyncio
-async def test_completion_check_sends_buttons(flow_db, mock_whatsapp):
+async def test_completion_check_sends_text_message(flow_db, mock_whatsapp):
     pro_id = ObjectId()
     await flow_db.users.insert_one({"_id": pro_id, "business_name": "יוסי אינסטלציה"})
 
@@ -46,9 +45,10 @@ async def test_completion_check_sends_buttons(flow_db, mock_whatsapp):
 
     await send_customer_completion_check(str(lead_id), mock_whatsapp)
 
-    mock_whatsapp.send_interactive_buttons.assert_called_once()
-    call_kwargs = mock_whatsapp.send_interactive_buttons.call_args
-    assert "972501111111" in str(call_kwargs)
+    mock_whatsapp.send_message.assert_called_once()
+    call_args = mock_whatsapp.send_message.call_args
+    # Message should contain the numeric reply instructions
+    assert "השב *1*" in str(call_args)
 
 
 @pytest.mark.asyncio
@@ -62,13 +62,13 @@ async def test_completion_check_non_booked_skipped(flow_db, mock_whatsapp):
 
     await send_customer_completion_check(str(lead_id), mock_whatsapp)
 
-    mock_whatsapp.send_interactive_buttons.assert_not_called()
+    mock_whatsapp.send_message.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_completion_check_missing_lead(flow_db, mock_whatsapp):
     await send_customer_completion_check(str(ObjectId()), mock_whatsapp)
-    mock_whatsapp.send_interactive_buttons.assert_not_called()
+    mock_whatsapp.send_message.assert_not_called()
 
 
 # --- handle_customer_completion_text ---
@@ -104,6 +104,40 @@ async def test_handle_completion_confirms(flow_db, mock_whatsapp):
 
 
 @pytest.mark.asyncio
+async def test_handle_completion_numeric_yes(flow_db, mock_whatsapp):
+    """Reply '1' triggers completion."""
+    pro_id = ObjectId()
+    await flow_db.users.insert_one({"_id": pro_id, "business_name": "Test", "phone_number": "972500000001"})
+
+    lead_id = ObjectId()
+    await flow_db.leads.insert_one({
+        "_id": lead_id, "chat_id": "972501111112@c.us",
+        "status": LeadStatus.BOOKED, "pro_id": pro_id,
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_customer_completion_text("972501111112@c.us", "1", mock_whatsapp)
+    assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_handle_completion_hebrew_yes(flow_db, mock_whatsapp):
+    """Reply 'כן' triggers completion."""
+    pro_id = ObjectId()
+    await flow_db.users.insert_one({"_id": pro_id, "business_name": "Test2", "phone_number": "972500000002"})
+
+    lead_id = ObjectId()
+    await flow_db.leads.insert_one({
+        "_id": lead_id, "chat_id": "972501111113@c.us",
+        "status": LeadStatus.BOOKED, "pro_id": pro_id,
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_customer_completion_text("972501111113@c.us", "כן", mock_whatsapp)
+    assert result is not None
+
+
+@pytest.mark.asyncio
 async def test_handle_completion_no_match(flow_db, mock_whatsapp):
     result = await handle_customer_completion_text("972501111111@c.us", "שלום", mock_whatsapp)
     assert result is None
@@ -114,23 +148,6 @@ async def test_handle_completion_no_booked_lead(flow_db, mock_whatsapp):
     # Use a unique chat_id that has no booked leads
     result = await handle_customer_completion_text("972508888888@c.us", "כן, הסתיים", mock_whatsapp)
     assert result is None
-
-
-@pytest.mark.asyncio
-async def test_handle_completion_button_id(flow_db, mock_whatsapp):
-    """Button ID 'confirm_finish' also triggers completion."""
-    pro_id = ObjectId()
-    await flow_db.users.insert_one({"_id": pro_id, "business_name": "Test", "phone_number": "972500000000"})
-
-    lead_id = ObjectId()
-    await flow_db.leads.insert_one({
-        "_id": lead_id, "chat_id": "972501111111@c.us",
-        "status": LeadStatus.BOOKED, "pro_id": pro_id,
-        "created_at": datetime.now(timezone.utc),
-    })
-
-    result = await handle_customer_completion_text("972501111111@c.us", "confirm_finish", mock_whatsapp)
-    assert result is not None
 
 
 # --- handle_customer_rating_text ---

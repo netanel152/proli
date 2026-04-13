@@ -29,6 +29,19 @@ whatsapp = WhatsAppClient()
 ai = AIEngine()
 lead_manager = LeadManager()
 
+# Pro business keywords that must always route to pro_flow, even mid-CUSTOMER_MODE
+PRO_BUSINESS_KEYWORDS = (
+    set(Messages.Keywords.APPROVE_COMMANDS)
+    | set(Messages.Keywords.REJECT_COMMANDS)
+    | set(Messages.Keywords.FINISH_COMMANDS)
+    | set(Messages.Keywords.ACTIVE_JOBS_COMMANDS)
+    | set(Messages.Keywords.HISTORY_COMMANDS)
+    | set(Messages.Keywords.STATS_COMMANDS)
+    | set(Messages.Keywords.REVIEWS_COMMANDS)
+    | set(Messages.Keywords.RESUME_COMMANDS)
+    | set(Messages.Keywords.PAUSE_COMMANDS)
+)
+
 
 # --- Public API (used by scheduler, admin panel, arq_worker) ---
 
@@ -57,6 +70,21 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         await ContextManager.clear_context(chat_id)
         await whatsapp.send_message(chat_id, Messages.System.RESET_SUCCESS)
         return
+
+    # Zero-Touch: transient confirmation after intent was detected in pro_flow
+    if current_state == UserStates.AWAITING_INTENT_CONFIRMATION:
+        if normalized_text == "1" or normalized_text in ("כן", "yes"):
+            await StateManager.set_state(chat_id, UserStates.CUSTOMER_MODE)
+            await ContextManager.clear_context(chat_id)
+            await whatsapp.send_message(chat_id, Messages.Pro.SWITCHED_TO_CUSTOMER)
+            return
+        if normalized_text == "2" or normalized_text in ("לא", "no"):
+            await StateManager.clear_state(chat_id)
+            await whatsapp.send_message(chat_id, Messages.Pro.SWITCH_CANCELLED)
+            return
+        # Any other reply: clear transient state and fall through to normal routing
+        await StateManager.clear_state(chat_id)
+        current_state = await StateManager.get_state(chat_id)
 
     # Consent Check (skip for professionals — they're added by admin)
 
@@ -138,13 +166,25 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         logger.info(f"Bot paused for {chat_id} — message logged but not processed")
         return
 
+    # Safety Bypass: a registered pro typing a business keyword always routes to pro_flow,
+    # even if they're currently in CUSTOMER_MODE — snap them back to PRO_MODE first.
+    if normalized_text in PRO_BUSINESS_KEYWORDS:
+        phone = chat_id.replace("@c.us", "")
+        is_pro_doc = await users_collection.find_one(
+            {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
+        )
+        if is_pro_doc and current_state != UserStates.PRO_MODE:
+            await StateManager.set_state(chat_id, UserStates.PRO_MODE)
+            current_state = UserStates.PRO_MODE
+
     # Handle Pro Mode
     if current_state == UserStates.PRO_MODE:
-        pro_resp = await _handle_pro_cmd(chat_id, user_text, whatsapp, lead_manager)
+        pro_resp = await _handle_pro_cmd(chat_id, user_text, whatsapp, lead_manager, ai=ai)
         if pro_resp:
             await whatsapp.send_message(chat_id, pro_resp)
-        else:
+        elif pro_resp is None:
             await whatsapp.send_message(chat_id, Messages.Pro.PRO_HELP_MENU)
+        # empty string "" means pro_flow already sent everything internally
         return
 
     # Handle Pro Onboarding Flow
@@ -184,11 +224,12 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         is_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional", "is_active": True})
         if is_pro:
             await StateManager.set_state(chat_id, UserStates.PRO_MODE)
-            pro_resp = await _handle_pro_cmd(chat_id, user_text, whatsapp, lead_manager)
+            pro_resp = await _handle_pro_cmd(chat_id, user_text, whatsapp, lead_manager, ai=ai)
             if pro_resp:
                 await whatsapp.send_message(chat_id, pro_resp)
-            else:
+            elif pro_resp is None:
                 await whatsapp.send_message(chat_id, Messages.Pro.PRO_HELP_MENU)
+            # empty string "" means pro_flow already sent everything internally
             return
 
     # 1. Log User Message
@@ -505,14 +546,15 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
 
             await whatsapp.send_message(pro_phone, approval_msg)
 
-            await whatsapp.send_interactive_buttons(
-                to_number=pro_phone,
-                text="מה תרצה לעשות?",
-                buttons=[
-                    {"id": Messages.Keywords.BTN_APPROVE_LEAD, "title": Messages.Keywords.BUTTON_TITLE_APPROVE},
-                    {"id": Messages.Keywords.BTN_PAUSE_BOT, "title": Messages.Keywords.BUTTON_TITLE_PAUSE},
-                    {"id": Messages.Keywords.BTN_REJECT_LEAD, "title": Messages.Keywords.BUTTON_TITLE_REJECT},
-                ]
-            )
-
             await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)
+
+    # Zero-Touch: if the "customer" is actually a registered pro (came via CUSTOMER_MODE),
+    # snap them back to PRO_MODE so they can keep running their own business.
+    phone = chat_id.replace("@c.us", "")
+    customer_is_pro = await users_collection.find_one(
+        {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
+    )
+    if customer_is_pro:
+        await StateManager.set_state(chat_id, UserStates.PRO_MODE)
+        await whatsapp.send_message(chat_id, Messages.Pro.AUTO_RETURNED_TO_PRO)
+        logger.info(f"Auto-returned pro-as-customer {chat_id} to PRO_MODE after lead dispatched")

@@ -27,9 +27,14 @@ def _normalize(text: str) -> str:
     return text.strip().lower()
 
 
-async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manager):
+async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manager, ai=None):
     """
     Handles text commands from Professionals.
+
+    Return contract (tri-state):
+      - None  → no match, caller should send PRO_HELP_MENU
+      - ""    → already handled internally (intent prompt sent), caller sends nothing
+      - str   → send verbatim to the pro
     """
     phone = chat_id.replace("@c.us", "")
     pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional"})
@@ -38,18 +43,11 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
 
     text = _normalize(text)
 
-    # Interactive button responses (Pro Approval flow)
-    if text == Messages.Keywords.BTN_APPROVE_LEAD:
-        return await _handle_approve(pro, lead_manager, whatsapp)
-
-    if text == Messages.Keywords.BTN_PAUSE_BOT:
-        return await _handle_pause_bot(pro, whatsapp)
-
-    if text == Messages.Keywords.BTN_REJECT_LEAD:
-        return await _handle_reject(pro, lead_manager)
-
     if text in Messages.Keywords.RESUME_COMMANDS:
         return await _handle_resume(pro)
+
+    if text in Messages.Keywords.PAUSE_COMMANDS:
+        return await _handle_pause_bot(pro, whatsapp)
 
     if text in Messages.Keywords.APPROVE_COMMANDS:
         return await _handle_approve(pro, lead_manager, whatsapp)
@@ -71,6 +69,20 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
 
     if text in Messages.Keywords.REVIEWS_COMMANDS:
         return await _handle_reviews(pro)
+
+    # No command match — try intent detection on free-text
+    if ai is not None and text and len(text) > 3:
+        try:
+            is_service_intent = await ai.detect_service_intent(text)
+        except Exception as e:
+            logger.warning(f"Intent detection failed for {chat_id}: {e}")
+            is_service_intent = False
+        if is_service_intent:
+            await whatsapp.send_message(chat_id, Messages.Pro.INTENT_DETECTED)
+            # 5-minute TTL so a stale prompt doesn't linger
+            await StateManager.set_state(chat_id, UserStates.AWAITING_INTENT_CONFIRMATION, ttl=300)
+            logger.info(f"Pro {chat_id} received intent-switch prompt for: {text[:60]}")
+            return ""  # sentinel: handled internally, caller must not send PRO_HELP_MENU
 
     return None
 

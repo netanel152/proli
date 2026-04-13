@@ -64,9 +64,6 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str | None = None
     AWS_REGION: str = "eu-west-1"
 
-    # WhatsApp feature flags
-    WHATSAPP_BUTTONS_ENABLED: bool = True
-
     # SMS fallback (optional)
     SMS_API_KEY: str | None = None
     SMS_SENDER_ID: str = "Proli"

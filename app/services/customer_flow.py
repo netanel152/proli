@@ -19,28 +19,25 @@ async def send_customer_completion_check(lead_id: str, whatsapp, triggered_by: s
         pro = await users_collection.find_one({"_id": lead["pro_id"]})
         pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME) if pro else Defaults.GENERIC_PRO_NAME
 
-        await whatsapp.send_interactive_buttons(
-            to_number=customer_chat_id.replace("@c.us", ""),
-            text=Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name),
-            buttons=[
-                {"id": Messages.Keywords.BUTTON_CONFIRM_FINISH, "title": Messages.Keywords.BUTTON_TITLE_YES_FINISHED},
-                {"id": Messages.Keywords.BUTTON_NOT_FINISHED, "title": Messages.Keywords.BUTTON_TITLE_NO_NOT_YET}
-            ]
+        await whatsapp.send_message(
+            customer_chat_id,
+            Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name),
         )
-        logger.success(f"Sent customer completion check (buttons) for lead {lead_id} (Trigger: {triggered_by})")
+        logger.success(f"Sent customer completion check for lead {lead_id} (Trigger: {triggered_by})")
     except Exception as e:
         logger.error(f"Error in send_customer_completion_check for lead {lead_id}: {e}")
 
 
 async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     """Checks if the user confirmed job completion via text."""
-    text = text.strip()
+    stripped = text.strip()
+    normalized = stripped.lower()
 
-    is_completion = False
-    if Messages.Keywords.CUSTOMER_COMPLETION_INDICATOR in text:
-        is_completion = True
-    elif Messages.Keywords.BUTTON_CONFIRM_FINISH in text or Messages.Keywords.TEXT_YES_FINISHED in text:
-        is_completion = True
+    yes_tokens = {"1", "כן", "כן הסתיים", "כן, הסתיים", "הסתיים", "yes", "done"}
+    is_completion = (
+        normalized in yes_tokens
+        or Messages.Keywords.CUSTOMER_COMPLETION_INDICATOR in stripped
+    )
 
     if not is_completion:
         return None

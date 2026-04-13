@@ -67,11 +67,6 @@ async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=N
                 user_text = msg_data.textMessageData.textMessage
             elif msg_data.typeMessage == "extendedTextMessage":
                 user_text = msg_data.extendedTextMessageData.text or ""
-            elif msg_data.typeMessage == "buttonsResponseMessage":
-                # Handle interactive button clicks from Green API
-                if msg_data.buttonsResponseMessage:
-                    user_text = msg_data.buttonsResponseMessage.selectedButtonId or msg_data.buttonsResponseMessage.selectedButtonText or ""
-                    logger.info(f"Button response from {chat_id}: {user_text}")
             elif msg_data.typeMessage == "locationMessage":
                 # Handle location pin messages
                 if msg_data.locationMessageData:

@@ -23,7 +23,6 @@ def mock_workflow_dependencies():
         mock_lm.create_lead_from_dict = AsyncMock(return_value={"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id"})
         mock_whatsapp.send_message = AsyncMock()
         mock_whatsapp.send_location_link = AsyncMock()
-        mock_whatsapp.send_interactive_buttons = AsyncMock(return_value={})
         mock_users.find_one = AsyncMock(return_value=None)
         
         mock_lead_data = {"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id", "status": "new"}

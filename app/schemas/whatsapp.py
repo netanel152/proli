@@ -18,11 +18,6 @@ class FileMessageData(BaseSchema):
     mimeType: str
     fileName: Optional[str] = None
 
-class ButtonsResponseData(BaseSchema):
-    """Green API sends button clicks as buttonsResponseMessage."""
-    selectedButtonId: Optional[str] = None
-    selectedButtonText: Optional[str] = None
-
 class LocationMessageData(BaseSchema):
     """Green API location message data."""
     latitude: Optional[float] = None
@@ -40,7 +35,6 @@ class MessageData(BaseSchema):
     textMessageData: Optional[TextMessageData] = None
     extendedTextMessageData: Optional[ExtendedTextMessageData] = None
     fileMessageData: Optional[FileMessageData] = None
-    buttonsResponseMessage: Optional[ButtonsResponseData] = None
     locationMessageData: Optional[LocationMessageData] = None
     quotedMessage: Optional[QuotedMessageData] = None
 

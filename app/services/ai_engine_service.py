@@ -183,3 +183,30 @@ class AIEngine:
                     is_deal=False
                 )
         return Messages.Errors.AI_OVERLOAD
+
+    async def detect_service_intent(self, text: str) -> bool:
+        """Lightweight classifier: does this text describe a home-service need?
+
+        Uses a single-shot low-token Gemini call at temperature=0.0.
+        Returns False conservatively on any error so it never blocks a Pro from the help menu.
+        """
+        if not text or len(text.strip()) < 3:
+            return False
+        try:
+            response = await self.client.aio.models.generate_content(
+                model=self.model_hierarchy[0],
+                contents=text.strip(),
+                config=types.GenerateContentConfig(
+                    system_instruction=(
+                        "Analyze the following text. Does it describe a home service malfunction, "
+                        "repair request, or a need for a professional (e.g., 'my AC is leaking', "
+                        "'need a plumber')? Reply ONLY with 'True' or 'False'."
+                    ),
+                    temperature=0.0,
+                ),
+            )
+            result = (response.text or "").strip().lower()
+            return "true" in result
+        except Exception as e:
+            logger.warning(f"detect_service_intent failed: {e}")
+            return False

@@ -13,6 +13,8 @@ class LeadStatus(str, Enum):
 class UserStates(str, Enum):
     IDLE = "idle"                      # Default state
     PRO_MODE = "pro_mode"              # User is acting as a Professional
+    CUSTOMER_MODE = "customer_mode"    # Pro temporarily acting as a customer
+    AWAITING_INTENT_CONFIRMATION = "awaiting_intent_confirmation"  # Transient: waiting for 1/2 after intent detected
     CUSTOMER_FLOW = "customer_flow"    # User is in a booking flow
     AWAITING_ADDRESS = "awaiting_address"
     AWAITING_MEDIA = "awaiting_media"
