@@ -221,3 +221,23 @@ async def get_leads_by_pro_type(days: int = 30) -> list[dict]:
         })
 
     return results
+
+
+async def get_finops_stats() -> list[dict]:
+    """
+    Fetch AI token usage per professional (Async version).
+    """
+    pipeline = [
+        {"$match": {"role": "professional", "total_tokens_used": {"$exists": True, "$gt": 0}}},
+        {"$project": {
+            "name": {"$ifNull": ["$business_name", "$name"]},
+            "tokens": "$total_tokens_used",
+            "phone": "$phone_number"
+        }},
+        {"$sort": {"tokens": -1}}
+    ]
+    
+    results = []
+    async for doc in users_collection.aggregate(pipeline):
+        results.append(doc)
+    return results
