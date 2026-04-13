@@ -108,6 +108,20 @@ def _get_leads_by_type(days: int = 30) -> list[dict]:
     return [{"type": doc["_id"] or "unassigned", "count": doc["count"]} for doc in _db.leads.aggregate(pipeline)]
 
 
+def _get_finops_stats() -> list[dict]:
+    """Fetch AI token usage per professional."""
+    pipeline = [
+        {"$match": {"role": "professional", "total_tokens_used": {"$exists": True, "$gt": 0}}},
+        {"$project": {
+            "name": {"$ifNull": ["$business_name", "$name"]},
+            "tokens": "$total_tokens_used",
+            "phone": "$phone_number"
+        }},
+        {"$sort": {"tokens": -1}}
+    ]
+    return list(_db.users.aggregate(pipeline))
+
+
 def view_analytics(T):
     st.title(T.get("analytics_title", "Analytics & Reporting"))
     st.caption(T.get("analytics_desc", "Business metrics, lead funnels, and professional performance."))
@@ -138,11 +152,12 @@ def view_analytics(T):
     st.markdown("")
 
     # --- Tabs ---
-    tab_funnel, tab_volume, tab_pros, tab_types = st.tabs([
+    tab_funnel, tab_volume, tab_pros, tab_types, tab_finops = st.tabs([
         T.get("tab_funnel", "Lead Funnel"),
         T.get("tab_volume", "Daily Volume"),
         T.get("tab_pro_perf", "Pro Performance"),
         T.get("tab_by_type", "By Service Type"),
+        "FinOps (AI Costs)",
     ])
 
     with tab_funnel:
@@ -212,3 +227,34 @@ def view_analytics(T):
             st.bar_chart(df, x="type", y="count", color="#2563EB")
         else:
             st.info(T.get("no_data", "No data available for this period."))
+
+    with tab_finops:
+        st.subheader("FinOps: AI Token Usage Tracking")
+        st.caption("Monitoring Google Gemini token consumption per professional to track API costs.")
+
+        tokens_data = _get_finops_stats()
+        if tokens_data:
+            df_tokens = pd.DataFrame(tokens_data)
+            
+            col_a, col_b = st.columns([2, 1])
+            with col_a:
+                st.dataframe(
+                    df_tokens,
+                    column_config={
+                        "name": "Professional",
+                        "phone": "Phone",
+                        "tokens": st.column_config.NumberColumn("Tokens Used", format="%d"),
+                    },
+                    hide_index=True,
+                    use_container_width=True
+                )
+            with col_b:
+                total_tokens = df_tokens["tokens"].sum()
+                st.metric("Total System Tokens", f"{total_tokens:,}")
+                st.info(f"Estimated Cost: ${round(total_tokens / 1_000_000 * 0.15, 4)}") # Rough Flash Lite 2.5 estimate
+                
+            st.markdown("### Token Distribution")
+            st.bar_chart(df_tokens, x="name", y="tokens", color="#F59E0B")
+        else:
+            st.info("No token usage data available.")
+
