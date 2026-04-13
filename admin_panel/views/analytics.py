@@ -136,18 +136,24 @@ def view_analytics(T):
     )
 
     # --- Overview Metrics ---
-    total_leads = _db.leads.count_documents({})
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     now = datetime.now(timezone.utc)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    week_start = now - timedelta(days=7)
+
+    # Leads in the selected period
+    period_leads = _db.leads.count_documents({"created_at": {"$gte": cutoff}})
+    period_completed = _db.leads.count_documents({"created_at": {"$gte": cutoff}, "status": LeadStatus.COMPLETED})
+    leads_today = _db.leads.count_documents({"created_at": {"$gte": today_start}})
+    active_pros = _db.users.count_documents({"is_active": True, "role": "professional"})
+    
+    # Calculate conversion for the period
+    conv_rate = round((period_completed / period_leads * 100), 1) if period_leads > 0 else 0
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric(T.get("metric_total", "Total Leads"), total_leads)
-    c2.metric(T.get("analytics_today", "Today"), _db.leads.count_documents({"created_at": {"$gte": today_start}}))
-    c3.metric(T.get("analytics_week", "This Week"), _db.leads.count_documents({"created_at": {"$gte": week_start}}))
-    c4.metric(T.get("analytics_completed", "Completed"), _db.leads.count_documents({"status": LeadStatus.COMPLETED}))
-
-    active_pros = _db.users.count_documents({"is_active": True, "role": "professional"})
+    c1.metric(f"{T.get('metric_total', 'Leads')} ({days}d)", period_leads)
+    c2.metric(T.get("analytics_today", "Today"), leads_today)
+    c3.metric(f"{T.get('analytics_completed', 'Completed')} ({days}d)", period_completed)
+    c4.metric(T.get("conversion_rate", "Conv. Rate"), f"{conv_rate}%")
     c5.metric(T.get("metric_pros", "Active Pros"), active_pros)
 
     st.markdown("")
@@ -230,8 +236,8 @@ def view_analytics(T):
             st.info(T.get("no_data", "No data available for this period."))
 
     with tab_finops:
-        st.subheader("FinOps: AI Token Usage Tracking")
-        st.caption("Monitoring Google Gemini token consumption per professional to track API costs.")
+        st.subheader("FinOps: Lifetime AI Token Usage")
+        st.caption("Monitoring cumulative Google Gemini token consumption per professional to track overall API costs.")
 
         tokens_data = _get_finops_stats()
         if tokens_data:
