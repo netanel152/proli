@@ -23,12 +23,15 @@ import uuid
 import time
 import sys
 import os
+from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import uri_parser
+import certifi
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # --- Config ---
-BASE_URL = "http://localhost:8000"
+BASE_URL = os.getenv("SMOKE_BASE_URL", "http://localhost:8000")
 INSTANCE_ID = int(os.getenv("GREEN_API_INSTANCE_ID", "7105567180"))
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
 
@@ -539,20 +542,32 @@ async def main():
     parser.add_argument("--base-url", type=str, default=BASE_URL, help="Server URL")
     parser.add_argument("--instance-id", type=int, default=INSTANCE_ID, help="Green API instance ID")
     parser.add_argument("--token", type=str, default=WEBHOOK_TOKEN, help="Webhook token (overrides .env)")
+    parser.add_argument("--mongo-uri", default=os.getenv("MONGO_URI") or os.getenv("MONGODB_URI"))
+    parser.add_argument("--db", default=os.getenv("MONGO_DB_NAME"))
     args = parser.parse_args()
 
     if args.list:
         print(f"\n{BOLD}Available tests:{RESET}")
         for key, (name, _) in TESTS.items():
             print(f"  {GREEN}{key:6s}{RESET} — {name}")
-        print(f"\n  Usage: python scripts/simulate_test.py --test tc1,tc3")
-        print(f"         python scripts/simulate_test.py --test all")
-        print(f"         python scripts/simulate_test.py --test full")
+        print(f"\n  Usage: python tests/simulate_test.py --test tc1,tc3")
+        print(f"         python tests/simulate_test.py --test all")
+        print(f"         python tests/simulate_test.py --test full")
         return
 
     BASE_URL = args.base_url
     INSTANCE_ID = args.instance_id
     WEBHOOK_TOKEN = args.token
+
+    # Database setup for pre-verification
+    mongo_uri = args.mongo_uri
+    db_name = args.db
+    if mongo_uri and not db_name:
+        try:
+            _parsed = uri_parser.parse_uri(mongo_uri)
+            db_name = _parsed.get("database") or "proli_db"
+        except Exception:
+            db_name = "proli_db"
 
     # Determine which tests to run
     if args.test == "all":
@@ -576,8 +591,8 @@ async def main():
     print(f"  Pro:      {PRO_PHONE} (your real phone)")
     print(f"  Tests:    {', '.join(test_keys)}")
 
-    # Quick health check
-    async with httpx.AsyncClient(timeout=5) as client:
+    # Preflight Check: Health + MongoDB Pro
+    async with httpx.AsyncClient(timeout=10) as client:
         try:
             r = await client.get(f"{BASE_URL}/health")
             health = r.json()
@@ -588,6 +603,26 @@ async def main():
         except Exception:
             print(f"  Health:   {RED}✗ Server not reachable at {BASE_URL}{RESET}")
             return
+
+    if mongo_uri:
+        try:
+            ca_file = certifi.where() if "+srv" in mongo_uri else None
+            kwargs = {"tlsCAFile": ca_file} if ca_file else {}
+            m_client = AsyncIOMotorClient(mongo_uri, **kwargs)
+            m_db = m_client[db_name]
+            pro = await m_db.users.find_one({"phone_number": PRO_PHONE, "role": "professional"})
+            if not pro:
+                print(f"  Pro Check: {RED}✗ Pro {PRO_PHONE} not found in DB {db_name}{RESET}")
+                print(f"             Run 'python scripts/seed_db.py' first.")
+                m_client.close()
+                return
+            if not pro.get("is_active"):
+                print(f"  Pro Check: {YELLOW}⚠ Pro {PRO_PHONE} found but is_active=False{RESET}")
+            else:
+                print(f"  Pro Check: {GREEN}✓ Pro seeded and active{RESET}")
+            m_client.close()
+        except Exception as e:
+            print(f"  Pro Check: {YELLOW}⚠ Could not verify pro in DB (skipping check): {e}{RESET}")
 
     async with httpx.AsyncClient(timeout=30) as client:
         for key in test_keys:
