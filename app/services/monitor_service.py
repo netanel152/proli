@@ -107,9 +107,12 @@ async def check_and_reassign_stale_leads():
                     )
                     msg_to_pro += Messages.Pro.NEW_LEAD_FOOTER
 
-                    lead_media_url = lead.get("media_url")
-                    if lead_media_url:
-                        await whatsapp.send_file_by_url(pro_phone, lead_media_url, caption=msg_to_pro)
+                    # Send all collected media
+                    all_media = lead.get("media_urls", [])
+                    if all_media:
+                        for i, m_url in enumerate(all_media):
+                            caption = msg_to_pro if i == 0 else ""
+                            await whatsapp.send_file_by_url(pro_phone, m_url, caption=caption)
                     else:
                         await whatsapp.send_message(pro_phone, msg_to_pro)
 
