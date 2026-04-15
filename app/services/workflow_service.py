@@ -451,25 +451,36 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
 
     logger.info(f"Dispatcher analysis: City={extracted_city}, Issue={extracted_issue}, Transcr={transcription}")
 
-    # 6. Logic Gate: Dispatcher vs Professional
-    best_pro = None
-    pro_response_obj = None
-    current_lead_id = None
-
-    if extracted_city and extracted_issue:
-        if active_lead:
-            current_lead_id = active_lead["_id"]
-        else:
-            new_lead = await lead_manager.create_lead_from_dict(
+    # --- NEW: Sticky Persistence Gate ---
+    # Create or update a "contacted" lead as soon as we have ANY info.
+    # This ensures that if the AI forgets to repeat a field in the next turn,
+    # it's still preserved in the DB and injected as a 'sticky' fact.
+    if extracted_city or extracted_issue:
+        if not active_lead:
+            active_lead = await lead_manager.create_lead_from_dict(
                 chat_id=chat_id,
-                issue_type=extracted_issue,
-                full_address=extracted_city,
+                issue_type=extracted_issue or Defaults.UNKNOWN_ISSUE,
+                full_address=extracted_city or Defaults.UNKNOWN_ADDRESS,
                 status=LeadStatus.CONTACTED,
                 appointment_time=Defaults.PENDING_TIME
             )
-            if new_lead:
-                current_lead_id = new_lead["_id"]
+            current_lead_id = active_lead["_id"] if active_lead else None
+        else:
+            current_lead_id = active_lead["_id"]
+            update_data = {}
+            if ai_city and ai_city != lead_facts.get("city"): update_data["city"] = ai_city
+            if ai_issue and ai_issue != lead_facts.get("issue_type"): update_data["issue_type"] = ai_issue
+            if update_data:
+                await leads_collection.update_one({"_id": current_lead_id}, {"$set": update_data})
+                # Refresh facts for the matching block below
+                extracted_city = ai_city or extracted_city
+                extracted_issue = ai_issue or extracted_issue
 
+    # 6. Logic Gate: Dispatcher vs Professional
+    best_pro = None
+    pro_response_obj = None
+
+    if extracted_city and extracted_issue and extracted_city != Defaults.UNKNOWN_ADDRESS and extracted_issue != Defaults.UNKNOWN_ISSUE:
         try:
             best_pro = await determine_best_pro(issue_type=extracted_issue, location=extracted_city)
         except Exception as e:
@@ -661,7 +672,12 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
             full_address=d_address,
             appointment_time=d_time,
             status=LeadStatus.NEW,
-            pro_id=best_pro["_id"]
+            pro_id=best_pro["_id"],
+            street=final_response.extracted_data.street,
+            street_number=final_response.extracted_data.street_number,
+            city=final_response.extracted_data.city,
+            floor=final_response.extracted_data.floor,
+            apartment=final_response.extracted_data.apartment
         )
 
     if lead:
