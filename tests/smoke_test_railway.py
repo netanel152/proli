@@ -176,7 +176,15 @@ class SmokeTest:
     # --- Steps ---
     async def step1_customer_reports_problem(self) -> bool:
         _step(1, "Customer reports plumbing issue")
-        await self._send(CUSTOMER_CHAT_ID, "שלום, יש לי נזילה במטבח בתל אביב", "עדי")
+        # Send greeting first (AI is instructed not to extract on first message)
+        await self._send(CUSTOMER_CHAT_ID, "שלום!", "עדי")
+        await asyncio.sleep(5)
+        # Send issue
+        await self._send(CUSTOMER_CHAT_ID, "יש לי נזילה רצינית במטבח", "עדי")
+        await asyncio.sleep(5)
+        # Send location
+        await self._send(CUSTOMER_CHAT_ID, "אני גר בתל אביב", "עדי")
+        
         _info("Waiting for dispatcher to create a lead and match a pro (≤40s)...")
         lead = await self._poll_lead(
             lambda d: d.get("pro_id") is not None,
