@@ -455,14 +455,15 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # Create or update a "contacted" lead as soon as we have ANY info.
     # This ensures that if the AI forgets to repeat a field in the next turn,
     # it's still preserved in the DB and injected as a 'sticky' fact.
-    if extracted_city or extracted_issue:
+    if extracted_city or extracted_issue or media_url:
         if not active_lead:
             active_lead = await lead_manager.create_lead_from_dict(
                 chat_id=chat_id,
                 issue_type=extracted_issue or Defaults.UNKNOWN_ISSUE,
                 full_address=extracted_city or Defaults.UNKNOWN_ADDRESS,
                 status=LeadStatus.CONTACTED,
-                appointment_time=Defaults.PENDING_TIME
+                appointment_time=Defaults.PENDING_TIME,
+                media_url=media_url
             )
             current_lead_id = active_lead["_id"] if active_lead else None
         else:
@@ -470,6 +471,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             update_data = {}
             if ai_city and ai_city != lead_facts.get("city"): update_data["city"] = ai_city
             if ai_issue and ai_issue != lead_facts.get("issue_type"): update_data["issue_type"] = ai_issue
+            if media_url and not lead_facts.get("media_url"): update_data["media_url"] = media_url
             if update_data:
                 await leads_collection.update_one({"_id": current_lead_id}, {"$set": update_data})
                 # Refresh facts for the matching block below
@@ -527,6 +529,11 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                             )
                             + Messages.Pro.EARLY_LEAD_FOOTER
                         )
+                        early_media_url = active_lead.get("media_url") if active_lead else None
+                        early_media_url = early_media_url or media_url
+                        if early_media_url:
+                            notify_msg += Messages.Pro.APPROVAL_MEDIA.format(media_url=early_media_url)
+
                         await whatsapp.send_message(pro_phone, notify_msg)
                         logger.info(f"📢 Notified pro {pro_phone} about new lead from {chat_id}")
                 except Exception as e:
@@ -698,9 +705,11 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
                 pro_phone = f"{pro_phone}@c.us"
 
             customer_phone = chat_id.replace("@c.us", "")
+            extra_info = f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
             approval_msg = Messages.Pro.APPROVAL_REQUEST.format(
                 customer_phone=customer_phone,
                 full_address=lead['full_address'],
+                extra_info=extra_info,
                 issue_type=lead['issue_type'],
                 appointment_time=lead['appointment_time'],
             )

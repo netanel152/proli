@@ -32,10 +32,7 @@ def is_address_complete(extracted_data) -> tuple[bool, str]:
 
 def compose_full_address(extracted_data) -> str:
     """Build a canonical single-line address string from extracted parts."""
-    return (
-        f"{extracted_data.street} {extracted_data.street_number}, "
-        f"{extracted_data.city}, קומה {extracted_data.floor}, דירה {extracted_data.apartment}"
-    )
+    return f"{extracted_data.street} {extracted_data.street_number}, {extracted_data.city}"
 
 
 class LeadManager:
@@ -85,7 +82,8 @@ class LeadManager:
         street_number: str = None,
         city: str = None,
         floor: str = None,
-        apartment: str = None
+        apartment: str = None,
+        media_url: str = None
     ) -> dict:
         """
         Creates a lead document directly from parameters.
@@ -108,6 +106,8 @@ class LeadManager:
                 "floor": floor,
                 "apartment": apartment
             }
+            if media_url:
+                lead_doc["media_url"] = media_url
 
             if status == LeadStatus.CONTACTED and not pro_id:
                 # Atomic find-or-create: prevents duplicate active leads per customer

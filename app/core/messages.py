@@ -70,13 +70,14 @@ class Messages:
         # Sent when deal closes — ready for approval
         DEAL_CONFIRMED_HEADER = "✅ *הלקוח אישר! פרטי העבודה:*"
         NEW_LEAD_HEADER = "📢 *הצעת עבודה חדשה*"
-        NEW_LEAD_DETAILS = "📍 *כתובת:* {full_address}\n🛠️ *תקלה:* {issue_type}\n⏰ *תאריך ושעה מועדפים:* {appointment_time}"
+        NEW_LEAD_DETAILS = "📍 *כתובת:* {full_address}\nℹ️ *פרטים נוספים:* {extra_info}\n🛠️ *תקלה:* {issue_type}\n⏰ *תאריך ושעה מועדפים:* {appointment_time}"
         NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"
         NEW_LEAD_FOOTER = "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
         APPROVAL_REQUEST = (
             "📋 *פרטי עבודה חדשה לאישורך:*\n\n"
             "👤 *לקוח:* {customer_phone}\n"
             "📍 *כתובת:* {full_address}\n"
+            "ℹ️ *פרטים נוספים:* {extra_info}\n"
             "🛠️ *תקלה:* {issue_type}\n"
             "⏰ *תאריך ושעה:* {appointment_time}\n\n"
             "כדי לאשר השב: *אשר*\n"

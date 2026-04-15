@@ -164,8 +164,8 @@ async def test_awaiting_address_saves_valid(wf_mocks, mock_db):
     assert updated["floor"] == "2"
     assert updated["apartment"] == "4"
     assert "הרצל 15" in updated["full_address"]
-    assert "קומה 2" in updated["full_address"]
-    assert "דירה 4" in updated["full_address"]
+    assert updated["floor"] == "2"
+    assert updated["apartment"] == "4"
 
 
 @pytest.mark.asyncio
