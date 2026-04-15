@@ -81,8 +81,8 @@ class SmokeTest:
             url += f"?token={self.webhook_token}"
         return url
 
-    def _payload(self, chat_id: str, text: str, sender_name: str) -> dict:
-        return {
+    def _payload(self, chat_id: str, text: str, sender_name: str, media_url: str = None) -> dict:
+        base = {
             "typeWebhook": "incomingMessageReceived",
             "idMessage": uuid.uuid4().hex[:24],
             "instanceData": {
@@ -91,14 +91,26 @@ class SmokeTest:
                 "typeInstance": "whatsapp",
             },
             "senderData": {"chatId": chat_id, "senderName": sender_name},
-            "messageData": {
+        }
+        if media_url:
+            base["messageData"] = {
+                "typeMessage": "imageMessage",
+                "fileMessageData": {
+                    "downloadUrl": media_url,
+                    "caption": text,
+                    "mimeType": "image/jpeg",
+                    "fileName": "test_image.jpg"
+                }
+            }
+        else:
+            base["messageData"] = {
                 "typeMessage": "textMessage",
                 "textMessageData": {"textMessage": text},
-            },
-        }
+            }
+        return base
 
-    async def _send(self, chat_id: str, text: str, sender_name: str = "Smoke Test") -> dict:
-        r = await self.http.post(self._url(), json=self._payload(chat_id, text, sender_name))
+    async def _send(self, chat_id: str, text: str, sender_name: str = "Smoke Test", media_url: str = None) -> dict:
+        r = await self.http.post(self._url(), json=self._payload(chat_id, text, sender_name, media_url))
         r.raise_for_status()
         return r.json()
 
@@ -179,8 +191,8 @@ class SmokeTest:
         # Send greeting first (AI is instructed not to extract on first message)
         await self._send(CUSTOMER_CHAT_ID, "שלום!", "עדי")
         await asyncio.sleep(5)
-        # Send issue
-        await self._send(CUSTOMER_CHAT_ID, "יש לי נזילה רצינית במטבח", "עדי")
+        # Send issue + media
+        await self._send(CUSTOMER_CHAT_ID, "יש לי נזילה רצינית במטבח, הנה תמונה", "עדי", media_url="https://res.cloudinary.com/dzt50vj4h/image/upload/v1711200000/sample.jpg")
         await asyncio.sleep(5)
         # Send location
         await self._send(CUSTOMER_CHAT_ID, "אני גר בתל אביב", "עדי")
