@@ -73,7 +73,20 @@ class LeadManager:
             logger.error(f"Failed to create lead from string '{deal_string}': {e}")
             return None
 
-    async def create_lead_from_dict(self, chat_id: str, issue_type: str, full_address: str, appointment_time: str = "Pending", status: str = LeadStatus.NEW, pro_id: ObjectId = None) -> dict:
+    async def create_lead_from_dict(
+        self,
+        chat_id: str,
+        issue_type: str,
+        full_address: str,
+        appointment_time: str = "Pending",
+        status: str = LeadStatus.NEW,
+        pro_id: ObjectId = None,
+        street: str = None,
+        street_number: str = None,
+        city: str = None,
+        floor: str = None,
+        apartment: str = None
+    ) -> dict:
         """
         Creates a lead document directly from parameters.
         For CONTACTED leads (no pro yet), uses an atomic upsert to prevent
@@ -88,7 +101,12 @@ class LeadManager:
                 "issue_type": issue_type,
                 "created_at": datetime.now(timezone.utc),
                 "history": [],
-                "pro_id": pro_id
+                "pro_id": pro_id,
+                "street": street,
+                "street_number": street_number,
+                "city": city,
+                "floor": floor,
+                "apartment": apartment
             }
 
             if status == LeadStatus.CONTACTED and not pro_id:
