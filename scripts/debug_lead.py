@@ -26,6 +26,7 @@ async def check():
         print(f"Street Num: {doc.get('street_number')}")
         print(f"Time: {doc.get('appointment_time')}")
         print(f"Pro ID: {doc.get('pro_id')}")
+        print(f"Media URLs: {doc.get('media_urls', [])}")
         print(f"Created At: {doc.get('created_at')}")
     else:
         print("No lead found.")

@@ -104,10 +104,11 @@ class LeadManager:
                 "street_number": street_number,
                 "city": city,
                 "floor": floor,
-                "apartment": apartment
+                "apartment": apartment,
+                "media_urls": []
             }
             if media_url:
-                lead_doc["media_url"] = media_url
+                lead_doc["media_urls"] = [media_url]
 
             if status == LeadStatus.CONTACTED and not pro_id:
                 # Atomic find-or-create: prevents duplicate active leads per customer

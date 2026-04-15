@@ -360,6 +360,12 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         logger.info(f"⚡ Skipping dispatcher — pro already assigned for {chat_id}")
         await lead_manager.log_message(chat_id, "user", user_text or (f"[MEDIA: {media_url}]" if media_url else ""))
 
+        if media_url:
+            await leads_collection.update_one(
+                {"_id": active_lead["_id"]},
+                {"$addToSet": {"media_urls": media_url}}
+            )
+
         extracted_city = active_lead.get("full_address", "")
         extracted_issue = active_lead.get("issue_type", "")
         transcription = None
@@ -471,9 +477,16 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             update_data = {}
             if ai_city and ai_city != lead_facts.get("city"): update_data["city"] = ai_city
             if ai_issue and ai_issue != lead_facts.get("issue_type"): update_data["issue_type"] = ai_issue
-            if media_url and not lead_facts.get("media_url"): update_data["media_url"] = media_url
+            
+            mongo_ops = {}
             if update_data:
-                await leads_collection.update_one({"_id": current_lead_id}, {"$set": update_data})
+                mongo_ops["$set"] = update_data
+            
+            if media_url:
+                mongo_ops["$addToSet"] = {"media_urls": media_url}
+            
+            if mongo_ops:
+                await leads_collection.update_one({"_id": current_lead_id}, mongo_ops)
                 # Refresh facts for the matching block below
                 extracted_city = ai_city or extracted_city
                 extracted_issue = ai_issue or extracted_issue
@@ -529,14 +542,22 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                             )
                             + Messages.Pro.EARLY_LEAD_FOOTER
                         )
-                        early_media_url = active_lead.get("media_url") if active_lead else None
-                        early_media_url = early_media_url or media_url
-                        if early_media_url:
-                            await whatsapp.send_file_by_url(pro_phone, early_media_url, caption=notify_msg)
+                        # Send all collected media so far
+                        all_media = []
+                        if active_lead and active_lead.get("media_urls"):
+                            all_media = active_lead.get("media_urls")
+                        elif media_url:
+                            all_media = [media_url]
+                        
+                        if all_media:
+                            # Send first with caption, others without to avoid spamming text
+                            for i, m_url in enumerate(all_media):
+                                caption = notify_msg if i == 0 else ""
+                                await whatsapp.send_file_by_url(pro_phone, m_url, caption=caption)
                         else:
                             await whatsapp.send_message(pro_phone, notify_msg)
                         
-                        logger.info(f"📢 Notified pro {pro_phone} about new lead from {chat_id}")
+                        logger.info(f"📢 Notified pro {pro_phone} about new lead from {chat_id} with {len(all_media)} media items")
                 except Exception as e:
                     logger.error(f"Failed to notify pro about new lead: {e}")
 
@@ -664,13 +685,15 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
         "issue_type": d_issue,
         "pro_id": best_pro["_id"],
     }
-    if media_url:
-        lead_update["media_url"] = media_url
 
     if current_lead_id:
+        mongo_ops = {"$set": lead_update}
+        if media_url:
+            mongo_ops["$addToSet"] = {"media_urls": media_url}
+            
         await leads_collection.update_one(
             {"_id": current_lead_id},
-            {"$set": lead_update}
+            mongo_ops
         )
         lead = await leads_collection.find_one({"_id": current_lead_id})
     else:
@@ -685,7 +708,8 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
             street_number=final_response.extracted_data.street_number,
             city=final_response.extracted_data.city,
             floor=final_response.extracted_data.floor,
-            apartment=final_response.extracted_data.apartment
+            apartment=final_response.extracted_data.apartment,
+            media_url=media_url
         )
 
     if lead:
@@ -718,9 +742,12 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
             if transcription:
                 approval_msg += Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(transcription=transcription)
 
-            lead_media_url = lead.get("media_url") or media_url
-            if lead_media_url:
-                await whatsapp.send_file_by_url(pro_phone, lead_media_url, caption=approval_msg)
+            # Send all collected media
+            all_media = lead.get("media_urls", [])
+            if all_media:
+                for i, m_url in enumerate(all_media):
+                    caption = approval_msg if i == 0 else ""
+                    await whatsapp.send_file_by_url(pro_phone, m_url, caption=caption)
             else:
                 await whatsapp.send_message(pro_phone, approval_msg)
 
