@@ -542,22 +542,13 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                             )
                             + Messages.Pro.EARLY_LEAD_FOOTER
                         )
-                        # Send all collected media so far
-                        all_media = []
-                        if active_lead and active_lead.get("media_urls"):
-                            all_media = active_lead.get("media_urls")
-                        elif media_url:
-                            all_media = [media_url]
-                        
-                        if all_media:
-                            # Send first with caption, others without to avoid spamming text
-                            for i, m_url in enumerate(all_media):
-                                caption = notify_msg if i == 0 else ""
-                                await whatsapp.send_file_by_url(pro_phone, m_url, caption=caption)
+                        # Send the CURRENT media only if it's new (to avoid duplicate spam)
+                        if media_url:
+                            await whatsapp.send_file_by_url(pro_phone, media_url, caption=notify_msg)
                         else:
                             await whatsapp.send_message(pro_phone, notify_msg)
                         
-                        logger.info(f"📢 Notified pro {pro_phone} about new lead from {chat_id} with {len(all_media)} media items")
+                        logger.info(f"📢 Notified pro {pro_phone} about lead status from {chat_id}")
                 except Exception as e:
                     logger.error(f"Failed to notify pro about new lead: {e}")
 
@@ -742,14 +733,14 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
             if transcription:
                 approval_msg += Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(transcription=transcription)
 
-            # Send all collected media
+            # Add media links as text to avoid re-sending files
             all_media = lead.get("media_urls", [])
             if all_media:
-                for i, m_url in enumerate(all_media):
-                    caption = approval_msg if i == 0 else ""
-                    await whatsapp.send_file_by_url(pro_phone, m_url, caption=caption)
-            else:
-                await whatsapp.send_message(pro_phone, approval_msg)
+                approval_msg += "\n\n📸 *מדיה מצורפת:*"
+                for i, m_url in enumerate(all_media, 1):
+                    approval_msg += f"\n{i}. {m_url}"
+
+            await whatsapp.send_message(pro_phone, approval_msg)
 
             await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)
 
