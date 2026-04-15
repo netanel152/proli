@@ -35,6 +35,8 @@ from datetime import datetime, timezone
 
 import httpx
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import uri_parser
+import certifi
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -65,7 +67,10 @@ class SmokeTest:
         self.instance_id = int(instance_id)
         self.webhook_token = webhook_token
         self.http = httpx.AsyncClient(timeout=30)
-        self.mongo = AsyncIOMotorClient(mongo_uri)
+        
+        ca_file = certifi.where() if "+srv" in mongo_uri else None
+        kwargs = {"tlsCAFile": ca_file} if ca_file else {}
+        self.mongo = AsyncIOMotorClient(mongo_uri, **kwargs)
         self.db = self.mongo[db_name]
         self.failures: list[str] = []
 
@@ -304,17 +309,26 @@ async def main():
     parser.add_argument("--instance-id", default=os.getenv("GREEN_API_INSTANCE_ID", "0"))
     parser.add_argument("--token", default=os.getenv("WEBHOOK_TOKEN", ""))
     parser.add_argument("--mongo-uri", default=os.getenv("MONGO_URI") or os.getenv("MONGODB_URI"))
-    parser.add_argument("--db", default=os.getenv("MONGO_DB_NAME", "proli_db"))
+    parser.add_argument("--db", default=os.getenv("MONGO_DB_NAME"))
     args = parser.parse_args()
 
     if not args.mongo_uri:
         print(f"{RED}Missing MONGO_URI — set it in .env or pass --mongo-uri{NC}")
         sys.exit(2)
+
+    db_name = args.db
+    if not db_name:
+        try:
+            _parsed = uri_parser.parse_uri(args.mongo_uri)
+            db_name = _parsed.get("database") or "proli_db"
+        except Exception:
+            db_name = "proli_db"
+
     if args.instance_id == "0":
         print(f"{RED}Missing GREEN_API_INSTANCE_ID — set it in .env or pass --instance-id{NC}")
         sys.exit(2)
 
-    test = SmokeTest(args.base_url, args.instance_id, args.token, args.mongo_uri, args.db)
+    test = SmokeTest(args.base_url, args.instance_id, args.token, args.mongo_uri, db_name)
     passed = False
     try:
         passed = await test.run()
