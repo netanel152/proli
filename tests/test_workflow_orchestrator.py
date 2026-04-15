@@ -128,9 +128,21 @@ async def test_pending_pro_not_auto_detected(wf_mocks, mock_db):
 
 @pytest.mark.asyncio
 async def test_awaiting_address_saves_valid(wf_mocks, mock_db):
-    """User in AWAITING_ADDRESS sends valid address -> saves it."""
-    mock_wa, mock_state, _, _, _ = wf_mocks
+    """User in AWAITING_ADDRESS sends a full 5-field address -> re-extracts, saves composed address, clears state."""
+    mock_wa, mock_state, _, mock_ai, _ = wf_mocks
     mock_state.get_state.return_value = UserStates.AWAITING_ADDRESS
+
+    # The new handler re-runs the AI dispatcher on the customer's reply — mock it to
+    # return all five address parts so is_address_complete passes.
+    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
+        reply_to_user="",
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="נזילה",
+            street="הרצל", street_number="15", floor="2", apartment="4",
+            appointment_time=None,
+        ),
+        transcription=None, is_deal=False,
+    ))
 
     lead_id = ObjectId()
     await mock_db.leads.insert_one({
@@ -140,14 +152,20 @@ async def test_awaiting_address_saves_valid(wf_mocks, mock_db):
         "created_at": "2026-01-01",
     })
 
-    await process_incoming_message("972501111111@c.us", "רחוב הרצל 15, תל אביב")
+    await process_incoming_message("972501111111@c.us", "הרצל 15, תל אביב קומה 2 דירה 4")
 
     mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Customer.ADDRESS_SAVED)
     mock_state.clear_state.assert_called()
 
-    # Verify lead updated in DB
+    # Verify lead updated in DB with a composed canonical full_address
     updated = await mock_db.leads.find_one({"_id": lead_id})
-    assert updated["full_address"] == "רחוב הרצל 15, תל אביב"
+    assert updated["street"] == "הרצל"
+    assert updated["street_number"] == "15"
+    assert updated["floor"] == "2"
+    assert updated["apartment"] == "4"
+    assert "הרצל 15" in updated["full_address"]
+    assert "קומה 2" in updated["full_address"]
+    assert "דירה 4" in updated["full_address"]
 
 
 @pytest.mark.asyncio

@@ -7,6 +7,37 @@ from app.core.constants import LeadStatus
 from app.core.config import settings
 from app.services.context_manager_service import ContextManager
 
+
+def is_address_complete(extracted_data) -> tuple[bool, str]:
+    """
+    Pure check: does extracted_data carry street+street_number+city+floor+apartment?
+    Returns (ok, reason). When ok is False, reason is a Hebrew-facing message
+    listing the missing fields — safe to send directly to the customer.
+    """
+    missing = []
+    if not (getattr(extracted_data, "street", None) or "").strip():
+        missing.append("רחוב")
+    if not (getattr(extracted_data, "street_number", None) or "").strip():
+        missing.append("מספר בית")
+    if not (getattr(extracted_data, "city", None) or "").strip():
+        missing.append("עיר")
+    if not (getattr(extracted_data, "floor", None) or "").strip():
+        missing.append("קומה")
+    if not (getattr(extracted_data, "apartment", None) or "").strip():
+        missing.append("מספר דירה")
+    if missing:
+        return False, "כדי שבעל המקצוע יגיע למקום המדויק אני צריך/ה עוד פרטים לכתובת: " + ", ".join(missing)
+    return True, ""
+
+
+def compose_full_address(extracted_data) -> str:
+    """Build a canonical single-line address string from extracted parts."""
+    return (
+        f"{extracted_data.street} {extracted_data.street_number}, "
+        f"{extracted_data.city}, קומה {extracted_data.floor}, דירה {extracted_data.apartment}"
+    )
+
+
 class LeadManager:
     async def create_lead(self, deal_string: str, chat_id: str, pro_id: ObjectId = None) -> dict:
         """

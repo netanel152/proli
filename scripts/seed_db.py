@@ -286,7 +286,9 @@ async def seed():
     await create_slots(pro_ids)
     await create_leads(pro_ids)
     await create_pending_pro()
-    await create_consent_records(["972524828796", "972500000002"])
+    # 972523651414 is the smoke-test virtual customer — seed consent so the
+    # post-deploy smoke test can run end-to-end without hitting the consent gate.
+    await create_consent_records(["972524828796", "972500000002", "972523651414"])
     await create_staging_admin()
 
     print("Seed Complete! Staging environment is ready.")

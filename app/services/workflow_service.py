@@ -1,6 +1,6 @@
 from app.services.whatsapp_client_service import WhatsAppClient
 from app.services.ai_engine_service import AIEngine, AIResponse
-from app.services.lead_manager_service import LeadManager
+from app.services.lead_manager_service import LeadManager, is_address_complete, compose_full_address
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
 from app.core.logger import logger
@@ -177,7 +177,6 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         await leads_collection.update_one(
             {"chat_id": chat_id, "is_paused": True, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]}},
             {"$set": {"paused_at": datetime.now(timezone.utc)}},
-            sort=[("created_at", -1)]
         )
 
         logger.info(f"Bot paused for {chat_id} — message logged and timeout reset to {WorkerConstants.PAUSE_TTL_SECONDS}s")
@@ -209,26 +208,86 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         await handle_onboarding_step(chat_id, user_text or "", current_state, whatsapp)
         return
 
-    # Handle Awaiting Address
+    # Handle Awaiting Address — re-entry after the finalization gate rejected an
+    # incomplete address. Re-run extraction on the customer's reply, merge with
+    # whatever we already stored, and only clear the state when all five fields
+    # (street, number, city, floor, apartment) are present.
     if current_state == UserStates.AWAITING_ADDRESS:
-        if user_text and len(user_text) > 3:
-            active_lead = await leads_collection.find_one(
-                {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
-                sort=[("created_at", -1)]
-            )
-            if active_lead:
-                await leads_collection.update_one(
-                    {"_id": active_lead["_id"]},
-                    {"$set": {"full_address": user_text}}
-                )
-                await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_SAVED)
-                await StateManager.clear_state(chat_id)
-                return
-            else:
-                await StateManager.clear_state(chat_id)
-        else:
+        if not user_text or len(user_text) <= 3:
             await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_INVALID)
             return
+
+        active_lead_await = await leads_collection.find_one(
+            {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
+            sort=[("created_at", -1)]
+        )
+        if not active_lead_await:
+            await StateManager.clear_state(chat_id)
+            # Fall through to normal routing below
+        else:
+            lead_facts = active_lead_await
+            await lead_manager.log_message(chat_id, "user", user_text)
+            follow_up_prompt = Prompts.DISPATCHER_SYSTEM.format(
+                known_city=lead_facts.get("city") or "none",
+                known_issue=lead_facts.get("issue_type") or "none",
+                known_street=lead_facts.get("street") or "none",
+                known_street_number=lead_facts.get("street_number") or "none",
+                known_floor=lead_facts.get("floor") or "none",
+                known_apartment=lead_facts.get("apartment") or "none",
+            )
+            try:
+                follow_up = await ai.analyze_conversation(
+                    history=await lead_manager.get_chat_history(chat_id),
+                    user_text=user_text,
+                    custom_system_prompt=follow_up_prompt,
+                    require_json=True,
+                )
+            except Exception as e:
+                logger.error(f"AWAITING_ADDRESS re-extraction failed for {chat_id}: {e}")
+                await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
+                return
+
+            merged = {
+                "street": follow_up.extracted_data.street or lead_facts.get("street"),
+                "street_number": follow_up.extracted_data.street_number or lead_facts.get("street_number"),
+                "city": follow_up.extracted_data.city or lead_facts.get("city"),
+                "floor": follow_up.extracted_data.floor or lead_facts.get("floor"),
+                "apartment": follow_up.extracted_data.apartment or lead_facts.get("apartment"),
+            }
+            logger.info(
+                f"🔍 AWAITING_ADDRESS re-extraction for {chat_id}: "
+                f"new_from_ai={[k for k, v in merged.items() if v and not lead_facts.get(k)]}, "
+                f"merged={ {k: v for k, v in merged.items() if v} }"
+            )
+            non_empty = {k: v for k, v in merged.items() if v}
+            if non_empty:
+                await leads_collection.update_one(
+                    {"_id": active_lead_await["_id"]}, {"$set": non_empty}
+                )
+
+            class _AddrProbe:
+                pass
+            probe = _AddrProbe()
+            probe.street = merged.get("street")
+            probe.street_number = merged.get("street_number")
+            probe.city = merged.get("city")
+            probe.floor = merged.get("floor")
+            probe.apartment = merged.get("apartment")
+
+            ok, reason = is_address_complete(probe)
+            if ok:
+                full = compose_full_address(probe)
+                await leads_collection.update_one(
+                    {"_id": active_lead_await["_id"]}, {"$set": {"full_address": full}}
+                )
+                await StateManager.clear_state(chat_id)
+                await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_SAVED)
+                logger.info(f"✅ AWAITING_ADDRESS complete for {chat_id}, full_address={full!r}")
+                return
+            else:
+                await whatsapp.send_message(chat_id, reason)
+                logger.info(f"⏳ AWAITING_ADDRESS still missing parts for {chat_id}: {reason}")
+                return
 
     # Pro Registration keyword check (before auto-detect)
     if current_state == UserStates.IDLE and normalized_text in Messages.Keywords.REGISTER_COMMANDS:
@@ -334,8 +393,31 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
 
     # 5. Smart Dispatcher Phase (only when no pro assigned yet)
     # Context window trimming is centralized in ai_engine_service.py
+    # Inject sticky facts from the active lead so extractions survive the 10-message window.
+    lead_facts = active_lead or {}
+    sticky = {
+        "city": lead_facts.get("city") or lead_facts.get("full_address") or "none",
+        "issue": lead_facts.get("issue_type") or "none",
+        "street": lead_facts.get("street") or "none",
+        "street_number": lead_facts.get("street_number") or "none",
+        "floor": lead_facts.get("floor") or "none",
+        "apartment": lead_facts.get("apartment") or "none",
+    }
+    logger.info(
+        f"📌 Sticky facts injected for {chat_id}: "
+        f"city={sticky['city']}, issue={sticky['issue']}, "
+        f"street={sticky['street']} {sticky['street_number']}, "
+        f"floor={sticky['floor']}, apt={sticky['apartment']}"
+    )
     dispatcher_history = history
-    dispatcher_prompt = Prompts.DISPATCHER_SYSTEM
+    dispatcher_prompt = Prompts.DISPATCHER_SYSTEM.format(
+        known_city=sticky["city"],
+        known_issue=sticky["issue"],
+        known_street=sticky["street"],
+        known_street_number=sticky["street_number"],
+        known_floor=sticky["floor"],
+        known_apartment=sticky["apartment"],
+    )
 
     try:
         dispatcher_response: AIResponse = await ai.analyze_conversation(
@@ -352,9 +434,20 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
         return
 
-    extracted_city = dispatcher_response.extracted_data.city
-    extracted_issue = dispatcher_response.extracted_data.issue
+    # Merge: prefer fresh AI output, fall back to stored lead facts so a trimmed
+    # window or a silent parse-failure can't erase a previously-confirmed fact.
+    ai_city = dispatcher_response.extracted_data.city
+    ai_issue = dispatcher_response.extracted_data.issue
+    extracted_city = ai_city or lead_facts.get("city") or lead_facts.get("full_address")
+    extracted_issue = ai_issue or lead_facts.get("issue_type")
     transcription = dispatcher_response.transcription
+
+    if (not ai_city and extracted_city) or (not ai_issue and extracted_issue):
+        logger.warning(
+            f"🩹 Sticky-facts fallback used for {chat_id}: "
+            f"AI returned city={ai_city!r}/issue={ai_issue!r}, "
+            f"lead facts filled in city={extracted_city!r}/issue={extracted_issue!r}"
+        )
 
     logger.info(f"Dispatcher analysis: City={extracted_city}, Issue={extracted_issue}, Transcr={transcription}")
 
@@ -504,14 +597,51 @@ async def _build_pro_response(best_pro, history, user_text, extracted_city, extr
 
 async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extracted_issue, transcription, current_lead_id, media_url=None):
     """Finalize a deal: create/update lead, set customer to AWAITING_PRO_APPROVAL, send pro interactive buttons."""
+    # Hard address gate: never dispatch a pro without street+number+city+floor+apartment.
+    ed = final_response.extracted_data
+    logger.info(
+        f"🚧 Address gate check for {chat_id}: "
+        f"street={ed.street!r}, number={ed.street_number!r}, city={ed.city!r}, "
+        f"floor={ed.floor!r}, apt={ed.apartment!r}, time={ed.appointment_time!r}"
+    )
+    ok, reason = is_address_complete(ed)
+    if not ok:
+        # Persist whatever partial address parts we already have so the sticky
+        # facts survive the next turn and the customer doesn't re-state them.
+        partial_update = {
+            "street": ed.street,
+            "street_number": ed.street_number,
+            "city": ed.city or extracted_city,
+            "floor": ed.floor,
+            "apartment": ed.apartment,
+            "issue_type": ed.issue or extracted_issue,
+        }
+        partial_update = {k: v for k, v in partial_update.items() if v}
+        if current_lead_id and partial_update:
+            await leads_collection.update_one({"_id": current_lead_id}, {"$set": partial_update})
+            logger.info(
+                f"💾 Persisted partial address parts for {chat_id} (lead={current_lead_id}): {list(partial_update.keys())}"
+            )
+
+        await StateManager.set_state(chat_id, UserStates.AWAITING_ADDRESS)
+        await whatsapp.send_message(chat_id, reason)
+        logger.warning(f"🚫 Address gate REJECTED finalization for {chat_id}: {reason}")
+        return
+    logger.info(f"✅ Address gate PASSED for {chat_id}")
+
     d_time = final_response.extracted_data.appointment_time or Defaults.ASAP_TIME
-    d_address = final_response.extracted_data.full_address or extracted_city or Defaults.UNKNOWN_ADDRESS
+    d_address = compose_full_address(final_response.extracted_data)
     d_issue = final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
 
     lead_update = {
         "status": LeadStatus.NEW,
         "appointment_time": d_time,
         "full_address": d_address,
+        "street": final_response.extracted_data.street,
+        "street_number": final_response.extracted_data.street_number,
+        "city": final_response.extracted_data.city,
+        "floor": final_response.extracted_data.floor,
+        "apartment": final_response.extracted_data.apartment,
         "issue_type": d_issue,
         "pro_id": best_pro["_id"],
     }
@@ -535,8 +665,13 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
         )
 
     if lead:
-        # 1. Set customer state to AWAITING_PRO_APPROVAL
-        await StateManager.set_state(chat_id, UserStates.AWAITING_PRO_APPROVAL)
+        # 1. Set customer state to AWAITING_PRO_APPROVAL with a bounded TTL so
+        #    the customer is never silently stuck if the pro misses the notification.
+        await StateManager.set_state(
+            chat_id,
+            UserStates.AWAITING_PRO_APPROVAL,
+            ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
+        )
         await whatsapp.send_message(chat_id, Messages.Customer.AWAITING_APPROVAL)
         logger.info(f"Customer {chat_id} entered AWAITING_PRO_APPROVAL state")
 

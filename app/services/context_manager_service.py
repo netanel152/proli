@@ -77,6 +77,9 @@ class ContextManager:
         """
         try:
             redis = await get_redis_client()
-            await redis.delete(f"context:{chat_id}")
+            key = f"context:{chat_id}"
+            prev_len = await redis.llen(key)
+            await redis.delete(key)
+            logger.info(f"🧹 Context cleared for {chat_id} (had {prev_len} messages)")
         except Exception as e:
             logger.error(f"Redis clear_context error for {chat_id}: {e}")

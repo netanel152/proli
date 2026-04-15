@@ -31,7 +31,11 @@ class StateManager:
         try:
             redis = await get_redis_client()
             effective_ttl = ttl if ttl is not None else cls.TTL
+            prev = await redis.get(f"state:{chat_id}")
             await redis.set(f"state:{chat_id}", state_value, ex=effective_ttl)
+            logger.info(
+                f"🔄 FSM {chat_id}: {prev or UserStates.IDLE} → {state_value} (ttl={effective_ttl}s)"
+            )
         except Exception as e:
              logger.error(f"Error setting state for {chat_id}: {e}")
 
@@ -42,7 +46,10 @@ class StateManager:
         """
         try:
             redis = await get_redis_client()
+            prev = await redis.get(f"state:{chat_id}")
             await redis.delete(f"state:{chat_id}", f"state_meta:{chat_id}")
+            if prev:
+                logger.info(f"🔄 FSM {chat_id}: {prev} → IDLE (cleared)")
         except Exception as e:
             logger.error(f"Error clearing state for {chat_id}: {e}")
 

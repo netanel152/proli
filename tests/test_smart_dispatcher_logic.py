@@ -146,15 +146,23 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
     # 1. Dispatcher: Extracts info + Transcription
     dispatcher_resp = AIResponse(
         reply_to_user="...",
-        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address=None, appointment_time=None),
+        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", appointment_time=None),
         transcription="Water is flowing everywhere",
         is_deal=False
     )
-    
+
     # 2. Pro: Closes Deal (Mocking that Pro also sees transcription in context)
     pro_resp = AIResponse(
         reply_to_user="[DEAL: Now | Tel Aviv | Leak]",
-        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Tel Aviv", appointment_time="Now"),
+        extracted_data=ExtractedData(
+            city="Tel Aviv",
+            issue="Leak",
+            street="Rothschild",
+            street_number="10",
+            floor="3",
+            apartment="5",
+            appointment_time="Now",
+        ),
         transcription="Water is flowing everywhere",
         is_deal=True
     )

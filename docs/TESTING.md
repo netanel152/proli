@@ -99,7 +99,7 @@ pytest -m integration
 # Override AI response for a specific test
 mock_ai.analyze_conversation.return_value = AIResponse(
     reply_to_user="...", is_deal=True,
-    extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", ...),
+    extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", street="Rothschild", street_number="10", floor="3", apartment="5", appointment_time="Now"),
     transcription=None,
 )
 

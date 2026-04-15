@@ -18,7 +18,10 @@ from bson import ObjectId
 class ExtractedData(BaseModel):
     city: Optional[str] = Field(description="The extracted city/location from the user's input.")
     issue: Optional[str] = Field(description="The extracted issue or service description.")
-    full_address: Optional[str] = Field(description="The full street address if provided.")
+    street: Optional[str] = Field(default=None, description="Street name only, e.g. 'הרצל'.")
+    street_number: Optional[str] = Field(default=None, description="Building number, e.g. '15'.")
+    floor: Optional[str] = Field(default=None, description="Floor number, e.g. '2'.")
+    apartment: Optional[str] = Field(default=None, description="Apartment number, e.g. '4'.")
     appointment_time: Optional[str] = Field(description="Preferred time for the appointment.")
 
 class AIResponse(BaseModel):
@@ -161,10 +164,13 @@ class AIEngine:
                                 data = json.loads(response.text)
                                 return AIResponse(**data)
                     except Exception as parse_error:
-                        logger.error(f"JSON Parse Error with {model_name}: {parse_error} - Text: {response.text}")
-                        # If JSON fails, it might be the model's fault, so we might want to continue to next model?
-                        # For now, let's treat JSON parse error as a hard failure for this model.
-                        continue 
+                        preview = (response.text[:500] if response.text else "EMPTY")
+                        logger.warning(
+                            f"JSON Parse Error with {model_name}: {parse_error} - "
+                            f"response text (first 500 chars): {preview}"
+                        )
+                        # Treat JSON parse error as a hard failure for this model → fall back.
+                        continue
 
                 return response.text.strip()
 
@@ -179,7 +185,7 @@ class AIEngine:
             return AIResponse(
                     reply_to_user=Messages.Errors.AI_OVERLOAD,
                     transcription=None,
-                    extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None),
+                    extracted_data=ExtractedData(city=None, issue=None, appointment_time=None),
                     is_deal=False
                 )
         return Messages.Errors.AI_OVERLOAD
