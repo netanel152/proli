@@ -107,7 +107,11 @@ async def check_and_reassign_stale_leads():
                     )
                     msg_to_pro += Messages.Pro.NEW_LEAD_FOOTER
 
-                    await whatsapp.send_message(pro_phone, msg_to_pro)
+                    lead_media_url = lead.get("media_url")
+                    if lead_media_url:
+                        await whatsapp.send_file_by_url(pro_phone, lead_media_url, caption=msg_to_pro)
+                    else:
+                        await whatsapp.send_message(pro_phone, msg_to_pro)
 
                     if lead.get('full_address'):
                         await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)

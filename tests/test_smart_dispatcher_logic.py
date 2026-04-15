@@ -22,6 +22,7 @@ def mock_workflow_dependencies():
         mock_lm.create_lead = AsyncMock(return_value={"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id"})
         mock_lm.create_lead_from_dict = AsyncMock(return_value={"_id": "123", "full_address": "Test St", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user_id"})
         mock_whatsapp.send_message = AsyncMock()
+        mock_whatsapp.send_file_by_url = AsyncMock()
         mock_whatsapp.send_location_link = AsyncMock()
         mock_users.find_one = AsyncMock(return_value=None)
         
@@ -197,12 +198,14 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
     # Verify Message to Pro contains Transcription
     # Pro phone: 972500000000 -> 972500000000@c.us
     pro_chat = "972500000000@c.us"
-    calls_to_pro = [call for call in mock_whatsapp.send_message.call_args_list if call[0][0] == pro_chat]
+    calls_to_pro_text = [call[0][1] for call in mock_whatsapp.send_message.call_args_list if call[0][0] == pro_chat]
+    calls_to_pro_file = [call.kwargs.get('caption', '') for call in mock_whatsapp.send_file_by_url.call_args_list if call.args[0] == pro_chat]
+    all_texts_to_pro = calls_to_pro_text + calls_to_pro_file
 
     # Messages to pro: early lead notification + deal/approval notification
-    assert len(calls_to_pro) >= 1
+    assert len(all_texts_to_pro) >= 1
     # Find the message that contains the transcription
-    transcription_msgs = [c[0][1] for c in calls_to_pro if "Water is flowing everywhere" in c[0][1]]
+    transcription_msgs = [msg for msg in all_texts_to_pro if "Water is flowing everywhere" in msg]
     assert len(transcription_msgs) >= 1
     msg_to_pro = transcription_msgs[0]
 

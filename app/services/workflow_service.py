@@ -532,9 +532,10 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                         early_media_url = active_lead.get("media_url") if active_lead else None
                         early_media_url = early_media_url or media_url
                         if early_media_url:
-                            notify_msg += Messages.Pro.APPROVAL_MEDIA.format(media_url=early_media_url)
-
-                        await whatsapp.send_message(pro_phone, notify_msg)
+                            await whatsapp.send_file_by_url(pro_phone, early_media_url, caption=notify_msg)
+                        else:
+                            await whatsapp.send_message(pro_phone, notify_msg)
+                        
                         logger.info(f"📢 Notified pro {pro_phone} about new lead from {chat_id}")
                 except Exception as e:
                     logger.error(f"Failed to notify pro about new lead: {e}")
@@ -719,9 +720,9 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
 
             lead_media_url = lead.get("media_url") or media_url
             if lead_media_url:
-                approval_msg += Messages.Pro.APPROVAL_MEDIA.format(media_url=lead_media_url)
-
-            await whatsapp.send_message(pro_phone, approval_msg)
+                await whatsapp.send_file_by_url(pro_phone, lead_media_url, caption=approval_msg)
+            else:
+                await whatsapp.send_message(pro_phone, approval_msg)
 
             await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)
 

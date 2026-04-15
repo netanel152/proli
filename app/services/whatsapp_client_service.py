@@ -57,3 +57,22 @@ class WhatsAppClient:
         message = f"{text_prefix}\n{waze_url}"
         await self.send_message(chat_id, message)
 
+    @retry(
+        retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10)
+    )
+    async def send_file_by_url(self, chat_id: str, url: str, caption: str = "", file_name: str = "media.jpg"):
+        payload = {
+            "chatId": chat_id,
+            "urlFile": url,
+            "fileName": file_name,
+            "caption": caption
+        }
+        try:
+            await self._send_request("sendFileByUrl", payload)
+            logger.info(f"File sent to {chat_id}")
+        except Exception as e:
+            logger.error(f"Failed to send file to {chat_id}: {e}")
+            raise
+
