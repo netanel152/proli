@@ -192,7 +192,7 @@ class SmokeTest:
         await self._send(CUSTOMER_CHAT_ID, "שלום!", "עדי")
         await asyncio.sleep(5)
         # Send issue + media
-        await self._send(CUSTOMER_CHAT_ID, "יש לי נזילה רצינית במטבח, הנה תמונה", "עדי", media_url="https://res.cloudinary.com/dzt50vj4h/image/upload/v1711200000/sample.jpg")
+        await self._send(CUSTOMER_CHAT_ID, "יש לי נזילה רצינית במטבח, הנה תמונה", "עדי", media_url="https://res.cloudinary.com/dvv4qlcyu/image/upload/v1765029750/az7qo1eiwfbbq5tvsudo.jpg")
         await asyncio.sleep(5)
         # Send location
         await self._send(CUSTOMER_CHAT_ID, "אני גר בתל אביב", "עדי")
