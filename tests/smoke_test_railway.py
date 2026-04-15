@@ -205,7 +205,7 @@ class SmokeTest:
         _step(2, "Customer provides full address + appointment time")
         await self._send(
             CUSTOMER_CHAT_ID,
-            "הרצל 15 תל אביב, קומה 2 דירה 4, מחר ב-10:00",
+            "הבעיה היא בברז וזה קורה כבר יומיים. הכתובת היא הרצל 15 תל אביב, קומה 2 דירה 4, מחר ב-10:00. אנא אשר/י את העבודה וסגור/י את העסקה כעת.",
             "עדי",
         )
         _info("Waiting for address gate to pass and deal to finalize (≤50s)...")
