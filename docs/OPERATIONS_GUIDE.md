@@ -107,7 +107,7 @@ A customer sending "אני צריך נציג" (or similar):
 
 When a deal is finalized by the AI:
 
-1. Customer enters `AWAITING_PRO_APPROVAL` state — bot replies with "still waiting" if they message again
+1. Customer enters `AWAITING_PRO_APPROVAL` state (1h TTL) — bot replies with "still waiting" if they message again
 2. Pro receives a text-based approval request (reply "אשר" or "1"):
    - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared
    - **Pause** (reply "השהה") → customer enters `PAUSED_FOR_HUMAN` (15m rolling), direct chat begins

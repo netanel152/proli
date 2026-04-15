@@ -30,7 +30,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 Activated when no pro is assigned to the active lead.
 
 - Receives the last **5 conversational turns** (10 messages max — centrally trimmed in `ai_engine_service.py`)
-- Extracts `city`, `issue`, `full_address`, `appointment_time` from the conversation
+- Extracts `city`, `issue`, `street`, `street_number`, `floor`, `apartment`, `appointment_time` from the conversation
 - If `city` + `issue` are found → calls `matching_service.determine_best_pro()`
 - If `city` or `issue` missing → sends a clarifying reply, waits for next message
 - If pro found → calls Phase 2 immediately
@@ -45,7 +45,7 @@ Activated when a pro is assigned (either from Phase 1 or an existing `pro_id` on
   1. Introduce pro and service
   2. Ask for photo/video of the issue (skipped if media already received)
   3. Provide estimate based on price list
-  4. Confirm appointment time and full address
+  4. Confirm appointment time and full 5-part address (street, number, city, floor, apt)
   5. Close deal when all details are confirmed (`is_deal=True`)
 - Token usage is incremented on the pro's `users` document after each call (`$inc total_tokens_used`) as a non-blocking background task
 
@@ -59,7 +59,7 @@ If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatc
 
 When Phase 2 returns `is_deal=True`:
 
-1. Create or update lead with `status=new`, `pro_id`, `full_address`, `issue_type`, `appointment_time`, `media_url`
+1. Create or update lead with `status=new`, `pro_id`, `full_address` (composed), `street`, `street_number`, `city`, `floor`, `apartment`, `issue_type`, `appointment_time`, `media_url`
 2. Set customer state to `AWAITING_PRO_APPROVAL` (customer sees a soft-hold message on next message)
 3. Send customer `Messages.Customer.AWAITING_APPROVAL`
 4. Send pro a text-based approval request (e.g., "Reply 'אשר' or '1' to approve")
@@ -76,7 +76,7 @@ When Phase 2 returns `is_deal=True`:
 | `AWAITING_INTENT_CONFIRMATION` | AI detects pro needs service | Prompt pro to switch modes |
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI |
 | `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged, 15m rolling TTL resets |
-| `AWAITING_ADDRESS` | Address needed | Next message saved as address, state cleared |
+| `AWAITING_ADDRESS` | Address missing parts | AI re-extracts parts from next message, state cleared if complete |
 
 ### SOS / Human Handoff
 

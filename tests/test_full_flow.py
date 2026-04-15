@@ -82,7 +82,15 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     # Only the pro AI response is needed for this second message.
     resp_pro_deal = AIResponse(
         reply_to_user="Done. [DEAL: tomorrow 10:00 | Dizengoff 1 | plumber]",
-        extracted_data=ExtractedData(city="Tel Aviv", issue="plumber", full_address="Dizengoff 1", appointment_time="tomorrow 10:00"),
+        extracted_data=ExtractedData(
+            city="Tel Aviv",
+            issue="plumber",
+            street="Dizengoff",
+            street_number="1",
+            floor="2",
+            apartment="4",
+            appointment_time="tomorrow 10:00",
+        ),
         transcription=None,
         is_deal=True
     )
@@ -95,7 +103,9 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     lead = await mock_db.leads.find_one({"chat_id": user_chat_id, "status": "new"})
     assert lead is not None
     assert lead["issue_type"] == "plumber"
-    assert lead["full_address"] == "Dizengoff 1"
+    assert "Dizengoff 1" in lead["full_address"]
+    assert "קומה 2" in lead["full_address"]
+    assert "דירה 4" in lead["full_address"]
 
     # 4. PRO: Approve via Text Command ("אשר")
     await process_incoming_message(pro_chat_id, "אשר")

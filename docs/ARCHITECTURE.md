@@ -111,7 +111,7 @@ process_incoming_message(chat_id, text, media_url)
         │      └─ "1" → set CUSTOMER_MODE, clear context
         │      └─ "2" → back to PRO_MODE
         │
-        ├─ State == AWAITING_ADDRESS? → save address, clear state
+        ├─ State == AWAITING_ADDRESS? → re-extract missing address parts, save, clear state if complete
         │
         ├─ Phone matches active pro? → set PRO_MODE, handle pro flow
         │
@@ -188,8 +188,8 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `PRO_MODE` | Sender is an active professional |
 | `CUSTOMER_MODE` | Professional temporarily acting as a customer (Zero-Touch) |
 | `AWAITING_INTENT_CONFIRMATION` | Prompting Pro to switch to `CUSTOMER_MODE` |
-| `AWAITING_ADDRESS` | Waiting for customer to provide street address |
-| `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold |
+| `AWAITING_ADDRESS` | Waiting for customer to provide missing parts of 5-field address |
+| `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold (1h TTL) |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
 
@@ -225,7 +225,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | Collection | Purpose |
 |-----------|---------|
 | `users` | Professionals and customers. Pros have `location` (2dsphere), `service_areas`, `price_list`, `social_proof`, `total_tokens_used` |
-| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `issue_type`, `full_address`, `appointment_time`, `media_url`, `reassignment_count` |
+| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `issue_type`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `appointment_time`, `media_url`, `reassignment_count` |
 | `messages` | Chat history log per `chat_id` |
 | `slots` | Appointment slots per pro with atomic locking (`is_taken`) |
 | `settings` | Scheduler config toggles (`sos_healer_active`, etc.) |
@@ -286,3 +286,4 @@ docker-compose up --build -d
 ### Railway (cloud)
 
 Three Railway services pointing to the same Dockerfile with different `command` overrides. All share MongoDB Atlas and Redis via project-level env vars. See [RAILWAY_SETUP.md](RAILWAY_SETUP.md).
+vars. See [RAILWAY_SETUP.md](RAILWAY_SETUP.md).
