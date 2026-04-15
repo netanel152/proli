@@ -1,6 +1,7 @@
 import pytest
 from app.services.workflow_service import process_incoming_message
 from app.services.ai_engine_service import AIResponse, ExtractedData
+from app.services.state_manager_service import StateManager
 from unittest.mock import MagicMock, AsyncMock
 
 # --- HELPERS ---
@@ -38,8 +39,7 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     await mock_db.users.insert_one(pro_data)
     pro = await mock_db.users.find_one({"business_name": "יוסי אינסטלציה"})
     pro_chat_id = "972524828796@c.us"
-    user_chat_id = "972501234567@c.us"
-
+    user_chat_id = "972509999999@c.us"
     # PATCH: Bypass determine_best_pro DB query because mongomock doesn't support $near
     mock_determine_best_pro = AsyncMock(return_value=pro)
     monkeypatch.setattr("app.services.workflow_service.determine_best_pro", mock_determine_best_pro)
@@ -104,9 +104,8 @@ async def test_full_lifecycle(mock_db, monkeypatch):
     assert lead is not None
     assert lead["issue_type"] == "plumber"
     assert "Dizengoff 1" in lead["full_address"]
-    assert "קומה 2" in lead["full_address"]
-    assert "דירה 4" in lead["full_address"]
-
+    assert lead["floor"] == "2"
+    assert lead["apartment"] == "4"
     # 4. PRO: Approve via Text Command ("אשר")
     await process_incoming_message(pro_chat_id, "אשר")
     

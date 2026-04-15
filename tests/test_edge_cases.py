@@ -89,6 +89,8 @@ async def test_bad_input_file_type(mock_dependencies):
             is_deal=False
         )
         
+        mock_lm.create_lead_from_dict = AsyncMock(return_value={"_id": "fake_id"})
+        
         await process_incoming_message("123", "Here is a file", media_url=media_url)
         
         # Verify AI was called with the PDF mime type

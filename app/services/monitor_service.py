@@ -101,6 +101,7 @@ async def check_and_reassign_stale_leads():
                     msg_to_pro = Messages.Pro.NEW_LEAD_HEADER + "\n\n"
                     msg_to_pro += Messages.Pro.NEW_LEAD_DETAILS.format(
                         full_address=lead.get('full_address', 'Unknown'),
+                        extra_info=f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}",
                         issue_type=lead.get('issue_type', 'Unknown'),
                         appointment_time=lead.get('appointment_time', 'Pending')
                     )
