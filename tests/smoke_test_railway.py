@@ -191,8 +191,11 @@ class SmokeTest:
         # Send greeting first (AI is instructed not to extract on first message)
         await self._send(CUSTOMER_CHAT_ID, "שלום!", "עדי")
         await asyncio.sleep(5)
-        # Send issue + media
-        await self._send(CUSTOMER_CHAT_ID, "יש לי נזילה רצינית במטבח, הנה תמונה", "עדי", media_url="https://res.cloudinary.com/dvv4qlcyu/image/upload/v1765029750/az7qo1eiwfbbq5tvsudo.jpg")
+        # Send first photo
+        await self._send(CUSTOMER_CHAT_ID, "יש לי נזילה רצינית במטבח, הנה תמונה ראשונה", "עדי", media_url="https://res.cloudinary.com/dvv4qlcyu/image/upload/v1776296828/6aa179c001e5bbee97112f3f7ba3878d_q6tdht.png")
+        await asyncio.sleep(5)
+        # Send second photo
+        await self._send(CUSTOMER_CHAT_ID, "והנה עוד תמונה מזווית אחרת", "עדי", media_url="https://res.cloudinary.com/dvv4qlcyu/image/upload/v1765029750/az7qo1eiwfbbq5tvsudo.jpg")
         await asyncio.sleep(5)
         # Send location
         await self._send(CUSTOMER_CHAT_ID, "אני גר בתל אביב", "עדי")
