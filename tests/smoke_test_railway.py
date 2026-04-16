@@ -186,23 +186,90 @@ class SmokeTest:
         return True
 
     # --- Steps ---
+    async def step0_bailout_flow(self) -> bool:
+        _step(0, "Test Bailout: Silent Media + AWAITING_ADDRESS Cancel")
+        # 1. Image only (Silent Media intent)
+        await self._send(CUSTOMER_CHAT_ID, "", "עדי", media_url="https://res.cloudinary.com/dvv4qlcyu/image/upload/v1776296828/6aa179c001e5bbee97112f3f7ba3878d_q6tdht.png")
+        await asyncio.sleep(8)
+        
+        # 2. Provide problem and city to trigger match
+        await self._send(CUSTOMER_CHAT_ID, "יש לי פיצוץ בצנרת ואני מתל אביב", "עדי")
+        _info("Waiting for lead to hit AWAITING_ADDRESS (contacted)...")
+        lead = await self._poll_lead(
+            lambda d: d.get("pro_id") is not None and d.get("status") in ("contacted", "new"),
+            timeout=45,
+        )
+        if not lead:
+            _fail("Lead not matched/contacted for bailout test")
+            self.failures.append("step0-no-match")
+            return False
+            
+        _ok(f"Lead {lead['_id']} matched to pro, waiting at address gate")
+        
+        # 3. Cancel the flow (Nevermind trap)
+        await self._send(CUSTOMER_CHAT_ID, "בטל", "עדי")
+        _info("Waiting for lead status → CANCELLED...")
+        lead_cancelled = await self._poll_lead(
+            lambda d: d.get("status") == "cancelled",
+            timeout=25,
+        )
+        if not lead_cancelled:
+            _fail("Lead did not transition to cancelled")
+            self.failures.append("step0-not-cancelled")
+            return False
+            
+        _ok(f"Lead {lead_cancelled['_id']} successfully cancelled by bailout")
+        
+        # Give system a moment to settle
+        await asyncio.sleep(2)
+        return True
+
+    async def step0b_empty_radius_bailout(self) -> bool:
+        _step("0b", "Test Empty Radius (30km) Bailout: PENDING_ADMIN_REVIEW")
+        # 1. Reset user state first
+        await self._send(CUSTOMER_CHAT_ID, "תפריט", "ישראל")
+        await asyncio.sleep(2)
+
+        # 2. Report a problem in a distant city (e.g. Eilat, assuming pro is in Tel Aviv/Center)
+        await self._send(CUSTOMER_CHAT_ID, "יש לי פיצוץ בצנרת ואני מאילת", "ישראל")
+        _info("Waiting for lead to hit PENDING_ADMIN_REVIEW (≤45s)...")
+        lead = await self._poll_lead(
+            lambda d: d.get("status") == "pending_admin_review",
+            timeout=45,
+        )
+        if not lead:
+            _fail("Lead did not escalate to pending_admin_review for distant city")
+            self.failures.append("step0b-no-admin-review")
+            return False
+            
+        _ok(f"Lead {lead['_id']} correctly escalated to PENDING_ADMIN_REVIEW for Eilat")
+        
+        # 3. Clean up the lead so it doesn't interfere with the next steps
+        await self.db.leads.delete_many({"chat_id": CUSTOMER_CHAT_ID})
+        await self._send(CUSTOMER_CHAT_ID, "תפריט", "ישראל")
+        await asyncio.sleep(2)
+        return True
+
     async def step1_customer_reports_problem(self) -> bool:
-        _step(1, "Customer reports plumbing issue")
-        # Send greeting first (AI is instructed not to extract on first message)
-        await self._send(CUSTOMER_CHAT_ID, "שלום!", "עדי")
+        _step(1, "Customer reports plumbing issue with pictures and gives name")
+        # Greet and give name
+        await self._send(CUSTOMER_CHAT_ID, "שלום! קוראים לי ישראל ישראלי", "ישראל")
         await asyncio.sleep(5)
-        # Send first photo
-        await self._send(CUSTOMER_CHAT_ID, "יש לי נזילה רצינית במטבח, הנה תמונה ראשונה", "עדי", media_url="https://res.cloudinary.com/dvv4qlcyu/image/upload/v1776296828/6aa179c001e5bbee97112f3f7ba3878d_q6tdht.png")
+        
+        # Send first photo with issue description
+        await self._send(CUSTOMER_CHAT_ID, "יש לי נזילה רצינית בכיור המטבח, הנה תמונה ראשונה", "ישראל", media_url="https://res.cloudinary.com/dvv4qlcyu/image/upload/v1776296828/6aa179c001e5bbee97112f3f7ba3878d_q6tdht.png")
         await asyncio.sleep(5)
+        
         # Send second photo
-        await self._send(CUSTOMER_CHAT_ID, "והנה עוד תמונה מזווית אחרת", "עדי", media_url="https://res.cloudinary.com/dvv4qlcyu/image/upload/v1765029750/az7qo1eiwfbbq5tvsudo.jpg")
+        await self._send(CUSTOMER_CHAT_ID, "והנה עוד תמונה מזווית אחרת", "ישראל", media_url="https://res.cloudinary.com/dvv4qlcyu/image/upload/v1765029750/az7qo1eiwfbbq5tvsudo.jpg")
         await asyncio.sleep(5)
-        # Send location
-        await self._send(CUSTOMER_CHAT_ID, "אני גר בתל אביב", "עדי")
+        
+        # City
+        await self._send(CUSTOMER_CHAT_ID, "אני גר בתל אביב", "ישראל")
         
         _info("Waiting for dispatcher to create a lead and match a pro (≤40s)...")
         lead = await self._poll_lead(
-            lambda d: d.get("pro_id") is not None,
+            lambda d: d.get("pro_id") is not None and d.get("status") != "cancelled",
             timeout=45,
         )
         if not lead or not lead.get("pro_id"):
@@ -213,15 +280,30 @@ class SmokeTest:
             _fail(f"Matched a different pro. Expected {self.pro_id}, got {lead['pro_id']}")
             self.failures.append("step1-wrong-pro")
             return False
-        _ok(f"Lead {lead['_id']} matched to pro (issue={lead.get('issue_type')}, city={lead.get('city')})")
+            
+        # Check customer_name capture
+        cust_name = lead.get("customer_name")
+        if not cust_name:
+            _fail("customer_name not captured in lead")
+            self.failures.append("step1-no-customer-name")
+            return False
+
+        # Check media capture
+        media_urls = lead.get("media_urls", [])
+        if len(media_urls) < 2:
+            _fail(f"Expected at least 2 media_urls, got {len(media_urls)}")
+            self.failures.append("step1-missing-media")
+            return False
+            
+        _ok(f"Lead {lead['_id']} matched to pro (issue={lead.get('issue_type')}, city={lead.get('city')}, name={cust_name}, {len(media_urls)} images attached)")
         return True
 
     async def step2_customer_provides_full_address(self) -> bool:
-        _step(2, "Customer provides full address + appointment time")
+        _step(2, "Customer provides bilingual full address + appointment time")
         await self._send(
             CUSTOMER_CHAT_ID,
-            "הבעיה היא בברז וזה קורה כבר יומיים. הכתובת היא הרצל 15 תל אביב, קומה 2 דירה 4, מחר ב-10:00. אנא אשר/י את העבודה וסגור/י את העסקה כעת.",
-            "עדי",
+            "הבעיה היא בברז וזה קורה כבר יומיים. הכתובת היא Herzl 15 Tel Aviv, floor 2 apt 4, מחר ב-10 בבוקר. אנא אשר/י את העבודה וסגור/י את העסקה כעת.",
+            "ישראל",
         )
         _info("Waiting for address gate to pass and deal to finalize (≤50s)...")
         lead = await self._poll_lead(
@@ -237,7 +319,7 @@ class SmokeTest:
             timeout=50,
         )
         if not lead:
-            _fail("Deal not finalized — address gate may still reject, or AI did not extract all fields")
+            _fail("Deal not finalized — address gate may still reject, or AI did not extract all fields from bilingual address")
             self.failures.append("step2-not-finalized")
             return False
         missing = [f for f in ("street", "street_number", "city", "floor", "apartment", "appointment_time") if not lead.get(f)]
@@ -251,8 +333,12 @@ class SmokeTest:
         return True
 
     async def step3_pro_approves(self) -> bool:
-        _step(3, "Pro approves the lead ('אשר')")
+        _step(3, "Pro approves the lead ('אשר') + Fat Finger check")
         await self._send(PRO_CHAT_ID, "אשר", "Netanel Pro")
+        
+        # Send immediately again to test the redis lock / fat finger guard (should gracefully ignore/return ALREADY_RESPONDED)
+        await self._send(PRO_CHAT_ID, "אשר", "Netanel Pro")
+        
         _info("Waiting for lead status → BOOKED (≤25s)...")
         lead = await self._poll_lead(lambda d: d.get("status") == "booked", timeout=25)
         if not lead or lead.get("status") != "booked":
@@ -279,7 +365,7 @@ class SmokeTest:
         pro_before = await self.db.users.find_one({"_id": self.pro_id})
         prior = (pro_before.get("social_proof") or {}).get("review_count", 0) or 0
 
-        await self._send(CUSTOMER_CHAT_ID, "5", "עדי")
+        await self._send(CUSTOMER_CHAT_ID, "5", "ישראל")
         _info("Waiting for pro review_count to increase (≤25s)...")
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline:
@@ -304,6 +390,8 @@ class SmokeTest:
             return False
 
         for stepfn in (
+            self.step0_bailout_flow,
+            self.step0b_empty_radius_bailout,
             self.step1_customer_reports_problem,
             self.step2_customer_provides_full_address,
             self.step3_pro_approves,
