@@ -8,6 +8,7 @@ from app.core.database import users_collection, leads_collection, reviews_collec
 from app.core.messages import Messages
 from app.core.prompts import Prompts
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
+from app.core.redis_client import acquire_chat_lock, release_chat_lock, ChatLockBusyError
 from app.services.matching_service import determine_best_pro
 from app.services.notification_service import send_sos_alert
 from app.services.data_management_service import has_consent, record_consent
@@ -60,6 +61,27 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
 # --- Main Orchestrator ---
 
 async def process_incoming_message(chat_id: str, user_text: str, media_url: str = None):
+    """
+    Entry point for all incoming customer/pro messages.
+
+    Wraps the actual handler in a Redis-backed per-chat lock so concurrent ARQ
+    tasks for the same chat_id (e.g. rapid-fire messages) don't race on state /
+    lead creation. On lock contention we raise ChatLockBusyError so the ARQ
+    task wrapper can requeue; on Redis failure the helper returns True and we
+    proceed in degraded mode.
+    """
+    acquired = await acquire_chat_lock(chat_id, ttl=10)
+    if not acquired:
+        logger.info(f"🔒 Chat lock held for {chat_id} — another task is mid-flight; deferring")
+        raise ChatLockBusyError(chat_id)
+
+    try:
+        await _process_incoming_message_inner(chat_id, user_text, media_url)
+    finally:
+        await release_chat_lock(chat_id)
+
+
+async def _process_incoming_message_inner(chat_id: str, user_text: str, media_url: str = None):
     normalized_text = (user_text or "").strip().lower()
 
     # Get state early — needed to skip global checks for pros
@@ -213,6 +235,29 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # whatever we already stored, and only clear the state when all five fields
     # (street, number, city, floor, apartment) are present.
     if current_state == UserStates.AWAITING_ADDRESS:
+        # Nevermind/cancel bailout: user wants out of the flow instead of fighting
+        # the address gate. Match cancellation keywords BEFORE is_address_complete
+        # so we never loop the user back through "אני צריך רחוב ומספר בית".
+        if user_text and any(kw in normalized_text for kw in Messages.Keywords.CANCEL_KEYWORDS):
+            cancelled_lead = await leads_collection.find_one(
+                {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
+                sort=[("created_at", -1)]
+            )
+            if cancelled_lead:
+                await leads_collection.update_one(
+                    {"_id": cancelled_lead["_id"]},
+                    {"$set": {
+                        "status": LeadStatus.CANCELLED,
+                        "cancelled_at": datetime.now(timezone.utc),
+                        "cancel_reason": "user_bailout_awaiting_address",
+                    }},
+                )
+                logger.info(f"🚪 AWAITING_ADDRESS cancelled by user for {chat_id} (lead={cancelled_lead['_id']})")
+            await StateManager.clear_state(chat_id)
+            await ContextManager.clear_context(chat_id)
+            await whatsapp.send_message(chat_id, Messages.Customer.REQUEST_CANCELLED)
+            return
+
         if not user_text or len(user_text) <= 3:
             await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_INVALID)
             return
@@ -228,6 +273,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             lead_facts = active_lead_await
             await lead_manager.log_message(chat_id, "user", user_text)
             follow_up_prompt = Prompts.DISPATCHER_SYSTEM.format(
+                known_customer_name=lead_facts.get("customer_name") or "none",
                 known_city=lead_facts.get("city") or "none",
                 known_issue=lead_facts.get("issue_type") or "none",
                 known_street=lead_facts.get("street") or "none",
@@ -248,6 +294,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 return
 
             merged = {
+                "customer_name": follow_up.extracted_data.customer_name or lead_facts.get("customer_name"),
                 "street": follow_up.extracted_data.street or lead_facts.get("street"),
                 "street_number": follow_up.extracted_data.street_number or lead_facts.get("street_number"),
                 "city": follow_up.extracted_data.city or lead_facts.get("city"),
@@ -353,6 +400,13 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     if active_lead and active_lead.get("pro_id"):
         existing_pro = await users_collection.find_one({"_id": active_lead["pro_id"], "is_active": True})
 
+    # Fresh-start guard: if there's no active lead, the user is starting a new
+    # conversation. Drop any stale Redis context from a previously-closed lead
+    # so the AI doesn't see turns that belong to a different request.
+    if not active_lead:
+        await ContextManager.clear_context(chat_id)
+        logger.info(f"🧼 No active lead for {chat_id} — cleared stale context before new dispatcher run")
+
     history = await lead_manager.get_chat_history(chat_id)
 
     # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
@@ -391,7 +445,8 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 await _finalize_deal(
                     chat_id, existing_pro, pro_response_obj,
                     extracted_city, extracted_issue, transcription,
-                    active_lead["_id"], media_url=media_url
+                    active_lead["_id"], media_url=media_url,
+                    extracted_name=active_lead.get("customer_name"),
                 )
             except Exception as e:
                 logger.error(f"Deal finalization failed for {chat_id}: {e}")
@@ -402,6 +457,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # Inject sticky facts from the active lead so extractions survive the 10-message window.
     lead_facts = active_lead or {}
     sticky = {
+        "customer_name": lead_facts.get("customer_name") or "none",
         "city": lead_facts.get("city") or lead_facts.get("full_address") or "none",
         "issue": lead_facts.get("issue_type") or "none",
         "street": lead_facts.get("street") or "none",
@@ -411,12 +467,13 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     }
     logger.info(
         f"📌 Sticky facts injected for {chat_id}: "
-        f"city={sticky['city']}, issue={sticky['issue']}, "
+        f"name={sticky['customer_name']}, city={sticky['city']}, issue={sticky['issue']}, "
         f"street={sticky['street']} {sticky['street_number']}, "
         f"floor={sticky['floor']}, apt={sticky['apartment']}"
     )
     dispatcher_history = history
     dispatcher_prompt = Prompts.DISPATCHER_SYSTEM.format(
+        known_customer_name=sticky["customer_name"],
         known_city=sticky["city"],
         known_issue=sticky["issue"],
         known_street=sticky["street"],
@@ -444,8 +501,10 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     # window or a silent parse-failure can't erase a previously-confirmed fact.
     ai_city = dispatcher_response.extracted_data.city
     ai_issue = dispatcher_response.extracted_data.issue
+    ai_name = dispatcher_response.extracted_data.customer_name
     extracted_city = ai_city or lead_facts.get("city") or lead_facts.get("full_address")
     extracted_issue = ai_issue or lead_facts.get("issue_type")
+    extracted_name = ai_name or lead_facts.get("customer_name")
     transcription = dispatcher_response.transcription
 
     if (not ai_city and extracted_city) or (not ai_issue and extracted_issue):
@@ -469,7 +528,8 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
                 full_address=extracted_city or Defaults.UNKNOWN_ADDRESS,
                 status=LeadStatus.CONTACTED,
                 appointment_time=Defaults.PENDING_TIME,
-                media_url=media_url
+                media_url=media_url,
+                customer_name=extracted_name,
             )
             current_lead_id = active_lead["_id"] if active_lead else None
         else:
@@ -477,6 +537,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             update_data = {}
             if ai_city and ai_city != lead_facts.get("city"): update_data["city"] = ai_city
             if ai_issue and ai_issue != lead_facts.get("issue_type"): update_data["issue_type"] = ai_issue
+            if ai_name and ai_name != lead_facts.get("customer_name"): update_data["customer_name"] = ai_name
             
             mongo_ops = {}
             if update_data:
@@ -581,7 +642,8 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
             await _finalize_deal(
                 chat_id, best_pro, final_response,
                 extracted_city, extracted_issue, transcription,
-                current_lead_id, media_url=media_url
+                current_lead_id, media_url=media_url,
+                extracted_name=extracted_name,
             )
         except Exception as e:
             logger.error(f"Deal finalization failed for {chat_id}: {e}")
@@ -626,7 +688,7 @@ async def _build_pro_response(best_pro, history, user_text, extracted_city, extr
     )
 
 
-async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extracted_issue, transcription, current_lead_id, media_url=None):
+async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extracted_issue, transcription, current_lead_id, media_url=None, extracted_name=None):
     """Finalize a deal: create/update lead, set customer to AWAITING_PRO_APPROVAL, send pro interactive buttons."""
     # Hard address gate: never dispatch a pro without street+number+city+floor+apartment.
     ed = final_response.extracted_data
@@ -664,6 +726,8 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
     d_address = compose_full_address(final_response.extracted_data)
     d_issue = final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
 
+    d_name = final_response.extracted_data.customer_name or extracted_name
+
     lead_update = {
         "status": LeadStatus.NEW,
         "appointment_time": d_time,
@@ -676,6 +740,8 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
         "issue_type": d_issue,
         "pro_id": best_pro["_id"],
     }
+    if d_name:
+        lead_update["customer_name"] = d_name
 
     if current_lead_id:
         mongo_ops = {"$set": lead_update}
@@ -723,6 +789,7 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
             customer_phone = chat_id.replace("@c.us", "")
             extra_info = f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
             approval_msg = Messages.Pro.APPROVAL_REQUEST.format(
+                customer_name=lead.get("customer_name") or "לקוח",
                 customer_phone=customer_phone,
                 full_address=lead['full_address'],
                 extra_info=extra_info,

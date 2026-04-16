@@ -18,6 +18,7 @@ from bson import ObjectId
 class ExtractedData(BaseModel):
     city: Optional[str] = Field(description="The extracted city/location from the user's input.")
     issue: Optional[str] = Field(description="The extracted issue or service description.")
+    customer_name: Optional[str] = Field(default=None, description="The customer's first name, as they introduced themselves.")
     street: Optional[str] = Field(default=None, description="Street name only, e.g. 'הרצל'.")
     street_number: Optional[str] = Field(default=None, description="Building number, e.g. '15'.")
     floor: Optional[str] = Field(default=None, description="Floor number, e.g. '2'.")
