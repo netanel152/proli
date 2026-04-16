@@ -15,6 +15,7 @@ import os
 import pytz
 from app.services.scheduling_service import regenerate_all_templates
 from app.core.logger import logger
+from app.core.redis_client import with_scheduler_lock
 
 IL_TZ = pytz.timezone('Asia/Jerusalem')
 
@@ -58,6 +59,7 @@ async def send_daily_reminders():
                 except Exception as e:
                     logger.error(f"❌ Failed to send to {pro['business_name']}: {e}")
 
+@with_scheduler_lock("monitor_unfinished_jobs", ttl=1500)
 async def monitor_unfinished_jobs():
     """
     Monitors 'booked' leads and takes action based on their age.
@@ -107,6 +109,7 @@ async def monitor_unfinished_jobs():
 
 # --- Wrappers for Imported Services ---
 
+@with_scheduler_lock("run_sos_healer", ttl=500)
 async def run_sos_healer():
     """Wrapper for SOS Auto-Healer with Toggle Check"""
     config = await settings_collection.find_one({"_id": "scheduler_config"})
@@ -114,6 +117,7 @@ async def run_sos_healer():
         return
     await check_and_reassign_stale_leads()
 
+@with_scheduler_lock("run_slot_regeneration", ttl=82000)
 async def run_slot_regeneration():
     """Regenerate slots from recurring templates for all active pros."""
     try:
@@ -124,6 +128,7 @@ async def run_slot_regeneration():
         logger.error(f"❌ [Scheduler] Slot regeneration error: {e}")
 
 
+@with_scheduler_lock("run_daily_backup", ttl=82000)
 async def run_daily_backup():
     """Run automated daily backup via subprocess."""
     import subprocess
@@ -142,6 +147,7 @@ async def run_daily_backup():
         logger.error(f"❌ [Scheduler] Backup error: {e}")
 
 
+@with_scheduler_lock("run_sos_reporter", ttl=14000)
 async def run_sos_reporter():
     """Wrapper for SOS Admin Reporter with Toggle Check"""
     config = await settings_collection.find_one({"_id": "scheduler_config"})
@@ -150,16 +156,19 @@ async def run_sos_reporter():
     await send_periodic_admin_report()
 
 
+@with_scheduler_lock("run_lead_janitor", ttl=20000)
 async def run_lead_janitor():
     """Auto-reject CONTACTED leads with no pro after timeout."""
     await auto_reject_unassigned_leads()
 
 
+@with_scheduler_lock("run_sla_monitor", ttl=270)
 async def run_sla_monitor():
     """Check for silent handoffs and deflect if necessary."""
     await check_sla_deflection()
 
 
+@with_scheduler_lock("daily_reminders_job", ttl=82000)
 async def daily_reminders_job():
     """
     Daily Reminders Job (Cron).

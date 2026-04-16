@@ -83,7 +83,8 @@ class LeadManager:
         city: str = None,
         floor: str = None,
         apartment: str = None,
-        media_url: str = None
+        media_url: str = None,
+        customer_name: str = None,
     ) -> dict:
         """
         Creates a lead document directly from parameters.
@@ -105,6 +106,7 @@ class LeadManager:
                 "city": city,
                 "floor": floor,
                 "apartment": apartment,
+                "customer_name": customer_name,
                 "media_urls": []
             }
             if media_url:
@@ -145,26 +147,51 @@ class LeadManager:
     async def get_chat_history(self, chat_id: str, limit: int = settings.MAX_CHAT_HISTORY) -> list:
         # 1. Try fetching from ContextManager (Redis)
         cached_history = await ContextManager.get_history(chat_id)
-        
+
         if cached_history is not None:
-            # If cache hit, return it (slicing if needed to respect limit)
-            # Assuming cache stores full relevant history or we manage size elsewhere.
-            # If limit is smaller than cached history, we take the last 'limit' items.
             if len(cached_history) > limit:
                 return cached_history[-limit:]
             return cached_history
 
-        # 2. If empty/None, fetch from MongoDB
-        cursor = messages_collection.find({"chat_id": chat_id}).sort("timestamp", 1).limit(limit)
+        # 2. Mongo fallback — scope to messages that belong to the *current*
+        # conversation only. If the chat has any prior terminal-status lead
+        # (COMPLETED/REJECTED/CLOSED/CANCELLED), messages from before that
+        # lead closed belong to an old session and MUST NOT leak into the new
+        # AI prompt. Without this cutoff, every post-completion rehydration
+        # would re-inject stale context and confuse Gemini.
+        terminal_statuses = [
+            LeadStatus.COMPLETED,
+            LeadStatus.REJECTED,
+            LeadStatus.CLOSED,
+            LeadStatus.CANCELLED,
+        ]
+        last_terminal = await leads_collection.find_one(
+            {"chat_id": chat_id, "status": {"$in": terminal_statuses}},
+            sort=[("completed_at", -1), ("created_at", -1)],
+        )
+        cutoff = None
+        if last_terminal:
+            cutoff = (
+                last_terminal.get("completed_at")
+                or last_terminal.get("closed_at")
+                or last_terminal.get("updated_at")
+                or last_terminal.get("created_at")
+            )
+
+        query = {"chat_id": chat_id}
+        if cutoff:
+            query["timestamp"] = {"$gt": cutoff}
+
+        cursor = messages_collection.find(query).sort("timestamp", 1).limit(limit)
         msgs = await cursor.to_list(length=limit)
-        
+
         formatted = []
         for m in msgs:
             formatted.append({"role": "user" if m["role"] == "user" else "model", "parts": [m["text"]]})
-        
+
         # 3. Save to ContextManager
         await ContextManager.set_history(chat_id, formatted)
-        
+
         return formatted
 
     async def get_lead_by_id(self, lead_id: str):

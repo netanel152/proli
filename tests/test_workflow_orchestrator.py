@@ -179,6 +179,68 @@ async def test_awaiting_address_too_short(wf_mocks):
     mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Customer.ADDRESS_INVALID)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("idx,cancel_text", list(enumerate(["בטל", "עזוב לא משנה", "טעות", "cancel", "nevermind"])))
+async def test_awaiting_address_cancel_bailout(wf_mocks, mock_db, idx, cancel_text):
+    """
+    Regression: a user stuck in AWAITING_ADDRESS who replies with a cancel
+    keyword must NOT be re-routed into the address gate. The lead must flip to
+    CANCELLED, FSM state must be cleared, Redis context must be cleared, and
+    the user must receive the polite REQUEST_CANCELLED confirmation.
+
+    Each parametrize case uses a unique chat_id so the module-scoped mock_db
+    doesn't leak NEW leads between runs (the handler's sort-by-created_at would
+    otherwise update the wrong document).
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    mock_state.get_state.return_value = UserStates.AWAITING_ADDRESS
+
+    chat_id = f"9725099{idx:05d}@c.us"
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one({
+        "_id": lead_id,
+        "chat_id": chat_id,
+        "status": LeadStatus.NEW,
+        "street": "הרצל",
+        "created_at": "2026-01-01",
+    })
+
+    await process_incoming_message(chat_id, cancel_text)
+
+    mock_wa.send_message.assert_called_once_with(chat_id, Messages.Customer.REQUEST_CANCELLED)
+    mock_state.clear_state.assert_called_with(chat_id)
+    mock_ctx.clear_context.assert_called_with(chat_id)
+
+    # AI must not have been invoked — the bailout short-circuits before re-extraction
+    mock_ai.analyze_conversation.assert_not_called()
+
+    # Lead must now be CANCELLED with audit fields populated
+    updated = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated["status"] == LeadStatus.CANCELLED
+    assert updated.get("cancel_reason") == "user_bailout_awaiting_address"
+    assert updated.get("cancelled_at") is not None
+
+
+@pytest.mark.asyncio
+async def test_awaiting_address_cancel_without_active_lead(wf_mocks, mock_db):
+    """
+    Cancel keyword arrives but there's no NEW/CONTACTED lead for this chat_id
+    (already closed, or race with the janitor). Must still clear state +
+    context and confirm to the user — never raise.
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    mock_state.get_state.return_value = UserStates.AWAITING_ADDRESS
+
+    chat_id = "972509988888@c.us"  # unique: no prior lead in mock_db
+
+    await process_incoming_message(chat_id, "עזוב")
+
+    mock_wa.send_message.assert_called_once_with(chat_id, Messages.Customer.REQUEST_CANCELLED)
+    mock_state.clear_state.assert_called_with(chat_id)
+    mock_ctx.clear_context.assert_called_with(chat_id)
+    mock_ai.analyze_conversation.assert_not_called()
+
+
 # --- Register / Onboarding ---
 
 @pytest.mark.asyncio

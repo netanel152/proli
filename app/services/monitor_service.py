@@ -100,6 +100,7 @@ async def check_and_reassign_stale_leads():
 
                     msg_to_pro = Messages.Pro.NEW_LEAD_HEADER + "\n\n"
                     msg_to_pro += Messages.Pro.NEW_LEAD_DETAILS.format(
+                        customer_name=lead.get("customer_name") or "לקוח",
                         full_address=lead.get('full_address', 'Unknown'),
                         extra_info=f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}",
                         issue_type=lead.get('issue_type', 'Unknown'),
@@ -142,6 +143,10 @@ async def check_and_reassign_stale_leads():
                     await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
                 except Exception as e:
                     logger.error(f"Failed to notify customer {chat_id} of pending review: {e}")
+                # Release the customer from AWAITING_PRO_APPROVAL (or any other
+                # FSM state) so the next message they send is routed normally
+                # instead of hitting STILL_WAITING for 4 hours.
+                await StateManager.clear_state(chat_id)
                 await ContextManager.clear_context(chat_id)
 
     except Exception as e:

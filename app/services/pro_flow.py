@@ -5,7 +5,7 @@ from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
 from app.services.matching_service import book_slot_for_lead
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 STATUS_LABELS = {
     LeadStatus.NEW: "ממתין",
@@ -107,12 +107,38 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
 
 # --- Handlers ---
 
+_RESPONSE_WINDOW_SECONDS = 60 * 5  # "just responded" = within 5 minutes
+
+
+async def _recently_responded_lead(pro_id) -> bool:
+    """
+    Returns True if this pro has a BOOKED or REJECTED lead that was touched
+    within the last 5 minutes. Used to distinguish "fat-finger second press"
+    from "no pending lead at all" when the pro sends approve/reject.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=_RESPONSE_WINDOW_SECONDS)
+    recent = await leads_collection.find_one(
+        {
+            "pro_id": pro_id,
+            "status": {"$in": [LeadStatus.BOOKED, LeadStatus.REJECTED]},
+            "created_at": {"$gte": cutoff},
+        },
+        sort=[("created_at", -1)],
+    )
+    return bool(recent)
+
+
 async def _handle_approve(pro, lead_manager, whatsapp):
     lead = await leads_collection.find_one(
         {"pro_id": pro["_id"], "status": LeadStatus.NEW},
         sort=[("created_at", -1)]
     )
     if not lead:
+        # Fat-finger guard: if the pro JUST approved/rejected this lead and
+        # the second button-press is still in-flight, send a clear "already
+        # responded" message instead of the generic "no pending" copy.
+        if await _recently_responded_lead(pro["_id"]):
+            return Messages.Pro.ALREADY_RESPONDED
         return Messages.Pro.NO_PENDING_APPROVE
 
     await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.BOOKED, pro["_id"])
@@ -173,6 +199,8 @@ async def _handle_reject(pro, lead_manager):
         sort=[("created_at", -1)]
     )
     if not lead:
+        if await _recently_responded_lead(pro["_id"]):
+            return Messages.Pro.ALREADY_RESPONDED
         return Messages.Pro.NO_PENDING_REJECT
 
     await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.REJECTED)

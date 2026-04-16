@@ -28,6 +28,7 @@ class Messages:
         REVIEW_SAVED = "תודה רבה! הביקורת שלך נשמרה."
         ADDRESS_SAVED = "✅ הכתובת עודכנה בהצלחה!"
         ADDRESS_INVALID = "❌ לא הצלחתי לזהות את הכתובת. אנא נסה לשלוח מיקום (Location Pin) או הקלד עיר ורחוב בצורה ברורה."
+        REQUEST_CANCELLED = "👍 הבקשה בוטלה. אם תרצה/י לפתוח פנייה חדשה, פשוט שלח/י הודעה."
         PENDING_REVIEW = (
             "קיבלתי את הפנייה שלך! 👍\n"
             "כרגע אנחנו מחפשים את איש המקצוע המתאים ביותר.\n"
@@ -59,6 +60,7 @@ class Messages:
         APPROVE_SUCCESS = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
         CALENDAR_UPDATE_SUCCESS = "\n📅 היומן עודכן בהצלחה!"
         NO_PENDING_APPROVE = "לא מצאתי עבודה חדשה לאישור."
+        ALREADY_RESPONDED = "כבר הגבת לקריאה זו. לא ניתן לשנות את בחירתך כעת."
         REJECT_SUCCESS = "העבודה נדחתה. נחפש איש מקצוע אחר."
         NO_PENDING_REJECT = "לא מצאתי עבודה חדשה לדחייה."
         FINISH_SUCCESS = "✅ עודכן שהעבודה הסתיימה. תודה!"
@@ -70,12 +72,12 @@ class Messages:
         # Sent when deal closes — ready for approval
         DEAL_CONFIRMED_HEADER = "✅ *הלקוח אישר! פרטי העבודה:*"
         NEW_LEAD_HEADER = "📢 *הצעת עבודה חדשה*"
-        NEW_LEAD_DETAILS = "📍 *כתובת:* {full_address}\nℹ️ *פרטים נוספים:* {extra_info}\n🛠️ *תקלה:* {issue_type}\n⏰ *תאריך ושעה מועדפים:* {appointment_time}"
+        NEW_LEAD_DETAILS = "👤 *לקוח:* {customer_name}\n📍 *כתובת:* {full_address}\nℹ️ *פרטים נוספים:* {extra_info}\n🛠️ *תקלה:* {issue_type}\n⏰ *תאריך ושעה מועדפים:* {appointment_time}"
         NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"
         NEW_LEAD_FOOTER = "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
         APPROVAL_REQUEST = (
             "📋 *פרטי עבודה חדשה לאישורך:*\n\n"
-            "👤 *לקוח:* {customer_phone}\n"
+            "👤 *לקוח:* {customer_name} ({customer_phone})\n"
             "📍 *כתובת:* {full_address}\n"
             "ℹ️ *פרטים נוספים:* {extra_info}\n"
             "🛠️ *תקלה:* {issue_type}\n"
@@ -267,6 +269,7 @@ class Messages:
         REVIEWS_COMMANDS = ["ביקורות", "7", "reviews", "ratings"]
         RESET_COMMANDS = ["תפריט", "עזרה", "reset", "menu", "התחלה", "help"]
         SOS_COMMANDS = ["נציג", "אנושי", "מנהל", "admin", "sos"]
+        CANCEL_KEYWORDS = ["בטל", "בטלי", "עזוב", "עזבי", "לא משנה", "טעות", "cancel", "nevermind"]
         REGISTER_COMMANDS = ["הרשמה", "להירשם", "register", "signup", "הצטרפות"]
         RESUME_COMMANDS = ["המשך", "resume", "חזור"]
         PAUSE_COMMANDS = ["השהה", "pause", "hold"]
