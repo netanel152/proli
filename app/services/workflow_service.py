@@ -24,7 +24,7 @@ from app.services.pro_onboarding_service import (
 )
 from app.services.media_handler import detect_and_fetch_media
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 # Initialize services
 whatsapp = WhatsAppClient()
@@ -355,6 +355,46 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
             # empty string "" means pro_flow already sent everything internally
             return
 
+    # Patch #2: Short-circuit PENDING_ADMIN_REVIEW.
+    # If this chat has a lead already sitting in PENDING_ADMIN_REVIEW, an admin
+    # owns it — running the dispatcher again would create a DUPLICATE contacted
+    # lead for the same issue (observed on 2026-04-18 with lead
+    # 69e375cb9a04cba45197e625 spawning 69e376679a04cba45197e63e 2 min later).
+    # Log the message for admin visibility, send a throttled ack, and stop.
+    pending_admin_lead = await leads_collection.find_one(
+        {"chat_id": chat_id, "status": LeadStatus.PENDING_ADMIN_REVIEW},
+        sort=[("created_at", -1)],
+    )
+    if pending_admin_lead:
+        log_text_pending = user_text or ""
+        if media_url:
+            log_text_pending = f"{log_text_pending} [MEDIA: {media_url}]"
+        await lead_manager.log_message(chat_id, "user", log_text_pending)
+
+        # Throttle the ack: at most once per 30 minutes so the customer isn't
+        # spammed if they send a burst of messages while waiting for admin.
+        now = datetime.now(timezone.utc)
+        last_ack = pending_admin_lead.get("last_pending_ack_at")
+        should_ack = True
+        if last_ack:
+            if last_ack.tzinfo is None:
+                last_ack = last_ack.replace(tzinfo=timezone.utc)
+            if (now - last_ack) < timedelta(minutes=30):
+                should_ack = False
+
+        if should_ack:
+            await whatsapp.send_message(chat_id, Messages.Customer.STILL_PENDING_REVIEW)
+            await lead_manager.log_message(chat_id, "model", Messages.Customer.STILL_PENDING_REVIEW)
+            await leads_collection.update_one(
+                {"_id": pending_admin_lead["_id"]},
+                {"$set": {"last_pending_ack_at": now}},
+            )
+        logger.info(
+            f"🔒 PENDING_ADMIN_REVIEW short-circuit for {chat_id} "
+            f"(lead={pending_admin_lead['_id']}, ack_sent={should_ack})"
+        )
+        return
+
     # 1. Log User Message
     log_text = user_text
     if media_url:
@@ -525,7 +565,11 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
             active_lead = await lead_manager.create_lead_from_dict(
                 chat_id=chat_id,
                 issue_type=extracted_issue or Defaults.UNKNOWN_ISSUE,
-                full_address=extracted_city or Defaults.UNKNOWN_ADDRESS,
+                # full_address stays None until the address gate collects a
+                # real address. Persisting the "Unknown Address" sentinel used
+                # to confuse matching_service (see 2026-04-18 Unknown Address
+                # incident) — see migration script migrate_unknown_address.py.
+                full_address=extracted_city or None,
                 status=LeadStatus.CONTACTED,
                 appointment_time=Defaults.PENDING_TIME,
                 media_url=media_url,
@@ -556,7 +600,9 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
     best_pro = None
     pro_response_obj = None
 
-    if extracted_city and extracted_issue and extracted_city != Defaults.UNKNOWN_ADDRESS and extracted_issue != Defaults.UNKNOWN_ISSUE:
+    # Note: the explicit `!= UNKNOWN_ADDRESS` check is gone because we no longer
+    # persist that sentinel. `extracted_city` is either a real city string or None.
+    if extracted_city and extracted_issue and extracted_issue != Defaults.UNKNOWN_ISSUE:
         try:
             best_pro = await determine_best_pro(issue_type=extracted_issue, location=extracted_city)
         except Exception as e:

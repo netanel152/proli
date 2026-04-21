@@ -46,3 +46,6 @@ arq~=0.25
 
 # Backup (optional S3 upload)
 boto3~=1.34
+
+# Error Reporting (optional — worker only, activates only when SENTRY_DSN is set)
+sentry-sdk~=2.18

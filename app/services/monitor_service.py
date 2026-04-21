@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from app.core.database import leads_collection, users_collection
-from app.core.constants import LeadStatus, WorkerConstants
+from app.core.constants import LeadStatus, UserStates, WorkerConstants, Defaults
 from app.core.config import settings
 from app.core.logger import logger
 from app.services.whatsapp_client_service import WhatsAppClient
@@ -23,8 +23,14 @@ async def check_and_reassign_stale_leads():
     timeout_minutes = WorkerConstants.SOS_TIMEOUT_MINUTES
     threshold_time = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
     
+    # Patch #3: Exclude PENDING_ADMIN_REVIEW from the Healer query.
+    # PENDING_ADMIN_REVIEW is a *terminal* state for the Healer — it means the
+    # Healer already gave up on this lead and handed it to a human. Re-running
+    # the reassignment flow on it just re-notifies the customer with
+    # CUSTOMER_REASSIGNING, re-fails the match, and re-sets the status to
+    # PENDING_ADMIN_REVIEW on every 10-minute tick (see logs 2026-04-18).
     query = {
-        "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.PENDING_ADMIN_REVIEW]},
+        "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
         "created_at": {"$lt": threshold_time}
     }
 
@@ -42,7 +48,30 @@ async def check_and_reassign_stale_leads():
             lead_id = lead["_id"]
             chat_id = lead["chat_id"]
             current_pro_id = lead.get("pro_id")
-            
+
+            # Patch #5: Skip leads without a real, usable location before
+            # attempting reassignment. A lead with full_address missing, empty,
+            # or equal to the legacy UNKNOWN_ADDRESS magic string will always
+            # fail geo matching and escalate to PENDING_ADMIN_REVIEW — burning
+            # a CUSTOMER_REASSIGNING notification on the customer every cycle.
+            # Let the admin take it over directly.
+            raw_location = lead.get("full_address")
+            if not raw_location or raw_location == Defaults.UNKNOWN_ADDRESS:
+                logger.info(
+                    f"⏭️ [SOS Healer] Skipping lead {lead_id} for {chat_id} — "
+                    f"no usable location (full_address={raw_location!r}). "
+                    f"Escalating to PENDING_ADMIN_REVIEW without retry loop."
+                )
+                await leads_collection.update_one(
+                    {"_id": lead_id},
+                    {"$set": {
+                        "status": LeadStatus.PENDING_ADMIN_REVIEW,
+                        "escalation_reason": "no_usable_location",
+                    }}
+                )
+                await StateManager.clear_state(chat_id)
+                continue
+
             # 1. Notify Customer
             try:
                 await whatsapp.send_message(chat_id, Messages.SOS.CUSTOMER_REASSIGNING)
@@ -52,10 +81,10 @@ async def check_and_reassign_stale_leads():
             # 2. Find Replacement (Excluding current pro)
             excluded_ids = [current_pro_id] if current_pro_id else []
             # Also exclude previously attempted pros if we tracked them (future improvement)
-            
+
             new_pro = await matching_service.determine_best_pro(
                 issue_type=lead.get("issue_type"),
-                location=lead.get("full_address"),
+                location=raw_location,
                 excluded_pro_ids=excluded_ids
             )
             
@@ -101,7 +130,7 @@ async def check_and_reassign_stale_leads():
                     msg_to_pro = Messages.Pro.NEW_LEAD_HEADER + "\n\n"
                     msg_to_pro += Messages.Pro.NEW_LEAD_DETAILS.format(
                         customer_name=lead.get("customer_name") or "לקוח",
-                        full_address=lead.get('full_address', 'Unknown'),
+                        full_address=lead.get('full_address') or 'Unknown',
                         extra_info=f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}",
                         issue_type=lead.get('issue_type', 'Unknown'),
                         appointment_time=lead.get('appointment_time', 'Pending')
@@ -239,7 +268,7 @@ async def send_periodic_admin_report():
         for lead in stuck_leads:
             chat_id = lead.get("chat_id", "Unknown").split("@")[0]
             issue = lead.get("issue_type", "Unknown Issue")
-            city = lead.get("full_address", "Unknown City")
+            city = lead.get("full_address") or "Unknown City"
             created_at = lead.get("created_at")
             time_str = created_at.strftime("%H:%M") if created_at else "??"
             

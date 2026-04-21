@@ -299,7 +299,8 @@ async def _handle_active_jobs(pro):
     for i, lead in enumerate(leads, 1):
         status_label = STATUS_LABELS.get(lead.get("status"), lead.get("status", "?"))
         issue = lead.get("issue_type", "לא ידוע")
-        address = lead.get("full_address", "לא ידוע")
+        # `or` covers both key-missing and key-present-with-None (nullable full_address)
+        address = lead.get("full_address") or "לא ידוע"
         time = lead.get("appointment_time", "לא נקבע")
         lines.append(Messages.Pro.ACTIVE_JOB_ROW.format(
             num=i, status=status_label, issue=issue, address=address, time=time
@@ -322,7 +323,7 @@ async def _handle_history(pro):
     lines = ["📋 *10 עבודות אחרונות שהושלמו:*\n"]
     for i, lead in enumerate(leads, 1):
         issue = lead.get("issue_type", "לא ידוע")
-        address = lead.get("full_address", "לא ידוע")
+        address = lead.get("full_address") or "לא ידוע"
         completed_at = lead.get("completed_at")
         if completed_at:
             if isinstance(completed_at, datetime):
