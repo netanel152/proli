@@ -68,7 +68,25 @@ class Settings(BaseSettings):
     SMS_API_KEY: str | None = None
     SMS_SENDER_ID: str = "Proli"
     SMS_API_URL: str = "https://api.inforu.co.il/SendSMS/SendSMS"
-    
+
+    # Sentry (optional — error reporting for worker)
+    # When unset, Sentry is disabled (no-op). When set, only CRITICAL-level
+    # log events are forwarded as issues; regular INFO/WARNING/ERROR stays in
+    # stdout/loguru. See SENTRY_SETUP.md for alert rule recommendations.
+    SENTRY_DSN: str | None = None
+    SENTRY_TRACES_SAMPLE_RATE: float = 0.0  # no perf tracing by default
+
+    # Geocoding (Google Maps) — resolves Israeli city/address names to
+    # coordinates for the matching service's $geoNear pipeline. When unset,
+    # geocoding falls back to the static ISRAEL_CITIES_COORDS dict only.
+    # Enabling this is what closes the gap for cities not in the static
+    # dict (e.g. ראש העין, תל-מונד, טמרה) without shipping a new release.
+    GOOGLE_MAPS_API_KEY: str | None = None
+    # Negative cache TTL (seconds). Positive lookups are cached forever
+    # — city coordinates don't move. Failures expire so we re-try after
+    # a quota reset or a corrected spelling.
+    GEOCODING_NEGATIVE_TTL_SECONDS: int = 86400  # 24 hours
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()

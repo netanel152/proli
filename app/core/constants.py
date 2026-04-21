@@ -58,6 +58,11 @@ class APIStatus:
 class Defaults:
     PENDING_TIME = "Pending"
     ASAP_TIME = "As soon as possible"
+    # DEPRECATED — kept only so the migration script and monitor_service.py
+    # backward-compat skip can reference the legacy sentinel. NEW CODE MUST
+    # NOT WRITE THIS VALUE. full_address is now nullable; a missing address
+    # should be represented as None. Scheduled for removal after the migration
+    # sweep clears all historical docs (see scripts/migrate_unknown_address.py).
     UNKNOWN_ADDRESS = "Unknown Address"
     UNKNOWN_ISSUE = "Issue"
     GENERIC_PRO_NAME = "איש המקצוע"

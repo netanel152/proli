@@ -1,14 +1,20 @@
 from app.core.database import users_collection, leads_collection, slots_collection
 from app.core.logger import logger
 from app.core.constants import LeadStatus, WorkerConstants, ISRAEL_CITIES_COORDS
+from app.services.geocoding_service import resolve_city_to_coords
 from app.services.scheduling_service import check_pro_availability
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
 
 def get_coordinates(city_name: str):
     """
-    Returns [Longitude, Latitude] for a given city name if found in the static dictionary.
-    Normalizes input to lowercase.
+    Static-dict lookup — returns [lon, lat] or None.
+
+    Kept for callers that need a synchronous, zero-dependency coordinate
+    resolution (e.g. unit tests, debug utilities). The main routing path
+    (`determine_best_pro`) now goes through `resolve_city_to_coords()` in
+    geocoding_service, which calls this static dict first and only falls
+    back to Google on miss.
     """
     if not city_name:
         return None
@@ -35,7 +41,13 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
             base_filter["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
 
         # 2. Location Filtering
-        coordinates = get_coordinates(location)
+        # Resolve via the full pipeline: static dict → Redis cache →
+        # Google Geocoding. Returns (lon, lat) tuple or None. The dict
+        # stays the zero-latency hot path; Google only runs on cache miss
+        # + static miss. Closes the silent-fail gap surfaced 2026-04-18
+        # where unknown cities (e.g. ראש העין) escalated without a pro try.
+        resolved = await resolve_city_to_coords(location) if location else None
+        coordinates = [resolved[0], resolved[1]] if resolved else None
         geo_enabled = False
         matching_pros = []
 

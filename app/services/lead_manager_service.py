@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Optional
 from bson import ObjectId
 from pymongo import ReturnDocument
 from app.core.database import leads_collection, messages_collection
@@ -49,12 +50,14 @@ class LeadManager:
             # Flexible parsing depending on how many parts returned
             if len(parts) >= 3:
                 appointment_time = parts[0]
-                full_address = parts[1]
+                full_address = parts[1] or None
                 issue_type = parts[2]
             else:
-                # Fallback
+                # Fallback — prefer None over magic strings so downstream code
+                # (matching_service, Healer) can reject missing data cleanly
+                # instead of parsing 'Unknown' as a real address.
                 appointment_time = "Not specified"
-                full_address = parts[0] if len(parts) > 0 else "Unknown"
+                full_address = parts[0] if len(parts) > 0 and parts[0] else None
                 issue_type = parts[1] if len(parts) > 1 else "Unknown"
 
             return await self.create_lead_from_dict(
@@ -74,7 +77,7 @@ class LeadManager:
         self,
         chat_id: str,
         issue_type: str,
-        full_address: str,
+        full_address: Optional[str] = None,
         appointment_time: str = "Pending",
         status: str = LeadStatus.NEW,
         pro_id: ObjectId = None,
@@ -90,7 +93,16 @@ class LeadManager:
         Creates a lead document directly from parameters.
         For CONTACTED leads (no pro yet), uses an atomic upsert to prevent
         race-condition duplicates when messages arrive in quick succession.
+
+        `full_address` is intentionally Optional — a CONTACTED lead may be
+        created before the customer provides a usable address. Downstream
+        consumers (matching_service, monitor_service) must treat a missing or
+        empty full_address as "not yet known" and NOT as a real location.
         """
+        # Normalize legacy sentinel to None at the write boundary so we never
+        # persist the "Unknown Address" magic string going forward.
+        if full_address in (None, "", "Unknown Address", "Unknown"):
+            full_address = None
         try:
             lead_doc = {
                 "chat_id": chat_id,

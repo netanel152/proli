@@ -1,8 +1,13 @@
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Response, status
-from app.core.database import check_db_connection
+
+from app.core.config import settings
+from app.core.constants import LeadStatus, WorkerConstants
+from app.core.database import check_db_connection, leads_collection
+from app.core.logger import logger
 from app.core.redis_client import get_redis_client
 from app.services.whatsapp_client_service import WhatsAppClient
-from app.core.logger import logger
 import time
 
 router = APIRouter(prefix="/health", tags=["Health"])
@@ -92,3 +97,58 @@ async def health_check(response: Response):
         return {"status": "unhealthy", "checks": checks, "uptime_seconds": uptime_seconds}
 
     return {"status": "healthy", "checks": checks, "uptime_seconds": uptime_seconds}
+
+
+@router.get("/leads")
+async def leads_health(response: Response):
+    """
+    Business-level health signal for the lead pipeline.
+
+    Two counters that together catch the failure modes the 2026-04-18 post-
+    mortem surfaced:
+
+      * `pending_review_count` — leads escalated to PENDING_ADMIN_REVIEW and
+        waiting on a human. A small non-zero number is normal; a growing
+        backlog means the admin panel isn't being worked or the Healer is
+        looping (the very bug the 2026-04-18 patches fixed).
+
+      * `stuck_contacted_count` — leads in CONTACTED older than
+        UNASSIGNED_LEAD_TIMEOUT_HOURS (24h). The SOS Healer is supposed to
+        reassign or escalate these on its 10-minute tick. If this number
+        climbs, the Healer is silently failing.
+
+    Intended as the source-of-truth for the Sentry alert
+    `pending_review_count > 5 for > 30 min` (wire a synthetic monitor —
+    Better Uptime / Cronitor / Sentry Crons — to poll this endpoint and
+    alert on threshold breach).
+
+    Always returns 200 on success; surfacing the counts alone is the
+    contract. A DB failure returns 503 so monitors can distinguish "DB is
+    down" from "backlog is high but DB is fine."
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        stuck_threshold = now - timedelta(hours=WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS)
+
+        pending_review_count = await leads_collection.count_documents(
+            {"status": LeadStatus.PENDING_ADMIN_REVIEW}
+        )
+        stuck_contacted_count = await leads_collection.count_documents(
+            {
+                "status": LeadStatus.CONTACTED,
+                "created_at": {"$lt": stuck_threshold},
+            }
+        )
+
+        return {
+            "status": "ok",
+            "pending_review_count": pending_review_count,
+            "stuck_contacted_count": stuck_contacted_count,
+            "stuck_threshold_hours": WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS,
+            "environment": settings.ENVIRONMENT,
+            "checked_at": now.isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Health Check: /health/leads failed: {e}")
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "error", "error": str(e)}

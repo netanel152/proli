@@ -455,3 +455,70 @@ async def test_safety_bypass_from_customer_mode(wf_mocks, mock_db):
 
     # Safety bypass: state should have been snapped to PRO_MODE
     mock_state.set_state.assert_any_call(f"{pro_phone}@c.us", UserStates.PRO_MODE)
+
+
+# --- Patch #2: PENDING_ADMIN_REVIEW short-circuit ---
+
+@pytest.mark.asyncio
+async def test_pending_admin_review_does_not_create_duplicate_lead(wf_mocks, mock_db):
+    """
+    Regression for the 2026-04-18 log incident: a chat with a PENDING_ADMIN_REVIEW
+    lead sends a new message, workflow_service must NOT call the dispatcher or
+    create a second lead. It should log the message and send a throttled ack.
+    """
+    from datetime import datetime, timezone
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+
+    chat_id = "972501234567@c.us"
+    await mock_db.leads.delete_many({})
+    await mock_db.leads.insert_one({
+        "chat_id": chat_id,
+        "status": LeadStatus.PENDING_ADMIN_REVIEW,
+        "issue_type": "Leak",
+        "full_address": "Unknown Address",
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    await process_incoming_message(chat_id, "שלום, אני עדיין מחכה")
+
+    # 1. No new lead must be created
+    mock_lm.create_lead_from_dict.assert_not_called()
+    # 2. Dispatcher must not be invoked
+    mock_ai.analyze_conversation.assert_not_called()
+    # 3. Customer gets the STILL_PENDING_REVIEW ack
+    mock_wa.send_message.assert_any_call(chat_id, Messages.Customer.STILL_PENDING_REVIEW)
+    # 4. The message still gets logged for admin visibility
+    mock_lm.log_message.assert_any_call(chat_id, "user", "שלום, אני עדיין מחכה")
+
+
+@pytest.mark.asyncio
+async def test_pending_admin_review_ack_throttled(wf_mocks, mock_db):
+    """
+    If we've already acked within the last 30 minutes, don't send another ack
+    — just log the message silently. Prevents ack-spam on rapid-fire messages.
+    """
+    from datetime import datetime, timedelta, timezone
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+
+    chat_id = "972501234567@c.us"
+    await mock_db.leads.delete_many({})
+    await mock_db.leads.insert_one({
+        "chat_id": chat_id,
+        "status": LeadStatus.PENDING_ADMIN_REVIEW,
+        "issue_type": "Leak",
+        "full_address": "Tel Aviv",
+        "created_at": datetime.now(timezone.utc) - timedelta(hours=2),
+        "last_pending_ack_at": datetime.now(timezone.utc) - timedelta(minutes=5),
+    })
+
+    await process_incoming_message(chat_id, "היי, יש עדכון?")
+
+    # No new lead, no dispatcher, no ack resend
+    mock_lm.create_lead_from_dict.assert_not_called()
+    mock_ai.analyze_conversation.assert_not_called()
+    for call in mock_wa.send_message.call_args_list:
+        assert call.args[1] != Messages.Customer.STILL_PENDING_REVIEW, (
+            "Ack was re-sent within the 30-minute throttle window"
+        )
+    # Message is still logged
+    mock_lm.log_message.assert_any_call(chat_id, "user", "היי, יש עדכון?")

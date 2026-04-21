@@ -83,7 +83,8 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                 "pending_admin_review": "ממתין לבדיקת מנהל",
             }
             issue = active_lead.get("issue_type", "לא ידוע")
-            address = active_lead.get("full_address", "לא ידוע")
+            # `or` covers nullable full_address (None value, not just missing key)
+            address = active_lead.get("full_address") or "לא ידוע"
             apt_time = active_lead.get("appointment_time", "לא נקבע")
             status_he = STATUS_HE.get(active_lead.get("status", ""), active_lead.get("status", ""))
             lead_details = (
