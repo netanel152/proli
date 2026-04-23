@@ -19,10 +19,21 @@ class SMSClient:
         self.sender_id = getattr(settings, "SMS_SENDER_ID", "Proli")
         self.base_url = getattr(settings, "SMS_API_URL", "https://api.inforu.co.il/SendSMS/SendSMS")
         self._enabled = bool(self.api_key)
+        self._client: httpx.AsyncClient | None = None
 
     @property
     def is_configured(self) -> bool:
         return self._enabled
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(timeout=10.0)
+        return self._client
+
+    async def close(self):
+        if self._client and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def send_sms(self, phone: str, message: str) -> bool:
         """
@@ -52,17 +63,17 @@ class SMSClient:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(self.base_url, json=payload)
-                response.raise_for_status()
+            client = await self._get_client()
+            response = await client.post(self.base_url, json=payload)
+            response.raise_for_status()
 
-                result = response.json()
-                if result.get("status") == "ok" or result.get("success"):
-                    logger.info(f"SMS sent to {clean_phone[:6]}***")
-                    return True
-                else:
-                    logger.warning(f"SMS API returned error: {result}")
-                    return False
+            result = response.json()
+            if result.get("status") == "ok" or result.get("success"):
+                logger.info(f"SMS sent to {clean_phone[:6]}***")
+                return True
+            else:
+                logger.warning(f"SMS API returned error: {result}")
+                return False
 
         except httpx.HTTPStatusError as e:
             logger.error(f"SMS HTTP error: {e.response.status_code}")

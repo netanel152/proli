@@ -30,7 +30,7 @@ def _mock_empty_aggregate():
 
 
 @pytest.fixture
-def mock_matching_dependencies():
+def mock_matching_dependencies(monkeypatch):
     with patch("app.services.matching_service.users_collection") as mock_users, \
          patch("app.services.matching_service.leads_collection") as mock_leads:
 
@@ -44,6 +44,18 @@ def mock_matching_dependencies():
         mock_cursor = MagicMock()
         mock_cursor.to_list = AsyncMock(return_value=[])
         mock_users.find.return_value = mock_cursor
+
+        # Mock resolve_city_to_coords to avoid real API calls and control fallback logic.
+        # This ensures 'Unknown City' returns None and triggers regex-based matching.
+        async def mock_resolve(location):
+            if not location:
+                return None
+            loc_lower = location.lower().strip()
+            if loc_lower == "tel aviv" or loc_lower == "tlv":
+                return [34.7818, 32.0853]
+            return None
+
+        monkeypatch.setattr("app.services.matching_service.resolve_city_to_coords", mock_resolve)
 
         yield mock_users, mock_leads
 

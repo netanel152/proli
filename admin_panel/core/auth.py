@@ -4,6 +4,7 @@ import time
 import secrets
 import extra_streamlit_components as stx
 import bcrypt
+import redis as _sync_redis
 from datetime import datetime, timedelta
 from pymongo import MongoClient
 from app.core.logger import logger
@@ -11,6 +12,63 @@ from app.core.config import settings
 from admin_panel.core.config import TRANS
 from admin_panel.core.rbac import AdminRole
 import certifi
+
+# --- Login brute-force lockout (sync Redis, fail-open) ---
+# 5 failed attempts within 15 min → login locked for the remainder of that window.
+# If Redis is unreachable we log and allow login (same fail-open policy as
+# app/services/security_service.py) — admin panel availability beats lockout.
+MAX_FAILED_ATTEMPTS = 5
+LOCKOUT_SECONDS = 900  # 15 minutes
+
+try:
+    _redis_url = settings.REDIS_URL or f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+    _rate_redis = _sync_redis.from_url(_redis_url, decode_responses=True, socket_connect_timeout=2)
+except Exception as e:
+    logger.warning(f"Admin rate limiter: Redis init failed, lockout disabled: {e}")
+    _rate_redis = None
+
+
+def _lockout_key(identifier: str) -> str:
+    return f"admin_lockout:{identifier}"
+
+
+def _is_locked(identifier: str) -> tuple[bool, int]:
+    """Returns (locked, seconds_remaining). Fail-open on Redis errors."""
+    if _rate_redis is None:
+        return (False, 0)
+    try:
+        key = _lockout_key(identifier)
+        count = _rate_redis.get(key)
+        if count is None:
+            return (False, 0)
+        if int(count) >= MAX_FAILED_ATTEMPTS:
+            ttl = _rate_redis.ttl(key)
+            return (True, max(0, int(ttl)))
+        return (False, 0)
+    except Exception as e:
+        logger.warning(f"Admin lockout check failed (fail-open): {e}")
+        return (False, 0)
+
+
+def _record_failed_attempt(identifier: str) -> None:
+    if _rate_redis is None:
+        return
+    try:
+        key = _lockout_key(identifier)
+        count = _rate_redis.incr(key)
+        if count == 1:
+            _rate_redis.expire(key, LOCKOUT_SECONDS)
+    except Exception as e:
+        logger.warning(f"Admin lockout increment failed: {e}")
+
+
+def _reset_attempts(identifier: str) -> None:
+    if _rate_redis is None:
+        return
+    try:
+        _rate_redis.delete(_lockout_key(identifier))
+    except Exception as e:
+        logger.warning(f"Admin lockout reset failed: {e}")
 
 # MongoDB-backed session store — survives worker/Streamlit restarts
 # Falls back to in-memory if DB is unavailable
@@ -194,45 +252,62 @@ def check_password(cookies):
             submitted = st.form_submit_button(T_auth["login_button"], type="primary")
 
             if submitted:
-                auth_result = None
+                identifier = username or "env"
 
-                # Try DB auth first if admins exist
-                if has_db_admins and username:
-                    auth_result = _authenticate_admin(username, password)
-
-                # Fallback to env var auth
-                if not auth_result:
-                    auth_result = _authenticate_env(password)
-
-                if auth_result:
-                    admin_username = auth_result.get("username", "admin")
-                    admin_role = auth_result.get("role", AdminRole.OWNER)
-
-                    logger.info(f"Admin login: {admin_username} (role: {admin_role})")
-                    st.session_state["authenticated"] = True
-                    st.session_state["admin_username"] = admin_username
-                    st.session_state["admin_role"] = admin_role
-
-                    _log_audit_sync(admin_username, "login")
-
-                    if remember_me:
-                        secure_token = secrets.token_hex(32)
-                        expires = datetime.now() + timedelta(days=7)
-                        session_data = {
-                            "expiry": expires,
-                            "username": admin_username,
-                            "role": admin_role,
-                        }
-                        _active_sessions[secure_token] = session_data
-                        _persist_session(secure_token, session_data)
-                        cookie_manager.set("proli_auth_token", secure_token, expires_at=expires)
-
-                    st.success(T_auth.get("connected", "Connected!"))
-                    time.sleep(1)
-                    st.rerun()
+                # Brute-force guard: block further attempts after MAX_FAILED_ATTEMPTS
+                locked, seconds_left = _is_locked(identifier)
+                if locked:
+                    minutes_left = max(1, seconds_left // 60)
+                    logger.warning(f"Admin login locked out: {identifier} ({seconds_left}s remaining)")
+                    st.error(
+                        T_auth.get(
+                            "login_locked",
+                            f"Too many failed attempts. Try again in {minutes_left} minute(s).",
+                        )
+                    )
                 else:
-                    logger.warning(f"Failed admin login attempt (user: {username or 'env'})")
-                    st.error(T_auth["wrong_password"])
+                    auth_result = None
+
+                    # Try DB auth first if admins exist
+                    if has_db_admins and username:
+                        auth_result = _authenticate_admin(username, password)
+
+                    # Fallback to env var auth
+                    if not auth_result:
+                        auth_result = _authenticate_env(password)
+
+                    if auth_result:
+                        admin_username = auth_result.get("username", "admin")
+                        admin_role = auth_result.get("role", AdminRole.OWNER)
+
+                        _reset_attempts(identifier)
+
+                        logger.info(f"Admin login: {admin_username} (role: {admin_role})")
+                        st.session_state["authenticated"] = True
+                        st.session_state["admin_username"] = admin_username
+                        st.session_state["admin_role"] = admin_role
+
+                        _log_audit_sync(admin_username, "login")
+
+                        if remember_me:
+                            secure_token = secrets.token_hex(32)
+                            expires = datetime.now() + timedelta(days=7)
+                            session_data = {
+                                "expiry": expires,
+                                "username": admin_username,
+                                "role": admin_role,
+                            }
+                            _active_sessions[secure_token] = session_data
+                            _persist_session(secure_token, session_data)
+                            cookie_manager.set("proli_auth_token", secure_token, expires_at=expires)
+
+                        st.success(T_auth.get("connected", "Connected!"))
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        _record_failed_attempt(identifier)
+                        logger.warning(f"Failed admin login attempt (user: {identifier})")
+                        st.error(T_auth["wrong_password"])
 
     return False
 
