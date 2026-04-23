@@ -2,6 +2,13 @@
 Data Management Service - GDPR/Israeli Privacy Law compliance.
 
 Handles consent tracking, user data export, and right-to-delete.
+
+NOTE: `export_user_data` and `delete_user_data` are implemented but not yet
+wired to any endpoint or admin action. They are kept here so the compliance
+code is ready the moment we need to expose a DSAR (Data Subject Access
+Request) flow. When adding the integration, surface them via either an
+admin-only route or a dedicated CLI script; do not call them from
+user-facing message handlers without auth.
 """
 
 from datetime import datetime, timezone
