@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## CRITICAL: Green API limitation
+
+Do **not** use interactive buttons (`send_interactive_buttons`) — Green API does not support them and the helper was removed in April 2026. All WhatsApp menus must be text-based (numeric or keyword replies). Example: instead of Approve/Reject buttons, send `"Reply '1' to approve, '2' to reject."`
+
 ## Commands
 
 ### Local Development (run all three in separate terminals)
@@ -81,7 +85,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 |---|---|
 | `workflow_service.py` | Central orchestrator — routes messages, manages FSM states, delegates to customer/pro flows |
 | `customer_flow.py` | Customer completion checks, ratings, reviews |
-| `pro_flow.py` | Professional text commands and button handlers (approve, reject, pause, resume, finish) |
+| `pro_flow.py` | Professional text commands (approve, reject, pause, resume, finish) — text-only, no button handlers |
 | `media_handler.py` | Media type detection and download (images, audio, video) |
 | `ai_engine_service.py` | Gemini 2.5 Flash with adaptive fallback (Flash Lite → Flash → Flash 1.5); multimodal; 5-turn context window; non-blocking token accounting |
 | `matching_service.py` | Progressive `$geoNear` aggregation (10 km → 20 km → 30 km); falls back to regex city match; load-balances by max 3 active leads per pro |
@@ -90,7 +94,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 | `lead_manager_service.py` | CRUD for leads in MongoDB |
 | `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts |
 | `monitor_service.py` | Stale job detection, reassignment, and escalation to PENDING_ADMIN_REVIEW |
-| `whatsapp_client_service.py` | Green API HTTP client with `sendButtons` support and text fallback |
+| `whatsapp_client_service.py` | Green API HTTP client — text-only messages (interactive buttons not supported by Green API) |
 | `cloudinary_client_service.py` | Media upload/retrieval |
 | `security_service.py` | Rate limiting via Redis |
 
