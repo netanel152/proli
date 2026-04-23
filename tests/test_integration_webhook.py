@@ -79,8 +79,8 @@ def test_webhook_missing_fields(mock_background_tasks):
     assert response.json() == {"status": "ignored_no_data"}
 
 
-def test_webhook_token_header_required_when_configured():
-    """When WEBHOOK_TOKEN is set, requests must carry X-Webhook-Token header."""
+def test_webhook_token_query_param_required_when_configured():
+    """When WEBHOOK_TOKEN is set, requests must carry ?token= parameter."""
     with patch("app.core.config.settings.GREEN_API_INSTANCE_ID", "7107387490"), \
          patch("app.core.config.settings.WEBHOOK_TOKEN", "secret-token"):
         with patch("app.api.routes.webhook.get_arq_pool") as mock_get_pool, \
@@ -90,24 +90,16 @@ def test_webhook_token_header_required_when_configured():
             mock_redis.set.return_value = True
             mock_get_redis.return_value = mock_redis
 
-            # Missing header → 403
+            # Missing token → 403
             resp_missing = client.post("/webhook", json=VALID_PAYLOAD)
             assert resp_missing.status_code == 403
             assert resp_missing.json() == {"status": "forbidden"}
 
-            # Wrong header → 403
-            resp_wrong = client.post(
-                "/webhook",
-                json=VALID_PAYLOAD,
-                headers={"X-Webhook-Token": "not-the-token"},
-            )
+            # Wrong token → 403
+            resp_wrong = client.post("/webhook", json=VALID_PAYLOAD, params={"token": "not-the-token"})
             assert resp_wrong.status_code == 403
 
-            # Correct header → 200
-            resp_ok = client.post(
-                "/webhook",
-                json=VALID_PAYLOAD,
-                headers={"X-Webhook-Token": "secret-token"},
-            )
+            # Correct token → 200
+            resp_ok = client.post("/webhook", json=VALID_PAYLOAD, params={"token": "secret-token"})
             assert resp_ok.status_code == 200
             assert resp_ok.json() == {"status": "processing_message"}
