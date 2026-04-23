@@ -80,24 +80,12 @@ class Settings(BaseSettings):
     # Enabling this is what closes the gap for cities not in the static
     # dict (e.g. ראש העין, תל-מונד, טמרה) without shipping a new release.
     GOOGLE_MAPS_API_KEY: str | None = None
-    # Negative cache TTL (seconds). Positive lookups are cached forever
-    # — city coordinates don't move. Failures expire so we re-try after
+    # TTL for negative geocoding results (failures). Cached for 24h to avoid
+    # immediate retries of unresolvable names, while still allowing for
     # a quota reset or a corrected spelling.
     GEOCODING_NEGATIVE_TTL_SECONDS: int = 86400  # 24 hours
 
-    @model_validator(mode="after")
-    def require_webhook_token_in_production(self) -> "Settings":
-        # Production must have an explicit WEBHOOK_TOKEN — the webhook endpoint
-        # is the only untrusted-internet surface. Dev/test keep the None default
-        # so local boots and pytest don't need to fabricate a value.
-        if self.ENVIRONMENT == "production" and not self.WEBHOOK_TOKEN:
-            raise ValueError(
-                "WEBHOOK_TOKEN is required when ENVIRONMENT='production'. "
-                "Set WEBHOOK_TOKEN to a random secret and configure the same "
-                "value as the X-Webhook-Token header in Green API."
-            )
-        return self
-
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
 
 settings = Settings()

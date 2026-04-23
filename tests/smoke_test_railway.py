@@ -76,10 +76,10 @@ class SmokeTest:
 
     # --- HTTP helpers ---
     def _url(self) -> str:
-        return f"{self.base_url}/webhook"
-
-    def _headers(self) -> dict:
-        return {"X-Webhook-Token": self.webhook_token} if self.webhook_token else {}
+        url = f"{self.base_url}/webhook"
+        if self.webhook_token:
+            url += f"?token={self.webhook_token}"
+        return url
 
     def _payload(self, chat_id: str, text: str, sender_name: str, media_url: str = None) -> dict:
         base = {
