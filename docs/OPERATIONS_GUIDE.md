@@ -272,3 +272,6 @@ python scripts/generate_admin_hash.py
 | `AWS_REGION` | `eu-west-1` | AWS region |
 | `SMS_API_KEY` | — | InforUMobile SMS API key (optional fallback) |
 | `SMS_SENDER_ID` | `Proli` | SMS sender name |
+| `GOOGLE_MAPS_API_KEY` | — | Google Geocoding API key; falls back to static city dict if unset |
+| `SENTRY_DSN` | — | Sentry error reporting DSN (worker process only); disabled if unset |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0.0` | Sentry performance tracing sample rate (0.0 = off) |

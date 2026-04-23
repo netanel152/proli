@@ -102,11 +102,11 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 ### Key Constants (`app/core/constants.py`)
 
 - `LeadStatus`: `contacted → new → booked → completed/rejected/closed/cancelled/pending_admin_review`
-- `UserStates`: `IDLE`, `PRO_MODE`, `AWAITING_ADDRESS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `ONBOARDING_*`
+- `UserStates`: `IDLE`, `PRO_MODE`, `CUSTOMER_MODE`, `AWAITING_INTENT_CONFIRMATION`, `AWAITING_ADDRESS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `ONBOARDING_*`
 - `WorkerConstants.MAX_PRO_LOAD = 3`: max concurrent leads per professional
 - `WorkerConstants.SOS_TIMEOUT_MINUTES = 60`: reassignment trigger threshold
 - `WorkerConstants.GEO_RADIUS_STEPS = [10000, 20000, 30000]`: progressive geo search radii
-- `WorkerConstants.PAUSE_TTL_SECONDS = 7200`: 2-hour TTL for PAUSED_FOR_HUMAN state
+- `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions
@@ -120,3 +120,9 @@ Unit tests use `mongomock_motor` (in-memory MongoDB) and mock `whatsapp` and `ai
 ### Configuration
 
 All config is in `app/core/config.py` via `pydantic-settings`. Required env vars: `GREEN_API_INSTANCE_ID`, `GREEN_API_TOKEN`, `GEMINI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Optional: `MONGO_URI` (defaults to localhost), `REDIS_URL`, `MONGO_TEST_URI` (for integration tests), `ADMIN_PASSWORD`, `ADMIN_PHONE` (defaults to hardcoded), `WEBHOOK_TOKEN` (enables webhook auth).
+
+## Session Guidelines
+
+- Skip files over 100KB unless explicitly required.
+- Suggest `/cost` when a session is running long to monitor cache ratio.
+- Recommend starting a new session when switching to an unrelated task.

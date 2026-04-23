@@ -88,6 +88,19 @@ When the customer sends a trigger phrase (e.g., "אני צריך נציג"):
 4. All subsequent messages reset the 15-minute TTL.
 5. If 15 minutes of silence pass, the **SLA Monitor** triggers `SLA_DEFLECTION_MESSAGE`.
 
+### Edge-Case Bailouts
+
+| Scenario | Trigger | Outcome |
+|----------|---------|---------|
+| **Address cancellation** | Customer sends "לא משנה" / "ביטול" while in `AWAITING_ADDRESS` | State + Redis context cleared; customer returned to normal flow |
+| **Silent media (image-only)** | Customer sends an image with no text | Treated as service intent; media collected and dispatcher proceeds normally |
+| **Empty radius (30 km)** | No pro found after all three geo radius steps | State cleared, lead escalated to `PENDING_ADMIN_REVIEW`, customer notified |
+| **Fat finger guard** | Pro replies to a lead they already replied to within 5 minutes | Second reply silently ignored to prevent double-action |
+
+### Customer Name Capture
+
+The Dispatcher AI extracts and stores `customer_name` from the conversation. The name is included in the approval notification sent to the pro so they know who they're speaking with before accepting the lead.
+
 ---
 
 ## 5. SOS Auto-Recovery ("The Healer")

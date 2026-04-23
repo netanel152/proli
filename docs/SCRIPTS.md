@@ -18,6 +18,14 @@ Populates MongoDB with sample professionals (plumbers, electricians) and test le
 python scripts/seed_db.py
 ```
 
+### `migrate_unknown_address.py`
+
+One-time migration. Finds all leads with `full_address = "Unknown Address"` (a legacy sentinel value) and clears the field so the geocoding service can resolve it properly on the next interaction.
+
+```bash
+python scripts/migrate_unknown_address.py
+```
+
 ### `create_indexes.py`
 
 Creates MongoDB indexes for query performance. Run once when setting up a new environment.

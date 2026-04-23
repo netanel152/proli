@@ -60,7 +60,11 @@ Customer (WhatsApp)
 
 **Startup/shutdown:** Verifies DB + Redis connectivity, starts APScheduler, updates `worker:heartbeat` key in Redis every 60 s (120 s expiry).
 
-**Scaling:** Multiple worker instances require distributed locking for scheduler jobs (not yet implemented — run a single worker instance).
+**Concurrency hardening:**
+- **Distributed locks (APScheduler):** Each scheduled job acquires a Redis `SETNX` lock before running, preventing duplicate execution if multiple worker instances are deployed.
+- **Chat-level lock (FSM):** `process_message_task` acquires a per-`chat_id` Redis lock before entering the workflow. If the lock is busy (machine-gun messages), the task re-queues with a 2-second defer via ARQ retry.
+
+**Scaling:** Multiple worker instances are safe for task processing. APScheduler distributed locking via Redis SETNX prevents duplicate job runs.
 
 ### Process 3: Admin Panel (`admin_panel/main.py`)
 
@@ -239,11 +243,14 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | Pattern | Purpose | TTL |
 |---------|---------|-----|
 | `arq:queue:*` | ARQ task queue | — |
-| `state:{chat_id}` | User FSM state | 4 h (PAUSED_FOR_HUMAN: 2 h) |
+| `state:{chat_id}` | User FSM state | 4 h (PAUSED_FOR_HUMAN: 15 min rolling) |
 | `ctx:{chat_id}` | Chat history (last 20 messages) | 4 h |
 | `rate:{chat_id}` | Rate limit counter | 60 s |
 | `webhook:{idMessage}` | Idempotency key | 24 h |
 | `worker:heartbeat` | Worker liveness | 120 s |
+| `lock:chat:{chat_id}` | Per-chat FSM lock (machine-gun deferral) | 30 s |
+| `lock:job:{job_name}` | APScheduler distributed lock | 5 min |
+| `geocode:{name}` | Resolved coordinates cache (Google Maps) | 7 days |
 
 ---
 
@@ -254,7 +261,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | Language | Python 3.12+ | |
 | API framework | FastAPI | Async, OpenAPI built-in |
 | Task queue | ARQ | Lightweight, Redis-backed |
-| Scheduler | APScheduler | 6 cron/interval jobs |
+| Scheduler | APScheduler | 7 cron/interval jobs |
 | AI | Google Gemini (google-genai) | Flash Lite 2.5 → Flash 2.5 → Flash 1.5 fallback |
 | Database | MongoDB 6.0 + Motor | Async driver |
 | Cache/State | Redis | Context, FSM, rate limit, idempotency |
