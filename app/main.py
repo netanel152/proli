@@ -1,3 +1,4 @@
+import logging
 import uuid
 import time
 from fastapi import FastAPI, Request
@@ -12,7 +13,51 @@ from app.core.redis_client import close_redis_client, get_redis_client
 from app.core.http_client import close_http_client as _close_shared_http_client
 from app.core.database import client as mongo_client
 from app.core.logger import logger
+from app.services.sms_service import sms_client
 from scripts.create_indexes import create_all_indexes
+
+
+def _init_sentry() -> None:
+    """
+    Initialize Sentry if SENTRY_DSN is configured.
+
+    Duplicated from app/worker.py so webhook-level failures (payload parse,
+    Redis, ARQ enqueue) surface alongside worker failures. Same CRITICAL-only
+    filter — regular ERROR/WARNING noise stays in stdout/loguru. No-op when
+    SENTRY_DSN is unset, so tests and local dev are unaffected.
+    """
+    if not settings.SENTRY_DSN:
+        logger.info("Sentry disabled (SENTRY_DSN not set).")
+        return
+
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.logging import LoggingIntegration
+    except ImportError:
+        logger.warning(
+            "SENTRY_DSN is set but sentry-sdk is not installed. "
+            "Run `pip install -r requirements.txt`. Continuing without Sentry."
+        )
+        return
+
+    logging_integration = LoggingIntegration(
+        level=logging.INFO,
+        event_level=logging.CRITICAL,
+    )
+
+    sentry_sdk.init(
+        dsn=settings.SENTRY_DSN,
+        environment=settings.ENVIRONMENT,
+        integrations=[logging_integration],
+        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
+        send_default_pii=False,
+        attach_stacktrace=True,
+    )
+    sentry_sdk.set_tag("service", "proli-api")
+    logger.info(f"Sentry initialized (environment={settings.ENVIRONMENT}, CRITICAL-only).")
+
+
+_init_sentry()
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -60,6 +105,7 @@ async def lifespan(app: FastAPI):
     # ---- Shutdown ----
     await close_redis_client()
     await _close_shared_http_client()
+    await sms_client.close()
     logger.info("API shut down cleanly.")
 
 

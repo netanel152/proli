@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Header
 from fastapi.responses import JSONResponse
 from app.schemas.whatsapp import WebhookPayload
 from app.core.logger import logger
@@ -10,13 +10,17 @@ from app.services.security_service import SecurityService
 router = APIRouter()
 
 @router.post("/webhook")
-async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=None)):
+async def webhook_endpoint(
+    payload: WebhookPayload,
+    x_webhook_token: str | None = Header(default=None, alias="X-Webhook-Token"),
+):
     """
     Main entry point for Green API Webhooks.
     """
-    # Webhook Token Verification
+    # Webhook Token Verification — header-based so the token never lands in
+    # access logs, proxy logs, or Referer strings the way ?token=... does.
     if settings.WEBHOOK_TOKEN:
-        if token != settings.WEBHOOK_TOKEN:
+        if x_webhook_token != settings.WEBHOOK_TOKEN:
             logger.warning("Security Alert: Webhook request with invalid or missing token")
             return JSONResponse(status_code=403, content={"status": "forbidden"})
 

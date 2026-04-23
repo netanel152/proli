@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 import os
 
 class Settings(BaseSettings):
@@ -84,6 +84,19 @@ class Settings(BaseSettings):
     # — city coordinates don't move. Failures expire so we re-try after
     # a quota reset or a corrected spelling.
     GEOCODING_NEGATIVE_TTL_SECONDS: int = 86400  # 24 hours
+
+    @model_validator(mode="after")
+    def require_webhook_token_in_production(self) -> "Settings":
+        # Production must have an explicit WEBHOOK_TOKEN — the webhook endpoint
+        # is the only untrusted-internet surface. Dev/test keep the None default
+        # so local boots and pytest don't need to fabricate a value.
+        if self.ENVIRONMENT == "production" and not self.WEBHOOK_TOKEN:
+            raise ValueError(
+                "WEBHOOK_TOKEN is required when ENVIRONMENT='production'. "
+                "Set WEBHOOK_TOKEN to a random secret and configure the same "
+                "value as the X-Webhook-Token header in Green API."
+            )
+        return self
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

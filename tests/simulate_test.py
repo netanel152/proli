@@ -76,17 +76,19 @@ def make_text_payload(chat_id: str, text: str, sender_name: str = "Test User") -
 
 
 def _webhook_url() -> str:
-    """Webhook URL with token appended if configured."""
-    url = f"{BASE_URL}/webhook"
-    if WEBHOOK_TOKEN:
-        url += f"?token={WEBHOOK_TOKEN}"
-    return url
+    """Webhook URL (token is sent via X-Webhook-Token header, not query param)."""
+    return f"{BASE_URL}/webhook"
+
+
+def _webhook_headers() -> dict:
+    """Auth header, when WEBHOOK_TOKEN is configured."""
+    return {"X-Webhook-Token": WEBHOOK_TOKEN} if WEBHOOK_TOKEN else {}
 
 
 async def send_message(client: httpx.AsyncClient, chat_id: str, text: str, sender_name: str = "Test User") -> dict:
     """Send a simulated webhook and return the response."""
     payload = make_text_payload(chat_id, text, sender_name)
-    resp = await client.post(_webhook_url(), json=payload)
+    resp = await client.post(_webhook_url(), json=payload, headers=_webhook_headers())
     return resp.json()
 
 
