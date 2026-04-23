@@ -91,13 +91,14 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 | `pro_flow.py` | Professional text commands (approve, reject, pause, resume, finish) |
 | `media_handler.py` | Media type detection and download (images, audio, video) |
 | `ai_engine_service.py` | Gemini 2.5 Flash with adaptive fallback (Flash Lite → Flash → Flash 1.5); multimodal; 5-turn context window; non-blocking token accounting |
+| `geocoding_service.py` | Resolves city/address names to coordinates — static dict → Redis cache → Google Maps API (with Israel bounding-box validation) |
 | `matching_service.py` | Progressive `$geoNear` aggregation (10 km → 20 km → 30 km); falls back to regex city match; load-balances by max 3 active leads per pro |
 | `state_manager_service.py` | Redis-backed FSM per `chat_id` (`UserStates` enum); supports custom TTL per state |
 | `context_manager_service.py` | Stores last 20 messages per `chat_id` in Redis |
 | `lead_manager_service.py` | CRUD for leads in MongoDB |
 | `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts |
 | `monitor_service.py` | Stale job detection, reassignment, and escalation to PENDING_ADMIN_REVIEW |
-| `whatsapp_client_service.py` | Green API HTTP client with `sendButtons` support and text fallback |
+| `whatsapp_client_service.py` | Green API HTTP client (text-only — no interactive buttons) |
 | `cloudinary_client_service.py` | Media upload/retrieval |
 | `security_service.py` | Rate limiting via Redis |
 
@@ -114,6 +115,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 - `WorkerConstants.SOS_TIMEOUT_MINUTES = 60`: reassignment trigger threshold
 - `WorkerConstants.GEO_RADIUS_STEPS = [10000, 20000, 30000]`: progressive geo search radii
 - `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state
+- `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` (first lookup layer for geocoding)
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions

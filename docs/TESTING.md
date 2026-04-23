@@ -50,6 +50,7 @@ pytest -m integration
 | File | What it covers |
 |------|---------------|
 | `test_matching_service.py` | `$geoNear` pipeline, progressive radius (10→20→30 km), no-pro-at-max-radius returns None, text fallback, load balancing, excluded pro IDs, rating sort |
+| `test_geocoding_service.py` | Static dict lookup, Redis cache hits/misses, Google Maps API calls with bounding-box validation, fallback chain |
 
 ### Infrastructure
 
@@ -69,6 +70,12 @@ pytest -m integration
 | `test_admin_auth.py` | Password hashing, cookie auth, session tokens |
 | `test_ai_parsing.py` | Prompt template formatting (no live API calls) |
 | `test_edge_cases.py` | Bad inputs: Gemini failure, WhatsApp down, unsupported file types |
+
+### Health & Regression
+
+| File | What it covers |
+|------|---------------|
+| `test_health_leads.py` | Lead status health checks — verifies no leads are stuck in unexpected states |
 
 ### Integration & E2E
 
