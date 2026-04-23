@@ -71,15 +71,6 @@ class Defaults:
     DEFAULT_TRANSCRIPTION = "None"
     DEFAULT_MIME_TYPE = "image/jpeg"
 
-class ProType(str, Enum):
-    PLUMBER = "plumber"
-    ELECTRICIAN = "electrician"
-    HANDYMAN = "handyman"
-    LOCKSMITH = "locksmith"
-    PAINTER = "painter"
-    CLEANER = "cleaner"
-    GENERAL = "general"
-
 class AdminDefaults:
     UNKNOWN_PRO = "Unknown"
     MANUAL_SOURCE = "manual_admin"
