@@ -58,11 +58,9 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"  # "production" or "development"
     LOG_LEVEL: str = "INFO"
 
-    # Backup (optional - S3 upload)
+    # Backup (optional - S3 upload). AWS credentials are read by boto3
+    # directly from the environment; no need to re-declare them here.
     BACKUP_S3_BUCKET: str | None = None
-    AWS_ACCESS_KEY_ID: str | None = None
-    AWS_SECRET_ACCESS_KEY: str | None = None
-    AWS_REGION: str = "eu-west-1"
 
     # SMS fallback (optional)
     SMS_API_KEY: str | None = None
