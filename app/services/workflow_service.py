@@ -23,6 +23,7 @@ from app.services.pro_onboarding_service import (
     start_onboarding, handle_onboarding_step, ONBOARDING_STATES,
 )
 from app.services.media_handler import detect_and_fetch_media
+from app.core.config import settings
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -87,11 +88,29 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
     # Get state early — needed to skip global checks for pros
     current_state = await StateManager.get_state(chat_id)
 
+    # Admin routing wizard — must come before all other checks so the admin-as-pro
+    # isn't trapped by consent, SOS, or paused-for-human gates.
+    admin_chat_id = f"{settings.ADMIN_PHONE}@c.us"
+    if chat_id == admin_chat_id:
+        if (user_text and user_text.strip() == "ניהול") or (current_state or "").startswith("admin_"):
+            from app.services import admin_flow
+            from app.core.redis_client import get_redis_client
+            redis_client = await get_redis_client()
+            await admin_flow.handle_admin_message(
+                chat_id, user_text, current_state, StateManager, redis_client, whatsapp, None,
+            )
+            return
+
     # Global Reset Check (skip for pros — they use "תפריט" to show their menu)
     if normalized_text in Messages.Keywords.RESET_COMMANDS and current_state != UserStates.PRO_MODE:
         await StateManager.clear_state(chat_id)
         await ContextManager.clear_context(chat_id)
         await whatsapp.send_message(chat_id, Messages.System.RESET_SUCCESS)
+        return
+
+    # Help / menu — send info without touching state or context
+    if normalized_text in Messages.Keywords.HELP_COMMANDS and current_state != UserStates.PRO_MODE:
+        await whatsapp.send_message(chat_id, Messages.Customer.HELP_INFO)
         return
 
     # Zero-Touch: transient confirmation after intent was detected in pro_flow

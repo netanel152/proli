@@ -88,7 +88,14 @@ Customer (WhatsApp)
 ```
 process_incoming_message(chat_id, text, media_url)
         │
+        ├─ Admin phone + "ניהול" / admin_* state?
+        │      └─ admin_flow.handle_admin_message()
+        │            list PENDING_ADMIN_REVIEW leads → select lead
+        │            → self-assign OR list candidate pros → assign
+        │
         ├─ Reset keyword? → clear state + context → RESET_SUCCESS
+        │
+        ├─ Help keyword ("תפריט"/"עזרה", non-pro)? → send HELP_INFO, leave state intact
         │
         ├─ SOS / human handoff keyword?
         │      └─ set PAUSED_FOR_HUMAN (TTL 900 s)
@@ -108,7 +115,9 @@ process_incoming_message(chat_id, text, media_url)
         │            ├─ "השהה" / "pause" → customer PAUSED_FOR_HUMAN (TTL 900 s)
         │            ├─ "דחה" / "2" → lead REJECTED, clear customer state
         │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN
-        │            └─ other commands (3-7) → finish/status/history/etc.
+        │            ├─ other commands (3-7) → finish/status/history/etc.
+        │            ├─ "מצא" / "search" → claim oldest PENDING_ADMIN_REVIEW lead
+        │            │     (rate-limited 10 min per pro via Redis rate_limit:pro_search:*)
         │            └─ detect_service_intent() → if True, prompt for CUSTOMER_MODE
         │
         ├─ State == AWAITING_INTENT_CONFIRMATION?
@@ -196,6 +205,7 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold (1h TTL) |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
+| `ADMIN_MODE_IDLE` / `ADMIN_SELECTING_LEAD` / `ADMIN_SELECTING_ACTION` / `ADMIN_SELECTING_PRO` | Admin routing wizard steps (`ניהול` keyword, 15m TTL) |
 
 ---
 
@@ -245,7 +255,8 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | `arq:queue:*` | ARQ task queue | — |
 | `state:{chat_id}` | User FSM state | 4 h (PAUSED_FOR_HUMAN: 15 min rolling) |
 | `ctx:{chat_id}` | Chat history (last 20 messages) | 4 h |
-| `rate:{chat_id}` | Rate limit counter | 60 s |
+| `rate:{chat_id}` | Rate limit counter (webhook) | 60 s |
+| `rate_limit:pro_search:{chat_id}` | Per-pro cool-down on proactive `מצא` command | 600 s |
 | `webhook:{idMessage}` | Idempotency key | 24 h |
 | `worker:heartbeat` | Worker liveness | 120 s |
 | `lock:chat:{chat_id}` | Per-chat FSM lock (machine-gun deferral) | 30 s |

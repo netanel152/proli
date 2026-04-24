@@ -24,6 +24,8 @@
 - **SOS Auto-Recovery (Healer)** — Detects leads stuck > 60 min and reassigns to a new pro. If no replacement is found, escalates to `PENDING_ADMIN_REVIEW` and notifies the customer.
 - **Stale Monitor** — Follows up with pros (4–6 h) and customers (6–24 h) on open leads.
 - **Pro Onboarding** — Self-service WhatsApp signup flow for new professionals.
+- **Proactive Stuck-Lead Search (`מצא`)** — Pros can pull the oldest `PENDING_ADMIN_REVIEW` lead on demand. Redis-backed per-pro cool-down (10 min) prevents spamming.
+- **Admin Routing Wizard (`ניהול`)** — Admin phone number triggers a guided flow to list stuck leads, self-assign, or pick a replacement pro directly from WhatsApp.
 
 ### Admin Panel (Manager-facing)
 
@@ -139,7 +141,7 @@ pytest tests/test_matching_service.py
 pytest -m integration
 ```
 
-Expected result: **162 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+Expected result: **208 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 ---
 
@@ -179,6 +181,8 @@ Expected result: **162 passed, 6 skipped** (integration tests skipped when `MONG
 - **SLA Deflection** — אם איש המקצוע לא עונה תוך 15 דקות בזמן שיחה ישירה, הבוט יתעורר ויציע ללקוח מעבר לשיחה טלפונית.
 - **AI מולטי-מודאלי** — ניתוח תמונות, תמלול הודעות קוליות, צפייה בסרטונים.
 - **SOS Healer** — ניתוב מחדש אוטומטי של לידים תקועים, ואסקלציה למנהל אם לא נמצא מחליף.
+- **חיפוש יזום של לידים תקועים (`מצא`)** — איש מקצוע יכול למשוך את הליד התקוע הוותיק ביותר. הגבלת קצב ברדיס (10 דק' לאיש מקצוע) מונעת ספאם.
+- **אשף ניתוב למנהל (`ניהול`)** — מספר הטלפון של המנהל מפעיל תהליך מובנה להצגת לידים תקועים, הקצאה עצמית או בחירת איש מקצוע חלופי ישירות מוואטסאפ.
 
 #### פאנל ניהול
 

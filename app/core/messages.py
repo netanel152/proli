@@ -29,6 +29,11 @@ class Messages:
         ADDRESS_SAVED = "✅ הכתובת עודכנה בהצלחה!"
         ADDRESS_INVALID = "❌ לא הצלחתי לזהות את הכתובת. אנא נסה לשלוח מיקום (Location Pin) או הקלד עיר ורחוב בצורה ברורה."
         REQUEST_CANCELLED = "👍 הבקשה בוטלה. אם תרצה/י לפתוח פנייה חדשה, פשוט שלח/י הודעה."
+        HELP_INFO = (
+            "אני המערכת החכמה של Proli! 🛠️\n"
+            "אני כאן כדי לעזור לך למצוא את איש המקצוע המתאים ביותר. "
+            "פשוט תאר/י לי את התקלה והמיקום שלך, ואני אדאג להשאר."
+        )
         PENDING_REVIEW = (
             "קיבלתי את הפנייה שלך! 👍\n"
             "כרגע אנחנו מחפשים את איש המקצוע המתאים ביותר.\n"
@@ -140,6 +145,15 @@ class Messages:
             "הקריאה שלך הועברה לאיש המקצוע לאישור. בינתיים, החזרתי אותך למצב טכנאי 🛠️ "
             "כדי שתוכל להמשיך לנהל את העסק כרגיל."
         )
+        SEARCH_RATE_LIMITED = "⏳ חיפשת לאחרונה. אנא המתן {minutes} דקות לפני החיפוש הבא."
+        NO_STUCK_LEADS = "אין לידים תקועים זמינים כרגע. ננסה שוב מאוחר יותר 👍"
+        STUCK_LEAD_FOUND = (
+            "📢 *נמצא ליד תקוע:*\n\n"
+            "🛠️ *תקלה:* {issue}\n"
+            "📍 *עיר:* {city}\n"
+            "⏰ *ממתין:* {wait_minutes} דק'\n\n"
+            "השב 'אשר' כדי לקחת את העבודה."
+        )
 
     class SOS:
         CUSTOMER_REASSIGNING = "מתנצלים על ההמתנה, אנו מאתרים עבורך איש מקצוע זמין יותר כעת... ⏳"
@@ -154,7 +168,10 @@ class Messages:
         PRO_LOST_LEAD = "העבודה הועברה לאיש מקצוע אחר עקב חוסר מענה."
         ADMIN_REPORT_HEADER = "🚨 *דו\"ח לידים תקועים (Proli)*"
         ADMIN_REPORT_BODY = "נמצאו {count} לידים ללא מענה (> {timeout} דק'):\n"
-        ADMIN_REPORT_FOOTER = "\nהמערכת ניסתה להעביר אותם אך ללא הצלחה. נדרשת התערבות ידנית."
+        ADMIN_REPORT_FOOTER = (
+            "\nהמערכת ניסתה להעביר אותם אך ללא הצלחה. נדרשת התערבות ידנית."
+            "\n💡 לטיפול בלידים והעברה לאיש מקצוע, השב את המילה: ניהול"
+        )
 
         TO_USER_WITH_PRO = (
             "✅ קיבלתי! העברתי את בקשתך לאיש המקצוע שלך.\n"
@@ -271,7 +288,9 @@ class Messages:
         HISTORY_COMMANDS = ["היסטוריה", "5", "history"]
         STATS_COMMANDS = ["דוח", 'דו"ח', "6", "stats", "report"]
         REVIEWS_COMMANDS = ["ביקורות", "7", "reviews", "ratings"]
-        RESET_COMMANDS = ["תפריט", "עזרה", "reset", "menu", "התחלה", "help"]
+        SEARCH_COMMANDS = ["מצא", "search", "find"]
+        RESET_COMMANDS = ["reset", "התחלה"]
+        HELP_COMMANDS = ["תפריט", "עזרה", "help", "menu"]
         SOS_COMMANDS = ["נציג", "אנושי", "מנהל", "admin", "sos"]
         CANCEL_KEYWORDS = ["בטל", "בטלי", "עזוב", "עזבי", "לא משנה", "טעות", "cancel", "nevermind"]
         REGISTER_COMMANDS = ["הרשמה", "להירשם", "register", "signup", "הצטרפות"]
