@@ -4,12 +4,12 @@ Covers: approve, reject, finish, active jobs, history, stats, reviews.
 """
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
-from app.services.pro_flow import handle_pro_text_command
+from app.services.pro_flow import handle_pro_text_command, _handle_search
 import app.services.pro_flow
 
 PRO_ID = ObjectId()
@@ -488,3 +488,97 @@ async def test_intent_detection_no_ai_returns_none(pro_setup, mock_wa, mock_lm):
         f"{PRO_PHONE}@c.us", "שאלה כלשהי", mock_wa, mock_lm
     )
     assert result is None
+
+
+# --- Proactive Search (rate-limited) ---
+
+def _make_mock_redis():
+    """Redis stub that simulates ttl / setex for _handle_search."""
+    store = {}  # key -> (value, expires_at or None)
+
+    def _now():
+        return datetime.now(timezone.utc)
+
+    async def ttl(key):
+        entry = store.get(key)
+        if entry is None:
+            return -2
+        _, expires_at = entry
+        if expires_at is None:
+            return -1
+        remaining = int((expires_at - _now()).total_seconds())
+        return remaining if remaining > 0 else -2
+
+    async def setex(key, seconds, value):
+        store[key] = (value, _now() + timedelta(seconds=seconds))
+
+    redis = MagicMock()
+    redis.ttl = AsyncMock(side_effect=ttl)
+    redis.setex = AsyncMock(side_effect=setex)
+    return redis, store
+
+
+@pytest.mark.asyncio
+async def test_search_no_stuck_leads_sets_cooldown(pro_setup, mock_wa):
+    """First call with empty DB: returns NO_STUCK_LEADS and locks cool-down."""
+    pro_doc, _ = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    redis, store = _make_mock_redis()
+
+    with patch("app.services.pro_flow.get_redis_client", new_callable=AsyncMock, return_value=redis):
+        result = await _handle_search(pro_doc, chat_id, mock_wa)
+
+    assert result == Messages.Pro.NO_STUCK_LEADS
+    assert f"rate_limit:pro_search:{chat_id}" in store
+    redis.setex.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_search_rate_limited_sends_wait_message(pro_setup, mock_wa):
+    """Second call within cool-down returns the rate-limited sentinel and sends formatted message."""
+    pro_doc, _ = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    redis, store = _make_mock_redis()
+    # Pre-seed an active cool-down with ~6 minutes remaining
+    store[f"rate_limit:pro_search:{chat_id}"] = (
+        "1",
+        datetime.now(timezone.utc) + timedelta(seconds=360),
+    )
+
+    with patch("app.services.pro_flow.get_redis_client", new_callable=AsyncMock, return_value=redis):
+        result = await _handle_search(pro_doc, chat_id, mock_wa)
+
+    assert result == ""  # sentinel: handler sent message itself
+    mock_wa.send_message.assert_called_once()
+    sent_text = mock_wa.send_message.call_args.args[1]
+    assert "6" in sent_text  # math.ceil(360 / 60) == 6
+    assert "דקות" in sent_text
+    # setex must NOT be refreshed when already rate-limited
+    redis.setex.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_finds_stuck_lead_and_assigns(pro_setup, mock_wa):
+    """Pending-admin-review lead: assigned to pro as NEW, cool-down set."""
+    pro_doc, db = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    redis, store = _make_mock_redis()
+
+    lead_id = ObjectId()
+    await db.leads.insert_one({
+        "_id": lead_id,
+        "status": LeadStatus.PENDING_ADMIN_REVIEW,
+        "issue_type": "נזילה",
+        "city": "תל אביב",
+        "created_at": datetime.now(timezone.utc) - timedelta(minutes=75),
+    })
+
+    with patch("app.services.pro_flow.get_redis_client", new_callable=AsyncMock, return_value=redis):
+        result = await _handle_search(pro_doc, chat_id, mock_wa)
+
+    assert "נזילה" in result
+    assert "תל אביב" in result
+    lead = await db.leads.find_one({"_id": lead_id})
+    assert lead["status"] == LeadStatus.NEW
+    assert lead["pro_id"] == pro_doc["_id"]
+    assert f"rate_limit:pro_search:{chat_id}" in store

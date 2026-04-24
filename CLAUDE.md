@@ -54,7 +54,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected: **162 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
+Expected: **208 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
 
 ### Linting / Formatting
 
@@ -83,9 +83,10 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 
 | Service | Responsibility |
 |---|---|
-| `workflow_service.py` | Central orchestrator — routes messages, manages FSM states, delegates to customer/pro flows |
+| `workflow_service.py` | Central orchestrator — routes messages, manages FSM states, delegates to customer/pro/admin flows |
 | `customer_flow.py` | Customer completion checks, ratings, reviews |
-| `pro_flow.py` | Professional text commands (approve, reject, pause, resume, finish) — text-only, no button handlers |
+| `pro_flow.py` | Professional text commands (approve, reject, pause, resume, finish, **מצא** — rate-limited stuck-lead search) — text-only, no button handlers |
+| `admin_flow.py` | Admin routing wizard (`ניהול` keyword): list PENDING_ADMIN_REVIEW leads → self-assign or pick a pro |
 | `media_handler.py` | Media type detection and download (images, audio, video) |
 | `ai_engine_service.py` | Gemini 2.5 Flash with adaptive fallback (Flash Lite → Flash → Flash 1.5); multimodal; 5-turn context window; non-blocking token accounting |
 | `matching_service.py` | Progressive `$geoNear` aggregation (10 km → 20 km → 30 km); falls back to regex city match; load-balances by max 3 active leads per pro |
@@ -106,11 +107,12 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 ### Key Constants (`app/core/constants.py`)
 
 - `LeadStatus`: `contacted → new → booked → completed/rejected/closed/cancelled/pending_admin_review`
-- `UserStates`: `IDLE`, `PRO_MODE`, `CUSTOMER_MODE`, `AWAITING_INTENT_CONFIRMATION`, `AWAITING_ADDRESS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `ONBOARDING_*`
+- `UserStates`: `IDLE`, `PRO_MODE`, `CUSTOMER_MODE`, `AWAITING_INTENT_CONFIRMATION`, `AWAITING_ADDRESS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `ONBOARDING_*`, `ADMIN_MODE_IDLE`, `ADMIN_SELECTING_LEAD`, `ADMIN_SELECTING_ACTION`, `ADMIN_SELECTING_PRO`
 - `WorkerConstants.MAX_PRO_LOAD = 3`: max concurrent leads per professional
 - `WorkerConstants.SOS_TIMEOUT_MINUTES = 60`: reassignment trigger threshold
 - `WorkerConstants.GEO_RADIUS_STEPS = [10000, 20000, 30000]`: progressive geo search radii
 - `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state
+- `WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS = 600`: 10-minute per-pro cool-down on the `מצא` proactive stuck-lead search
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions
@@ -130,3 +132,4 @@ All config is in `app/core/config.py` via `pydantic-settings`. Required env vars
 - Skip files over 100KB unless explicitly required.
 - Suggest `/cost` when a session is running long to monitor cache ratio.
 - Recommend starting a new session when switching to an unrelated task.
+- After finishing a code-change task, run `/sync-docs` to update any `.md` files made stale by the diff.

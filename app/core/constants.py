@@ -29,6 +29,11 @@ class UserStates(str, Enum):
     ONBOARDING_AREAS = "onboarding_areas"
     ONBOARDING_PRICES = "onboarding_prices"
     ONBOARDING_CONFIRM = "onboarding_confirm"
+    # Admin routing wizard
+    ADMIN_MODE_IDLE = "admin_mode_idle"
+    ADMIN_SELECTING_LEAD = "admin_selecting_lead"
+    ADMIN_SELECTING_ACTION = "admin_selecting_action"
+    ADMIN_SELECTING_PRO = "admin_selecting_pro"
 
 class WorkerConstants:
     MAX_PRO_LOAD = 3
@@ -43,6 +48,7 @@ class WorkerConstants:
     GEO_RADIUS_STEPS = [10000, 20000, 30000]  # Progressive search radius in meters (10km, 20km, 30km)
     PAUSE_TTL_SECONDS = 900        # 15 minutes — auto-expiry for PAUSED_FOR_HUMAN state
     PRO_APPROVAL_TTL_SECONDS = 3600  # 60 min — pro must approve a finalized deal within this window
+    PRO_SEARCH_RATE_LIMIT_SECONDS = 600  # 10 min — per-pro cool-down on proactive "מצא" command
     # ADMIN_PHONE moved to config.py / env var
 
 class APIStatus:

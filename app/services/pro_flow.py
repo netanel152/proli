@@ -1,7 +1,10 @@
+import math
+
 from app.core.database import users_collection, leads_collection, reviews_collection
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
+from app.core.redis_client import get_redis_client
 from app.services.matching_service import book_slot_for_lead
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
@@ -69,6 +72,9 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
 
     if text in Messages.Keywords.REVIEWS_COMMANDS:
         return await _handle_reviews(pro)
+
+    if text in Messages.Keywords.SEARCH_COMMANDS:
+        return await _handle_search(pro, chat_id, whatsapp)
 
     # No command match — try intent detection on free-text
     if ai is not None and text and len(text) > 3:
@@ -409,3 +415,62 @@ async def _handle_reviews(pro):
             lines.append(f"  ⭐{r}")
 
     return "\n".join(lines)
+
+
+async def _handle_search(pro, chat_id: str, whatsapp):
+    """
+    Proactive stuck-lead search for pros. Rate-limited per chat_id via Redis
+    (PRO_SEARCH_RATE_LIMIT_SECONDS). Assigns the oldest PENDING_ADMIN_REVIEW
+    lead to this pro as NEW so the existing "אשר"/"דחה" flow takes over.
+    """
+    redis_client = await get_redis_client()
+    rate_limit_key = f"rate_limit:pro_search:{chat_id}"
+
+    ttl = await redis_client.ttl(rate_limit_key)
+    if ttl > 0:
+        minutes_left = math.ceil(ttl / 60)
+        await whatsapp.send_message(
+            chat_id,
+            Messages.Pro.SEARCH_RATE_LIMITED.format(minutes=minutes_left),
+        )
+        # sentinel: handled internally, caller must not send PRO_HELP_MENU
+        return ""
+
+    stuck = await leads_collection.find_one(
+        {"status": LeadStatus.PENDING_ADMIN_REVIEW},
+        sort=[("created_at", 1)],
+    )
+
+    # Lock the cool-down regardless of outcome
+    await redis_client.setex(
+        rate_limit_key,
+        WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS,
+        "1",
+    )
+
+    if not stuck:
+        return Messages.Pro.NO_STUCK_LEADS
+
+    await leads_collection.update_one(
+        {"_id": stuck["_id"]},
+        {"$set": {
+            "pro_id": pro["_id"],
+            "status": LeadStatus.NEW,
+            "assigned_by_admin_at": datetime.now(timezone.utc),
+        }},
+    )
+
+    wait_minutes = 0
+    created_at = stuck.get("created_at")
+    if created_at:
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        wait_minutes = int((datetime.now(timezone.utc) - created_at).total_seconds() / 60)
+
+    logger.info(f"Pro {pro['_id']} claimed stuck lead {stuck['_id']} via search")
+
+    return Messages.Pro.STUCK_LEAD_FOUND.format(
+        issue=stuck.get("issue_type") or "לא ידוע",
+        city=stuck.get("city") or stuck.get("full_address") or "לא ידוע",
+        wait_minutes=wait_minutes,
+    )

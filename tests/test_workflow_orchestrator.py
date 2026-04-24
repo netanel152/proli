@@ -65,13 +65,15 @@ async def test_reset_command_clears_state(wf_mocks):
 
 
 @pytest.mark.asyncio
-async def test_reset_menu_command(wf_mocks):
+async def test_help_command_sends_help_info_without_reset(wf_mocks):
+    """תפריט is now a HELP command — must send HELP_INFO and leave state intact."""
     mock_wa, mock_state, mock_ctx, _, _ = wf_mocks
 
     await process_incoming_message("972501111111@c.us", "תפריט")
 
-    mock_state.clear_state.assert_called()
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.System.RESET_SUCCESS)
+    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Customer.HELP_INFO)
+    mock_state.clear_state.assert_not_called()
+    mock_ctx.clear_context.assert_not_called()
 
 
 @pytest.mark.asyncio
