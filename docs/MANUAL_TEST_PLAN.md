@@ -109,11 +109,12 @@ redis-cli DEL "state:972523651414@c.us"
 
 ---
 
-### TC-7: Pro Help Menu
+### TC-7: Pro Dynamic Dashboard (Help Menu)
 
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
-| 1 | 972524828796 | "בלה בלה" | Pro help menu with available commands | State stays PRO_MODE |
+| 1 | 972524828796 | "תפריט" | Pro Dashboard: rating, availability, active job count, and command list | State stays PRO_MODE |
+| 2 | 972524828796 | "מה קורה?" | Same Dashboard (fallback for unknown text) | |
 
 ---
 
@@ -267,5 +268,47 @@ Run these in order for a full system validation:
 8. **TC-9** → SOS works
 9. **TC-12** → Idempotency
 10. **TC-13** → Media handling
+11. **TC-14** → Emergency Lead Flow (Bypass)
+12. **TC-15** → Pro Availability & Vacation Mode
+13. **TC-16** → Multi-Job Finish Flow
 
 After each test, verify in worker logs and database that the expected state changes occurred.
+
+---
+
+### TC-14: Emergency Lead Flow (Bypass)
+
+**Pre-condition:** Customer has consent, state is idle.
+
+| Step | From Phone | Send Message | Expected Bot Response | Verify |
+|------|-----------|-------------|----------------------|--------|
+| 1 | 972523651414 | "הצילו! יש לי פיצוץ מים בבית בתל אביב" | 1. EMERGENCY_ACK: "🚨 זיהיתי מצב חירום..." <br> 2. Pro persona reply with [DEAL] | Lead `is_emergency` = True |
+| 2 | - | - | Pro (972524828796) receives: "🚨 *קריאת חירום דחופה!* 🚨" | Address gate bypassed even without street/number |
+| 3 | 972524828796 | "אשר" | Pro gets: "✅ העבודה אושרה!" | Lead status = BOOKED |
+| 4 | - | - | Customer gets pro details | |
+
+---
+
+### TC-15: Pro Availability & Vacation Mode
+
+**Pre-condition:** Pro is in PRO_MODE.
+
+| Step | From Phone | Send Message | Expected Bot Response | Verify |
+|------|-----------|-------------|----------------------|--------|
+| 1 | 972524828796 | "הפסקה" | "☕ הסטטוס שלך שונה ל'בהפסקה'..." | User `is_active` = False |
+| 2 | 972524828796 | "תפריט" | Dashboard shows: "🔴 סטטוס: בהפסקה" | |
+| 3 | 972524828796 | "זמין" | "🚀 הסטטוס שלך שונה ל'זמין'..." | User `is_active` = True |
+| 4 | 972524828796 | "תפריט" | Dashboard shows: "🟢 סטטוס: זמין" | |
+
+---
+
+### TC-16: Multi-Job Finish Flow
+
+**Pre-condition:** Pro has 2+ leads in BOOKED status.
+
+| Step | From Phone | Send Message | Expected Bot Response | Verify |
+|------|-----------|-------------|----------------------|--------|
+| 1 | 972524828796 | "סיימתי" | "איזו עבודה סיימת?" + Numbered list of active jobs | State = PRO_SELECTING_JOB_TO_FINISH |
+| 2 | 972524828796 | "1" | "✅ עודכן שהעבודה הסתיימה" | Selected lead status = COMPLETED |
+| 3 | 972524828796 | "תפריט" | Dashboard active job count decreased | State back to PRO_MODE |
+

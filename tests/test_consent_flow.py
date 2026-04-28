@@ -150,11 +150,24 @@ async def test_pro_skips_consent(consent_mocks, mock_db):
     """Known professional bypasses consent entirely."""
     mock_wa, mock_state, mock_has_consent, _ = consent_mocks
     mock_state.get_state.return_value = UserStates.PRO_MODE
+    
+    # Setup pro in DB
+    await mock_db.users.insert_one({
+        "phone_number": "972524828796",
+        "role": "professional",
+        "business_name": "Test Pro",
+        "is_active": True
+    })
 
     # Pro in PRO_MODE -> goes to pro handler, not consent
     await process_incoming_message("972524828796@c.us", "תפריט")
 
+
     # has_consent should NOT have been called
     mock_has_consent.assert_not_called()
-    # Should get pro help menu
-    mock_wa.send_message.assert_called_once_with("972524828796@c.us", Messages.Pro.PRO_HELP_MENU)
+    # Should get pro dashboard (fallback or direct match for 'תפריט')
+    mock_wa.send_message.assert_called_once()
+    msg = mock_wa.send_message.call_args.args[1]
+    assert "שלום" in msg
+    assert "דירוג" in msg
+

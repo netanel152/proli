@@ -23,6 +23,7 @@ class UserStates(str, Enum):
     SOS = "sos"
     AWAITING_PRO_APPROVAL = "awaiting_pro_approval"
     PAUSED_FOR_HUMAN = "paused_for_human"
+    AWAITING_RESCHEDULE_TIME = "awaiting_reschedule_time"
     # Pro onboarding flow
     ONBOARDING_NAME = "onboarding_name"
     ONBOARDING_TYPE = "onboarding_type"
@@ -34,6 +35,10 @@ class UserStates(str, Enum):
     ADMIN_SELECTING_LEAD = "admin_selecting_lead"
     ADMIN_SELECTING_ACTION = "admin_selecting_action"
     ADMIN_SELECTING_PRO = "admin_selecting_pro"
+    # Pro flow
+    PRO_SELECTING_JOB_TO_FINISH = "pro_selecting_job_to_finish"
+    # Loyalty flow
+    AWAITING_LOYALTY_CONFIRMATION = "awaiting_loyalty_confirmation"
 
 class WorkerConstants:
     MAX_PRO_LOAD = 3
@@ -45,6 +50,7 @@ class WorkerConstants:
     MAX_REASSIGNMENTS = 3          # Max times a lead can be reassigned before closing
     UNASSIGNED_LEAD_TIMEOUT_HOURS = 24  # Auto-reject CONTACTED leads with no pro after this
     MAX_PRO_REMINDERS = 3          # Max reminder messages sent to a pro for a stale booked lead
+    STALE_BOOKED_LEAD_HOURS = 24   # Threshold for considering a booked lead "stale"
     GEO_RADIUS_STEPS = [10000, 20000, 30000]  # Progressive search radius in meters (10km, 20km, 30km)
     PAUSE_TTL_SECONDS = 900        # 15 minutes — auto-expiry for PAUSED_FOR_HUMAN state
     PRO_APPROVAL_TTL_SECONDS = 3600  # 60 min — pro must approve a finalized deal within this window

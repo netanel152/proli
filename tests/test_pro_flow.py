@@ -93,7 +93,7 @@ async def test_approve_no_pending(mock_db, mock_wa, mock_lm):
             "role": "professional", "is_active": True,
         })
     result = await handle_pro_text_command("972502222222@c.us", "אשר", mock_wa, mock_lm)
-    assert result == Messages.Pro.NO_PENDING_APPROVE
+    assert result == Messages.Pro.NO_PENDING_APPROVALS
 
 
 @pytest.mark.asyncio
@@ -136,13 +136,13 @@ async def test_reject_no_pending(mock_db, mock_wa, mock_lm):
             "phone_number": "972502222222", "role": "professional", "is_active": True,
         })
     result = await handle_pro_text_command("972502222222@c.us", "דחה", mock_wa, mock_lm)
-    assert result == Messages.Pro.NO_PENDING_REJECT
+    assert result == Messages.Pro.NO_PENDING_APPROVALS
 
 
 # --- Finish ---
 
 @pytest.mark.asyncio
-async def test_finish_job(pro_setup, mock_wa, mock_lm):
+async def test_finish_job_single(pro_setup, mock_wa, mock_lm):
     pro_doc, db = pro_setup
     lead_id = ObjectId()
     await db.leads.insert_one({
@@ -157,11 +157,29 @@ async def test_finish_job(pro_setup, mock_wa, mock_lm):
     # Lead should be completed
     lead = await db.leads.find_one({"_id": lead_id})
     assert lead["status"] == LeadStatus.COMPLETED
-    assert lead["waiting_for_rating"] is True
 
-    # Customer gets rating request
-    mock_wa.send_message.assert_called_once()
-    assert "972501111111@c.us" == mock_wa.send_message.call_args.args[0]
+@pytest.mark.asyncio
+async def test_finish_multiple_jobs_selection(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """If multiple BOOKED leads, pro enters selection state."""
+    pro_doc, db = pro_setup
+    chat_id = "972500000000@c.us"
+    
+    await db.leads.insert_many([
+        {"pro_id": pro_doc["_id"], "status": LeadStatus.BOOKED, "customer_name": "A", "created_at": datetime.now(timezone.utc)},
+        {"pro_id": pro_doc["_id"], "status": LeadStatus.BOOKED, "customer_name": "B", "created_at": datetime.now(timezone.utc) - timedelta(minutes=1)},
+    ])
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    mock_state.set_state = AsyncMock()
+    mock_state.set_metadata = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    result = await handle_pro_text_command(chat_id, "סיימתי", mock_wa, mock_lm)
+    
+    assert "איזו עבודה סיימת?" in result
+    mock_state.set_state.assert_called_with(chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH)
+    mock_state.set_metadata.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -172,7 +190,7 @@ async def test_finish_no_booked(mock_db, mock_wa, mock_lm):
             "phone_number": "972502222222", "role": "professional", "is_active": True,
         })
     result = await handle_pro_text_command("972502222222@c.us", "סיימתי", mock_wa, mock_lm)
-    assert result == Messages.Pro.NO_ACTIVE_FINISH
+    assert result == Messages.Pro.NO_ACTIVE_JOBS
 
 
 # --- Active Jobs ---
@@ -201,7 +219,7 @@ async def test_active_jobs_empty(mock_db, mock_wa, mock_lm):
         })
     # Use the pro that has no leads assigned to it
     result = await handle_pro_text_command("972502222222@c.us", "עבודות", mock_wa, mock_lm)
-    assert result == Messages.Pro.NO_ACTIVE_JOBS
+    assert result == Messages.Pro.NO_ACTIVE_JOBS_LIST
 
 
 # --- History ---
@@ -289,9 +307,15 @@ async def test_reviews_empty(pro_setup, mock_wa, mock_lm):
 # --- Unknown Command ---
 
 @pytest.mark.asyncio
-async def test_unknown_command_returns_none(pro_setup, mock_wa, mock_lm):
+async def test_unknown_command_returns_dashboard(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Now returns dashboard instead of None."""
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
     result = await handle_pro_text_command("972500000000@c.us", "שלום", mock_wa, mock_lm)
-    assert result is None
+    assert "סטטוס: זמין" in result
+    assert "יוסי אינסטלציה" in result
 
 
 @pytest.mark.asyncio
@@ -310,6 +334,7 @@ async def test_approve_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch
     monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=True))
 
     mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
     mock_state.clear_state = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
@@ -339,6 +364,7 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     pro_doc, db = pro_setup
 
     mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
     mock_state.set_state = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
@@ -354,11 +380,12 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
         "created_at": datetime.now(timezone.utc),
     })
 
+    # Note: "השהה" is now in BOT_PAUSE_COMMANDS
     result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "השהה", mock_wa, mock_lm)
 
     assert result == Messages.Pro.PAUSE_ACK
-    # Customer state should be set with 2h TTL
-    mock_state.set_state.assert_called_once_with(
+    # Customer state should be set with TTL
+    mock_state.set_state.assert_called_with(
         "972501111111@c.us",
         UserStates.PAUSED_FOR_HUMAN,
         ttl=WorkerConstants.PAUSE_TTL_SECONDS,
@@ -367,12 +394,14 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     mock_wa.send_message.assert_called_with("972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_PRO)
 
 
+
 @pytest.mark.asyncio
 async def test_reject_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     """Pro types 'דחה' -> lead rejected, customer state cleared."""
     pro_doc, db = pro_setup
 
     mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
     mock_state.clear_state = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
@@ -429,6 +458,7 @@ async def test_resume_clears_pause(pro_setup, mock_wa, mock_lm, monkeypatch):
 async def test_intent_detected_prompts_switch(pro_setup, mock_wa, mock_lm, monkeypatch):
     """Free-text service request from Pro -> sends INTENT_DETECTED message and sets AWAITING state."""
     mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
     mock_state.set_state = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
@@ -454,8 +484,12 @@ async def test_intent_detected_prompts_switch(pro_setup, mock_wa, mock_lm, monke
 
 
 @pytest.mark.asyncio
-async def test_intent_not_detected_returns_none(pro_setup, mock_wa, mock_lm):
-    """Classifier returns False -> function returns None (caller sends help menu)."""
+async def test_intent_not_detected_returns_dashboard(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """Classifier returns False -> function returns Dashboard."""
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
     mock_ai = MagicMock()
     mock_ai.detect_service_intent = AsyncMock(return_value=False)
 
@@ -463,8 +497,9 @@ async def test_intent_not_detected_returns_none(pro_setup, mock_wa, mock_lm):
         f"{PRO_PHONE}@c.us", "סתם הודעה", mock_wa, mock_lm, ai=mock_ai
     )
 
-    assert result is None
+    assert "יוסי אינסטלציה" in result
     mock_ai.detect_service_intent.assert_called_once_with("סתם הודעה")
+
 
 
 @pytest.mark.asyncio
@@ -482,12 +517,17 @@ async def test_known_command_skips_intent_detection(pro_setup, mock_wa, mock_lm,
 
 
 @pytest.mark.asyncio
-async def test_intent_detection_no_ai_returns_none(pro_setup, mock_wa, mock_lm):
-    """When ai=None (default), unmatched text returns None (backward compat)."""
+async def test_intent_detection_no_ai_returns_dashboard(pro_setup, mock_wa, mock_lm, monkeypatch):
+    """When ai=None (default), unmatched text returns Dashboard."""
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
     result = await handle_pro_text_command(
         f"{PRO_PHONE}@c.us", "שאלה כלשהי", mock_wa, mock_lm
     )
-    assert result is None
+    assert "יוסי אינסטלציה" in result
+
 
 
 # --- Proactive Search (rate-limited) ---

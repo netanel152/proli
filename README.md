@@ -13,10 +13,17 @@
 ### WhatsApp Bot (Customer-facing)
 
 - **Bulletproof Text-Based Menus** — All interactions use simple numeric (e.g., "1", "2") or keyword (e.g., "אשר", "דחה") replies. No reliance on fragile interactive buttons.
+- **Dynamic Pro Dashboard** — Professionals receive a real-time status overview (rating, active jobs, availability) when they access the menu or send unknown commands.
+- **Availability & Vacation Mode** — Pros can toggle their status ("זמין" / "הפסקה") to control lead flow directly from WhatsApp.
+- **Multi-Job Finish** — Pros with multiple active bookings are guided through a selection menu to close the correct job.
 - **Zero-Touch Intent Detection** — AI automatically detects if a registered professional needs a service for their own home and seamlessly toggles them into `CUSTOMER_MODE` without manual switching.
+- **Emergency Express Lane** — Urgent issues (leaks, electrical fires) bypass strict address requirements if a city is identified, speeding up help when it matters most.
+- **Loyalty Matchmaking** — Returning customers are automatically offered their previous successful professional before new matching begins.
+- **Self-Service Rescheduling** — Customers with confirmed bookings can reschedule by picking from the professional's live available slots directly in WhatsApp.
 - **Progressive Geo Routing** — Finds the best pro within 10 km, expanding to 20 km then 30 km if needed. Falls back to city-name matching for non-geo queries.
 - **Rating + Load Balancing** — Prioritizes highest-rated pros; skips any pro carrying 3 or more active leads.
 - **Pro Approval Flow** — Every deal requires explicit pro consent via text reply. Customers wait in a soft-hold state (`AWAITING_PRO_APPROVAL`) while the pro reviews and approves, pauses, or rejects.
+- **Transparent Approval** — Customers see the name of the professional being contacted, reducing uncertainty during the wait.
 - **Live Handoff (SOS)** — Customer can request a human representative. The bot pauses for a **15-Minute Dynamic Idle Timeout** that resets on every message.
 - **SLA Deflection** — If a Pro remains silent for 15 minutes during a handoff, the bot proactively "wakes up" to offer the customer a direct phone call escalation.
 - **Multimodal AI** — Analyzes photos, transcribes voice notes, and watches video clips. Mandatory media collection step before estimates.
@@ -141,7 +148,7 @@ pytest tests/test_matching_service.py
 pytest -m integration
 ```
 
-Expected result: **208 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+Expected result: **216 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 ---
 
@@ -174,7 +181,14 @@ Expected result: **208 passed, 6 skipped** (integration tests skipped when `MONG
 #### בוט וואטסאפ
 
 - **תפריטי טקסט חסינים** — כל האינטראקציות מבוססות על תשובות טקסט פשוטות (מספרים כמו "1", "2" או מילות מפתח כמו "אשר", "דחה"). ללא הסתמכות על כפתורי וואטסאפ שבירים.
+- **דשבורד איש מקצוע דינמי** — אנשי מקצוע מקבלים תמונת מצב בזמן אמת (דירוג, עבודות פעילות, סטטוס) בכל כניסה לתפריט או שליחת הודעה לא מוכרת.
+- **שליטה בזמינות (מצב חופשה)** — אפשרות למעבר בין מצב "זמין" ל"הפסקה" לשליטה בקבלת לידים חדשים ישירות מוואטסאפ.
+- **סיום עבודות מרובות** — ממשק בחירה מובנה לסיום עבודה ספציפית כאשר יש לאיש המקצוע מספר עבודות פעילות במקביל.
 - **זיהוי כוונות אוטומטי (Zero-Touch)** — ה-AI מזהה באופן אוטומטי אם איש מקצוע רשום זקוק לשירות עבור עצמו ומעביר אותו למצב לקוח (`CUSTOMER_MODE`) בצורה חלקה.
+- **נתיב מהיר לחירום** — תקלות דחופות (פיצוץ צנרת, קצר חשמלי) עוקפות את דרישת הכתובת המלאה ומאפשרות חיבור מהיר לאיש מקצוע ברגע שהעיר זוהתה.
+- **שימור לקוחות חכם** — לקוחות חוזרים מקבלים הצעה אוטומטית לחזור לאיש המקצוע שטיפל בהם בעבר בהצלחה.
+- **שינוי מועד עצמאי** — לקוחות יכולים לשנות מועד לביקור קיים על ידי בחירה מתוך רשימת תורים פנויים של איש המקצוע ישירות בוואטסאפ.
+- **שקיפות מלאה** — הלקוח רואה את שם איש המקצוע אליו הועברה הפנייה, מה שמפחית את חוסר הוודאות בזמן ההמתנה.
 - **ניתוב גיאוגרפי פרוגרסיבי** — מחפש איש מקצוע ברדיוס 10 ק"מ, ומרחיב ל-20 ו-30 ק"מ בהתאם לצורך.
 - **אישור איש מקצוע** — כל עסקה מחייבת אישור מפורש של איש המקצוע דרך תשובת טקסט (אשר/השהה/דחה).
 - **מעבר אנושי (SOS)** — לקוח יכול לבקש מענה אנושי. הבוט מושהה לחלון זמן דינמי של 15 דקות שמתאפס עם כל הודעה.

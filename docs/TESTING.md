@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 162 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 216 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 ---
 
@@ -41,7 +41,7 @@ pytest -m integration
 |------|---------------|
 | `test_workflow_orchestrator.py` | Central routing: reset commands, pro auto-detect, AWAITING_ADDRESS, AWAITING_PRO_APPROVAL, PAUSED_FOR_HUMAN, SOS→TTL, deal finalization, no-pro fallback |
 | `test_smart_dispatcher_logic.py` | Dispatcher AI: missing info → clarify, city+issue → handoff to pro, audio transcription flow |
-| `test_pro_flow.py` | Pro commands: approve, reject, finish, pause bot, resume, button handlers |
+| `test_pro_flow.py` | Pro commands: approve, reject, finish (multi-job selection), pause bot, resume, dashboard fallback, vacation mode |
 | `test_customer_flow.py` | Post-job: completion checks, rating prompts, review collection |
 | `test_sos_logic.py` | SOS alerts: admin notification, pro notification, BOT_PAUSED_BY_CUSTOMER message |
 
@@ -50,8 +50,8 @@ pytest -m integration
 | File | What it covers |
 |------|---------------|
 | `test_matching_service.py` | `$geoNear` pipeline, progressive radius (10→20→30 km), no-pro-at-max-radius returns None, text fallback, load balancing, excluded pro IDs, rating sort |
-| `test_geocoding_service.py` | Static dict lookup, Redis cache hits/misses, Google Maps API calls with bounding-box validation, fallback chain |
-
+| `test_geocoding_service.py` | Static dict lookup, Redis cache hits/misses, Google Maps API calls with bounding-box validation, fallback chain |   
+| `test_stale_nudger.py` | Periodic reminders for booked leads > 24h old |
 ### Infrastructure
 
 | File | What it covers |

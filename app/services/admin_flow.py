@@ -227,8 +227,9 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
         try:
             customer_phone = (lead.get("chat_id") or "").replace("@c.us", "")
             extra_info = f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
+            header = Messages.Pro.EMERGENCY_LEAD_HEADER if lead.get("is_emergency") else Messages.Pro.NEW_LEAD_HEADER
             msg = (
-                Messages.Pro.NEW_LEAD_HEADER + "\n\n"
+                header + "\n\n"
                 + Messages.Pro.NEW_LEAD_DETAILS.format(
                     customer_name=lead.get("customer_name") or "לקוח",
                     full_address=lead.get("full_address") or "לא ידוע",

@@ -29,6 +29,19 @@ class Messages:
         ADDRESS_SAVED = "✅ הכתובת עודכנה בהצלחה!"
         ADDRESS_INVALID = "❌ לא הצלחתי לזהות את הכתובת. אנא נסה לשלוח מיקום (Location Pin) או הקלד עיר ורחוב בצורה ברורה."
         REQUEST_CANCELLED = "👍 הבקשה בוטלה. אם תרצה/י לפתוח פנייה חדשה, פשוט שלח/י הודעה."
+        CANCELLED_ACTIVE_LEAD = "✅ ביטלתי את העבודה כבקשתך. עדכנתי את איש המקצוע."
+        RESCHEDULE_OFFER = (
+            "אין בעיה! בוא נתאם מועד חדש. הנה הזמנים הפנויים של איש המקצוע:\n"
+            "{slots}\n\n"
+            "השב עם מספר התור הרצוי, או 'ביטול' כדי להשאיר את המועד הנוכחי."
+        )
+        RESCHEDULE_SUCCESS = "✅ מעולה! המועד שונה בהצלחה ל-{new_time}. איש המקצוע עודכן."
+        RESCHEDULE_NO_SLOTS = (
+            "מצטערים, לא מצאתי תורים פנויים כרגע אצל איש המקצוע. "
+            "האם תרצה לבטל את העבודה או להמתין?"
+        )
+        RESCHEDULE_INVALID_CHOICE = "אנא בחר מספר תור חוקי מהרשימה."
+        RESCHEDULE_CANCELLED = "המועד נשאר כפי שהיה."
         HELP_INFO = (
             "אני המערכת החכמה של Proli! 🛠️\n"
             "אני כאן כדי לעזור לך למצוא את איש המקצוע המתאים ביותר. "
@@ -47,6 +60,8 @@ class Messages:
             "מעולה, העברתי את הפרטים והמדיה לאיש המקצוע לאישור. "
             "אעדכן אותך ממש בקרוב. 👍"
         )
+        AWAITING_APPROVAL_TRANSPARENT = "✅ העברתי את הפנייה שלך ל-{pro_name}. \nזמן המענה הממוצע שלו הוא כ-10 דקות.\nאעדכן אותך כאן ברגע שהוא יאשר את העבודה!"
+        YOU_ARE_WELCOME = "בכיף! אני כאן אם תצטרך עוד משהו. 🛠️"
         STILL_WAITING = "הפנייה שלך נמצאת עכשיו אצל איש המקצוע לאישור. נעדכן אותך ברגע שנקבל תשובה! 🙏"
         BOT_PAUSED_BY_PRO = (
             "איש המקצוע ביקש לדבר איתך ישירות. 📞\n"
@@ -55,16 +70,24 @@ class Messages:
         BOT_PAUSED_BY_CUSTOMER = (
             "✅ קיבלתי! מעביר אותך לנציג אנושי.\n"
         )
+        EMERGENCY_ACK = "🚨 *זיהיתי מצב חירום.* \nאני מדלג על שאר הפרטים ומזעיק עכשיו אנשי מקצוע פנויים באזור שלך! בינתיים, אנא שמור על בטיחות."
         SLA_DEFLECTION_MESSAGE = (
             "אני רואה שאיש המקצוע שלנו כרגע באמצע עבודה מורכבת ולא התפנה לענות.\n"
             "תרצה שאקבע לך שיחה טלפונית איתו להמשך היום?\n\n"
             "השב *כן* - לקביעת שיחה\n"
             "השב *לא* - להמשך המתנה בוואטסאפ"
         )
+        LOYALTY_OFFER = (
+            "איזה כיף שחזרת אלינו! 🏠\n"
+            "ראיתי שבעבר {pro_name} טיפל בך. תרצה שאבדוק קודם אם הוא פנוי לקחת את העבודה הזו?\n\n"
+            "השב *1* - כן, אשמח שזה יהיה הוא.\n"
+            "השב *2* - לא, חפש לי מישהו אחר."
+        )
     class Pro:
         # Messages sent to professionals
         REMINDER = """👋 היי, רק מוודא לגבי העבודה האחרונה. האם סיימת? 
 השב 'סיימתי' לאישור או 'עדיין עובד' לעדכון."""
+        STALE_LEAD_REMINDER = "היי {pro_name}! 👋\nשמתי לב שהעבודה שנקבעה אצל {customer_name} עדיין מסומנת כפתוחה.\nאם סיימת אותה, אנא השב *סיימתי* כדי לשחרר את המערכת ולקבל עבודות חדשות!"
         CUSTOMER_REPORTED_COMPLETION = "👍 הלקוח דיווח שהעבודה הסתיימה. הסטטוס עודכן."
         APPROVE_SUCCESS = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
         CALENDAR_UPDATE_SUCCESS = "\n📅 היומן עודכן בהצלחה!"
@@ -74,12 +97,19 @@ class Messages:
         NO_PENDING_REJECT = "לא מצאתי עבודה חדשה לדחייה."
         FINISH_SUCCESS = "✅ עודכן שהעבודה הסתיימה. תודה!"
         NO_ACTIVE_FINISH = "לא מצאתי עבודה פעילה לסיום."
+        STATUS_PAUSED = "☕ *הסטטוס שלך שונה ל'בהפסקה'.* לא תקבל הצעות עבודה חדשות עד שתכתוב 'זמין'."
+        STATUS_RESUMED = "🚀 *הסטטוס שלך שונה ל'זמין'.* חזרת לקבל הצעות עבודה!"
+        NO_PENDING_APPROVALS = "❌ אין לך כרגע עבודות שממתינות לאישור."
+        NO_ACTIVE_JOBS = "❌ אין לך עבודות פעילות כרגע שניתן לסיים."
+        SELECT_JOB_TO_FINISH = "איזו עבודה סיימת?\n{jobs_list}\nהשב עם מספר העבודה, או 'ביטול'."
         # Sent when pro is first matched — conversation still in progress, no action needed yet
         EARLY_LEAD_HEADER = "👀 *שיחה בתהליך*"
+        LOYALTY_LEAD_HEADER = "🌟 *לקוח חוזר שלך ביקש אותך!*"
         EARLY_LEAD_DETAILS = "🛠️ *תקלה:* {issue_type}\n📍 *עיר:* {city}"
         EARLY_LEAD_FOOTER = "\n\nהבוט אוסף פרטים מהלקוח (כתובת + תאריך ושעה).\nתקבל הודעה עם כל הפרטים לאישורך — *אין צורך לפעול עכשיו.*"
         # Sent when deal closes — ready for approval
         DEAL_CONFIRMED_HEADER = "✅ *הלקוח אישר! פרטי העבודה:*"
+        EMERGENCY_LEAD_HEADER = "🚨 *קריאת חירום דחופה!* 🚨"
         NEW_LEAD_HEADER = "📢 *הצעת עבודה חדשה*"
         NEW_LEAD_DETAILS = "👤 *לקוח:* {customer_name}\n📍 *כתובת:* {full_address}\nℹ️ *פרטים נוספים:* {extra_info}\n🛠️ *תקלה:* {issue_type}\n⏰ *תאריך ושעה מועדפים:* {appointment_time}"
         NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"
@@ -102,8 +132,19 @@ class Messages:
             "🚨 הלקוח מבקש מענה אנושי.\n"
             "כנס לשיחה בוואטסאפ. הבוט יחזור לפעולה אוטומטית בעוד שעתיים."
         )
+        CUSTOMER_CANCELLED = (
+            "⚠️ *עדכון חשוב:* הלקוח/ה {customer_name} ביטל/ה את העבודה "
+            "שנקבעה לכתובת {address}."
+        )
+        CUSTOMER_RESCHEDULED_SUCCESS = (
+            "📅 *עדכון יומן:* הלקוח/ה {customer_name} בכתובת {address} "
+            "שינה/תה את מועד העבודה.\n"
+            "מועד ישן: {old_time}\n"
+            "מועד חדש: {new_time}\n"
+            "היומן שלך עודכן אוטומטית."
+        )
         NAVIGATE_TO = "🚗 נווט לכתובת:"
-        NO_ACTIVE_JOBS = "אין לך עבודות פעילות כרגע. 👍"
+        NO_ACTIVE_JOBS_LIST = "אין לך עבודות פעילות כרגע. 👍"
         NO_HISTORY = "עדיין אין לך עבודות מושלמות."
         NO_REVIEWS = "עדיין אין לך ביקורות."
         ACTIVE_JOB_ROW = "  {num}. [{status}] {issue} — {address} | {time}"
@@ -117,22 +158,16 @@ class Messages:
             "💬 ביקורות: {reviews}\n"
             "📅 הצטרפת: {joined}"
         )
-        PRO_HELP_MENU = (
-            "👷 *תפריט איש המקצוע*\n"
-            "──────────────────────\n\n"
-            "📋 *ניהול עבודות:*\n"
-            "  *1*  •  אשר  — קבל עבודה חדשה\n"
-            "  *2*  •  דחה  — דחה עבודה\n"
-            "  *3*  •  סיימתי  — סיים עבודה פעילה\n\n"
-            "📊 *מידע ודוחות:*\n"
-            "  *4*  •  עבודות  — עבודות פעילות כרגע\n"
-            "  *5*  •  היסטוריה  — 10 עבודות אחרונות\n"
-            "  *6*  •  דוח  — סטטיסטיקות ודירוג\n"
-            "  *7*  •  ביקורות  — ביקורות לקוחות\n\n"
-            "──────────────────────\n"
-            "💡 *איך להשתמש:*\n"
-            "שלח מספר *1–7* או את שם הפקודה.\n"
-            "לתפריט זה: שלח *תפריט* או *עזרה* בכל עת."
+        PRO_DASHBOARD = (
+            "שלום {pro_name}! 🛠️\n"
+            "⭐ דירוג: {rating}\n"
+            "{status_emoji} סטטוס: {status_text}\n"
+            "💼 עבודות פעילות: {active_jobs}/{max_jobs}\n\n"
+            "*פקודות המערכת:*\n"
+            "✅ 'אשר' / ❌ 'דחה' - לעבודות שממתינות לתשובתך\n"
+            "🏁 'סיימתי' - לסיום עבודה פעילה\n"
+            "🔍 'חפש' - לאיתור לידים פנויים\n"
+            "☕ 'הפסקה' / 🚀 'זמין' - לשליטה בקבלת עבודות"
         )
         INTENT_DETECTED = (
             "🛠️ זיהיתי שאתה מדווח על תקלה. האם תרצה לעבור למצב לקוח כדי שאזמין לך איש מקצוע?\n\n"
@@ -293,16 +328,25 @@ class Messages:
         HELP_COMMANDS = ["תפריט", "עזרה", "help", "menu"]
         SOS_COMMANDS = ["נציג", "אנושי", "מנהל", "admin", "sos"]
         CANCEL_KEYWORDS = ["בטל", "בטלי", "עזוב", "עזבי", "לא משנה", "טעות", "cancel", "nevermind"]
+        RESCHEDULE_KEYWORDS = [
+            "לשנות שעה", "לשנות תאריך", "מועד אחר", "זמן אחר",
+            "תאריך אחר", "reschedule", "לדחות את", "מועד חדש",
+        ]
         REGISTER_COMMANDS = ["הרשמה", "להירשם", "register", "signup", "הצטרפות"]
-        RESUME_COMMANDS = ["המשך", "resume", "חזור"]
-        PAUSE_COMMANDS = ["השהה", "pause", "hold"]
+        RESUME_COMMANDS = ["זמין", "חזרתי", "פעיל"]
+        PAUSE_COMMANDS = ["חופשה", "הפסקה", "לא זמין"]
+        BOT_RESUME_COMMANDS = ["המשך", "resume", "חזור"]
+        BOT_PAUSE_COMMANDS = ["השהה", "pause", "hold"]
+        EMERGENCY_KEYWORDS = ["דחוף", "פיצוץ", "הצפה", "שריפה", "קצר", "סכנה", "מים בכל הבית", "חירום", "emergency", "urgent"]
         RATING_OPTIONS = ["1", "2", "3", "4", "5"]
+        THANKS_KEYWORDS = ["תודה", "תודה רבה", "אחלה", "מעולה תודה", "thanks", "thank you", "תודה אחי", "מעולה", "בסדר גמור"]
 
         # Completion check text tokens (used in handle_customer_completion_text)
         CUSTOMER_COMPLETION_INDICATOR = "כן, הסתיים"
 
     class Errors:
         AI_OVERLOAD = "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."
+        GENERIC_ERROR = "משהו השתבש. אנא נסה שוב."
 
     class AISystemPrompts:
         ANALYZE_IMAGE = "[System: Analyze the image to identify the issue.]"

@@ -46,12 +46,13 @@ Customer (WhatsApp)
 
 **ARQ task:** `process_message_task` → `workflow_service.process_incoming_message`
 
-**APScheduler jobs (7 total):**
+**APScheduler jobs (8 total):**
 
 | Job | Schedule | Function |
 |-----|----------|----------|
 | Daily agendas | 08:00 IL (daily) | Send each pro their booked jobs for the day |
 | Stale monitor | Every 30 min | Remind pros (4–6 h), check customers (6–24 h), flag >24 h for admin |
+| Stale Lead Nudger | Every 4 h | Remind pros of booked leads > 24h old to close them |
 | SOS Healer | Every 10 min | Reassign leads stuck > 60 min; escalate to `PENDING_ADMIN_REVIEW` if no replacement |
 | SLA Monitor | Every 5 min | Wake up silent `PAUSED_FOR_HUMAN` chats after 15m; offer phone call |
 | SOS Reporter | Every 4 h | Send batched summary of stuck leads to admin WhatsApp |
@@ -103,6 +104,11 @@ process_incoming_message(chat_id, text, media_url)
         │         send_sos_alert(admin + pro)
         │         notify customer BOT_PAUSED_BY_CUSTOMER
         │
+        ├─ Emergency Detection (Task 1)
+        │      └─ normalized_text contains EMERGENCY_KEYWORDS?
+        │         → set lead.is_emergency = True
+        │         → notify customer EMERGENCY_ACK (once per lead)
+        │
         ├─ State == PAUSED_FOR_HUMAN?
         │      └─ log message, reset TTL to 900 s, update lead.paused_at, return
         │
@@ -111,13 +117,17 @@ process_incoming_message(chat_id, text, media_url)
         │
         ├─ State == PRO_MODE?
         │      └─ handle_pro_text_command(pro, text)
-        │            ├─ "אשר" / "1" → lead BOOKED, clear customer state
+        │            ├─ "אשר" / "1" → lead BOOKED, clear customer state (strict scope check)
         │            ├─ "השהה" / "pause" → customer PAUSED_FOR_HUMAN (TTL 900 s)
-        │            ├─ "דחה" / "2" → lead REJECTED, clear customer state
+        │            ├─ "דחה" / "2" → lead REJECTED, clear customer state (strict scope check)
+        │            ├─ "סיימתי" / "3" → finish job (multi-job selection if needed)
         │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN
-        │            ├─ other commands (3-7) → finish/status/history/etc.
+        │            ├─ "הפסקה" / "חופשה" → set pro is_active=False
+        │            ├─ "זמין" / "חזרתי" → set pro is_active=True
+        │            ├─ other commands (4-7) → status/history/etc.
         │            ├─ "מצא" / "search" → claim oldest PENDING_ADMIN_REVIEW lead
         │            │     (rate-limited 10 min per pro via Redis rate_limit:pro_search:*)
+        │            └─ fallback → show Dynamic Dashboard (rating, active jobs, status)
         │            └─ detect_service_intent() → if True, prompt for CUSTOMER_MODE
         │
         ├─ State == AWAITING_INTENT_CONFIRMATION?
@@ -145,10 +155,12 @@ process_incoming_message(chat_id, text, media_url)
                │      is_deal=True → _finalize_deal()
                │
                └─ _finalize_deal():
+                      check for emergency (Lead.is_emergency == True)
+                      Emergency Express Lane: if emergency + city found, bypass strict address gate
                       create/update lead (status=NEW)
                       set customer state AWAITING_PRO_APPROVAL
                       send customer AWAITING_APPROVAL
-                      send pro text-based approval request (reply "אשר" or "1")
+                      send pro approval request (EMERGENCY_LEAD_HEADER if urgent)
 ```
 
 ---
@@ -203,7 +215,10 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `AWAITING_INTENT_CONFIRMATION` | Prompting Pro to switch to `CUSTOMER_MODE` |
 | `AWAITING_ADDRESS` | Waiting for customer to provide missing parts of 5-field address |
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold (1h TTL) |
+| `PRO_SELECTING_JOB_TO_FINISH` | Pro has multiple active jobs and is picking which one to finish |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
+| `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |
+| `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
 | `ADMIN_MODE_IDLE` / `ADMIN_SELECTING_LEAD` / `ADMIN_SELECTING_ACTION` / `ADMIN_SELECTING_PRO` | Admin routing wizard steps (`ניהול` keyword, 15m TTL) |
 
@@ -239,7 +254,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | Collection | Purpose |
 |-----------|---------|
 | `users` | Professionals and customers. Pros have `location` (2dsphere), `service_areas`, `price_list`, `social_proof`, `total_tokens_used` |
-| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `issue_type`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `appointment_time`, `media_url`, `reassignment_count` |
+| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `appointment_time`, `media_url`, `reassignment_count` |
 | `messages` | Chat history log per `chat_id` |
 | `slots` | Appointment slots per pro with atomic locking (`is_taken`) |
 | `settings` | Scheduler config toggles (`sos_healer_active`, etc.) |
