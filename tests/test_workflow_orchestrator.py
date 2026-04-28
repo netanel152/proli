@@ -77,6 +77,22 @@ async def test_help_command_sends_help_info_without_reset(wf_mocks):
 
 
 @pytest.mark.asyncio
+async def test_politeness_interceptor_thanks_keyword(wf_mocks):
+    """Customer sends 'תודה' -> receives YOU_ARE_WELCOME without touching state."""
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
+
+    await process_incoming_message("972501111111@c.us", "תודה")
+
+    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Customer.YOU_ARE_WELCOME)
+    # Ensure other logic was skipped
+    mock_ai.analyze_conversation.assert_not_called()
+    # State should NOT be cleared or changed (other than get_state)
+    mock_state.clear_state.assert_not_called()
+    mock_state.set_state.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_reset_skipped_for_pro_mode(wf_mocks):
     """Pro in PRO_MODE sends reset keyword -> goes to pro handler, not reset."""
     mock_wa, mock_state, _, _, _ = wf_mocks
@@ -524,3 +540,92 @@ async def test_pending_admin_review_ack_throttled(wf_mocks, mock_db):
         )
     # Message is still logged
     mock_lm.log_message.assert_any_call(chat_id, "user", "היי, יש עדכון?")
+
+
+# --- Emergency Logic Tests ---
+
+@pytest.mark.asyncio
+async def test_emergency_detection_and_ack(wf_mocks, mock_db):
+    """Message with emergency keyword creates lead with is_emergency=True and sends EMERGENCY_ACK."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501112222@c.us"
+
+    # Mock dispatcher to return city but no deal yet
+    mock_ai.analyze_conversation.return_value = AIResponse(
+        reply_to_user="זיהיתי מצב חירום",
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="פיצוץ", 
+            full_address=None, appointment_time=None,
+            street=None, street_number=None, floor=None, apartment=None, customer_name=None
+        ),
+        transcription=None, is_deal=False,
+    )
+
+    await process_incoming_message(chat_id, "יש לי פיצוץ מים בבית!")
+
+    # Verify EMERGENCY_ACK sent
+    mock_wa.send_message.assert_any_call(chat_id, Messages.Customer.EMERGENCY_ACK)
+    
+    # Verify lead created with is_emergency=True
+    mock_lm.create_lead_from_dict.assert_called()
+    call_args = mock_lm.create_lead_from_dict.call_args.kwargs
+    assert call_args["is_emergency"] is True
+
+
+@pytest.mark.asyncio
+async def test_emergency_bypass_address_gate(wf_mocks, monkeypatch, mock_db):
+    """Emergency lead bypasses address gate with just a city."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501113333@c.us"
+
+    # 1. Setup emergency lead in DB
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one({
+        "_id": lead_id,
+        "chat_id": chat_id,
+        "status": LeadStatus.CONTACTED,
+        "is_emergency": True,
+        "city": "תל אביב",
+    })
+
+    # 2. Mock AI to return a [DEAL] with ONLY city (incomplete address)
+    pro_id = ObjectId()
+    pro_doc = {
+        "_id": pro_id,
+        "business_name": "Emergency Pro",
+        "phone_number": "972500000001",
+        "is_active": True,
+    }
+    monkeypatch.setattr(app.services.workflow_service, "determine_best_pro", AsyncMock(return_value=pro_doc))
+
+    # Mock analyze_conversation: first call is dispatcher, second is pro-persona
+    dispatcher_resp = AIResponse(
+        reply_to_user="זיהיתי חירום",
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="הצפה",
+            full_address=None, appointment_time=None,
+            street=None, street_number=None, floor=None, apartment=None, customer_name=None
+        ),
+        transcription=None, is_deal=False,
+    )
+    pro_resp = AIResponse(
+        reply_to_user="[DEAL: בהקדם | תל אביב | הצפה]",
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="הצפה", street=None, street_number=None,
+            full_address="תל אביב", appointment_time="בהקדם",
+            floor=None, apartment=None, customer_name=None
+        ),
+        transcription=None, is_deal=True,
+    )
+    mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
+
+    await process_incoming_message(chat_id, "יש הצפה דחופה!")
+
+    # Verify address gate bypass: customer gets AWAITING_APPROVAL_TRANSPARENT, NOT the address reason
+    expected_msg = Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(pro_name="Emergency Pro")
+    mock_wa.send_message.assert_any_call(chat_id, expected_msg)
+    
+    # Pro should get EMERGENCY_LEAD_HEADER
+    pro_calls = [c for c in mock_wa.send_message.call_args_list if c.args[0] == "972500000001@c.us"]
+    found_emergency_header = any(Messages.Pro.EMERGENCY_LEAD_HEADER in str(call.args[1]) for call in pro_calls)
+    assert found_emergency_header is True

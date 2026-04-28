@@ -86,6 +86,11 @@ The **SOS Healer** (every 10 min) finds leads in `new`, `contacted`, or `pending
 4. If not found → sets lead to `PENDING_ADMIN_REVIEW`, sends customer a `PENDING_REVIEW` message, clears context
 5. If max reassignments (3) reached → closes the lead, notifies customer
 
+The **Stale Lead Nudger** (every 4 h) finds leads in `BOOKED` status older than 24 hours:
+1. Sends a reminder to the professional to close the job if finished.
+2. Helps prevent `MAX_PRO_LOAD` (3) issues by ensuring completed jobs are cleared from the system.
+3. Limits reminders to `MAX_PRO_REMINDERS` (3) per lead.
+
 The **SLA Monitor** (every 5 min) checks chats in the `PAUSED_FOR_HUMAN` state:
 1. If 15 minutes of silence pass, the bot sends `Messages.Customer.SLA_DEFLECTION_MESSAGE`.
 2. This proactive "wake up" offers the customer a telephone call escalation if the Pro is unresponsive.
@@ -109,10 +114,16 @@ When a deal is finalized by the AI:
 
 1. Customer enters `AWAITING_PRO_APPROVAL` state (1h TTL) — bot replies with "still waiting" if they message again
 2. Pro receives a text-based approval request (reply "אשר" or "1"):
-   - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared
-   - **Pause** (reply "השהה") → customer enters `PAUSED_FOR_HUMAN` (15m rolling), direct chat begins
+   - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared. System enforces strict scoping (pro must have a pending lead assigned).
+   - **Pause Bot** (reply "השהה") → customer enters `PAUSED_FOR_HUMAN` (15m rolling), direct chat begins
    - **Reject** (reply "2" or "דחה") → lead becomes `REJECTED`, system may re-route
-3. Pro can resume the bot with "המשך" → clears customer pause state
+3. Pro can manage availability:
+   - **Vacation Mode** (reply "חופשה" or "הפסקה") → sets `is_active: False`, pro stops receiving new leads.
+   - **Resume** (reply "זמין") → sets `is_active: True`.
+4. Finishing Jobs:
+   - **Finish** (reply "סיימתי" or "3") → if single job, marks as `COMPLETED`. If multiple, pro picks from a numbered list.
+5. **Dynamic Dashboard:** Any unknown command or "תפריט" sends the pro a real-time status summary (rating, active jobs, status).
+
 
 ---
 

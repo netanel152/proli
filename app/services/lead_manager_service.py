@@ -88,6 +88,7 @@ class LeadManager:
         apartment: str = None,
         media_url: str = None,
         customer_name: str = None,
+        is_emergency: bool = False,
     ) -> dict:
         """
         Creates a lead document directly from parameters.
@@ -110,6 +111,7 @@ class LeadManager:
                 "appointment_time": appointment_time,
                 "full_address": full_address,
                 "issue_type": issue_type,
+                "is_emergency": is_emergency,
                 "created_at": datetime.now(timezone.utc),
                 "history": [],
                 "pro_id": pro_id,

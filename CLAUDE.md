@@ -54,7 +54,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected: **208 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
+Expected: **216 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
 
 ### Linting / Formatting
 
@@ -65,7 +65,7 @@ flake8 .
 
 ## Architecture
 
-Proli is an AI-powered WhatsApp CRM for Israeli service professionals (plumbers, electricians, etc.). It runs as three cooperating processes:
+Proli is an AI-powered WhatsApp CRM for Israeli service professionals (plumbers, electricians, etc.). It runs as three cooperating processes:       
 
 ### Process 1: FastAPI Backend (`app/`)
 
@@ -73,7 +73,7 @@ Entry point for Green API webhooks. Its only job is to validate the incoming pay
 
 ### Process 2: ARQ Worker (`app/worker.py` + `app/core/arq_worker.py`)
 
-Picks up `process_message_task` jobs from Redis and calls `workflow_service.process_incoming_message`. Also hosts APScheduler for periodic jobs (SOS healer every 10 mins, stale monitor every 30 mins, daily agenda at 08:00 Israel time).
+Picks up `process_message_task` jobs from Redis and calls `workflow_service.process_incoming_message`. Also hosts APScheduler for periodic jobs (SOS healer every 10 mins, stale monitor every 30 mins, stale lead nudger every 4h, daily agenda at 08:00 Israel time).
 
 ### Process 3: Streamlit Admin Panel (`admin_panel/`)
 
@@ -83,9 +83,9 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 
 | Service | Responsibility |
 |---|---|
-| `workflow_service.py` | Central orchestrator — routes messages, manages FSM states, delegates to customer/pro/admin flows |
-| `customer_flow.py` | Customer completion checks, ratings, reviews |
-| `pro_flow.py` | Professional text commands (approve, reject, pause, resume, finish, **מצא** — rate-limited stuck-lead search) — text-only, no button handlers |
+| `workflow_service.py` | Central orchestrator — routes messages, manages FSM states, delegates to customer/pro/admin flows; handles emergency bypass and loyalty checks |
+| `customer_flow.py` | Customer completion checks, ratings, reviews, and rescheduling |
+| `pro_flow.py` | Professional text commands (approve, reject, pause, resume, finish, **מצא** — rate-limited stuck-lead search) — implements Dynamic Dashboard and availability controls |
 | `admin_flow.py` | Admin routing wizard (`ניהול` keyword): list PENDING_ADMIN_REVIEW leads → self-assign or pick a pro |
 | `media_handler.py` | Media type detection and download (images, audio, video) |
 | `ai_engine_service.py` | Gemini 2.5 Flash with adaptive fallback (Flash Lite → Flash → Flash 1.5); multimodal; 5-turn context window; non-blocking token accounting |
@@ -94,25 +94,25 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 | `context_manager_service.py` | Stores last 20 messages per `chat_id` in Redis |
 | `lead_manager_service.py` | CRUD for leads in MongoDB |
 | `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts |
-| `monitor_service.py` | Stale job detection, reassignment, and escalation to PENDING_ADMIN_REVIEW |
+| `monitor_service.py` | Stale job detection, reassignment, stale lead reminders (nudger), and escalation to PENDING_ADMIN_REVIEW |
 | `whatsapp_client_service.py` | Green API HTTP client — text-only messages (interactive buttons not supported by Green API) |
 | `cloudinary_client_service.py` | Media upload/retrieval |
 | `security_service.py` | Rate limiting via Redis |
 
 ### Data Layer
 
-- **MongoDB**: Primary store — `users` (pros + customers), `leads`, `slots`, `messages`, `settings`, `reviews`, `consent`, `audit_log`, `admins`
+- **MongoDB**: Primary store — `users` (pros + customers), `leads`, `slots`, `messages`, `settings`, `reviews`, `consent`, `audit_log`, `admins`  
 - **Redis**: ARQ task queue + context cache (chat history) + state machine (FSM)
 
 ### Key Constants (`app/core/constants.py`)
 
 - `LeadStatus`: `contacted → new → booked → completed/rejected/closed/cancelled/pending_admin_review`
-- `UserStates`: `IDLE`, `PRO_MODE`, `CUSTOMER_MODE`, `AWAITING_INTENT_CONFIRMATION`, `AWAITING_ADDRESS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `ONBOARDING_*`, `ADMIN_MODE_IDLE`, `ADMIN_SELECTING_LEAD`, `ADMIN_SELECTING_ACTION`, `ADMIN_SELECTING_PRO`
+- `UserStates`: `IDLE`, `PRO_MODE`, `CUSTOMER_MODE`, `AWAITING_INTENT_CONFIRMATION`, `AWAITING_ADDRESS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `AWAITING_RESCHEDULE_TIME`, `AWAITING_LOYALTY_CONFIRMATION`, `PRO_SELECTING_JOB_TO_FINISH`, `ONBOARDING_*`, `ADMIN_MODE_IDLE`, `ADMIN_SELECTING_LEAD`, `ADMIN_SELECTING_ACTION`, `ADMIN_SELECTING_PRO`
 - `WorkerConstants.MAX_PRO_LOAD = 3`: max concurrent leads per professional
 - `WorkerConstants.SOS_TIMEOUT_MINUTES = 60`: reassignment trigger threshold
+- `WorkerConstants.STALE_BOOKED_LEAD_HOURS = 24`: threshold for stale job reminders
 - `WorkerConstants.GEO_RADIUS_STEPS = [10000, 20000, 30000]`: progressive geo search radii
-- `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state
-- `WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS = 600`: 10-minute per-pro cool-down on the `מצא` proactive stuck-lead search
+- `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state- `WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS = 600`: 10-minute per-pro cool-down on the `מצא` proactive stuck-lead search
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions

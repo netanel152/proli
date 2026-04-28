@@ -7,7 +7,8 @@ from app.services.monitor_service import (
     check_and_reassign_stale_leads, 
     send_periodic_admin_report, 
     auto_reject_unassigned_leads,
-    check_sla_deflection
+    check_sla_deflection,
+    remind_stale_booked_leads
 )
 from datetime import datetime, timedelta
 from app.core.constants import LeadStatus
@@ -168,6 +169,12 @@ async def run_sla_monitor():
     await check_sla_deflection()
 
 
+@with_scheduler_lock("run_stale_lead_nudger", ttl=3000)
+async def run_stale_lead_nudger():
+    """Wrapper for Stale Lead Nudger"""
+    await remind_stale_booked_leads()
+
+
 @with_scheduler_lock("daily_reminders_job", ttl=82000)
 async def daily_reminders_job():
     """
@@ -274,6 +281,14 @@ def start_scheduler():
         run_sla_monitor,
         IntervalTrigger(minutes=5),
         id="sla_deflection_monitor",
+        replace_existing=True
+    )
+
+    # Job 9: Stale Lead Nudger — remind pros to close old active jobs (every 4 hours)
+    scheduler.add_job(
+        run_stale_lead_nudger,
+        IntervalTrigger(hours=4),
+        id="stale_lead_nudger",
         replace_existing=True
     )
 

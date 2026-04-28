@@ -127,7 +127,8 @@ async def check_and_reassign_stale_leads():
                     if not pro_phone.endswith("@c.us"):
                         pro_phone = f"{pro_phone}@c.us"
 
-                    msg_to_pro = Messages.Pro.NEW_LEAD_HEADER + "\n\n"
+                    header = Messages.Pro.EMERGENCY_LEAD_HEADER if lead.get("is_emergency") else Messages.Pro.NEW_LEAD_HEADER
+                    msg_to_pro = header + "\n\n"
                     msg_to_pro += Messages.Pro.NEW_LEAD_DETAILS.format(
                         customer_name=lead.get("customer_name") or "לקוח",
                         full_address=lead.get('full_address') or 'Unknown',
@@ -340,3 +341,84 @@ async def check_sla_deflection():
 
     except Exception as e:
         logger.error(f"❌ [SLA Monitor] Error: {e}")
+
+async def remind_stale_booked_leads():
+    """
+    STALE LEAD NUDGER:
+    Finds leads in BOOKED status that are older than STALE_BOOKED_LEAD_HOURS.
+    Sends a reminder to the pro to close the job, preventing MAX_PRO_LOAD issues.
+    """
+    logger.info("⏰ [Stale Lead Nudger] Checking for stale booked leads...")
+    
+    threshold_time = datetime.now(timezone.utc) - timedelta(hours=WorkerConstants.STALE_BOOKED_LEAD_HOURS)
+    
+    # Query for BOOKED leads older than 24 hours with reminders < max
+    # We use $and to ensure both the time threshold and the reminder count are checked
+    query = {
+        "status": LeadStatus.BOOKED,
+        "$and": [
+            {
+                "$or": [
+                    {"appointment_time": {"$lt": threshold_time}},
+                    {"updated_at": {"$lt": threshold_time}}
+                ]
+            },
+            {
+                "$or": [
+                    {"reminders_sent": {"$exists": False}},
+                    {"reminders_sent": {"$lt": WorkerConstants.MAX_PRO_REMINDERS}}
+                ]
+            }
+        ]
+    }
+
+    try:
+        cursor = leads_collection.find(query)
+        stale_leads = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+
+        if not stale_leads:
+            logger.info("✅ [Stale Lead Nudger] No stale booked leads found.")
+            return
+
+        logger.warning(f"⏰ [Stale Lead Nudger] Found {len(stale_leads)} stale leads. Sending reminders...")
+
+        for lead in stale_leads:
+            lead_id = lead["_id"]
+            pro_id = lead.get("pro_id")
+            customer_name = lead.get("customer_name") or "לקוח"
+            
+            if not pro_id:
+                continue
+
+            pro = await users_collection.find_one({"_id": pro_id})
+            if not pro or not pro.get("phone_number"):
+                continue
+
+            pro_name = pro.get("business_name") or pro.get("name") or "איש מקצוע"
+            pro_phone = pro["phone_number"]
+            if not pro_phone.endswith("@c.us"):
+                pro_phone = f"{pro_phone}@c.us"
+
+            # Send Message
+            message = Messages.Pro.STALE_LEAD_REMINDER.format(
+                pro_name=pro_name,
+                customer_name=customer_name
+            )
+            
+            try:
+                await whatsapp.send_message(pro_phone, message)
+                
+                # Update lead
+                await leads_collection.update_one(
+                    {"_id": lead_id},
+                    {
+                        "$inc": {"reminders_sent": 1},
+                        "$set": {"last_reminder_at": datetime.now(timezone.utc)}
+                    }
+                )
+                logger.info(f"✅ [Stale Lead Nudger] Sent reminder to pro {pro_id} for lead {lead_id}")
+            except Exception as e:
+                logger.error(f"❌ [Stale Lead Nudger] Failed to send reminder to {pro_phone}: {e}")
+
+    except Exception as e:
+        logger.error(f"❌ [Stale Lead Nudger] Error: {e}")

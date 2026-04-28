@@ -12,7 +12,7 @@ def mock_lead_manager_db():
         
         # Setup AsyncMocks for common methods
         mock_leads.insert_one = AsyncMock()
-        mock_leads.find_one = AsyncMock()
+        mock_leads.find_one = AsyncMock(return_value=None)
         mock_leads.update_one = AsyncMock()
         
         mock_messages.insert_one = AsyncMock()
@@ -154,3 +154,20 @@ async def test_log_message(mock_lead_manager_db):
     
     # Verify Cache Update
     mock_context_manager.update_history.assert_called_once_with("123", "user", "Test message")
+
+@pytest.mark.asyncio
+async def test_create_lead_with_emergency(mock_lead_manager_db):
+    mock_leads, _, _ = mock_lead_manager_db
+    lead_manager = LeadManager()
+    
+    mock_leads.insert_one.return_value.inserted_id = ObjectId("507f1f77bcf86cd799439011")
+    
+    result = await lead_manager.create_lead_from_dict(
+        chat_id="123@c.us",
+        issue_type="Fire",
+        is_emergency=True
+    )
+    
+    assert result["is_emergency"] is True
+    call_args = mock_leads.insert_one.call_args[0][0]
+    assert call_args["is_emergency"] is True

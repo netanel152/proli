@@ -1,10 +1,14 @@
-from app.core.database import users_collection, leads_collection, reviews_collection
+from app.core.database import users_collection, leads_collection, reviews_collection, slots_collection
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, Defaults
 from app.services.context_manager_service import ContextManager
+from app.services.state_manager_service import StateManager
 from bson import ObjectId
 from datetime import datetime, timezone
+import pytz
+
+_IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 
 async def send_customer_completion_check(lead_id: str, whatsapp, triggered_by: str = "auto"):
@@ -167,3 +171,80 @@ async def handle_customer_review_comment(chat_id: str, text: str):
 
     logger.success(f"📝 Review comment saved for lead {lead['_id']}")
     return Messages.Customer.REVIEW_SAVED
+
+
+async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) -> None:
+    normalized = user_text.strip().lower()
+
+    if any(kw in normalized for kw in Messages.Keywords.CANCEL_KEYWORDS):
+        await StateManager.clear_state(chat_id)
+        await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_CANCELLED)
+        return
+
+    meta = await StateManager.get_metadata(chat_id)
+    slots_context = meta.get("reschedule_slots_context", {})
+    pick = user_text.strip()
+
+    if pick not in slots_context:
+        await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_INVALID_CHOICE)
+        return  # state preserved — let customer retry
+
+    slot_id = ObjectId(slots_context[pick])
+
+    lead = await leads_collection.find_one(
+        {"chat_id": chat_id, "status": LeadStatus.BOOKED},
+        sort=[("created_at", -1)],
+    )
+    if not lead:
+        await StateManager.clear_state(chat_id)
+        await whatsapp.send_message(chat_id, Messages.Errors.GENERIC_ERROR)
+        return
+
+    # Atomically claim the chosen slot (guards against race conditions)
+    chosen_slot = await slots_collection.find_one_and_update(
+        {"_id": slot_id, "is_taken": False},
+        {"$set": {"is_taken": True}},
+    )
+    if not chosen_slot:
+        await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_INVALID_CHOICE)
+        return  # state preserved — let customer retry
+
+    # Free previously booked slot if we have a reference to it
+    old_slot_id = lead.get("booked_slot_id")
+    if old_slot_id:
+        await slots_collection.update_one(
+            {"_id": old_slot_id, "is_taken": True},
+            {"$set": {"is_taken": False}},
+        )
+
+    old_time = lead.get("appointment_time", "לא ידוע")
+    new_time = chosen_slot["start_time"].astimezone(_IL_TZ).strftime("%d/%m/%Y %H:%M")
+
+    await leads_collection.update_one(
+        {"_id": lead["_id"]},
+        {"$set": {
+            "appointment_time": new_time,
+            "booked_slot_id": slot_id,
+            "rescheduled_at": datetime.now(timezone.utc),
+            "rescheduled_count": lead.get("rescheduled_count", 0) + 1,
+        }},
+    )
+
+    await StateManager.clear_state(chat_id)
+    await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_SUCCESS.format(new_time=new_time))
+
+    pro = await users_collection.find_one({"_id": lead["pro_id"]})
+    if pro and pro.get("phone_number"):
+        pro_phone = pro["phone_number"]
+        if not pro_phone.endswith("@c.us"):
+            pro_phone = f"{pro_phone}@c.us"
+        await whatsapp.send_message(
+            pro_phone,
+            Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS.format(
+                customer_name=lead.get("customer_name") or "הלקוח",
+                address=lead.get("full_address") or "לא ידועה",
+                old_time=old_time,
+                new_time=new_time,
+            ),
+        )
+    logger.success(f"📅 Lead {lead['_id']} rescheduled to {new_time} by customer {chat_id}")

@@ -1,5 +1,5 @@
 import math
-
+from bson import ObjectId
 from app.core.database import users_collection, leads_collection, reviews_collection
 from app.core.logger import logger
 from app.core.messages import Messages
@@ -44,13 +44,31 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
     if not pro:
         return None
 
+    current_state = await StateManager.get_state(chat_id)
     text = _normalize(text)
 
+    # State: PRO_SELECTING_JOB_TO_FINISH
+    if current_state == UserStates.PRO_SELECTING_JOB_TO_FINISH:
+        return await _handle_job_selection(chat_id, text, pro, whatsapp)
+
+    # Availability Toggles (Vacation Mode)
+    if text in Messages.Keywords.PAUSE_COMMANDS:
+        await users_collection.update_one({"_id": pro["_id"]}, {"$set": {"is_active": False}})
+        return Messages.Pro.STATUS_PAUSED
+
     if text in Messages.Keywords.RESUME_COMMANDS:
+        await users_collection.update_one({"_id": pro["_id"]}, {"$set": {"is_active": True}})
+        return Messages.Pro.STATUS_RESUMED
+
+    # Bot Pause/Resume
+    if text in Messages.Keywords.BOT_PAUSE_COMMANDS:
+        return await _handle_pause_bot(pro, whatsapp)
+
+    if text in Messages.Keywords.BOT_RESUME_COMMANDS:
         return await _handle_resume(pro)
 
-    if text in Messages.Keywords.PAUSE_COMMANDS:
-        return await _handle_pause_bot(pro, whatsapp)
+    if text in Messages.Keywords.HELP_COMMANDS:
+        return await _show_pro_dashboard(pro)
 
     if text in Messages.Keywords.APPROVE_COMMANDS:
         return await _handle_approve(pro, lead_manager, whatsapp)
@@ -59,7 +77,7 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
         return await _handle_reject(pro, lead_manager)
 
     if text in Messages.Keywords.FINISH_COMMANDS:
-        return await _handle_finish(pro, whatsapp)
+        return await _handle_finish(pro, whatsapp, chat_id)
 
     if text in Messages.Keywords.ACTIVE_JOBS_COMMANDS:
         return await _handle_active_jobs(pro)
@@ -90,8 +108,7 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
             logger.info(f"Pro {chat_id} received intent-switch prompt for: {text[:60]}")
             return ""  # sentinel: handled internally, caller must not send PRO_HELP_MENU
 
-    # Task 2: Pro-side Dynamic Timeout Reset
-    # If the Pro sends a message and there's a lead in PAUSED_FOR_HUMAN, reset the TTL.
+    # Dynamic Timeout Reset
     latest_lead = await leads_collection.find_one(
         {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
         sort=[("created_at", -1)]
@@ -108,10 +125,52 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
             )
             logger.info(f"Pro {chat_id} sent a message; reset PAUSED_FOR_HUMAN TTL and updated paused_at for customer {customer_chat_id}")
 
-    return None
+    # Fallback: show dashboard if no match
+    return await _show_pro_dashboard(pro)
 
 
 # --- Handlers ---
+
+async def _show_pro_dashboard(pro):
+    pro_name = pro.get('business_name', 'איש מקצוע')
+    rating = pro.get('candidate_score', 5.0)
+    is_active = pro.get('is_active', True)
+    status_emoji = "🟢" if is_active else "🔴"
+    status_text = "זמין" if is_active else "בהפסקה"
+
+    active_count = await leads_collection.count_documents({"pro_id": pro["_id"], "status": LeadStatus.BOOKED})
+
+    return Messages.Pro.PRO_DASHBOARD.format(
+        pro_name=pro_name,
+        rating=rating,
+        status_emoji=status_emoji,
+        status_text=status_text,
+        active_jobs=active_count,
+        max_jobs=WorkerConstants.MAX_PRO_LOAD
+    )
+
+
+async def _handle_job_selection(chat_id, text, pro, whatsapp):
+    if text in Messages.Keywords.CANCEL_KEYWORDS or text == "ביטול":
+        await StateManager.clear_state(chat_id)
+        return "הפעולה בוטלה."
+
+    meta = await StateManager.get_metadata(chat_id)
+    mapping = meta.get("finishing_jobs_context", {})
+
+    if text not in mapping:
+        return "בחירה לא תקינה. אנא בחר מספר מהרשימה או כתוב 'ביטול'."
+
+    lead_id = mapping[text]
+    lead = await leads_collection.find_one({"_id": ObjectId(lead_id), "pro_id": pro["_id"]})
+    if not lead:
+        await StateManager.clear_state(chat_id)
+        return Messages.Errors.GENERIC_ERROR
+
+    await _execute_finish(lead, pro, whatsapp)
+    await StateManager.clear_state(chat_id)
+    return Messages.Pro.FINISH_SUCCESS
+
 
 _RESPONSE_WINDOW_SECONDS = 60 * 5  # "just responded" = within 5 minutes
 
@@ -140,15 +199,25 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         sort=[("created_at", -1)]
     )
     if not lead:
-        # Fat-finger guard: if the pro JUST approved/rejected this lead and
-        # the second button-press is still in-flight, send a clear "already
-        # responded" message instead of the generic "no pending" copy.
+        # Fat-finger guard
         if await _recently_responded_lead(pro["_id"]):
             return Messages.Pro.ALREADY_RESPONDED
-        return Messages.Pro.NO_PENDING_APPROVE
+        return Messages.Pro.NO_PENDING_APPROVALS
 
     await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.BOOKED, pro["_id"])
     booking_success = await book_slot_for_lead(pro["_id"], lead["created_at"])
+
+    if booking_success:
+        from app.core.database import slots_collection
+        booked_slot = await slots_collection.find_one(
+            {"pro_id": pro["_id"], "is_taken": True},
+            sort=[("start_time", 1)],
+        )
+        if booked_slot:
+            await leads_collection.update_one(
+                {"_id": lead["_id"]},
+                {"$set": {"booked_slot_id": booked_slot["_id"]}},
+            )
 
     response_text = Messages.Pro.APPROVE_SUCCESS
     if booking_success:
@@ -207,7 +276,7 @@ async def _handle_reject(pro, lead_manager):
     if not lead:
         if await _recently_responded_lead(pro["_id"]):
             return Messages.Pro.ALREADY_RESPONDED
-        return Messages.Pro.NO_PENDING_REJECT
+        return Messages.Pro.NO_PENDING_APPROVALS
 
     await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.REJECTED)
     # Clear cached context and customer state so next conversation starts fresh
@@ -224,7 +293,7 @@ async def _handle_pause_bot(pro, whatsapp):
         sort=[("created_at", -1)]
     )
     if not lead:
-        return Messages.Pro.NO_PENDING_APPROVE
+        return Messages.Pro.NO_PENDING_APPROVALS
 
     customer_chat_id = lead["chat_id"]
     await StateManager.set_state(customer_chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
@@ -263,14 +332,34 @@ async def _handle_resume(pro):
     return "הבוט כבר פעיל."
 
 
-async def _handle_finish(pro, whatsapp):
-    lead = await leads_collection.find_one(
-        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED},
-        sort=[("created_at", -1)]
-    )
-    if not lead:
-        return Messages.Pro.NO_ACTIVE_FINISH
+async def _handle_finish(pro, whatsapp, chat_id):
+    cursor = leads_collection.find({"pro_id": pro["_id"], "status": LeadStatus.BOOKED}).sort("created_at", -1)
+    leads = await cursor.to_list(length=10)
 
+    if not leads:
+        return Messages.Pro.NO_ACTIVE_JOBS
+
+    if len(leads) == 1:
+        await _execute_finish(leads[0], pro, whatsapp)
+        return Messages.Pro.FINISH_SUCCESS
+
+    # Multiple leads: Ask to select
+    lines = []
+    mapping = {}
+    for i, lead in enumerate(leads, 1):
+        name = lead.get("customer_name", "לקוח")
+        city = lead.get("city") or "לא ידוע"
+        issue = lead.get("issue_type") or "תקלה"
+        lines.append(f"{i}. {name} - {city} ({issue})")
+        mapping[str(i)] = str(lead["_id"])
+
+    await StateManager.set_state(chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH)
+    await StateManager.set_metadata(chat_id, {"finishing_jobs_context": mapping})
+
+    return Messages.Pro.SELECT_JOB_TO_FINISH.format(jobs_list="\n".join(lines))
+
+
+async def _execute_finish(lead, pro, whatsapp):
     await leads_collection.update_one(
         {"_id": lead["_id"]},
         {"$set": {
@@ -281,14 +370,14 @@ async def _handle_finish(pro, whatsapp):
         }}
     )
 
-    # Clear cached context — job is done, next conversation starts fresh
+    # Clear cached context
     if lead.get("chat_id"):
         await ContextManager.clear_context(lead["chat_id"])
 
     pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME)
     feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
     await whatsapp.send_message(lead["chat_id"], feedback_msg)
-    return Messages.Pro.FINISH_SUCCESS
+    logger.info(f"Lead {lead['_id']} marked as COMPLETED by pro {pro['_id']}")
 
 
 async def _handle_active_jobs(pro):
@@ -299,7 +388,7 @@ async def _handle_active_jobs(pro):
     leads = await cursor.to_list(length=20)
 
     if not leads:
-        return Messages.Pro.NO_ACTIVE_JOBS
+        return Messages.Pro.NO_ACTIVE_JOBS_LIST
 
     lines = ["🔄 *עבודות פעילות:*\n"]
     for i, lead in enumerate(leads, 1):
