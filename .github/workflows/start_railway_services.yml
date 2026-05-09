@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       target_env:
-        description: 'Select environment to start'
+        description: 'Select environment to start.'
         required: true
         default: 'staging'
         type: choice
