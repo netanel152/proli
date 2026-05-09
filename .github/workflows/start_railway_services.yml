@@ -25,7 +25,6 @@ jobs:
           RAILWAY_TOKEN: ${{ inputs.target_env == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
         run: |
           echo "Starting services in ${{ inputs.target_env }}..."
-          railway redeploy --service redis -y
           railway up --service api -d
           railway up --service worker -d
           railway up --service admin -d
