@@ -1,0 +1,35 @@
+name: 🚀 Start Railway Proli Services
+on: 
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: 'בחר סביבה להפעלה'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  start-railway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Railway CLI
+        run: bash <(curl -fsSL cli.new)
+      - name: Deploy Services to ${{ inputs.target_env }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          TARGET_ENV: ${{ inputs.target_env }}
+        run: |
+          if [ "$TARGET_ENV" = "production" ]; then
+            ENV_ID="a8c1fc4c-9434-48c4-9461-afce87651d21"
+          else
+            ENV_ID="93e8ad7e-3582-4ab7-8f71-1775bf0bbddc"
+          fi
+          
+          echo "Starting services in $TARGET_ENV ($ENV_ID)..."
+          railway up --service api -e $ENV_ID -d
+          railway up --service worker -e $ENV_ID -d
+          railway up --service admin -e $ENV_ID -d
