@@ -22,8 +22,8 @@ jobs:
           RAILWAY_TOKEN: ${{ inputs.target_env == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
         run: |
           echo "Stopping services in ${{ inputs.target_env }}..."
-          railway down --service api -y
-          railway down --service worker -y
-          railway down --service admin -y
-          railway down --service redis -y
+          railway down --service api -y || echo "api: no active deployment"
+          railway down --service worker -y || echo "worker: no active deployment"
+          railway down --service admin -y || echo "admin: no active deployment"
+          railway down --service redis -y || echo "redis: no active deployment"
           echo "All services stopped."
