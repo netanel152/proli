@@ -25,3 +25,5 @@ jobs:
           railway down --service api -y
           railway down --service worker -y
           railway down --service admin -y
+          railway down --service redis -y
+          echo "All services stopped."
