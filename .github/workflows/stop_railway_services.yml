@@ -25,5 +25,4 @@ jobs:
           railway down --service api -y || echo "api: no active deployment"
           railway down --service worker -y || echo "worker: no active deployment"
           railway down --service admin -y || echo "admin: no active deployment"
-          railway down --service redis -y || echo "redis: no active deployment"
-          echo "All services stopped."
+          echo "All services stopped (redis left running)."
