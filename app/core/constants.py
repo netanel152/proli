@@ -37,6 +37,7 @@ class UserStates(str, Enum):
     ADMIN_SELECTING_PRO = "admin_selecting_pro"
     # Pro flow
     PRO_SELECTING_JOB_TO_FINISH = "pro_selecting_job_to_finish"
+    PRO_SELECTING_JOB_TO_CANCEL = "pro_selecting_job_to_cancel"
     # Loyalty flow
     AWAITING_LOYALTY_CONFIRMATION = "awaiting_loyalty_confirmation"
 
