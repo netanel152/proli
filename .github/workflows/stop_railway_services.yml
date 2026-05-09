@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       target_env:
-        description: 'Select environment to stop'
+        description: 'Select environment to stop.'
         required: true
         default: 'staging'
         type: choice
