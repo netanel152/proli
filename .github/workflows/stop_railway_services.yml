@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Install Railway CLI
-        run: bash <(curl -fsSL cli.new)
+        run: curl -fsSL cli.new | sudo sh
       - name: Stop Services in ${{ inputs.target_env }}
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
