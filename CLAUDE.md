@@ -54,7 +54,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected: **216 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
+Expected: **238 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
 
 ### Linting / Formatting
 
@@ -69,7 +69,7 @@ Proli is an AI-powered WhatsApp CRM for Israeli service professionals (plumbers,
 
 ### Process 1: FastAPI Backend (`app/`)
 
-Entry point for Green API webhooks. Its only job is to validate the incoming payload, enqueue a task to Redis via ARQ, and immediately return `200 OK`. All heavy lifting is deferred to the Worker. Routes: `POST /webhook` and `GET /health`.
+Entry point for Green API webhooks. Its only job is to validate the incoming payload, enqueue a task to Redis via ARQ, and immediately return `200 OK`. All heavy lifting is deferred to the Worker. Routes: `POST /webhook`, `GET /health`, and `GET /health/leads`.
 
 ### Process 2: ARQ Worker (`app/worker.py` + `app/core/arq_worker.py`)
 
@@ -85,7 +85,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 |---|---|
 | `workflow_service.py` | Central orchestrator — routes messages, manages FSM states, delegates to customer/pro/admin flows; handles emergency bypass and loyalty checks |
 | `customer_flow.py` | Customer completion checks, ratings, reviews, and rescheduling |
-| `pro_flow.py` | Professional text commands (approve, reject, pause, resume, finish, **מצא** — rate-limited stuck-lead search) — implements Dynamic Dashboard and availability controls |
+| `pro_flow.py` | Professional text commands (approve, reject, pause, resume, finish, cancel booked job, details, summary, **מצא** — rate-limited stuck-lead search) — implements Dynamic Dashboard and availability controls |
 | `admin_flow.py` | Admin routing wizard (`ניהול` keyword): list PENDING_ADMIN_REVIEW leads → self-assign or pick a pro |
 | `media_handler.py` | Media type detection and download (images, audio, video) |
 | `ai_engine_service.py` | Gemini 2.5 Flash with adaptive fallback (Flash Lite → Flash → Flash 1.5); multimodal; 5-turn context window; non-blocking token accounting |
@@ -107,12 +107,13 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 ### Key Constants (`app/core/constants.py`)
 
 - `LeadStatus`: `contacted → new → booked → completed/rejected/closed/cancelled/pending_admin_review`
-- `UserStates`: `IDLE`, `PRO_MODE`, `CUSTOMER_MODE`, `AWAITING_INTENT_CONFIRMATION`, `AWAITING_ADDRESS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `AWAITING_RESCHEDULE_TIME`, `AWAITING_LOYALTY_CONFIRMATION`, `PRO_SELECTING_JOB_TO_FINISH`, `ONBOARDING_*`, `ADMIN_MODE_IDLE`, `ADMIN_SELECTING_LEAD`, `ADMIN_SELECTING_ACTION`, `ADMIN_SELECTING_PRO`
+- `UserStates`: `IDLE`, `PRO_MODE`, `CUSTOMER_MODE`, `AWAITING_INTENT_CONFIRMATION`, `CUSTOMER_FLOW`, `AWAITING_ADDRESS`, `AWAITING_MEDIA`, `AWAITING_TIME`, `AWAITING_CONSENT`, `SOS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `AWAITING_RESCHEDULE_TIME`, `AWAITING_LOYALTY_CONFIRMATION`, `PRO_SELECTING_JOB_TO_FINISH`, `PRO_SELECTING_JOB_TO_CANCEL`, `ONBOARDING_*`, `ADMIN_MODE_IDLE`, `ADMIN_SELECTING_LEAD`, `ADMIN_SELECTING_ACTION`, `ADMIN_SELECTING_PRO`
 - `WorkerConstants.MAX_PRO_LOAD = 3`: max concurrent leads per professional
 - `WorkerConstants.SOS_TIMEOUT_MINUTES = 60`: reassignment trigger threshold
 - `WorkerConstants.STALE_BOOKED_LEAD_HOURS = 24`: threshold for stale job reminders
 - `WorkerConstants.GEO_RADIUS_STEPS = [10000, 20000, 30000]`: progressive geo search radii
-- `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state- `WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS = 600`: 10-minute per-pro cool-down on the `מצא` proactive stuck-lead search
+- `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state
+- `WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS = 600`: 10-minute per-pro cool-down on the `מצא` proactive stuck-lead search
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions

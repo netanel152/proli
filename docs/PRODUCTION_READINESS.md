@@ -45,10 +45,7 @@ All 19 issues from the March 2026 code review have been resolved. The codebase h
 
 ## Test Results
 
-- **41 passed**, 6 skipped (integration tests — require `MONGO_TEST_URI`) out of 49 total
-- **2 known-failing tests** (pre-existing, not blockers):
-  - `test_sos_pro_alert`: uses string `"pro123"` as ObjectId (invalid)
-  - `test_full_lifecycle`: mock `side_effect` list exhausted (insufficient mock responses)
+- **238 passed**, 6 skipped (integration tests — require `MONGO_TEST_URI`)
 
 ## Pre-Production Deployment Checklist
 
@@ -75,7 +72,7 @@ All 19 issues from the March 2026 code review have been resolved. The codebase h
 |---|---|---|
 | Automated Backups | Done | Daily mongodump at 02:00 IL, S3 upload, 7-day retention |
 | Privacy/Consent | Done | Consent gate on first contact, data export/delete |
-| Error Hardening | Done | Per-section try/except in workflow, user-friendly errors, ARQ max_retries=3 |
+| Error Hardening | Done | Per-section try/except in workflow, user-friendly errors, ARQ max_tries=5 |
 | Admin RBAC | Done | Owner/Editor/Viewer roles, multi-admin auth, audit logging |
 | Monitoring | Done | Expanded /health (DB/Redis latency, worker heartbeat), PII masking in logs |
 

@@ -120,9 +120,11 @@ redis-cli DEL "state:972523651414@c.us"
 
 ### TC-8: Global Reset Command
 
+Reset keywords are `"reset"` and `"התחלה"`. The `"תפריט"` keyword sends the help/info message for customers — it does **not** reset state.
+
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
-| 1 | 972523651414 | "תפריט" | "🔄 השיחה אופסה בהצלחה" | State cleared to idle |
+| 1 | 972523651414 | "reset" | "🔄 השיחה אופסה בהצלחה" | State cleared to idle |
 | 2 | 972524828796 | "reset" | "🔄 השיחה אופסה בהצלחה" | State cleared (will re-detect as pro on next message) |
 
 ---
@@ -131,10 +133,12 @@ redis-cli DEL "state:972523651414@c.us"
 
 **Pre-condition:** Customer has active lead
 
+SOS keywords: `"נציג"`, `"אנושי"`, `"מנהל"`, `"admin"`, `"sos"`. Note: `"עזרה"` is a help keyword — it sends an info message, not an SOS alert.
+
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
 | 1 | 972523651414 | "נציג" | "העברתי את הפרטים..." (SOS message) | State = SOS, admin notified |
-| 2 | 972523651414 | "עזרה" | Same SOS response | Works with multiple keywords |
+| 2 | 972523651414 | "אנושי" | Same SOS response | Works with multiple keywords |
 
 ---
 
