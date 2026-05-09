@@ -19,16 +19,9 @@ jobs:
         run: npm install -g @railway/cli
       - name: Stop Services in ${{ inputs.target_env }}
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          TARGET_ENV: ${{ inputs.target_env }}
+          RAILWAY_TOKEN: ${{ inputs.target_env == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
         run: |
-          if [ "$TARGET_ENV" = "production" ]; then
-            ENV_ID="a8c1fc4c-9434-48c4-9461-afce87651d21"
-          else
-            ENV_ID="93e8ad7e-3582-4ab7-8f71-1775bf0bbddc"
-          fi
-
-          echo "Stopping services in $TARGET_ENV ($ENV_ID)..."
-          railway down --service api -e $ENV_ID -y
-          railway down --service worker -e $ENV_ID -y
-          railway down --service admin -e $ENV_ID -y
+          echo "Stopping services in ${{ inputs.target_env }}..."
+          railway down --service api -y
+          railway down --service worker -y
+          railway down --service admin -y
