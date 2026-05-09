@@ -23,6 +23,8 @@ jobs:
           RAILWAY_TOKEN: ${{ inputs.target_env == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
         run: |
           echo "Starting services in ${{ inputs.target_env }}..."
+          railway up --service redis -d
           railway up --service api -d
           railway up --service worker -d
           railway up --service admin -d
+          echo "All services started."
