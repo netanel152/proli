@@ -5,7 +5,7 @@ Proli בנויה כפלטפורמה מולטי-מודאלית ומבוזרת. מ
 ## 1. מנוע הניתוב והרחבה (Routing Engine)
 
 המערכת משתמשת בלוגיקה חכמה כדי לבזר עומסים:
-*   **Geo-Spatial Routing:** שימוש ב-MongoDB `$near` (10 ק"מ רדיוס) למציאת אנשי מקצוע קרובים.
+*   **Geo-Spatial Routing:** שימוש ב-MongoDB `$geoNear` Aggregation Pipeline בשלושה שלבים פרוגרסיביים: 10 ק"מ → 20 ק"מ → 30 ק"מ.
 *   **Fallback:** אם אין קורדינטות, המערכת עוברת ל-Regex על `service_areas`.
 *   **Load Balancing:** המערכת בודקת כמה עבודות פתוחות (`new`/`contacted`/`booked`) יש לכל איש מקצוע.
 *   **סף עומס (Threshold):** כרגע מוגדר ל-3 עבודות במקביל (`WorkerConstants.MAX_PRO_LOAD`). אם איש מקצוע עמוס, המערכת תעבור אוטומטית לבא בתור בדירוג.
@@ -42,8 +42,7 @@ Proli בנויה כפלטפורמה מולטי-מודאלית ומבוזרת. מ
 
 ### Worker (ARQ)
 *   ניתן להרחיב ל-2+ workers שמצביעים על אותו Redis.
-*   **בעיה ידועה:** ה-Scheduler (APScheduler) רץ בתוך ה-Worker. עם מספר workers, כל אחד יריץ את ה-Scheduler בנפרד — מה שגורם לכפילויות (SOS alerts כפולים, reminders כפולים).
-*   **פתרון נדרש:** הוספת מנגנון נעילה מבוזר (Redis `SET NX`) לפני כל ריצת job תזמון. או הפרדת ה-Scheduler לתהליך נפרד.
+*   **נעילה מבוזרת (Distributed Lock):** כל job ב-Scheduler עטוף ב-decorator `@with_scheduler_lock` שמשתמש ב-Redis `SET NX` לפני הרצה. מונע כפילויות גם עם מספר Worker replicas רצים במקביל.
 
 ### Admin Panel (Streamlit)
 *   רץ בנפרד ומשתמש ב-PyMongo (sync). לא צריך scaling — מיועד למנהל אחד.

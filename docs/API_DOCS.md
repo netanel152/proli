@@ -14,12 +14,14 @@ Checks the health of all external dependencies (MongoDB, Redis, WhatsApp/Green A
 **Response (200 OK):**
 ```json
 {
-  "status": "ok",
-  "components": {
-    "mongo": "up",
-    "redis": "up",
-    "whatsapp": "up"
-  }
+  "status": "healthy",
+  "checks": {
+    "mongodb": {"status": "up", "latency_ms": 4.2},
+    "redis": {"status": "up", "latency_ms": 1.1},
+    "worker": {"status": "up", "last_heartbeat": "1715000000.0"},
+    "whatsapp": {"status": "up"}
+  },
+  "uptime_seconds": 3600
 }
 ```
 
@@ -27,15 +29,36 @@ Checks the health of all external dependencies (MongoDB, Redis, WhatsApp/Green A
 ```json
 {
   "status": "unhealthy",
-  "components": {
-    "mongo": "down",
-    "redis": "up",
-    "whatsapp": "up"
-  }
+  "checks": {
+    "mongodb": {"status": "down", "latency_ms": null},
+    "redis": {"status": "up", "latency_ms": 1.1},
+    "worker": {"status": "no_heartbeat", "last_heartbeat": null},
+    "whatsapp": {"status": "up"}
+  },
+  "uptime_seconds": 120
 }
 ```
 
 Critical components are MongoDB and Redis. If either is down, the endpoint returns 503.
+
+### 3. Lead Pipeline Health
+**GET** `/health/leads`
+
+Business-level signal for the lead pipeline. Returns counts of stuck leads for monitoring.
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "pending_review_count": 2,
+  "stuck_contacted_count": 0,
+  "stuck_threshold_hours": 24,
+  "environment": "production",
+  "checked_at": "2026-05-09T08:00:00+00:00"
+}
+```
+
+Returns 503 if the database is unavailable. Use this endpoint with a synthetic monitor to alert when `pending_review_count > 5` for more than 30 minutes.
 
 ### 2. WhatsApp Webhook
 **POST** `/webhook`
@@ -73,7 +96,6 @@ The main entry point for receiving messages from Green API.
 |---|---|---|
 | `textMessage` | `textMessageData.textMessage` | Plain text |
 | `extendedTextMessage` | `extendedTextMessageData.text` | Text with URL preview |
-| `buttonsResponseMessage` | `buttonsResponseMessage.selectedButtonId` | Interactive button click |
 | `locationMessage` | `locationMessageData` | Location pin (lat/lon/name/address) |
 | `imageMessage` | `fileMessageData.downloadUrl` | Image with optional caption |
 | `audioMessage` | `fileMessageData.downloadUrl` | Voice note |

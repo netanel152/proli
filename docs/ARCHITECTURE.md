@@ -46,7 +46,7 @@ Customer (WhatsApp)
 
 **ARQ task:** `process_message_task` → `workflow_service.process_incoming_message`
 
-**APScheduler jobs (8 total):**
+**APScheduler jobs (9 total):**
 
 | Job | Schedule | Function |
 |-----|----------|----------|
@@ -58,6 +58,7 @@ Customer (WhatsApp)
 | SOS Reporter | Every 4 h | Send batched summary of stuck leads to admin WhatsApp |
 | Lead Janitor | Every 6 h | Auto-reject `CONTACTED` leads with no assigned pro after 24 h |
 | Slot Regeneration | Sunday 01:00 IL | Regenerate appointment slots from recurring weekly templates |
+| Daily Backup | 02:00 IL (daily) | Create gzipped `mongodump`; upload to S3 if `BACKUP_S3_BUCKET` is configured |
 
 **Startup/shutdown:** Verifies DB + Redis connectivity, starts APScheduler, updates `worker:heartbeat` key in Redis every 60 s (120 s expiry).
 
@@ -213,9 +214,15 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `PRO_MODE` | Sender is an active professional |
 | `CUSTOMER_MODE` | Professional temporarily acting as a customer (Zero-Touch) |
 | `AWAITING_INTENT_CONFIRMATION` | Prompting Pro to switch to `CUSTOMER_MODE` |
+| `CUSTOMER_FLOW` | Customer is actively in a booking conversation |
 | `AWAITING_ADDRESS` | Waiting for customer to provide missing parts of 5-field address |
+| `AWAITING_MEDIA` | Waiting for customer to send a photo or video of the issue |
+| `AWAITING_TIME` | Waiting for customer to confirm or select an appointment time |
+| `AWAITING_CONSENT` | Waiting for customer to accept the privacy policy (first contact) |
+| `SOS` | Customer requested a human representative; bot in alert mode |
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold (1h TTL) |
 | `PRO_SELECTING_JOB_TO_FINISH` | Pro has multiple active jobs and is picking which one to finish |
+| `PRO_SELECTING_JOB_TO_CANCEL` | Pro has multiple booked jobs and is picking which one to cancel |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
 | `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |
 | `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro |
@@ -287,7 +294,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | Language | Python 3.12+ | |
 | API framework | FastAPI | Async, OpenAPI built-in |
 | Task queue | ARQ | Lightweight, Redis-backed |
-| Scheduler | APScheduler | 7 cron/interval jobs |
+| Scheduler | APScheduler | 9 cron/interval jobs |
 | AI | Google Gemini (google-genai) | Flash Lite 2.5 → Flash 2.5 → Flash 1.5 fallback |
 | Database | MongoDB 6.0 + Motor | Async driver |
 | Cache/State | Redis | Context, FSM, rate limit, idempotency |

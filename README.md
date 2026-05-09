@@ -148,7 +148,7 @@ pytest tests/test_matching_service.py
 pytest -m integration
 ```
 
-Expected result: **216 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+Expected result: **238 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 ---
 

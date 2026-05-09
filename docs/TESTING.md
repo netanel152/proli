@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 216 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 238 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 ---
 
@@ -57,7 +57,7 @@ pytest -m integration
 | File | What it covers |
 |------|---------------|
 | `test_unit_lead_manager.py` | Lead CRUD in isolation |
-| `test_booking_and_messaging.py` | Slot booking, `send_interactive_buttons` payload (`sendButtons` endpoint) |
+| `test_booking_and_messaging.py` | Slot booking and messaging flows |
 | `test_security_service.py` | Rate limiting (Redis fixed-window) |
 | `test_consent_flow.py` | Privacy consent gate |
 | `test_media_handler.py` | Media type detection, image download, audio/video URL handling |

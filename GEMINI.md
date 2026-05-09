@@ -63,9 +63,9 @@ Logic is strictly decoupled into services in `app/services/`:
 -   `state_manager_service.py`: Manages `UserStates` (FSM) in Redis with custom TTLs.
 
 ### State & Lead Lifecycles
--   **Lead Status**: `new` → `contacted` → `booked` → `completed`.
+-   **Lead Status**: `contacted` → `new` → `booked` → `completed` / `rejected` / `closed` / `cancelled` / `pending_admin_review`.
 -   **User States**: `IDLE`, `AWAITING_ADDRESS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`.
--   **SOS Healer**: Periodically checks for leads stuck in `AWAITING_PRO_APPROVAL` for >60 mins and reassigns them.
+-   **SOS Healer**: Periodically checks for leads with status `new`, `contacted`, or `pending_admin_review` older than 60 mins and reassigns them.
 
 ### Data Standards
 -   **MongoDB**: Primary persistent storage for `users`, `leads`, `slots`, and `audit_log`.
