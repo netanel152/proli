@@ -118,7 +118,8 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
         return
 
     # Help / menu — send info without touching state or context
-    if normalized_text in Messages.Keywords.HELP_COMMANDS and current_state != UserStates.PRO_MODE:
+    _help_words = Messages.Keywords.HELP_COMMANDS + Messages.Keywords.MENU_COMMANDS
+    if normalized_text in _help_words and current_state != UserStates.PRO_MODE:
         await whatsapp.send_message(chat_id, Messages.Customer.HELP_INFO)
         return
 

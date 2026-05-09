@@ -83,6 +83,10 @@ class Messages:
             "השב *1* - כן, אשמח שזה יהיה הוא.\n"
             "השב *2* - לא, חפש לי מישהו אחר."
         )
+        PRO_CANCELLED_BOOKING = (
+            "⚠️ *עדכון:* איש המקצוע ביטל את העבודה שנקבעה.\n"
+            "אנו נחפש לך איש מקצוע אחר בהקדם. 🙏"
+        )
     class Pro:
         # Messages sent to professionals
         REMINDER = """👋 היי, רק מוודא לגבי העבודה האחרונה. האם סיימת? 
@@ -158,6 +162,20 @@ class Messages:
             "💬 ביקורות: {reviews}\n"
             "📅 הצטרפת: {joined}"
         )
+        PRO_DASHBOARD_HEADER = (
+            "שלום {pro_name}! 🛠️\n"
+            "⭐ דירוג: {rating}\n"
+            "{status_emoji} סטטוס: {status_text}\n"
+            "💼 עבודות פעילות: {active_jobs}/{max_jobs}\n\n"
+            "*פקודות המערכת:*"
+        )
+        PRO_DASHBOARD_CMD_APPROVE_REJECT = "✅ 'אשר' / ❌ 'דחה' — לעבודה שממתינה לתשובתך"
+        PRO_DASHBOARD_CMD_FINISH = "🏁 'סיימתי' — לסיום עבודה פעילה"
+        PRO_DASHBOARD_CMD_DETAILS = "📋 'פרטים' — לצפייה בעבודות הפעילות"
+        PRO_DASHBOARD_CMD_CANCEL = "🚫 'ביטול' — לביטול עבודה פעילה"
+        PRO_DASHBOARD_CMD_SEARCH = "🔍 'חפש' — לאיתור לידים פנויים"
+        PRO_DASHBOARD_CMD_AVAILABILITY = "☕ 'הפסקה' / 🚀 'זמין' — לשליטה בקבלת עבודות"
+        # Keep for backward compat with any references in tests
         PRO_DASHBOARD = (
             "שלום {pro_name}! 🛠️\n"
             "⭐ דירוג: {rating}\n"
@@ -189,6 +207,48 @@ class Messages:
             "⏰ *ממתין:* {wait_minutes} דק'\n\n"
             "השב 'אשר' כדי לקחת את העבודה."
         )
+        DETAILS_HEADER = "📋 *עבודות פעילות (מאושרות):*\n"
+        DETAILS_ROW = (
+            "  {num}. 🛠️ {issue} | ⏰ {appointment_time}\n"
+            "     📍 {city}\n"
+            "     📞 {customer_phone} | 💬 https://wa.me/{customer_phone_intl}\n"
+            "     🗺️ https://waze.com/ul?q={address_encoded}"
+        )
+        SELECT_JOB_TO_CANCEL = "איזו עבודה לבטל?\n{jobs_list}\nהשב עם מספר העבודה, או 'ביטול'."
+        CANCEL_SUCCESS = "✅ העבודה בוטלה. הלקוח עודכן."
+        HELP_MENU = (
+            "📖 *מדריך הפקודות המלא*\n\n"
+            "📥 *קבלת עבודות:*\n"
+            "  • *אשר* — קבלת עבודה חדשה\n"
+            "  • *דחה* — דחיית עבודה חדשה\n\n"
+            "🔧 *ניהול העבודה:*\n"
+            "  • *פרטים* — פרטי עבודות פעילות + קישורי ניווט\n"
+            "  • *סיימתי* — סיום עבודה פעילה\n"
+            "  • *ביטול* — ביטול עבודה פעילה\n\n"
+            "🚀 *יוזמה ושליטה:*\n"
+            "  • *חפש* — חיפוש לידים פנויים במערכת\n"
+            "  • *זמין* — חזרה לקבלת עבודות\n"
+            "  • *הפסקה* — הפסקת קבלת עבודות זמנית\n\n"
+            "📊 *העסק שלי:*\n"
+            "  • *סיכום* — סיכום ביצועים חודשי\n"
+            "  • *ביקורות* — הביקורות האחרונות שלך\n\n"
+            "💡 להחזרת לוח הבקרה הראשי, כתוב *תפריט*."
+        )
+        SUMMARY_BODY = (
+            "📊 *סיכום ביצועים*\n\n"
+            "✅ עבודות שהושלמו החודש: *{this_month}*\n"
+            "📦 סה\"כ עבודות: *{total_completed}*\n"
+            "🔄 עבודות פעילות כרגע: *{active}*\n"
+            "⭐ דירוג ממוצע: *{rating}*\n\n"
+            "{motivation}"
+        )
+        SUMMARY_MOTIVATION_GREAT = "🏆 כל הכבוד! אתה מהטובים שלנו. המשך כך!"
+        SUMMARY_MOTIVATION_GOOD = "💪 עבודה טובה! כל עבודה מוסיפה לשם הטוב שלך."
+        SUMMARY_MOTIVATION_START = "🌱 תחילת דרך! ביצועים מצוינים מתחילים מהצעד הראשון."
+        NO_REVIEWS_WITH_TEXT = "עדיין אין ביקורות כתובות. לאחר כל עבודה, לקוחות יכולים להשאיר לך ביקורת 💬"
+        REVIEWS_HEADER = "💬 *הביקורות האחרונות שלך* (ממוצע ⭐{rating:.1f} | {count} דירוגים):\n"
+        REVIEW_TEXT_ROW = "  ⭐{rating} — \"{comment}\""
+        DASHBOARD_TIP = "\n💡 טיפ: כדי לראות את רשימת הפקודות המלאה של המערכת, הקלד 'עזרה'."
 
     class SOS:
         CUSTOMER_REASSIGNING = "מתנצלים על ההמתנה, אנו מאתרים עבורך איש מקצוע זמין יותר כעת... ⏳"
@@ -322,10 +382,14 @@ class Messages:
         ACTIVE_JOBS_COMMANDS = ["עבודות", "4", "jobs", "active"]
         HISTORY_COMMANDS = ["היסטוריה", "5", "history"]
         STATS_COMMANDS = ["דוח", 'דו"ח', "6", "stats", "report"]
-        REVIEWS_COMMANDS = ["ביקורות", "7", "reviews", "ratings"]
-        SEARCH_COMMANDS = ["מצא", "search", "find"]
+        REVIEWS_COMMANDS = ["ביקורות", "פידבק", "7", "reviews", "ratings"]
+        SEARCH_COMMANDS = ["מצא", "חפש", "search", "find"]
+        DETAILS_COMMANDS = ["פרטים", "details"]
+        CANCEL_BOOKED_COMMANDS = ["ביטול"]
+        SUMMARY_COMMANDS = ["סיכום", "סטטיסטיקה"]
         RESET_COMMANDS = ["reset", "התחלה"]
-        HELP_COMMANDS = ["תפריט", "עזרה", "help", "menu"]
+        MENU_COMMANDS = ["תפריט", "menu"]
+        HELP_COMMANDS = ["עזרה", "help"]
         SOS_COMMANDS = ["נציג", "אנושי", "מנהל", "admin", "sos"]
         CANCEL_KEYWORDS = ["בטל", "בטלי", "עזוב", "עזבי", "לא משנה", "טעות", "cancel", "nevermind"]
         RESCHEDULE_KEYWORDS = [
