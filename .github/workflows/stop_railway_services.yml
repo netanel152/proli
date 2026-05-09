@@ -1,0 +1,34 @@
+name: 🛑 Stop Proli Services
+on: 
+  workflow_dispatch:
+    inputs:
+      target_env:
+        description: 'בחר סביבה לעצירה'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  stop-railway:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Railway CLI
+        run: bash <(curl -fsSL cli.new)
+      - name: Stop Services in ${{ inputs.target_env }}
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          TARGET_ENV: ${{ inputs.target_env }}
+        run: |
+          if [ "$TARGET_ENV" = "production" ]; then
+            ENV_ID="a8c1fc4c-9434-48c4-9461-afce87651d21"
+          else
+            ENV_ID="93e8ad7e-3582-4ab7-8f71-1775bf0bbddc"
+          fi
+          
+          echo "Stopping services in $TARGET_ENV ($ENV_ID)..."
+          railway down --service api -e $ENV_ID -y
+          railway down --service worker -e $ENV_ID -y
+          railway down --service admin -e $ENV_ID -y
