@@ -12,6 +12,7 @@ from app.services.customer_flow import (
     handle_customer_completion_text,
     handle_customer_rating_text,
     handle_customer_review_comment,
+    handle_status_query,
 )
 
 
@@ -230,3 +231,88 @@ async def test_review_saved(flow_db, monkeypatch):
 async def test_review_no_waiting_lead(flow_db):
     result = await handle_customer_review_comment("972509030303@c.us", "good service")
     assert result is None
+
+
+# --- handle_status_query ---
+
+@pytest.mark.asyncio
+async def test_handle_status_query_new_lead(flow_db):
+    chat_id = "972511111111@c.us"
+    await flow_db.leads.insert_one({
+        "chat_id": chat_id,
+        "status": LeadStatus.NEW,
+        "issue_type": "נזילה",
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_status_query(chat_id)
+
+    assert result is not None
+    assert "נזילה" in result
+    # NEW status template contains "מאתרים"
+    assert "מאתרים" in result
+
+
+@pytest.mark.asyncio
+async def test_handle_status_query_contacted_lead(flow_db):
+    chat_id = "972511111112@c.us"
+    await flow_db.leads.insert_one({
+        "chat_id": chat_id,
+        "status": LeadStatus.CONTACTED,
+        "issue_type": "תקלת חשמל",
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_status_query(chat_id)
+
+    assert result is not None
+    assert "תקלת חשמל" in result
+    # CONTACTED template mentions waiting for pro
+    assert "ממתינים" in result
+
+
+@pytest.mark.asyncio
+async def test_handle_status_query_booked_lead_includes_pro_name(flow_db):
+    chat_id = "972511111113@c.us"
+    pro_id = ObjectId()
+    await flow_db.users.insert_one({"_id": pro_id, "business_name": "יוסי אינסטלציה"})
+    await flow_db.leads.insert_one({
+        "chat_id": chat_id,
+        "status": LeadStatus.BOOKED,
+        "issue_type": "צנרת",
+        "pro_id": pro_id,
+        "appointment_time": "10:00 15/05/2026",
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_status_query(chat_id)
+
+    assert result is not None
+    assert "יוסי אינסטלציה" in result
+    assert "10:00 15/05/2026" in result
+
+
+@pytest.mark.asyncio
+async def test_handle_status_query_no_active_lead_returns_friendly_message(flow_db):
+    # A chat_id with no leads at all
+    result = await handle_status_query("972599999999@c.us")
+
+    assert result == Messages.Customer.STATUS_NO_ACTIVE_LEAD
+
+
+@pytest.mark.asyncio
+async def test_handle_status_query_falls_back_to_recent_completed_lead(flow_db):
+    chat_id = "972511111114@c.us"
+    await flow_db.leads.insert_one({
+        "chat_id": chat_id,
+        "status": LeadStatus.COMPLETED,
+        "issue_type": "תיקון דלת",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    })
+
+    result = await handle_status_query(chat_id)
+
+    assert result is not None
+    # COMPLETED template mentions the work ended
+    assert "הסתיימה" in result

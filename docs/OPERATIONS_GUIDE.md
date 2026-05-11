@@ -124,6 +124,26 @@ When a deal is finalized by the AI:
    - **Finish** (reply "סיימתי" or "3") → if single job, marks as `COMPLETED`. If multiple, pro picks from a numbered list.
 5. **Dynamic Dashboard:** Any unknown command or "תפריט" sends the pro a real-time status summary (rating, active jobs, status).
 
+---
+
+## Customer Self-Service: Status Query
+
+Customers can send any of the following at any time to receive an instant status reply:
+
+| Trigger | Match rule |
+|---------|-----------|
+| `סטטוס` | whole message equals (case-insensitive) |
+| `status` | whole message equals (case-insensitive) |
+| `?` | **exact** — the entire trimmed message must be `?` |
+
+**Behaviour:**
+
+- Runs before the AI dispatcher — deterministic, zero token cost, works in every state except `PRO_MODE` and `ADMIN_*`.
+- If an active lead exists (`NEW`, `CONTACTED`, `BOOKED`, `PENDING_ADMIN_REVIEW`): returns a formatted status message including issue type, assigned pro (if any), and appointment time.
+- If no active lead but a recent terminal lead exists (`COMPLETED`, `CANCELLED`, `REJECTED`, `CLOSED`): returns that lead's terminal-state message.
+- If no leads at all: returns a friendly "no active request" message prompting the customer to open a new one.
+- State is **not changed** by this command. Logs the reply via `lead_manager.log_message`.
+
 
 ---
 

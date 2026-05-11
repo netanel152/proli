@@ -18,6 +18,7 @@ def wf_mocks(monkeypatch, mock_db):
     mock_wa = MagicMock()
     mock_wa.send_message = AsyncMock()
     mock_wa.send_location_link = AsyncMock()
+    mock_wa.send_chat_state_typing = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_wa)
 
     mock_state = MagicMock()
@@ -629,3 +630,54 @@ async def test_emergency_bypass_address_gate(wf_mocks, monkeypatch, mock_db):
     pro_calls = [c for c in mock_wa.send_message.call_args_list if c.args[0] == "972500000001@c.us"]
     found_emergency_header = any(Messages.Pro.EMERGENCY_LEAD_HEADER in str(call.args[1]) for call in pro_calls)
     assert found_emergency_header is True
+
+
+# --- Customer status command routing ---
+
+@pytest.mark.asyncio
+async def test_question_mark_alone_triggers_status(wf_mocks, mock_db):
+    """Sending '?' returns the status reply and never reaches the AI dispatcher."""
+    import asyncio
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
+
+    await process_incoming_message("972511111115@c.us", "?")
+    await asyncio.sleep(0)
+
+    mock_wa.send_message.assert_called_once()
+    sent_text = mock_wa.send_message.call_args.args[1]
+    # No active lead -> status_no_active_lead message
+    assert sent_text == Messages.Customer.STATUS_NO_ACTIVE_LEAD
+    mock_ai.analyze_conversation.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_question_mark_inside_sentence_does_not_trigger_status(wf_mocks, monkeypatch):
+    """'מה השעה?' must NOT trigger status — only exact '?' should match."""
+    import asyncio
+    mock_wa, mock_state, _, mock_ai, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
+
+    mock_status = AsyncMock(return_value="STATUS_RESPONSE")
+    monkeypatch.setattr(app.services.workflow_service, "_handle_status_query", mock_status)
+
+    await process_incoming_message("972511111116@c.us", "מה השעה?")
+    await asyncio.sleep(0)
+
+    mock_status.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_status_command_skipped_in_pro_mode(wf_mocks, monkeypatch):
+    """Pro in PRO_MODE sending 'סטטוס' must not hit the customer status handler."""
+    import asyncio
+    mock_wa, mock_state, _, _, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.PRO_MODE)
+
+    mock_status = AsyncMock(return_value="STATUS_RESPONSE")
+    monkeypatch.setattr(app.services.workflow_service, "_handle_status_query", mock_status)
+
+    await process_incoming_message("972524828796@c.us", "סטטוס")
+    await asyncio.sleep(0)
+
+    mock_status.assert_not_called()

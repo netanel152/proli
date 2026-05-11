@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 238 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 248 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 ---
 

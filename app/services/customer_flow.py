@@ -248,3 +248,84 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
             ),
         )
     logger.success(f"📅 Lead {lead['_id']} rescheduled to {new_time} by customer {chat_id}")
+
+
+def _format_il_datetime(dt) -> str:
+    if not dt:
+        return "—"
+    if dt.tzinfo is None:
+        dt = pytz.utc.localize(dt)
+    return dt.astimezone(_IL_TZ).strftime("%d/%m/%Y %H:%M")
+
+
+def _format_status_for_lead(lead: dict, pro: dict | None) -> str:
+    status = lead.get("status")
+    issue = lead.get("issue_type") or lead.get("issue") or "—"
+    appointment = lead.get("appointment_time") or "טרם נקבע"
+    pro_name = (pro or {}).get("business_name", "איש מקצוע")
+    updated_at = _format_il_datetime(lead.get("updated_at") or lead.get("created_at"))
+
+    mapping = {
+        LeadStatus.NEW: Messages.Customer.STATUS_NEW,
+        LeadStatus.CONTACTED: Messages.Customer.STATUS_CONTACTED,
+        LeadStatus.BOOKED: Messages.Customer.STATUS_BOOKED,
+        LeadStatus.PENDING_ADMIN_REVIEW: Messages.Customer.STATUS_PENDING_ADMIN_REVIEW,
+        LeadStatus.COMPLETED: Messages.Customer.STATUS_COMPLETED,
+        LeadStatus.CANCELLED: Messages.Customer.STATUS_CANCELLED,
+        LeadStatus.REJECTED: Messages.Customer.STATUS_REJECTED_OR_CLOSED,
+        LeadStatus.CLOSED: Messages.Customer.STATUS_REJECTED_OR_CLOSED,
+    }
+    template = mapping.get(status, Messages.Customer.STATUS_NO_ACTIVE_LEAD)
+    return template.format(
+        issue=issue,
+        appointment_time=appointment,
+        pro_name=pro_name,
+        updated_at=updated_at,
+    )
+
+
+async def handle_status_query(chat_id: str) -> str:
+    """Return the status of the customer's most recent non-terminal lead.
+
+    Always returns a user-facing string — caller does not need to guard against None.
+    """
+    lead = await leads_collection.find_one(
+        {
+            "chat_id": chat_id,
+            "status": {
+                "$in": [
+                    LeadStatus.NEW,
+                    LeadStatus.CONTACTED,
+                    LeadStatus.BOOKED,
+                    LeadStatus.PENDING_ADMIN_REVIEW,
+                ]
+            },
+        },
+        sort=[("created_at", -1)],
+    )
+
+    if lead:
+        pro = None
+        if lead.get("pro_id"):
+            pro = await users_collection.find_one({"_id": lead["pro_id"]})
+        return _format_status_for_lead(lead, pro)
+
+    # No active lead — check for a recent terminal lead to give context
+    recent_terminal = await leads_collection.find_one(
+        {
+            "chat_id": chat_id,
+            "status": {
+                "$in": [
+                    LeadStatus.COMPLETED,
+                    LeadStatus.CANCELLED,
+                    LeadStatus.REJECTED,
+                    LeadStatus.CLOSED,
+                ]
+            },
+        },
+        sort=[("updated_at", -1), ("created_at", -1)],
+    )
+    if recent_terminal:
+        return _format_status_for_lead(recent_terminal, pro=None)
+
+    return Messages.Customer.STATUS_NO_ACTIVE_LEAD
