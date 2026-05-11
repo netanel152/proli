@@ -137,6 +137,7 @@ def patch_dependencies(request, monkeypatch, mock_db):
     mock_whatsapp = MagicMock()
     mock_whatsapp.send_message = AsyncMock()
     mock_whatsapp.send_location_link = AsyncMock()
+    mock_whatsapp.send_chat_state_typing = AsyncMock()
 
     mock_ai = MagicMock()
     from app.services.ai_engine_service import AIResponse, ExtractedData
@@ -235,6 +236,7 @@ async def integration_db(monkeypatch):
     mock_whatsapp = MagicMock()
     mock_whatsapp.send_message = AsyncMock()
     mock_whatsapp.send_location_link = AsyncMock()
+    mock_whatsapp.send_chat_state_typing = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_whatsapp)
 
     # Optional: Mock AI to avoid API costs during tests

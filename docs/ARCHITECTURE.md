@@ -90,6 +90,8 @@ Customer (WhatsApp)
 ```
 process_incoming_message(chat_id, text, media_url)
         │
+        ├─ [fire-and-forget] send_chat_state_typing(chat_id)   ← typing indicator (non-blocking)
+        │
         ├─ Admin phone + "ניהול" / admin_* state?
         │      └─ admin_flow.handle_admin_message()
         │            list PENDING_ADMIN_REVIEW leads → select lead
@@ -98,6 +100,12 @@ process_incoming_message(chat_id, text, media_url)
         ├─ Reset keyword? → clear state + context → RESET_SUCCESS
         │
         ├─ Help keyword ("תפריט"/"עזרה", non-pro)? → send HELP_INFO, leave state intact
+        │
+        ├─ Politeness ("תודה" etc., non-pro)? → send YOU_ARE_WELCOME, return
+        │
+        ├─ Status pull ("סטטוס" / "status" / exact "?", non-pro)?
+        │      └─ handle_status_query(chat_id) → format lead status by LeadStatus
+        │         log + return — no AI, no state change
         │
         ├─ SOS / human handoff keyword?
         │      └─ set PAUSED_FOR_HUMAN (TTL 900 s)

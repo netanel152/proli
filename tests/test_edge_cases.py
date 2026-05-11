@@ -16,6 +16,7 @@ def mock_dependencies():
         mock_lm.get_chat_history = AsyncMock(return_value=[])
         mock_lm.log_message = AsyncMock()
         mock_wa.send_message = AsyncMock()
+        mock_wa.send_chat_state_typing = AsyncMock()
         mock_users.find.return_value.to_list = AsyncMock(return_value=[]) # No pros default
         mock_users.find_one = AsyncMock(return_value=None)
         mock_leads.find_one = AsyncMock(return_value=None)

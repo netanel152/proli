@@ -1,3 +1,4 @@
+import asyncio
 from app.services.whatsapp_client_service import WhatsAppClient
 from app.services.ai_engine_service import AIEngine, AIResponse
 from app.services.lead_manager_service import LeadManager, is_address_complete, compose_full_address
@@ -18,6 +19,7 @@ from app.services.customer_flow import (
     handle_customer_rating_text,
     handle_customer_review_comment,
     handle_reschedule_selection as _handle_reschedule_selection,
+    handle_status_query as _handle_status_query,
 )
 from app.services.scheduling_service import get_available_slots
 import pytz
@@ -85,6 +87,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         raise ChatLockBusyError(chat_id)
 
     try:
+        asyncio.create_task(whatsapp.send_chat_state_typing(chat_id))
         await _process_incoming_message_inner(chat_id, user_text, media_url)
     finally:
         await release_chat_lock(chat_id)
@@ -184,6 +187,19 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
     if current_state != UserStates.PRO_MODE and normalized_text in Messages.Keywords.THANKS_KEYWORDS:
         await whatsapp.send_message(chat_id, Messages.Customer.YOU_ARE_WELCOME)
         return
+
+    # Customer status pull ("סטטוס" / "status" / "?") — customers only, deterministic
+    if current_state not in (UserStates.PRO_MODE,) and not str(current_state).startswith("ADMIN_"):
+        stripped_text = (user_text or "").strip()
+        is_status_cmd = (
+            stripped_text in Messages.Keywords.STATUS_COMMANDS_EXACT
+            or stripped_text.lower() in Messages.Keywords.STATUS_COMMANDS_WORDS
+        )
+        if is_status_cmd:
+            reply = await _handle_status_query(chat_id)
+            await whatsapp.send_message(chat_id, reply)
+            await lead_manager.log_message(chat_id, "model", reply)
+            return
 
     # SOS / Human Handoff Check (customers only — pros have their own help menu)
     sos_keywords = Messages.Keywords.SOS_COMMANDS

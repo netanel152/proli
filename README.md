@@ -13,6 +13,7 @@
 ### WhatsApp Bot (Customer-facing)
 
 - **Bulletproof Text-Based Menus** — All interactions use simple numeric (e.g., "1", "2") or keyword (e.g., "אשר", "דחה") replies. No reliance on fragile interactive buttons.
+- **Customer Status Pull** — Customers send `סטטוס`, `status`, or `?` (exact) at any time to receive an instant, deterministic summary of their active lead. Zero AI cost, works in every state.
 - **Dynamic Pro Dashboard** — Professionals receive a real-time status overview (rating, active jobs, availability) when they access the menu or send unknown commands.
 - **Availability & Vacation Mode** — Pros can toggle their status ("זמין" / "הפסקה") to control lead flow directly from WhatsApp.
 - **Multi-Job Finish** — Pros with multiple active bookings are guided through a selection menu to close the correct job.
@@ -148,7 +149,7 @@ pytest tests/test_matching_service.py
 pytest -m integration
 ```
 
-Expected result: **238 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+Expected result: **248 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 ---
 

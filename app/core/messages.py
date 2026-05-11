@@ -87,6 +87,44 @@ class Messages:
             "⚠️ *עדכון:* איש המקצוע ביטל את העבודה שנקבעה.\n"
             "אנו נחפש לך איש מקצוע אחר בהקדם. 🙏"
         )
+
+        # --- Status pull responses (PR #1) ---
+        STATUS_NO_ACTIVE_LEAD = (
+            "👋 אין לך כרגע פנייה פעילה אצלנו.\n"
+            "אם תרצה/י לפתוח פנייה חדשה, פשוט תאר/י את הבעיה ונחזור אליך."
+        )
+        STATUS_NEW = (
+            "📨 *סטטוס הפנייה שלך*\n\n"
+            "קיבלנו את הפנייה ואנחנו מאתרים עבורך איש מקצוע מתאים.\n"
+            "🔧 בעיה: {issue}\n"
+            "⏱️ עודכן לאחרונה: {updated_at}"
+        )
+        STATUS_CONTACTED = (
+            "📤 *סטטוס הפנייה שלך*\n\n"
+            "שלחנו את הפנייה לאיש מקצוע ואנו ממתינים לאישורו.\n"
+            "🔧 בעיה: {issue}\n"
+            "⏱️ עודכן לאחרונה: {updated_at}"
+        )
+        STATUS_BOOKED = (
+            "✅ *סטטוס הפנייה שלך*\n\n"
+            "הפנייה אושרה ומשובצת.\n"
+            "👤 איש מקצוע: {pro_name}\n"
+            "🔧 בעיה: {issue}\n"
+            "📅 מועד: {appointment_time}"
+        )
+        STATUS_PENDING_ADMIN_REVIEW = (
+            "🕒 *סטטוס הפנייה שלך*\n\n"
+            "נציג מטעמנו בוחן את הפנייה ידנית — נחזור אליך בהקדם."
+        )
+        STATUS_COMPLETED = (
+            "✔️ *סטטוס הפנייה שלך*\n\n"
+            "העבודה הסתיימה. אם טרם דירגת את איש המקצוע, נשמח אם תוכל/י לעשות זאת."
+        )
+        STATUS_CANCELLED = "❌ *סטטוס הפנייה שלך*\n\nהפנייה בוטלה."
+        STATUS_REJECTED_OR_CLOSED = (
+            "ℹ️ *סטטוס הפנייה שלך*\n\nהפנייה נסגרה. תוכל/י לפתוח פנייה חדשה בכל עת."
+        )
+
     class Pro:
         # Messages sent to professionals
         REMINDER = """👋 היי, רק מוודא לגבי העבודה האחרונה. האם סיימת? 
@@ -407,6 +445,10 @@ class Messages:
 
         # Completion check text tokens (used in handle_customer_completion_text)
         CUSTOMER_COMPLETION_INDICATOR = "כן, הסתיים"
+
+        # Customer status pull — '?' must be exact match; words matched after .strip().lower()
+        STATUS_COMMANDS_EXACT = ("?",)
+        STATUS_COMMANDS_WORDS = ("סטטוס", "status")
 
     class Errors:
         AI_OVERLOAD = "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."

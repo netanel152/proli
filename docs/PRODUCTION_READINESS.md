@@ -45,16 +45,12 @@ All 19 issues from the March 2026 code review have been resolved. The codebase h
 
 ## Test Results
 
-- **238 passed**, 6 skipped (integration tests — require `MONGO_TEST_URI`)
+- **248 passed**, 6 skipped (integration tests — require `MONGO_TEST_URI`)
 
 ## Pre-Production Deployment Checklist
 
 ### Required Before Go-Live
-- [ ] Set production env vars: `GREEN_API_INSTANCE_ID`, `GREEN_API_TOKEN`, `GEMINI_API_KEY`, `CLOUDINARY_*`, `ADMIN_PASSWORD_HASH`
-- [ ] Set `WEBHOOK_TOKEN` and configure webhook URL in Green API dashboard as `https://your-domain/webhook?token=<value>`
-- [ ] Set `ADMIN_PHONE` to the production admin number
-- [ ] Set `ENVIRONMENT=production` in env
-- [ ] Deploy as 3 separate Railway services (see `docs/RAILWAY_SETUP.md`)
+
 - [ ] Run `python scripts/create_indexes.py` against production MongoDB (includes consent, audit_log, admins indexes)
 - [ ] Configure backup: set `BACKUP_S3_BUCKET` + AWS credentials for off-site backups
 - [ ] Verify SSL/HTTPS is enabled (Railway provides this automatically)

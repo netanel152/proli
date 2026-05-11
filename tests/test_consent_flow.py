@@ -15,6 +15,7 @@ def consent_mocks(monkeypatch, mock_db):
     """Setup mocks specific to consent flow testing."""
     mock_whatsapp = MagicMock()
     mock_whatsapp.send_message = AsyncMock()
+    mock_whatsapp.send_chat_state_typing = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_whatsapp)
 
     mock_state = MagicMock()

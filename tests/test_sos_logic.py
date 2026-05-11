@@ -13,6 +13,7 @@ async def test_sos_admin_alert(mock_db, monkeypatch):
     # Setup mocks
     mock_whatsapp_wf = MagicMock()
     mock_whatsapp_wf.send_message = AsyncMock()
+    mock_whatsapp_wf.send_chat_state_typing = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_whatsapp_wf)
 
     mock_whatsapp_notif = MagicMock()
@@ -53,6 +54,7 @@ async def test_sos_pro_alert(mock_db, monkeypatch):
     # Setup mocks
     mock_whatsapp_wf = MagicMock()
     mock_whatsapp_wf.send_message = AsyncMock()
+    mock_whatsapp_wf.send_chat_state_typing = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_whatsapp_wf)
 
     mock_whatsapp_notif = MagicMock()

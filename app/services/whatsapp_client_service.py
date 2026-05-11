@@ -54,6 +54,15 @@ class WhatsAppClient:
             logger.error(f"Failed to send message to {chat_id}: {e}")
             raise
 
+    async def send_chat_state_typing(self, chat_id: str) -> None:
+        """Show 'typing...' indicator via Green API sendChatStateTyping. Best-effort: failures are
+        logged and swallowed so they cannot block real message processing."""
+        try:
+            await self._send_request("sendChatStateTyping", {"chatId": chat_id})
+            logger.debug(f"Typing indicator sent to {chat_id}")
+        except Exception as e:
+            logger.warning(f"Failed to send typing indicator to {chat_id}: {e}")
+
     @retry(
         retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
         stop=stop_after_attempt(3),
