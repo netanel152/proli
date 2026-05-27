@@ -30,3 +30,7 @@ logs/
 .zip
 
 settings.local.json
+
+# --- Claude Code local state (not for teammates) ---
+.claude/worktrees/
+.claude/agent-memory/
