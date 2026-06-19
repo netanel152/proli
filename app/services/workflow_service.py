@@ -1,7 +1,11 @@
 import asyncio
 from app.services.whatsapp_client_service import WhatsAppClient
 from app.services.ai_engine_service import AIEngine, AIResponse
-from app.services.lead_manager_service import LeadManager, is_address_complete, compose_full_address
+from app.services.lead_manager_service import (
+    LeadManager,
+    is_address_complete,
+    compose_full_address,
+)
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
 from app.core.logger import logger
@@ -9,7 +13,11 @@ from app.core.database import users_collection, leads_collection, reviews_collec
 from app.core.messages import Messages
 from app.core.prompts import Prompts
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
-from app.core.redis_client import acquire_chat_lock, release_chat_lock, ChatLockBusyError
+from app.core.redis_client import (
+    acquire_chat_lock,
+    release_chat_lock,
+    ChatLockBusyError,
+)
 from app.services.matching_service import determine_best_pro
 from app.services.notification_service import send_sos_alert
 from app.services.data_management_service import has_consent, record_consent
@@ -25,9 +33,12 @@ from app.services.scheduling_service import get_available_slots
 import pytz
 from app.services.pro_flow import handle_pro_text_command as _handle_pro_cmd
 from app.services.pro_onboarding_service import (
-    start_onboarding, handle_onboarding_step, ONBOARDING_STATES,
+    start_onboarding,
+    handle_onboarding_step,
+    ONBOARDING_STATES,
 )
 from app.services.media_handler import detect_and_fetch_media
+from app.services.security_service import SecurityService
 from app.core.config import settings
 from bson import ObjectId
 import re
@@ -58,6 +69,7 @@ PRO_BUSINESS_KEYWORDS = (
 
 # --- Public API (used by scheduler, admin panel, arq_worker) ---
 
+
 async def send_customer_completion_check(lead_id: str, triggered_by: str = "auto"):
     """Public wrapper — delegates to customer_flow with shared whatsapp instance."""
     await _send_completion_check(lead_id, whatsapp, triggered_by)
@@ -66,10 +78,12 @@ async def send_customer_completion_check(lead_id: str, triggered_by: str = "auto
 async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
     """Re-export from notification_service for scheduler compatibility."""
     from app.services.notification_service import send_pro_reminder as _reminder
+
     await _reminder(lead_id, triggered_by)
 
 
 # --- Main Orchestrator ---
+
 
 async def process_incoming_message(chat_id: str, user_text: str, media_url: str = None):
     """
@@ -83,7 +97,9 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     """
     acquired = await acquire_chat_lock(chat_id, ttl=10)
     if not acquired:
-        logger.info(f"🔒 Chat lock held for {chat_id} — another task is mid-flight; deferring")
+        logger.info(
+            f"🔒 Chat lock held for {chat_id} — another task is mid-flight; deferring"
+        )
         raise ChatLockBusyError(chat_id)
 
     try:
@@ -93,9 +109,13 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         await release_chat_lock(chat_id)
 
 
-async def _process_incoming_message_inner(chat_id: str, user_text: str, media_url: str = None):
+async def _process_incoming_message_inner(
+    chat_id: str, user_text: str, media_url: str = None
+):
     normalized_text = (user_text or "").strip().lower()
-    is_emergency_detected = any(kw in normalized_text for kw in Messages.Keywords.EMERGENCY_KEYWORDS)
+    is_emergency_detected = any(
+        kw in normalized_text for kw in Messages.Keywords.EMERGENCY_KEYWORDS
+    )
 
     # Get state early — needed to skip global checks for pros
     current_state = await StateManager.get_state(chat_id)
@@ -104,17 +124,29 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
     # isn't trapped by consent, SOS, or paused-for-human gates.
     admin_chat_id = f"{settings.ADMIN_PHONE}@c.us"
     if chat_id == admin_chat_id:
-        if (user_text and user_text.strip() == "ניהול") or (current_state or "").startswith("admin_"):
+        if (user_text and user_text.strip() == "ניהול") or (
+            current_state or ""
+        ).startswith("admin_"):
             from app.services import admin_flow
             from app.core.redis_client import get_redis_client
+
             redis_client = await get_redis_client()
             await admin_flow.handle_admin_message(
-                chat_id, user_text, current_state, StateManager, redis_client, whatsapp, None,
+                chat_id,
+                user_text,
+                current_state,
+                StateManager,
+                redis_client,
+                whatsapp,
+                None,
             )
             return
 
     # Global Reset Check (skip for pros — they use "תפריט" to show their menu)
-    if normalized_text in Messages.Keywords.RESET_COMMANDS and current_state != UserStates.PRO_MODE:
+    if (
+        normalized_text in Messages.Keywords.RESET_COMMANDS
+        and current_state != UserStates.PRO_MODE
+    ):
         await StateManager.clear_state(chat_id)
         await ContextManager.clear_context(chat_id)
         await whatsapp.send_message(chat_id, Messages.System.RESET_SUCCESS)
@@ -125,6 +157,38 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
     if normalized_text in _help_words and current_state != UserStates.PRO_MODE:
         await whatsapp.send_message(chat_id, Messages.Customer.HELP_INFO)
         return
+
+    # PRO-21 — per-customer abuse / cost protection. Pros and the admin are exempt;
+    # is_exempt is reused below to gate the daily AI-call cap at each AI call site.
+    is_exempt = (
+        current_state == UserStates.PRO_MODE
+        or chat_id == f"{settings.ADMIN_PHONE}@c.us"
+    )
+    if not is_exempt:
+        phone = chat_id.replace("@c.us", "")
+        is_exempt = bool(
+            await users_collection.find_one(
+                {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
+            )
+        )
+
+    if not is_exempt:
+        allowed = await SecurityService.check_sliding_window(
+            chat_id,
+            WorkerConstants.INBOUND_RATE_LIMIT_MAX,
+            WorkerConstants.INBOUND_RATE_LIMIT_WINDOW_SECONDS,
+        )
+        if not allowed:
+            trips = await SecurityService.record_trip(
+                chat_id, WorkerConstants.INBOUND_RATE_LIMIT_WINDOW_SECONDS
+            )
+            logger.warning(f"⛔ Inbound rate limit hit for {chat_id} (trip {trips})")
+            if trips >= WorkerConstants.RATE_LIMIT_ABUSE_TRIP_THRESHOLD:
+                logger.error(
+                    f"🚨 Possible abuse: {chat_id} tripped the rate limit {trips}x"
+                )
+            await whatsapp.send_message(chat_id, Messages.Errors.RATE_LIMITED)
+            return
 
     # Zero-Touch: transient confirmation after intent was detected in pro_flow
     if current_state == UserStates.AWAITING_INTENT_CONFIRMATION:
@@ -145,7 +209,9 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
 
     if current_state != UserStates.PRO_MODE:
         phone = chat_id.replace("@c.us", "")
-        is_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional"})
+        is_pro = await users_collection.find_one(
+            {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
+        )
 
         if not is_pro:
             consent_status = await has_consent(chat_id)
@@ -184,12 +250,17 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
     logger.info(f"🚦 User {chat_id} is in State: {current_state}")
 
     # Politeness Interceptor: handle "thank you" keywords without breaking state
-    if current_state != UserStates.PRO_MODE and normalized_text in Messages.Keywords.THANKS_KEYWORDS:
+    if (
+        current_state != UserStates.PRO_MODE
+        and normalized_text in Messages.Keywords.THANKS_KEYWORDS
+    ):
         await whatsapp.send_message(chat_id, Messages.Customer.YOU_ARE_WELCOME)
         return
 
     # Customer status pull ("סטטוס" / "status" / "?") — customers only, deterministic
-    if current_state not in (UserStates.PRO_MODE,) and not str(current_state).startswith("ADMIN_"):
+    if current_state not in (UserStates.PRO_MODE,) and not str(
+        current_state
+    ).startswith("ADMIN_"):
         stripped_text = (user_text or "").strip()
         is_status_cmd = (
             stripped_text in Messages.Keywords.STATUS_COMMANDS_EXACT
@@ -203,23 +274,38 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
 
     # SOS / Human Handoff Check (customers only — pros have their own help menu)
     sos_keywords = Messages.Keywords.SOS_COMMANDS
-    if user_text and current_state != UserStates.PRO_MODE and any(k in normalized_text for k in sos_keywords):
+    if (
+        user_text
+        and current_state != UserStates.PRO_MODE
+        and any(k in normalized_text for k in sos_keywords)
+    ):
         # Pause bot with 15-minute auto-expiry (Task 1 updated constants)
-        await StateManager.set_state(chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
-        logger.info(f"Bot paused for {chat_id} (triggered by: customer_sos, TTL: {WorkerConstants.PAUSE_TTL_SECONDS}s)")
+        await StateManager.set_state(
+            chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS
+        )
+        logger.info(
+            f"Bot paused for {chat_id} (triggered by: customer_sos, TTL: {WorkerConstants.PAUSE_TTL_SECONDS}s)"
+        )
 
-        active_lead = await leads_collection.find_one({
-            "chat_id": chat_id,
-            "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]}
-        }, sort=[("created_at", -1)])
+        active_lead = await leads_collection.find_one(
+            {
+                "chat_id": chat_id,
+                "status": {
+                    "$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]
+                },
+            },
+            sort=[("created_at", -1)],
+        )
 
         if active_lead:
             await leads_collection.update_one(
                 {"_id": active_lead["_id"]},
-                {"$set": {"is_paused": True, "paused_at": datetime.now(timezone.utc)}}
+                {"$set": {"is_paused": True, "paused_at": datetime.now(timezone.utc)}},
             )
 
-        pro_id = active_lead["pro_id"] if active_lead and "pro_id" in active_lead else None
+        pro_id = (
+            active_lead["pro_id"] if active_lead and "pro_id" in active_lead else None
+        )
         await send_sos_alert(chat_id, user_text, pro_id)
 
         # Notify the pro about the pause (if assigned)
@@ -243,15 +329,25 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
     if current_state == UserStates.PAUSED_FOR_HUMAN:
         await lead_manager.log_message(chat_id, "user", user_text or "")
         # Task 2: Reset 15-minute rolling window
-        await StateManager.set_state(chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
+        await StateManager.set_state(
+            chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS
+        )
 
         # Update paused_at in lead doc to track activity for SLA monitor
         await leads_collection.update_one(
-            {"chat_id": chat_id, "is_paused": True, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]}},
+            {
+                "chat_id": chat_id,
+                "is_paused": True,
+                "status": {
+                    "$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]
+                },
+            },
             {"$set": {"paused_at": datetime.now(timezone.utc)}},
         )
 
-        logger.info(f"Bot paused for {chat_id} — message logged and timeout reset to {WorkerConstants.PAUSE_TTL_SECONDS}s")
+        logger.info(
+            f"Bot paused for {chat_id} — message logged and timeout reset to {WorkerConstants.PAUSE_TTL_SECONDS}s"
+        )
         return
 
     # Reschedule selection — customer has been shown the slot menu and is picking
@@ -264,7 +360,10 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
         meta = await StateManager.get_metadata(chat_id)
         past_pro_id = meta.get("past_pro_id")
         active_lead = await leads_collection.find_one(
-            {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
+            {
+                "chat_id": chat_id,
+                "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
+            },
             sort=[("created_at", -1)],
         )
         reply = (user_text or "").strip()
@@ -310,16 +409,22 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
             if any(kw in normalized_text for kw in Messages.Keywords.CANCEL_KEYWORDS):
                 await leads_collection.update_one(
                     {"_id": booked_lead["_id"]},
-                    {"$set": {
-                        "status": LeadStatus.CANCELLED,
-                        "cancelled_at": datetime.now(timezone.utc),
-                        "cancel_reason": "customer_requested",
-                    }},
+                    {
+                        "$set": {
+                            "status": LeadStatus.CANCELLED,
+                            "cancelled_at": datetime.now(timezone.utc),
+                            "cancel_reason": "customer_requested",
+                        }
+                    },
                 )
                 await StateManager.clear_state(chat_id)
                 await ContextManager.clear_context(chat_id)
-                await whatsapp.send_message(chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD)
-                logger.info(f"Customer {chat_id} cancelled BOOKED lead {booked_lead['_id']}")
+                await whatsapp.send_message(
+                    chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD
+                )
+                logger.info(
+                    f"Customer {chat_id} cancelled BOOKED lead {booked_lead['_id']}"
+                )
                 if pro_id:
                     pro = await users_collection.find_one({"_id": pro_id})
                     if pro and pro.get("phone_number"):
@@ -329,7 +434,8 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
                         await whatsapp.send_message(
                             pro_phone,
                             Messages.Pro.CUSTOMER_CANCELLED.format(
-                                customer_name=booked_lead.get("customer_name") or "הלקוח",
+                                customer_name=booked_lead.get("customer_name")
+                                or "הלקוח",
                                 address=booked_lead.get("full_address") or "לא ידועה",
                             ),
                         )
@@ -337,12 +443,16 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
 
             # Reschedule keyword
             if not pro_id:
-                await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS)
+                await whatsapp.send_message(
+                    chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS
+                )
                 return
 
             available_slots = await get_available_slots(str(pro_id), limit=8)
             if not available_slots:
-                await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS)
+                await whatsapp.send_message(
+                    chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS
+                )
                 return
 
             lines = []
@@ -353,12 +463,16 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
                 slots_context[str(i)] = str(slot["_id"])
 
             await StateManager.set_state(chat_id, UserStates.AWAITING_RESCHEDULE_TIME)
-            await StateManager.set_metadata(chat_id, {"reschedule_slots_context": slots_context})
+            await StateManager.set_metadata(
+                chat_id, {"reschedule_slots_context": slots_context}
+            )
             await whatsapp.send_message(
                 chat_id,
                 Messages.Customer.RESCHEDULE_OFFER.format(slots="\n".join(lines)),
             )
-            logger.info(f"Customer {chat_id} offered reschedule for lead {booked_lead['_id']}")
+            logger.info(
+                f"Customer {chat_id} offered reschedule for lead {booked_lead['_id']}"
+            )
             return
         # booked_lead is None — fall through to normal routing
 
@@ -375,7 +489,9 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
 
     # Handle Pro Mode
     if current_state == UserStates.PRO_MODE:
-        pro_resp = await _handle_pro_cmd(chat_id, user_text, whatsapp, lead_manager, ai=ai)
+        pro_resp = await _handle_pro_cmd(
+            chat_id, user_text, whatsapp, lead_manager, ai=ai
+        )
         if pro_resp:
             await whatsapp.send_message(chat_id, pro_resp)
         # empty string "" means pro_flow already sent everything internally
@@ -394,21 +510,30 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
         # Nevermind/cancel bailout: user wants out of the flow instead of fighting
         # the address gate. Match cancellation keywords BEFORE is_address_complete
         # so we never loop the user back through "אני צריך רחוב ומספר בית".
-        if user_text and any(kw in normalized_text for kw in Messages.Keywords.CANCEL_KEYWORDS):
+        if user_text and any(
+            kw in normalized_text for kw in Messages.Keywords.CANCEL_KEYWORDS
+        ):
             cancelled_lead = await leads_collection.find_one(
-                {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
-                sort=[("created_at", -1)]
+                {
+                    "chat_id": chat_id,
+                    "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
+                },
+                sort=[("created_at", -1)],
             )
             if cancelled_lead:
                 await leads_collection.update_one(
                     {"_id": cancelled_lead["_id"]},
-                    {"$set": {
-                        "status": LeadStatus.CANCELLED,
-                        "cancelled_at": datetime.now(timezone.utc),
-                        "cancel_reason": "user_bailout_awaiting_address",
-                    }},
+                    {
+                        "$set": {
+                            "status": LeadStatus.CANCELLED,
+                            "cancelled_at": datetime.now(timezone.utc),
+                            "cancel_reason": "user_bailout_awaiting_address",
+                        }
+                    },
                 )
-                logger.info(f"🚪 AWAITING_ADDRESS cancelled by user for {chat_id} (lead={cancelled_lead['_id']})")
+                logger.info(
+                    f"🚪 AWAITING_ADDRESS cancelled by user for {chat_id} (lead={cancelled_lead['_id']})"
+                )
             await StateManager.clear_state(chat_id)
             await ContextManager.clear_context(chat_id)
             await whatsapp.send_message(chat_id, Messages.Customer.REQUEST_CANCELLED)
@@ -419,8 +544,11 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
             return
 
         active_lead_await = await leads_collection.find_one(
-            {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
-            sort=[("created_at", -1)]
+            {
+                "chat_id": chat_id,
+                "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
+            },
+            sort=[("created_at", -1)],
         )
         if not active_lead_await:
             await StateManager.clear_state(chat_id)
@@ -437,6 +565,17 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
                 known_floor=lead_facts.get("floor") or "none",
                 known_apartment=lead_facts.get("apartment") or "none",
             )
+            if (
+                not is_exempt
+                and not await SecurityService.check_and_increment_daily_ai_cap(
+                    chat_id, WorkerConstants.DAILY_AI_CALL_CAP
+                )
+            ):
+                logger.warning(f"⛔ Daily AI cap reached for {chat_id}")
+                await whatsapp.send_message(
+                    chat_id, Messages.Errors.DAILY_AI_CAP_REACHED
+                )
+                return
             try:
                 follow_up = await ai.analyze_conversation(
                     history=await lead_manager.get_chat_history(chat_id),
@@ -445,17 +584,22 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
                     require_json=True,
                 )
             except Exception as e:
-                logger.error(f"AWAITING_ADDRESS re-extraction failed for {chat_id}: {e}")
+                logger.error(
+                    f"AWAITING_ADDRESS re-extraction failed for {chat_id}: {e}"
+                )
                 await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
                 return
 
             merged = {
-                "customer_name": follow_up.extracted_data.customer_name or lead_facts.get("customer_name"),
+                "customer_name": follow_up.extracted_data.customer_name
+                or lead_facts.get("customer_name"),
                 "street": follow_up.extracted_data.street or lead_facts.get("street"),
-                "street_number": follow_up.extracted_data.street_number or lead_facts.get("street_number"),
+                "street_number": follow_up.extracted_data.street_number
+                or lead_facts.get("street_number"),
                 "city": follow_up.extracted_data.city or lead_facts.get("city"),
                 "floor": follow_up.extracted_data.floor or lead_facts.get("floor"),
-                "apartment": follow_up.extracted_data.apartment or lead_facts.get("apartment"),
+                "apartment": follow_up.extracted_data.apartment
+                or lead_facts.get("apartment"),
             }
             logger.info(
                 f"🔍 AWAITING_ADDRESS re-extraction for {chat_id}: "
@@ -470,6 +614,7 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
 
             class _AddrProbe:
                 pass
+
             probe = _AddrProbe()
             probe.street = merged.get("street")
             probe.street_number = merged.get("street_number")
@@ -485,24 +630,39 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
                 )
                 await StateManager.clear_state(chat_id)
                 await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_SAVED)
-                logger.info(f"✅ AWAITING_ADDRESS complete for {chat_id}, full_address={full!r}")
+                logger.info(
+                    f"✅ AWAITING_ADDRESS complete for {chat_id}, full_address={full!r}"
+                )
                 return
             else:
                 await whatsapp.send_message(chat_id, reason)
-                logger.info(f"⏳ AWAITING_ADDRESS still missing parts for {chat_id}: {reason}")
+                logger.info(
+                    f"⏳ AWAITING_ADDRESS still missing parts for {chat_id}: {reason}"
+                )
                 return
 
     # Pro Registration keyword check (before auto-detect)
-    if current_state == UserStates.IDLE and normalized_text in Messages.Keywords.REGISTER_COMMANDS:
+    if (
+        current_state == UserStates.IDLE
+        and normalized_text in Messages.Keywords.REGISTER_COMMANDS
+    ):
         await start_onboarding(chat_id, whatsapp)
         return
 
     # Auto-detect Professional on first contact (only active/approved pros)
     if current_state == UserStates.IDLE:
-        is_pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional", "is_active": True})
+        is_pro = await users_collection.find_one(
+            {
+                "phone_number": {"$in": [phone, chat_id]},
+                "role": "professional",
+                "is_active": True,
+            }
+        )
         if is_pro:
             await StateManager.set_state(chat_id, UserStates.PRO_MODE)
-            pro_resp = await _handle_pro_cmd(chat_id, user_text, whatsapp, lead_manager, ai=ai)
+            pro_resp = await _handle_pro_cmd(
+                chat_id, user_text, whatsapp, lead_manager, ai=ai
+            )
             if pro_resp:
                 await whatsapp.send_message(chat_id, pro_resp)
             return
@@ -538,7 +698,9 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
 
         if should_ack:
             await whatsapp.send_message(chat_id, Messages.Customer.STILL_PENDING_REVIEW)
-            await lead_manager.log_message(chat_id, "model", Messages.Customer.STILL_PENDING_REVIEW)
+            await lead_manager.log_message(
+                chat_id, "model", Messages.Customer.STILL_PENDING_REVIEW
+            )
             await leads_collection.update_one(
                 {"_id": pending_admin_lead["_id"]},
                 {"$set": {"last_pending_ack_at": now}},
@@ -585,39 +747,48 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
             logger.warning(f"Media fetch failed for {chat_id}: {e}")
 
     # 4. Check for existing active lead with assigned pro (skip dispatcher if so)
-    active_lead = await leads_collection.find_one({
-        "chat_id": chat_id,
-        "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}
-    }, sort=[("created_at", -1)])
+    active_lead = await leads_collection.find_one(
+        {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
+        sort=[("created_at", -1)],
+    )
 
     existing_pro = None
     if active_lead and active_lead.get("pro_id"):
-        existing_pro = await users_collection.find_one({"_id": active_lead["pro_id"], "is_active": True})
+        existing_pro = await users_collection.find_one(
+            {"_id": active_lead["pro_id"], "is_active": True}
+        )
 
     # Fresh-start guard: if there's no active lead, the user is starting a new
     # conversation. Drop any stale Redis context from a previously-closed lead
     # so the AI doesn't see turns that belong to a different request.
     if not active_lead:
         await ContextManager.clear_context(chat_id)
-        logger.info(f"🧼 No active lead for {chat_id} — cleared stale context before new dispatcher run")
+        logger.info(
+            f"🧼 No active lead for {chat_id} — cleared stale context before new dispatcher run"
+        )
 
     history = await lead_manager.get_chat_history(chat_id)
 
     # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
     if existing_pro and active_lead:
         logger.info(f"⚡ Skipping dispatcher — pro already assigned for {chat_id}")
-        await lead_manager.log_message(chat_id, "user", user_text or (f"[MEDIA: {media_url}]" if media_url else ""))
+        await lead_manager.log_message(
+            chat_id, "user", user_text or (f"[MEDIA: {media_url}]" if media_url else "")
+        )
 
         if is_emergency_detected and not active_lead.get("is_emergency"):
-            await leads_collection.update_one({"_id": active_lead["_id"]}, {"$set": {"is_emergency": True}})
+            await leads_collection.update_one(
+                {"_id": active_lead["_id"]}, {"$set": {"is_emergency": True}}
+            )
             await whatsapp.send_message(chat_id, Messages.Customer.EMERGENCY_ACK)
-            await lead_manager.log_message(chat_id, "model", Messages.Customer.EMERGENCY_ACK)
+            await lead_manager.log_message(
+                chat_id, "model", Messages.Customer.EMERGENCY_ACK
+            )
             active_lead["is_emergency"] = True
 
         if media_url:
             await leads_collection.update_one(
-                {"_id": active_lead["_id"]},
-                {"$addToSet": {"media_urls": media_url}}
+                {"_id": active_lead["_id"]}, {"$addToSet": {"media_urls": media_url}}
             )
 
         extracted_city = active_lead.get("full_address", "")
@@ -626,9 +797,15 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
 
         try:
             pro_response_obj = await _build_pro_response(
-                existing_pro, history, user_text,
-                extracted_city, extracted_issue, transcription,
-                media_data=media_data, media_mime=media_mime, media_url=media_url,
+                existing_pro,
+                history,
+                user_text,
+                extracted_city,
+                extracted_issue,
+                transcription,
+                media_data=media_data,
+                media_mime=media_mime,
+                media_url=media_url,
             )
         except Exception as e:
             logger.error(f"Pro response failed for {chat_id}: {e}")
@@ -639,13 +816,20 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
         await lead_manager.log_message(chat_id, "model", pro_response_obj.reply_to_user)
 
         # Check for deal
-        is_deal = pro_response_obj.is_deal or bool(re.search(r"\[DEAL:.*?\]", pro_response_obj.reply_to_user))
+        is_deal = pro_response_obj.is_deal or bool(
+            re.search(r"\[DEAL:.*?\]", pro_response_obj.reply_to_user)
+        )
         if is_deal:
             try:
                 await _finalize_deal(
-                    chat_id, existing_pro, pro_response_obj,
-                    extracted_city, extracted_issue, transcription,
-                    active_lead["_id"], media_url=media_url,
+                    chat_id,
+                    existing_pro,
+                    pro_response_obj,
+                    extracted_city,
+                    extracted_issue,
+                    transcription,
+                    active_lead["_id"],
+                    media_url=media_url,
                     extracted_name=active_lead.get("customer_name"),
                 )
             except Exception as e:
@@ -682,6 +866,12 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
         known_apartment=sticky["apartment"],
     )
 
+    if not is_exempt and not await SecurityService.check_and_increment_daily_ai_cap(
+        chat_id, WorkerConstants.DAILY_AI_CALL_CAP
+    ):
+        logger.warning(f"⛔ Daily AI cap reached for {chat_id}")
+        await whatsapp.send_message(chat_id, Messages.Errors.DAILY_AI_CAP_REACHED)
+        return
     try:
         dispatcher_response: AIResponse = await ai.analyze_conversation(
             history=dispatcher_history,
@@ -690,7 +880,7 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
             media_data=media_data,
             media_mime_type=media_mime,
             media_url=media_url,
-            require_json=True
+            require_json=True,
         )
     except Exception as e:
         logger.error(f"AI dispatcher failed for {chat_id}: {e}")
@@ -714,7 +904,9 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
             f"lead facts filled in city={extracted_city!r}/issue={extracted_issue!r}"
         )
 
-    logger.info(f"Dispatcher analysis: City={extracted_city}, Issue={extracted_issue}, Transcr={transcription}")
+    logger.info(
+        f"Dispatcher analysis: City={extracted_city}, Issue={extracted_issue}, Transcr={transcription}"
+    )
 
     # --- NEW: Sticky Persistence Gate ---
     # Create or update a "contacted" lead as soon as we have ANY info.
@@ -739,26 +931,33 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
             current_lead_id = active_lead["_id"] if active_lead else None
             if is_emergency_detected:
                 await whatsapp.send_message(chat_id, Messages.Customer.EMERGENCY_ACK)
-                await lead_manager.log_message(chat_id, "model", Messages.Customer.EMERGENCY_ACK)
+                await lead_manager.log_message(
+                    chat_id, "model", Messages.Customer.EMERGENCY_ACK
+                )
         else:
             current_lead_id = active_lead["_id"]
             update_data = {}
-            if ai_city and ai_city != lead_facts.get("city"): update_data["city"] = ai_city
-            if ai_issue and ai_issue != lead_facts.get("issue_type"): update_data["issue_type"] = ai_issue
-            if ai_name and ai_name != lead_facts.get("customer_name"): update_data["customer_name"] = ai_name
-            
+            if ai_city and ai_city != lead_facts.get("city"):
+                update_data["city"] = ai_city
+            if ai_issue and ai_issue != lead_facts.get("issue_type"):
+                update_data["issue_type"] = ai_issue
+            if ai_name and ai_name != lead_facts.get("customer_name"):
+                update_data["customer_name"] = ai_name
+
             if is_emergency_detected and not lead_facts.get("is_emergency"):
                 update_data["is_emergency"] = True
                 await whatsapp.send_message(chat_id, Messages.Customer.EMERGENCY_ACK)
-                await lead_manager.log_message(chat_id, "model", Messages.Customer.EMERGENCY_ACK)
+                await lead_manager.log_message(
+                    chat_id, "model", Messages.Customer.EMERGENCY_ACK
+                )
 
             mongo_ops = {}
             if update_data:
                 mongo_ops["$set"] = update_data
-            
+
             if media_url:
                 mongo_ops["$addToSet"] = {"media_urls": media_url}
-            
+
             if mongo_ops:
                 await leads_collection.update_one({"_id": current_lead_id}, mongo_ops)
                 # Refresh facts for the matching block below
@@ -766,7 +965,12 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
                 extracted_issue = ai_issue or extracted_issue
 
     # Loyalty Check: offer returning customers their previous pro before running normal matching
-    if extracted_city and extracted_issue and extracted_issue != Defaults.UNKNOWN_ISSUE and current_lead_id:
+    if (
+        extracted_city
+        and extracted_issue
+        and extracted_issue != Defaults.UNKNOWN_ISSUE
+        and current_lead_id
+    ):
         current_lead_doc = await leads_collection.find_one({"_id": current_lead_id})
         if current_lead_doc and not current_lead_doc.get("loyalty_offered"):
             past_lead = await leads_collection.find_one(
@@ -782,8 +986,12 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
                         {"_id": current_lead_id},
                         {"$set": {"loyalty_offered": True}},
                     )
-                    await StateManager.set_metadata(chat_id, {"past_pro_id": str(past_pro["_id"])})
-                    await StateManager.set_state(chat_id, UserStates.AWAITING_LOYALTY_CONFIRMATION)
+                    await StateManager.set_metadata(
+                        chat_id, {"past_pro_id": str(past_pro["_id"])}
+                    )
+                    await StateManager.set_state(
+                        chat_id, UserStates.AWAITING_LOYALTY_CONFIRMATION
+                    )
                     loyalty_msg = Messages.Customer.LOYALTY_OFFER.format(
                         pro_name=past_pro.get("business_name", "איש המקצוע")
                     )
@@ -799,7 +1007,9 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
     # persist that sentinel. `extracted_city` is either a real city string or None.
     if extracted_city and extracted_issue and extracted_issue != Defaults.UNKNOWN_ISSUE:
         try:
-            best_pro = await determine_best_pro(issue_type=extracted_issue, location=extracted_city)
+            best_pro = await determine_best_pro(
+                issue_type=extracted_issue, location=extracted_city
+            )
         except Exception as e:
             logger.error(f"Pro matching failed for {chat_id}: {e}")
 
@@ -809,21 +1019,26 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
             if existing_lead and not existing_lead.get("pro_id"):
                 await leads_collection.update_one(
                     {"_id": current_lead_id},
-                    {"$set": {"status": LeadStatus.PENDING_ADMIN_REVIEW}}
+                    {"$set": {"status": LeadStatus.PENDING_ADMIN_REVIEW}},
                 )
-                logger.critical(f"Lead {current_lead_id} for {chat_id} requires admin review — no pro available")
+                logger.critical(
+                    f"Lead {current_lead_id} for {chat_id} requires admin review — no pro available"
+                )
                 await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
-                await lead_manager.log_message(chat_id, "model", Messages.Customer.PENDING_REVIEW)
+                await lead_manager.log_message(
+                    chat_id, "model", Messages.Customer.PENDING_REVIEW
+                )
                 return
 
         if best_pro:
             is_new_assignment = False
             if current_lead_id:
-                existing_lead = await leads_collection.find_one({"_id": current_lead_id})
+                existing_lead = await leads_collection.find_one(
+                    {"_id": current_lead_id}
+                )
                 had_pro = existing_lead and existing_lead.get("pro_id")
                 await leads_collection.update_one(
-                    {"_id": current_lead_id},
-                    {"$set": {"pro_id": best_pro["_id"]}}
+                    {"_id": current_lead_id}, {"$set": {"pro_id": best_pro["_id"]}}
                 )
                 if not had_pro:
                     is_new_assignment = True
@@ -837,35 +1052,47 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
                         if not pro_phone.endswith("@c.us"):
                             pro_phone = f"{pro_phone}@c.us"
                         notify_msg = (
-                            Messages.Pro.EARLY_LEAD_HEADER + "\n\n"
+                            Messages.Pro.EARLY_LEAD_HEADER
+                            + "\n\n"
                             + Messages.Pro.EARLY_LEAD_DETAILS.format(
-                                issue_type=extracted_issue,
-                                city=extracted_city
+                                issue_type=extracted_issue, city=extracted_city
                             )
                             + Messages.Pro.EARLY_LEAD_FOOTER
                         )
                         # Send the CURRENT media only if it's new (to avoid duplicate spam)
                         if media_url:
-                            await whatsapp.send_file_by_url(pro_phone, media_url, caption=notify_msg)
+                            await whatsapp.send_file_by_url(
+                                pro_phone, media_url, caption=notify_msg
+                            )
                         else:
                             await whatsapp.send_message(pro_phone, notify_msg)
-                        
-                        logger.info(f"📢 Notified pro {pro_phone} about lead status from {chat_id}")
+
+                        logger.info(
+                            f"📢 Notified pro {pro_phone} about lead status from {chat_id}"
+                        )
                 except Exception as e:
                     logger.error(f"Failed to notify pro about new lead: {e}")
 
             try:
                 pro_response_obj = await _build_pro_response(
-                    best_pro, history, user_text,
-                    extracted_city, extracted_issue, transcription,
-                    media_data=media_data, media_mime=media_mime, media_url=media_url,
+                    best_pro,
+                    history,
+                    user_text,
+                    extracted_city,
+                    extracted_issue,
+                    transcription,
+                    media_data=media_data,
+                    media_mime=media_mime,
+                    media_url=media_url,
                 )
             except Exception as e:
                 logger.error(f"Pro response build failed for {chat_id}: {e}")
                 pro_response_obj = None
 
     # Select which response to send
-    final_response = pro_response_obj if (best_pro and pro_response_obj) else dispatcher_response
+    final_response = (
+        pro_response_obj if (best_pro and pro_response_obj) else dispatcher_response
+    )
 
     # Send Message to User
     await whatsapp.send_message(chat_id, final_response.reply_to_user)
@@ -881,9 +1108,14 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
     if is_deal and best_pro:
         try:
             await _finalize_deal(
-                chat_id, best_pro, final_response,
-                extracted_city, extracted_issue, transcription,
-                current_lead_id, media_url=media_url,
+                chat_id,
+                best_pro,
+                final_response,
+                extracted_city,
+                extracted_issue,
+                transcription,
+                current_lead_id,
+                media_url=media_url,
                 extracted_name=extracted_name,
             )
         except Exception as e:
@@ -892,8 +1124,18 @@ async def _process_incoming_message_inner(chat_id: str, user_text: str, media_ur
 
 # --- Private Helpers ---
 
-async def _build_pro_response(best_pro, history, user_text, extracted_city, extracted_issue, transcription,
-                               media_data=None, media_mime=None, media_url=None):
+
+async def _build_pro_response(
+    best_pro,
+    history,
+    user_text,
+    extracted_city,
+    extracted_issue,
+    transcription,
+    media_data=None,
+    media_mime=None,
+    media_url=None,
+):
     """Build the pro persona AI response."""
     pro_name = best_pro.get("business_name", Defaults.PROLI_PRO_NAME)
     raw_price_list = best_pro.get("price_list", "")
@@ -901,7 +1143,10 @@ async def _build_pro_response(best_pro, history, user_text, extracted_city, extr
         price_list = ", ".join(f"{k}: {v} ILS" for k, v in raw_price_list.items())
     else:
         price_list = str(raw_price_list) if raw_price_list else ""
-    base_system_prompt = best_pro.get("system_prompt", Messages.AISystemPrompts.PROLI_SCHEDULER_ROLE.format(pro_name=pro_name))
+    base_system_prompt = best_pro.get(
+        "system_prompt",
+        Messages.AISystemPrompts.PROLI_SCHEDULER_ROLE.format(pro_name=pro_name),
+    )
 
     rating = best_pro.get("social_proof", {}).get("rating", 5.0)
     count = best_pro.get("social_proof", {}).get("review_count", 0)
@@ -914,7 +1159,7 @@ async def _build_pro_response(best_pro, history, user_text, extracted_city, extr
         social_proof_text=social_proof_text,
         extracted_city=extracted_city,
         extracted_issue=extracted_issue,
-        transcription=transcription or Defaults.DEFAULT_TRANSCRIPTION
+        transcription=transcription or Defaults.DEFAULT_TRANSCRIPTION,
     )
 
     return await ai.analyze_conversation(
@@ -929,7 +1174,17 @@ async def _build_pro_response(best_pro, history, user_text, extracted_city, extr
     )
 
 
-async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extracted_issue, transcription, current_lead_id, media_url=None, extracted_name=None):
+async def _finalize_deal(
+    chat_id,
+    best_pro,
+    final_response,
+    extracted_city,
+    extracted_issue,
+    transcription,
+    current_lead_id,
+    media_url=None,
+    extracted_name=None,
+):
     """Finalize a deal: create/update lead, set customer to AWAITING_PRO_APPROVAL, send pro interactive buttons."""
     # Hard address gate: never dispatch a pro without street+number+city+floor+apartment.
     ed = final_response.extracted_data
@@ -940,15 +1195,23 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
     )
 
     # Fetch lead to check for emergency status
-    active_lead_doc = await leads_collection.find_one({"_id": current_lead_id}) if current_lead_id else None
-    is_emergency = active_lead_doc.get("is_emergency", False) if active_lead_doc else False
+    active_lead_doc = (
+        await leads_collection.find_one({"_id": current_lead_id})
+        if current_lead_id
+        else None
+    )
+    is_emergency = (
+        active_lead_doc.get("is_emergency", False) if active_lead_doc else False
+    )
 
     ok, reason = is_address_complete(ed)
 
     # Task 3: Bypass for emergency
     bypass_address_logic = False
     if not ok and is_emergency and (ed.city or extracted_city):
-        logger.info(f"🚑 EMERGENCY BYPASS: allowing incomplete address for {chat_id} (city={ed.city or extracted_city})")
+        logger.info(
+            f"🚑 EMERGENCY BYPASS: allowing incomplete address for {chat_id} (city={ed.city or extracted_city})"
+        )
         ok = True
         bypass_address_logic = True
 
@@ -965,7 +1228,9 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
         }
         partial_update = {k: v for k, v in partial_update.items() if v}
         if current_lead_id and partial_update:
-            await leads_collection.update_one({"_id": current_lead_id}, {"$set": partial_update})
+            await leads_collection.update_one(
+                {"_id": current_lead_id}, {"$set": partial_update}
+            )
             logger.info(
                 f"💾 Persisted partial address parts for {chat_id} (lead={current_lead_id}): {list(partial_update.keys())}"
             )
@@ -977,13 +1242,15 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
     logger.info(f"✅ Address gate PASSED for {chat_id}")
 
     d_time = final_response.extracted_data.appointment_time or Defaults.ASAP_TIME
-    
+
     if bypass_address_logic and not (ed.street and ed.street_number):
         d_address = ed.city or extracted_city
     else:
         d_address = compose_full_address(ed)
 
-    d_issue = final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
+    d_issue = (
+        final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
+    )
 
     d_name = final_response.extracted_data.customer_name or extracted_name
 
@@ -1006,11 +1273,8 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
         mongo_ops = {"$set": lead_update}
         if media_url:
             mongo_ops["$addToSet"] = {"media_urls": media_url}
-            
-        await leads_collection.update_one(
-            {"_id": current_lead_id},
-            mongo_ops
-        )
+
+        await leads_collection.update_one({"_id": current_lead_id}, mongo_ops)
         lead = await leads_collection.find_one({"_id": current_lead_id})
     else:
         lead = await lead_manager.create_lead_from_dict(
@@ -1025,7 +1289,7 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
             city=final_response.extracted_data.city,
             floor=final_response.extracted_data.floor,
             apartment=final_response.extracted_data.apartment,
-            media_url=media_url
+            media_url=media_url,
         )
 
     if lead:
@@ -1040,7 +1304,7 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
             chat_id,
             Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
                 pro_name=best_pro.get("business_name", "איש המקצוע")
-            )
+            ),
         )
         logger.info(f"Customer {chat_id} entered AWAITING_PRO_APPROVAL state")
 
@@ -1051,9 +1315,13 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
                 pro_phone = f"{pro_phone}@c.us"
 
             customer_phone = chat_id.replace("@c.us", "")
-            extra_info = f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
+            extra_info = (
+                f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
+            )
 
-            emergency_header = Messages.Pro.EMERGENCY_LEAD_HEADER + "\n\n" if is_emergency else ""
+            emergency_header = (
+                Messages.Pro.EMERGENCY_LEAD_HEADER + "\n\n" if is_emergency else ""
+            )
             loyalty_header = ""
             if lead.get("loyalty_offered"):
                 meta = await StateManager.get_metadata(chat_id)
@@ -1061,17 +1329,23 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
                 if past_pro_id_str and str(best_pro["_id"]) == past_pro_id_str:
                     loyalty_header = Messages.Pro.LOYALTY_LEAD_HEADER + "\n\n"
 
-            approval_msg = emergency_header + loyalty_header + Messages.Pro.APPROVAL_REQUEST.format(
-                customer_name=lead.get("customer_name") or "לקוח",
-                customer_phone=customer_phone,
-                full_address=lead['full_address'],
-                extra_info=extra_info,
-                issue_type=lead['issue_type'],
-                appointment_time=lead['appointment_time'],
+            approval_msg = (
+                emergency_header
+                + loyalty_header
+                + Messages.Pro.APPROVAL_REQUEST.format(
+                    customer_name=lead.get("customer_name") or "לקוח",
+                    customer_phone=customer_phone,
+                    full_address=lead["full_address"],
+                    extra_info=extra_info,
+                    issue_type=lead["issue_type"],
+                    appointment_time=lead["appointment_time"],
+                )
             )
 
             if transcription:
-                approval_msg += Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(transcription=transcription)
+                approval_msg += Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(
+                    transcription=transcription
+                )
 
             # Add media links as text to avoid re-sending files
             all_media = lead.get("media_urls", [])
@@ -1082,7 +1356,9 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
 
             await whatsapp.send_message(pro_phone, approval_msg)
 
-            await whatsapp.send_location_link(pro_phone, lead['full_address'], Messages.Pro.NAVIGATE_TO)
+            await whatsapp.send_location_link(
+                pro_phone, lead["full_address"], Messages.Pro.NAVIGATE_TO
+            )
 
     # Zero-Touch: if the "customer" is actually a registered pro (came via CUSTOMER_MODE),
     # snap them back to PRO_MODE so they can keep running their own business.
@@ -1093,4 +1369,6 @@ async def _finalize_deal(chat_id, best_pro, final_response, extracted_city, extr
     if customer_is_pro:
         await StateManager.set_state(chat_id, UserStates.PRO_MODE)
         await whatsapp.send_message(chat_id, Messages.Pro.AUTO_RETURNED_TO_PRO)
-        logger.info(f"Auto-returned pro-as-customer {chat_id} to PRO_MODE after lead dispatched")
+        logger.info(
+            f"Auto-returned pro-as-customer {chat_id} to PRO_MODE after lead dispatched"
+        )

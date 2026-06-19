@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class LeadStatus(str, Enum):
     NEW = "new"
     CONTACTED = "contacted"
@@ -10,12 +11,13 @@ class LeadStatus(str, Enum):
     CANCELLED = "cancelled"
     PENDING_ADMIN_REVIEW = "pending_admin_review"
 
+
 class UserStates(str, Enum):
-    IDLE = "idle"                      # Default state
-    PRO_MODE = "pro_mode"              # User is acting as a Professional
-    CUSTOMER_MODE = "customer_mode"    # Pro temporarily acting as a customer
+    IDLE = "idle"  # Default state
+    PRO_MODE = "pro_mode"  # User is acting as a Professional
+    CUSTOMER_MODE = "customer_mode"  # Pro temporarily acting as a customer
     AWAITING_INTENT_CONFIRMATION = "awaiting_intent_confirmation"  # Transient: waiting for 1/2 after intent detected
-    CUSTOMER_FLOW = "customer_flow"    # User is in a booking flow
+    CUSTOMER_FLOW = "customer_flow"  # User is in a booking flow
     AWAITING_ADDRESS = "awaiting_address"
     AWAITING_MEDIA = "awaiting_media"
     AWAITING_TIME = "awaiting_time"
@@ -41,6 +43,7 @@ class UserStates(str, Enum):
     # Loyalty flow
     AWAITING_LOYALTY_CONFIRMATION = "awaiting_loyalty_confirmation"
 
+
 class WorkerConstants:
     MAX_PRO_LOAD = 3
     DB_QUERY_LIMIT = 100
@@ -48,15 +51,33 @@ class WorkerConstants:
     SLOT_SEARCH_WINDOW_HOURS = 2
     DEFAULT_CURRENCY = "ILS"
     SOS_TIMEOUT_MINUTES = 60
-    MAX_REASSIGNMENTS = 3          # Max times a lead can be reassigned before closing
-    UNASSIGNED_LEAD_TIMEOUT_HOURS = 24  # Auto-reject CONTACTED leads with no pro after this
-    MAX_PRO_REMINDERS = 3          # Max reminder messages sent to a pro for a stale booked lead
-    STALE_BOOKED_LEAD_HOURS = 24   # Threshold for considering a booked lead "stale"
-    GEO_RADIUS_STEPS = [10000, 20000, 30000]  # Progressive search radius in meters (10km, 20km, 30km)
-    PAUSE_TTL_SECONDS = 900        # 15 minutes — auto-expiry for PAUSED_FOR_HUMAN state
-    PRO_APPROVAL_TTL_SECONDS = 3600  # 60 min — pro must approve a finalized deal within this window
-    PRO_SEARCH_RATE_LIMIT_SECONDS = 600  # 10 min — per-pro cool-down on proactive "מצא" command
+    MAX_REASSIGNMENTS = 3  # Max times a lead can be reassigned before closing
+    UNASSIGNED_LEAD_TIMEOUT_HOURS = (
+        24  # Auto-reject CONTACTED leads with no pro after this
+    )
+    MAX_PRO_REMINDERS = 3  # Max reminder messages sent to a pro for a stale booked lead
+    STALE_BOOKED_LEAD_HOURS = 24  # Threshold for considering a booked lead "stale"
+    GEO_RADIUS_STEPS = [
+        10000,
+        20000,
+        30000,
+    ]  # Progressive search radius in meters (10km, 20km, 30km)
+    PAUSE_TTL_SECONDS = 900  # 15 minutes — auto-expiry for PAUSED_FOR_HUMAN state
+    PRO_APPROVAL_TTL_SECONDS = (
+        3600  # 60 min — pro must approve a finalized deal within this window
+    )
+    PRO_SEARCH_RATE_LIMIT_SECONDS = (
+        600  # 10 min — per-pro cool-down on proactive "מצא" command
+    )
+    # PRO-21 — abuse / cost protection (customers only; pros & admin exempt)
+    INBOUND_RATE_LIMIT_MAX = 20  # max inbound messages per sliding window
+    INBOUND_RATE_LIMIT_WINDOW_SECONDS = 60  # sliding-window size for the inbound limit
+    DAILY_AI_CALL_CAP = 40  # max Gemini/multimodal calls per chat per day (Israel-time)
+    RATE_LIMIT_ABUSE_TRIP_THRESHOLD = (
+        3  # trips within a window → escalate to logger.error (Sentry)
+    )
     # ADMIN_PHONE moved to config.py / env var
+
 
 class APIStatus:
     RUNNING = "Proli is running! 🚀"
@@ -67,6 +88,7 @@ class APIStatus:
     IGNORED_TYPE = "ignored_type"
     IGNORED_RATE_LIMIT = "ignored_rate_limit"
     ERROR = "error"
+
 
 class Defaults:
     PENDING_TIME = "Pending"
@@ -84,6 +106,7 @@ class Defaults:
     DEFAULT_TRANSCRIPTION = "None"
     DEFAULT_MIME_TYPE = "image/jpeg"
 
+
 class AdminDefaults:
     UNKNOWN_PRO = "Unknown"
     MANUAL_SOURCE = "manual_admin"
@@ -91,12 +114,13 @@ class AdminDefaults:
     DEFAULT_PLAN = "basic"
     DEFAULT_RATING = 5.0
 
+
 ISRAEL_CITIES_COORDS = {
     # Hebrew names (primary - AI returns Hebrew)
     "תל אביב": [34.7818, 32.0853],
     "תל-אביב": [34.7818, 32.0853],
     "תל אביב יפו": [34.7818, 32.0853],
-    "ת\"א": [34.7818, 32.0853],
+    'ת"א': [34.7818, 32.0853],
     "ירושלים": [35.2137, 31.7683],
     "חיפה": [34.9896, 32.7940],
     "ראשון לציון": [34.7925, 31.9730],

@@ -54,7 +54,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected: **270 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
+Expected: **281 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
 
 ### Linting / Formatting
 
@@ -97,7 +97,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 | `monitor_service.py` | Stale job detection, reassignment, stale lead reminders (nudger), and escalation to PENDING_ADMIN_REVIEW |
 | `whatsapp_client_service.py` | Green API HTTP client — text-only messages (interactive buttons not supported by Green API) |
 | `cloudinary_client_service.py` | Media upload/retrieval |
-| `security_service.py` | Rate limiting via Redis |
+| `security_service.py` | Rate limiting via Redis — coarse fixed-window webhook DDoS shield (`check_rate_limit`), per-customer inbound sliding window (`check_sliding_window`), and daily per-chat AI/multimodal cost cap (`check_and_increment_daily_ai_cap`, Israel-time reset). Pros/admins exempt; all checks fail-open |
 
 ### Data Layer
 
@@ -114,6 +114,9 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 - `WorkerConstants.GEO_RADIUS_STEPS = [10000, 20000, 30000]`: progressive geo search radii
 - `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state
 - `WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS = 600`: 10-minute per-pro cool-down on the `מצא` proactive stuck-lead search
+- `WorkerConstants.INBOUND_RATE_LIMIT_MAX = 20` / `INBOUND_RATE_LIMIT_WINDOW_SECONDS = 60`: per-customer inbound sliding-window limit (pros/admins exempt)
+- `WorkerConstants.DAILY_AI_CALL_CAP = 40`: per-chat daily ceiling on Gemini/multimodal calls (resets at Israel-time midnight)
+- `WorkerConstants.RATE_LIMIT_ABUSE_TRIP_THRESHOLD = 3`: repeated trips within a window escalate from `logger.warning` to `logger.error` (Sentry)
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions
