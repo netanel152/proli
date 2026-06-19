@@ -296,7 +296,7 @@ python scripts/generate_admin_hash.py
 | `ENVIRONMENT` | `development` | `production` enables JSON logs + PII masking on stdout |
 | `LOG_LEVEL` | `INFO` | Loguru log level |
 | `MAX_CHAT_HISTORY` | `20` | Max messages stored per chat in Redis |
-| `AI_MODELS` | Flash Lite 2.5, Flash 2.5, Flash 1.5 | Gemini model fallback chain |
+| `AI_MODELS` | Flash Lite 3.1, Flash 3.5, Flash 2.5, Flash 1.5 | Gemini model fallback chain |
 | `BACKUP_S3_BUCKET` | — | S3 bucket for automated backup upload |
 | `AWS_ACCESS_KEY_ID` | — | AWS credentials for S3 |
 | `AWS_SECRET_ACCESS_KEY` | — | AWS credentials for S3 |

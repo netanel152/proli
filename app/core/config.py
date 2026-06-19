@@ -2,19 +2,24 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator, model_validator
 import os
 
+
 class Settings(BaseSettings):
     GREEN_API_INSTANCE_ID: str
     GREEN_API_TOKEN: str
     GEMINI_API_KEY: str
     MONGO_URI: str = Field(default="mongodb://localhost:27017/proli_db")
-    
+
     @field_validator("MONGO_URI", mode="before")
     @classmethod
     def assemble_mongo_uri(cls, v: str | None) -> str:
         if v and v != "mongodb://localhost:27017/proli_db":
             return v
         # Try common cloud provider env vars
-        return os.getenv("MONGODB_URI") or os.getenv("MONGO_URL") or "mongodb://localhost:27017/proli_db"
+        return (
+            os.getenv("MONGODB_URI")
+            or os.getenv("MONGO_URL")
+            or "mongodb://localhost:27017/proli_db"
+        )
 
     MONGO_TEST_URI: str | None = None
     MONGO_MAX_POOL_SIZE: int = 100
@@ -28,7 +33,7 @@ class Settings(BaseSettings):
         if v is not None and len(v) < 8:
             raise ValueError("ADMIN_PASSWORD must be at least 8 characters long")
         return v
-    
+
     # Redis
     REDIS_HOST: str = "redis"
     REDIS_PORT: int = 6379
@@ -45,9 +50,14 @@ class Settings(BaseSettings):
     CLOUDINARY_CLOUD_NAME: str
     CLOUDINARY_API_KEY: str
     CLOUDINARY_API_SECRET: str
-    AI_MODELS: list[str] = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-1.5-flash"]
+    AI_MODELS: list[str] = [
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-2.5-flash",
+        "gemini-1.5-flash",
+    ]
     TIMEZONE: str = "Asia/Jerusalem"
-    
+
     # New Configs
     PROJECT_NAME: str = "Proli Bot Server"
     # In production, set to your actual domain(s). Defaults to localhost only.
