@@ -54,7 +54,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected: **248 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
+Expected: **270 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
 
 ### Linting / Formatting
 
