@@ -11,10 +11,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from zoneinfo import ZoneInfo
 
 import pytest
+from bson import ObjectId
 
 import app.services.workflow_service as workflow_service
 from app.core.config import settings
-from app.core.constants import UserStates, WorkerConstants
+from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
 from app.services.security_service import SecurityService
 
@@ -283,3 +284,74 @@ async def test_pro_is_exempt_from_inbound_limit(wired_mocks):
 
     check.assert_not_awaited()
     assert Messages.Errors.RATE_LIMITED not in _sent_texts(workflow_service.whatsapp)
+
+
+@pytest.mark.asyncio
+async def test_admin_is_exempt_from_inbound_limit(wired_mocks, monkeypatch):
+    """The admin phone is never checked against the inbound limiter."""
+    import app.services.admin_flow as admin_flow
+    import app.core.redis_client as redis_client
+
+    monkeypatch.setattr(admin_flow, "handle_admin_message", AsyncMock())
+    monkeypatch.setattr(
+        redis_client, "get_redis_client", AsyncMock(return_value=MagicMock())
+    )
+
+    admin_chat = f"{settings.ADMIN_PHONE}@c.us"
+    check = AsyncMock(return_value=False)
+    with patch.object(
+        workflow_service.SecurityService, "check_sliding_window", new=check
+    ):
+        await workflow_service.process_incoming_message(admin_chat, "ניהול")
+
+    check.assert_not_awaited()
+    assert Messages.Errors.RATE_LIMITED not in _sent_texts(workflow_service.whatsapp)
+
+
+@pytest.mark.asyncio
+async def test_daily_cap_blocks_assigned_pro_fast_path(wired_mocks):
+    """
+    A customer over the daily AI cap with an already-assigned pro (the high-volume
+    fast path) is throttled BEFORE _build_pro_response fires its Gemini call.
+    This is the path the original PRO-21 implementation left uncapped.
+    """
+    _, mock_db = wired_mocks
+    customer = "972500000099@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "role": "professional",
+            "is_active": True,
+            "phone_number": "972588888888",
+            "name": "Pro",
+        }
+    )
+    await mock_db.leads.insert_one(
+        {
+            "chat_id": customer,
+            "status": LeadStatus.NEW,
+            "pro_id": pro_id,
+            "created_at": datetime.now(),
+        }
+    )
+
+    build_pro = AsyncMock()
+    with patch.object(
+        workflow_service.SecurityService,
+        "check_sliding_window",
+        new=AsyncMock(return_value=True),
+    ), patch.object(
+        workflow_service.SecurityService,
+        "check_and_increment_daily_ai_cap",
+        new=AsyncMock(return_value=False),
+    ), patch.object(
+        workflow_service, "_build_pro_response", new=build_pro
+    ):
+        await workflow_service.process_incoming_message(customer, "מה קורה?")
+
+    assert Messages.Errors.DAILY_AI_CAP_REACHED in _sent_texts(
+        workflow_service.whatsapp
+    )
+    build_pro.assert_not_awaited()
+    workflow_service.ai.analyze_conversation.assert_not_awaited()
