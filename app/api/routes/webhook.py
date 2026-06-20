@@ -69,7 +69,7 @@ async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=N
             if not await SecurityService.check_rate_limit(
                 chat_id, limit=50, window_seconds=60
             ):
-                logger.warning(f"⛔ Webhook DDoS shield tripped for {chat_id}")
+                logger.warning(f"⛔ Webhook DDoS shield tripped for ...{chat_id[-8:]}")
                 return {"status": APIStatus.IGNORED_RATE_LIMIT}
 
             # Extract User Text
