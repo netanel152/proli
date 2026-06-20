@@ -182,10 +182,12 @@ async def _process_incoming_message_inner(
             trips = await SecurityService.record_trip(
                 chat_id, WorkerConstants.INBOUND_RATE_LIMIT_WINDOW_SECONDS
             )
-            logger.warning(f"⛔ Inbound rate limit hit for {chat_id} (trip {trips})")
+            logger.warning(
+                f"⛔ Inbound rate limit hit for ...{chat_id[-8:]} (trip {trips})"
+            )
             if trips >= WorkerConstants.RATE_LIMIT_ABUSE_TRIP_THRESHOLD:
                 logger.error(
-                    f"🚨 Possible abuse: {chat_id} tripped the rate limit {trips}x"
+                    f"🚨 Possible abuse: ...{chat_id[-8:]} tripped the rate limit {trips}x"
                 )
             await whatsapp.send_message(chat_id, Messages.Errors.RATE_LIMITED)
             return
@@ -571,7 +573,7 @@ async def _process_incoming_message_inner(
                     chat_id, WorkerConstants.DAILY_AI_CALL_CAP
                 )
             ):
-                logger.warning(f"⛔ Daily AI cap reached for {chat_id}")
+                logger.warning(f"⛔ Daily AI cap reached for ...{chat_id[-8:]}")
                 await whatsapp.send_message(
                     chat_id, Messages.Errors.DAILY_AI_CAP_REACHED
                 )
@@ -794,6 +796,19 @@ async def _process_incoming_message_inner(
         extracted_city = active_lead.get("full_address", "")
         extracted_issue = active_lead.get("issue_type", "")
         transcription = None
+
+        # Daily AI cost cap also applies to the assigned-pro fast path — this is
+        # the highest-volume conversation path and _build_pro_response makes a
+        # Gemini call on every turn. Pros/admins are exempt (is_exempt above).
+        if (
+            not is_exempt
+            and not await SecurityService.check_and_increment_daily_ai_cap(
+                chat_id, WorkerConstants.DAILY_AI_CALL_CAP
+            )
+        ):
+            logger.warning(f"⛔ Daily AI cap reached for ...{chat_id[-8:]}")
+            await whatsapp.send_message(chat_id, Messages.Errors.DAILY_AI_CAP_REACHED)
+            return
 
         try:
             pro_response_obj = await _build_pro_response(

@@ -71,7 +71,7 @@ class SecurityService:
             return count <= limit
 
         except Exception as e:
-            logger.error(f"Sliding-window check failed for {chat_id}: {e}")
+            logger.error(f"Sliding-window check failed for ...{chat_id[-8:]}: {e}")
             return True
 
     @staticmethod
@@ -95,7 +95,7 @@ class SecurityService:
             return count <= cap
 
         except Exception as e:
-            logger.error(f"Daily AI cap check failed for {chat_id}: {e}")
+            logger.error(f"Daily AI cap check failed for ...{chat_id[-8:]}: {e}")
             return True
 
     @staticmethod
@@ -113,5 +113,5 @@ class SecurityService:
                 await redis.expire(key, window_seconds)
             return count
         except Exception as e:
-            logger.error(f"Trip counter failed for {chat_id}: {e}")
+            logger.error(f"Trip counter failed for ...{chat_id[-8:]}: {e}")
             return 0
