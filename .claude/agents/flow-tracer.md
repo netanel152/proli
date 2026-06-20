@@ -1,7 +1,8 @@
 ---
 name: flow-tracer
 description: FSM and message-flow specialist. Given a state transition or a reported bug, traces the full path through workflow_service dispatch, flags broken invariants, and maintains a pattern memory file.
-model: sonnet
+model: opus
+effort: 2
 color: cyan
 tools:
   - Read
@@ -39,6 +40,7 @@ No backward transitions. `pending_admin_review` is a holding state, not terminal
 ## Context-Clearing Triggers
 
 Redis context (last 20 messages) must be cleared when:
+
 - Any transition back to `IDLE`
 - Entering `ONBOARDING_*` from a non-onboarding state
 - A lead is closed, completed, or rejected (customer flow ends)
