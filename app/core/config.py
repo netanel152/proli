@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:8501", "http://localhost:3000"]
     MAX_CHAT_HISTORY: int = 20
     ADMIN_PHONE: str = "972524828796"
+    # On-call number for high-urgency infra alerts (e.g. Green API deauth).
+    # When unset, falls back to ADMIN_PHONE. Set to a separate operator's
+    # number to route paging away from the day-to-day admin channel.
+    ONCALL_PHONE: str | None = None
     WEBHOOK_TOKEN: str | None = None
     ENVIRONMENT: str = "development"  # "production" or "development"
     LOG_LEVEL: str = "INFO"

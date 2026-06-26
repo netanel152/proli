@@ -54,7 +54,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected: **283 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
+Expected: **302 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`).
 
 ### Linting / Formatting
 
@@ -73,7 +73,7 @@ Entry point for Green API webhooks. Its only job is to validate the incoming pay
 
 ### Process 2: ARQ Worker (`app/worker.py` + `app/core/arq_worker.py`)
 
-Picks up `process_message_task` jobs from Redis and calls `workflow_service.process_incoming_message`. Also hosts APScheduler for periodic jobs (SOS healer every 10 mins, stale monitor every 30 mins, stale lead nudger every 4h, daily agenda at 08:00 Israel time).
+Picks up `process_message_task` jobs from Redis and calls `workflow_service.process_incoming_message`. Also hosts APScheduler for periodic jobs (SOS healer every 10 mins, stale monitor every 30 mins, stale lead nudger every 4h, daily agenda at 08:00 Israel time, WhatsApp instance deauth watchdog every 2 mins).
 
 ### Process 3: Streamlit Admin Panel (`admin_panel/`)
 
@@ -93,8 +93,8 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 | `state_manager_service.py` | Redis-backed FSM per `chat_id` (`UserStates` enum); supports custom TTL per state |
 | `context_manager_service.py` | Stores last 20 messages per `chat_id` in Redis |
 | `lead_manager_service.py` | CRUD for leads in MongoDB |
-| `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts |
-| `monitor_service.py` | Stale job detection, reassignment, stale lead reminders (nudger), and escalation to PENDING_ADMIN_REVIEW |
+| `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts; on-call paging via `send_oncall_alert` (SMS-first) |
+| `monitor_service.py` | Stale job detection, reassignment, stale lead reminders (nudger), escalation to PENDING_ADMIN_REVIEW, and Green API deauth detection (`check_whatsapp_instance_state`) |
 | `whatsapp_client_service.py` | Green API HTTP client — text-only messages (interactive buttons not supported by Green API) |
 | `cloudinary_client_service.py` | Media upload/retrieval |
 | `security_service.py` | Rate limiting via Redis — coarse fixed-window webhook DDoS shield (`check_rate_limit`), per-customer inbound sliding window (`check_sliding_window`), and daily per-chat AI/multimodal cost cap (`check_and_increment_daily_ai_cap`, Israel-time reset). Pros/admins exempt; all checks fail-open |
@@ -117,6 +117,9 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 - `WorkerConstants.INBOUND_RATE_LIMIT_MAX = 20` / `INBOUND_RATE_LIMIT_WINDOW_SECONDS = 60`: per-customer inbound sliding-window limit (pros/admins exempt)
 - `WorkerConstants.DAILY_AI_CALL_CAP = 40`: per-chat daily ceiling on Gemini/multimodal calls (resets at Israel-time midnight)
 - `WorkerConstants.RATE_LIMIT_ABUSE_TRIP_THRESHOLD = 3`: repeated trips within a window escalate from `logger.warning` to `logger.error` (Sentry)
+- `WorkerConstants.WA_STATE_CHECK_INTERVAL_MINUTES = 2`: how often the worker polls Green API `getStateInstance`
+- `WorkerConstants.WA_STATE_ALERT_THRESHOLD_MINUTES = 5`: page on-call only after the instance has been non-authorized > this many minutes
+- `WorkerConstants.WA_STATE_REALERT_MINUTES = 60`: re-page interval while the instance stays deauthorized
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions
@@ -129,7 +132,7 @@ Unit tests use `mongomock_motor` (in-memory MongoDB) and mock `whatsapp` and `ai
 
 ### Configuration
 
-All config is in `app/core/config.py` via `pydantic-settings`. Required env vars: `GREEN_API_INSTANCE_ID`, `GREEN_API_TOKEN`, `GEMINI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Optional: `MONGO_URI` (defaults to localhost), `REDIS_URL`, `MONGO_TEST_URI` (for integration tests), `ADMIN_PASSWORD`, `ADMIN_PHONE` (defaults to hardcoded), `WEBHOOK_TOKEN` (enables webhook auth).
+All config is in `app/core/config.py` via `pydantic-settings`. Required env vars: `GREEN_API_INSTANCE_ID`, `GREEN_API_TOKEN`, `GEMINI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Optional: `MONGO_URI` (defaults to localhost), `REDIS_URL`, `MONGO_TEST_URI` (for integration tests), `ADMIN_PASSWORD`, `ADMIN_PHONE` (defaults to hardcoded), `ONCALL_PHONE` (on-call number for infra alerts; defaults to `ADMIN_PHONE`), `WEBHOOK_TOKEN` (enables webhook auth).
 
 ## Session Guidelines
 

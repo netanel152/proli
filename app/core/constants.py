@@ -76,6 +76,15 @@ class WorkerConstants:
     RATE_LIMIT_ABUSE_TRIP_THRESHOLD = (
         3  # trips within a window → escalate to logger.error (Sentry)
     )
+    # PRO-20 — Green API instance deauth monitor (SPOF). The WhatsApp instance
+    # is a single point of failure: if it loses authorization (phone offline,
+    # ban, session drop) no message is processed. A worker job polls
+    # getStateInstance and pages on sustained deauth.
+    WA_STATE_CHECK_INTERVAL_MINUTES = 2  # how often the worker polls getStateInstance
+    WA_STATE_ALERT_THRESHOLD_MINUTES = (
+        5  # page only after the instance has been non-authorized > this long
+    )
+    WA_STATE_REALERT_MINUTES = 60  # re-page interval while the instance stays down
     # ADMIN_PHONE moved to config.py / env var
 
 
