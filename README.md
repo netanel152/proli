@@ -91,6 +91,7 @@ MONGO_URI=mongodb+srv://...          # default: mongodb://localhost:27017/proli_
 MONGO_TEST_URI=mongodb+srv://...     # required only for integration tests
 ADMIN_PASSWORD=...                   # generate hash: python scripts/generate_admin_hash.py
 ADMIN_PHONE=972501234567             # WhatsApp number for SOS alerts
+ONCALL_PHONE=972501234567            # on-call number for infra alerts (defaults to ADMIN_PHONE)
 WEBHOOK_TOKEN=...                    # enables ?token=<value> webhook auth
 ENVIRONMENT=development              # production | development
 ```
@@ -149,7 +150,7 @@ pytest tests/test_matching_service.py
 pytest -m integration
 ```
 
-Expected result: **270 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+Expected result: **302 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 ---
 

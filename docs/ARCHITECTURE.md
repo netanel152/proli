@@ -46,7 +46,7 @@ Customer (WhatsApp)
 
 **ARQ task:** `process_message_task` → `workflow_service.process_incoming_message`
 
-**APScheduler jobs (9 total):**
+**APScheduler jobs (10 total):**
 
 | Job | Schedule | Function |
 |-----|----------|----------|
@@ -59,6 +59,7 @@ Customer (WhatsApp)
 | Lead Janitor | Every 6 h | Auto-reject `CONTACTED` leads with no assigned pro after 24 h |
 | Slot Regeneration | Sunday 01:00 IL | Regenerate appointment slots from recurring weekly templates |
 | Daily Backup | 02:00 IL (daily) | Create gzipped `mongodump`; upload to S3 if `BACKUP_S3_BUCKET` is configured |
+| WhatsApp Deauth Watchdog | Every 2 min | Poll Green API `getStateInstance`; page on-call via `send_oncall_alert` if non-authorized > 5 min |
 
 **Startup/shutdown:** Verifies DB + Redis connectivity, starts APScheduler, updates `worker:heartbeat` key in Redis every 60 s (120 s expiry).
 
@@ -302,7 +303,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | Language | Python 3.12+ | |
 | API framework | FastAPI | Async, OpenAPI built-in |
 | Task queue | ARQ | Lightweight, Redis-backed |
-| Scheduler | APScheduler | 9 cron/interval jobs |
+| Scheduler | APScheduler | 10 cron/interval jobs |
 | AI | Google Gemini (google-genai) | Flash Lite 2.5 → Flash 2.5 → Flash 1.5 fallback |
 | Database | MongoDB 6.0 + Motor | Async driver |
 | Cache/State | Redis | Context, FSM, rate limit, idempotency |
