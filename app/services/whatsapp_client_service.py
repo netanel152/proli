@@ -1,13 +1,21 @@
 import asyncio
 import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
 from app.core.config import settings
 from app.core.logger import logger
 import urllib.parse
 
+
 class WhatsAppClient:
     def __init__(self):
-        self.api_url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}"
+        self.api_url = (
+            f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}"
+        )
         self.api_token = settings.GREEN_API_TOKEN
         self._client: httpx.AsyncClient | None = None
         self._client_lock = asyncio.Lock()
@@ -31,7 +39,7 @@ class WhatsAppClient:
     @retry(
         retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
+        wait=wait_exponential(multiplier=1, min=2, max=10),
     )
     async def _send_request(self, endpoint: str, payload: dict):
         url = f"{self.api_url}/{endpoint}/{self.api_token}"
@@ -43,7 +51,7 @@ class WhatsAppClient:
     @retry(
         retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
+        wait=wait_exponential(multiplier=1, min=2, max=10),
     )
     async def send_message(self, chat_id: str, text: str):
         payload = {"chatId": chat_id, "message": text}
@@ -53,6 +61,24 @@ class WhatsAppClient:
         except Exception as e:
             logger.error(f"Failed to send message to {chat_id}: {e}")
             raise
+
+    async def get_state_instance(self) -> str | None:
+        """Return the Green API instance authorization state (e.g. "authorized",
+        "notAuthorized", "starting", "yellowCard", "blocked") via getStateInstance.
+
+        Best-effort and read-only: returns None on any network/HTTP error so
+        callers (the deauth monitor) can treat "unreachable" the same as
+        "not authorized" without raising. Not wrapped in tenacity — the monitor
+        polls on its own interval, so a single failed probe is fine."""
+        try:
+            client = await self._get_client()
+            url = f"{self.api_url}/getStateInstance/{self.api_token}"
+            resp = await client.get(url)
+            resp.raise_for_status()
+            return resp.json().get("stateInstance")
+        except Exception as e:
+            logger.warning(f"getStateInstance probe failed: {e}")
+            return None
 
     async def send_chat_state_typing(self, chat_id: str) -> None:
         """Show 'typing...' indicator via Green API sendChatStateTyping. Best-effort: failures are
@@ -66,9 +92,11 @@ class WhatsAppClient:
     @retry(
         retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
+        wait=wait_exponential(multiplier=1, min=2, max=10),
     )
-    async def send_location_link(self, chat_id: str, address: str, text_prefix: str = "Navigate here:"):
+    async def send_location_link(
+        self, chat_id: str, address: str, text_prefix: str = "Navigate here:"
+    ):
         encoded_address = urllib.parse.quote(address)
         waze_url = f"https://waze.com/ul?q={encoded_address}"
         message = f"{text_prefix}\n{waze_url}"
@@ -77,14 +105,16 @@ class WhatsAppClient:
     @retry(
         retry=retry_if_exception_type((httpx.NetworkError, httpx.TimeoutException)),
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
+        wait=wait_exponential(multiplier=1, min=2, max=10),
     )
-    async def send_file_by_url(self, chat_id: str, url: str, caption: str = "", file_name: str = "media.jpg"):
+    async def send_file_by_url(
+        self, chat_id: str, url: str, caption: str = "", file_name: str = "media.jpg"
+    ):
         payload = {
             "chatId": chat_id,
             "urlFile": url,
             "fileName": file_name,
-            "caption": caption
+            "caption": caption,
         }
         try:
             await self._send_request("sendFileByUrl", payload)
@@ -92,4 +122,3 @@ class WhatsAppClient:
         except Exception as e:
             logger.error(f"Failed to send file to {chat_id}: {e}")
             raise
-

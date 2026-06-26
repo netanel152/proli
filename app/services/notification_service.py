@@ -16,10 +16,41 @@ async def _send_with_sms_fallback(chat_id: str, message: str) -> bool:
         await whatsapp.send_message(chat_id, message)
         return True
     except Exception as e:
-        logger.warning(f"WhatsApp send failed for {chat_id}: {e}, trying SMS fallback...")
+        logger.warning(
+            f"WhatsApp send failed for {chat_id}: {e}, trying SMS fallback..."
+        )
         if sms_client.is_configured:
             return await sms_client.send_sms(chat_id, message)
         logger.error(f"SMS not configured, message to {chat_id} lost.")
+        return False
+
+
+async def send_oncall_alert(message: str) -> bool:
+    """Deliver a high-urgency infra alert to the on-call operator.
+
+    Used for events where WhatsApp itself may be the failing component (e.g.
+    Green API deauth), so this is *SMS-first*: WhatsApp is only attempted as a
+    last resort. Routes to ONCALL_PHONE when set, else ADMIN_PHONE. Returns True
+    if any channel accepted the message. Sentry CRITICAL (logged by the caller)
+    remains the guaranteed paging channel regardless of this return value."""
+    oncall = settings.ONCALL_PHONE or settings.ADMIN_PHONE
+    # Mask to last 4 digits, matching the project-wide PII logging convention.
+    masked = "***" + oncall[-4:]
+
+    # WhatsApp is the likely-down channel for these alerts — try SMS first.
+    if sms_client.is_configured:
+        if await sms_client.send_sms(oncall, message):
+            logger.info(f"On-call alert delivered via SMS to {masked}")
+            return True
+        logger.warning("On-call SMS failed — attempting WhatsApp as last resort.")
+
+    chat_id = oncall if oncall.endswith("@c.us") else f"{oncall}@c.us"
+    try:
+        await whatsapp.send_message(chat_id, message)
+        logger.info(f"On-call alert delivered via WhatsApp to {masked}")
+        return True
+    except Exception as e:
+        logger.error(f"On-call alert failed on all channels for {masked}: {e}")
         return False
 
 
@@ -28,13 +59,17 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
     try:
         lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
         if not lead or lead.get("status") != LeadStatus.BOOKED:
-            logger.warning(f"send_pro_reminder called for invalid/non-booked lead: {lead_id}")
+            logger.warning(
+                f"send_pro_reminder called for invalid/non-booked lead: {lead_id}"
+            )
             return
 
         # Enforce reminder cap to avoid spamming the pro
         reminder_count = lead.get("reminder_sent_count", 0)
         if reminder_count >= WorkerConstants.MAX_PRO_REMINDERS:
-            logger.info(f"[Reminder] Lead {lead_id} already hit max reminders ({reminder_count}), skipping.")
+            logger.info(
+                f"[Reminder] Lead {lead_id} already hit max reminders ({reminder_count}), skipping."
+            )
             return
 
         pro = await users_collection.find_one({"_id": lead["pro_id"]})
@@ -42,17 +77,22 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
             logger.error(f"Could not find pro or pro phone for lead {lead_id}")
             return
 
-        pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
+        pro_chat_id = (
+            f"{pro['phone_number']}@c.us"
+            if not pro["phone_number"].endswith("@c.us")
+            else pro["phone_number"]
+        )
         message = Messages.Pro.REMINDER
 
         await _send_with_sms_fallback(pro_chat_id, message)
 
         # Increment counter atomically
         await leads_collection.update_one(
-            {"_id": ObjectId(lead_id)},
-            {"$inc": {"reminder_sent_count": 1}}
+            {"_id": ObjectId(lead_id)}, {"$inc": {"reminder_sent_count": 1}}
         )
-        logger.success(f"Sent pro reminder for lead {lead_id} ({reminder_count + 1}/{WorkerConstants.MAX_PRO_REMINDERS}, Trigger: {triggered_by})")
+        logger.success(
+            f"Sent pro reminder for lead {lead_id} ({reminder_count + 1}/{WorkerConstants.MAX_PRO_REMINDERS}, Trigger: {triggered_by})"
+        )
     except Exception as e:
         logger.error(f"Error in send_pro_reminder for lead {lead_id}: {e}")
 
@@ -68,8 +108,13 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
 
         # Fetch active lead for context
         active_lead = await leads_collection.find_one(
-            {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]}},
-            sort=[("created_at", -1)]
+            {
+                "chat_id": chat_id,
+                "status": {
+                    "$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]
+                },
+            },
+            sort=[("created_at", -1)],
         )
 
         if active_lead:
@@ -86,7 +131,9 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
             # `or` covers nullable full_address (None value, not just missing key)
             address = active_lead.get("full_address") or "לא ידוע"
             apt_time = active_lead.get("appointment_time", "לא נקבע")
-            status_he = STATUS_HE.get(active_lead.get("status", ""), active_lead.get("status", ""))
+            status_he = STATUS_HE.get(
+                active_lead.get("status", ""), active_lead.get("status", "")
+            )
             lead_details = (
                 f"📋 *פרטי הפנייה:*\n"
                 f"🛠️ בעיה: {issue}\n"
@@ -104,21 +151,26 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
             pro = await users_collection.find_one({"_id": pro_id})
             if pro and pro.get("phone_number"):
                 pro_phone = pro["phone_number"]
-                pro_chat_id = f"{pro_phone}@c.us" if not pro_phone.endswith('@c.us') else pro_phone
+                pro_chat_id = (
+                    f"{pro_phone}@c.us"
+                    if not pro_phone.endswith("@c.us")
+                    else pro_phone
+                )
                 pro_msg = Messages.SOS.PRO_ALERT.format(
-                    phone=customer_phone_display,
-                    last_message=last_message
+                    phone=customer_phone_display, last_message=last_message
                 )
                 await _send_with_sms_fallback(pro_chat_id, pro_msg)
                 logger.info(f"SOS alert sent to Pro {pro_id} for user {chat_id}")
 
         # 2. Always alert Admin with full details
         admin_phone = settings.ADMIN_PHONE
-        admin_chat_id = f"{admin_phone}@c.us" if not admin_phone.endswith('@c.us') else admin_phone
+        admin_chat_id = (
+            f"{admin_phone}@c.us" if not admin_phone.endswith("@c.us") else admin_phone
+        )
         admin_msg = Messages.SOS.ADMIN_ALERT.format(
             phone=customer_phone_display,
             last_message=last_message,
-            lead_details=lead_details
+            lead_details=lead_details,
         )
         await _send_with_sms_fallback(admin_chat_id, admin_msg)
         logger.info(f"SOS alert sent to Admin for user {chat_id}")

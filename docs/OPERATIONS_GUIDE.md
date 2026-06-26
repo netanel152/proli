@@ -70,7 +70,7 @@ db.settings.update_one(
 )
 ```
 
-Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`.
+Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `whatsapp_monitor_active`.
 
 ---
 
