@@ -1,6 +1,6 @@
 ---
 name: test-writer
-description: Writes and extends pytest tests for the Proli project. Use after implementing a new function, branch, or bugfix that lacks coverage. Writes ONLY under tests/ — never touches app/ or admin_panel/. Knows the async/mocking conventions and the 281-baseline.
+description: Writes and extends pytest tests for the Proli project. Use after implementing a new function, branch, or bugfix that lacks coverage. Writes ONLY under tests/ — never touches app/ or admin_panel/. Knows the async/mocking conventions; the test baseline lives in docs/TESTING.md.
 model: sonnet
 effort: 2
 color: orange
@@ -25,8 +25,8 @@ You write tests **only**. You may create and edit files under `tests/` and nowhe
 
 ## Project test conventions
 
-- **Baseline:** 281 passed, 6 skipped. Integration tests skip without `MONGO_TEST_URI`.
-- **Runner:** `venv/Scripts/pytest --tb=short -q` (Windows). Fallback `python -m pytest`.
+- **Baseline:** lives in `docs/TESTING.md` ("Current status" line) — the single source of truth. Never hardcode a count.
+- **Runner:** `venv/Scripts/pytest --tb=short -q` (Windows). Fallback `python -m pytest`. Deliberately no `-n auto` here — you run small subsets; parallel xdist is test-runner's full-suite concern. Integration tests skip without `MONGO_TEST_URI`.
 - **Async:** `asyncio_mode = strict`. Every async test needs `@pytest.mark.asyncio`. Every awaited dependency is mocked with `AsyncMock`, never `MagicMock` (a `MagicMock` returns a non-awaitable and the test will fail with "coroutine was never awaited" or "object is not awaitable").
 - **Mocking the externals:** `whatsapp` (Green API client), `lead_manager`, Motor/Mongo calls, and Redis (`state_manager_service`, `context_manager_service`) are always mocked — tests never hit real I/O.
 - **DI pattern:** functions in `pro_flow.py` / `customer_flow.py` receive `whatsapp` and `lead_manager` as parameters. Inject mocks through those parameters — do not patch module-level globals unless the function reads one.
@@ -43,8 +43,8 @@ You write tests **only**. You may create and edit files under `tests/` and nowhe
    - context cleared when the flow ends (`context_manager_service.clear_*` called),
    - the right WhatsApp message constant was sent,
    - no `send_interactive_buttons` (Green API constraint) — if the code under test ever calls it, that's a bug; write an assertion that it is NOT called.
-5. Run the suite. Confirm your new tests pass and the rest stays at baseline.
-6. Report: how many tests added, what they cover, and the new count (e.g. "281 → 287").
+5. Run **only the test files you created or changed** (e.g. `venv/Scripts/pytest tests/test_pro_flow.py --tb=short -q`). Do NOT run the full suite — that is test-runner's job, and it runs exactly once per loop.
+6. Report: how many tests added, what they cover, and which files to include in the full run.
 
 ## Test shape to follow
 
@@ -75,5 +75,5 @@ async def test_finish_job_transitions_booked_to_completed_and_clears_context():
 - `tests/` only. Production code is read-only to you.
 - `AsyncMock` for anything awaited. Assert side effects, not internals.
 - Assert against `WorkerConstants`, never magic numbers.
-- Run before reporting. Confirm baseline holds.
+- Run your new/changed test files before reporting. The full suite runs once, by test-runner.
 - If a test reveals a production bug, surface it — don't paper over it.
