@@ -5,9 +5,9 @@ Covers: reset, pro auto-detect, address collection, onboarding, deal finalizatio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
-from app.core.constants import UserStates, LeadStatus
+from app.core.constants import UserStates, LeadStatus, WorkerConstants
 from app.core.messages import Messages
-from app.services.workflow_service import process_incoming_message
+from app.services.workflow_service import process_incoming_message, _strip_deal_marker
 from app.services.ai_engine_service import AIResponse, ExtractedData
 import app.services.workflow_service
 
@@ -681,3 +681,223 @@ async def test_status_command_skipped_in_pro_mode(wf_mocks, monkeypatch):
     await asyncio.sleep(0)
 
     mock_status.assert_not_called()
+
+
+# --- PRO-44: [DEAL:...] marker must never reach the customer ---
+
+
+def test_strip_deal_marker_removes_marker_preserves_surrounding_text():
+    """Marker embedded mid-string is stripped, surrounding customer-facing text kept."""
+    raw = "מעולה, נקבע! [DEAL: 10:00 | הרצל 10 | נזילה] נתראה מחר!"
+    cleaned = _strip_deal_marker(raw)
+
+    assert "[DEAL" not in cleaned
+    assert "מעולה, נקבע!" in cleaned
+    assert "נתראה מחר!" in cleaned
+
+
+def test_strip_deal_marker_trims_extra_whitespace():
+    """Leading/trailing whitespace around the text must be trimmed."""
+    raw = "   שלום, מה שלומך?   "
+    cleaned = _strip_deal_marker(raw)
+
+    assert cleaned == "שלום, מה שלומך?"
+
+
+def test_strip_deal_marker_no_marker_returns_text_unchanged():
+    """Text with no marker at all is returned trimmed but otherwise untouched."""
+    raw = "  אין כאן שום סימון מיוחד  "
+    cleaned = _strip_deal_marker(raw)
+
+    assert cleaned == "אין כאן שום סימון מיוחד"
+    assert "[DEAL" not in cleaned
+
+
+def test_strip_deal_marker_removes_multiple_markers():
+    """More than one marker in the same string is fully stripped, not just the first."""
+    raw = "התחלה [DEAL: A] אמצע [DEAL: B] סוף"
+    cleaned = _strip_deal_marker(raw)
+
+    assert "[DEAL" not in cleaned
+    assert "התחלה" in cleaned and "אמצע" in cleaned and "סוף" in cleaned
+
+
+def test_strip_deal_marker_handles_empty_and_none_input():
+    """Empty string and None (the `text or \"\"` guard) both return ''."""
+    assert _strip_deal_marker("") == ""
+    assert _strip_deal_marker(None) == ""
+
+
+def test_strip_deal_marker_unclosed_bracket_is_not_stripped():
+    """Documents current behavior: a malformed marker with no closing ']'
+    is not matched by the non-greedy regex, so it is left in place."""
+    raw = "סיימנו [DEAL: no closing bracket"
+    cleaned = _strip_deal_marker(raw)
+
+    assert cleaned == raw
+
+
+@pytest.mark.asyncio
+async def test_assigned_pro_fast_path_strips_deal_marker_and_finalizes(wf_mocks, mock_db):
+    """
+    Regression PRO-44: on the "pro already assigned" fast path, a raw [DEAL:...]
+    marker embedded in reply_to_user (fallback signal because the AI didn't set
+    the structured is_deal flag) must be stripped before the text is sent/logged,
+    while the surrounding customer-facing text is preserved. The deal must still
+    be finalized (booking side effects fire) because detection runs on the raw
+    text before cleaning.
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, mock_lm = wf_mocks
+
+    chat_id = "972501119999@c.us"
+    pro_id = ObjectId()
+    lead_id = ObjectId()
+
+    await mock_db.users.insert_one({
+        "_id": pro_id,
+        "business_name": "Marker Pro",
+        "phone_number": "972500009999",
+        "is_active": True,
+    })
+    await mock_db.leads.insert_one({
+        "_id": lead_id,
+        "chat_id": chat_id,
+        "status": LeadStatus.CONTACTED,
+        "pro_id": pro_id,
+        "created_at": "2026-01-01",
+    })
+
+    raw_reply = "מעולה, נקבע! [DEAL: 10:00 | הרצל 10 | נזילה] נתראה מחר!"
+    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
+        reply_to_user=raw_reply,
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="נזילה",
+            street="הרצל", street_number="10", floor="2", apartment="4",
+            appointment_time="10:00",
+        ),
+        # Structured flag missed by the AI — the marker is the fallback signal.
+        transcription=None, is_deal=False,
+    ))
+
+    await process_incoming_message(chat_id, "אפשר מחר בעשר")
+
+    expected_cleaned = _strip_deal_marker(raw_reply)
+    assert "[DEAL" not in expected_cleaned
+    assert "מעולה, נקבע!" in expected_cleaned
+    assert "נתראה מחר!" in expected_cleaned
+
+    mock_wa.send_message.assert_any_call(chat_id, expected_cleaned)
+    mock_lm.log_message.assert_any_call(chat_id, "model", expected_cleaned)
+
+    # Marker must never leak to the customer (or anywhere) via WhatsApp
+    for call in mock_wa.send_message.call_args_list:
+        assert "[DEAL" not in str(call.args[1])
+    for call in mock_lm.log_message.call_args_list:
+        assert "[DEAL" not in str(call.args[-1])
+
+    # Deal still finalized despite is_deal=False: customer moved to
+    # AWAITING_PRO_APPROVAL and the pro received the approval request.
+    mock_state.set_state.assert_any_call(
+        chat_id,
+        UserStates.AWAITING_PRO_APPROVAL,
+        ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
+    )
+    pro_calls = [
+        c for c in mock_wa.send_message.call_args_list
+        if c.args[0] == "972500009999@c.us"
+    ]
+    assert len(pro_calls) >= 1
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["status"] == LeadStatus.NEW
+    assert updated_lead["pro_id"] == pro_id
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_path_with_best_pro_strips_deal_marker_and_finalizes(
+    wf_mocks, monkeypatch, mock_db
+):
+    """
+    Regression PRO-44: same marker-stripping guarantee on the main dispatcher
+    path (no pro assigned yet -> matching finds best_pro -> pro-persona reply
+    used as final_response). Marker must be stripped from the sent/logged text
+    but the deal must still be finalized.
+    """
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+
+    chat_id = "972501115555@c.us"
+    pro_id = ObjectId()
+    lead_id = ObjectId()
+
+    pro_doc = {
+        "_id": pro_id,
+        "business_name": "Test Pro",
+        "phone_number": "972500001111",
+        "service_areas": ["Tel Aviv"],
+        "is_active": True,
+    }
+    await mock_db.users.insert_one(pro_doc)
+
+    # Pre-existing CONTACTED lead with no pro assigned yet, so the dispatcher
+    # phase updates this real document instead of routing through the
+    # (mocked) create_lead_from_dict — letting _finalize_deal's real
+    # find_one/update_one calls resolve against an actual document.
+    await mock_db.leads.insert_one({
+        "_id": lead_id,
+        "chat_id": chat_id,
+        "status": LeadStatus.CONTACTED,
+        "created_at": "2026-01-01",
+    })
+
+    dispatcher_resp = AIResponse(
+        reply_to_user="מצאתי לך בעל מקצוע",
+        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", appointment_time=None),
+        transcription=None, is_deal=False,
+    )
+    raw_pro_reply = "מעולה! [DEAL: 10:00 | Herzl 10 | Leak] מחכה לך!"
+    pro_resp = AIResponse(
+        reply_to_user=raw_pro_reply,
+        extracted_data=ExtractedData(
+            city="Tel Aviv", issue="Leak",
+            street="Herzl", street_number="10", floor="2", apartment="4",
+            appointment_time="10:00",
+        ),
+        # Structured flag missed by the AI — the marker is the fallback signal.
+        transcription=None, is_deal=False,
+    )
+    mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
+
+    monkeypatch.setattr(
+        app.services.workflow_service, "determine_best_pro", AsyncMock(return_value=pro_doc)
+    )
+
+    await process_incoming_message(chat_id, "יש לי נזילה בתל אביב")
+
+    expected_cleaned = _strip_deal_marker(raw_pro_reply)
+    assert "[DEAL" not in expected_cleaned
+    assert "מעולה!" in expected_cleaned
+    assert "מחכה לך!" in expected_cleaned
+
+    mock_wa.send_message.assert_any_call(chat_id, expected_cleaned)
+    mock_lm.log_message.assert_any_call(chat_id, "model", expected_cleaned)
+
+    # Marker must never leak to the customer (or anywhere) via WhatsApp
+    for call in mock_wa.send_message.call_args_list:
+        assert "[DEAL" not in str(call.args[1])
+
+    # Deal still finalized despite is_deal=False: customer moved to
+    # AWAITING_PRO_APPROVAL and the pro received the approval request.
+    mock_state.set_state.assert_any_call(
+        chat_id,
+        UserStates.AWAITING_PRO_APPROVAL,
+        ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
+    )
+    pro_calls = [
+        c for c in mock_wa.send_message.call_args_list
+        if c.args[0] == "972500001111@c.us"
+    ]
+    assert len(pro_calls) >= 1
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["status"] == LeadStatus.NEW
+    assert updated_lead["pro_id"] == pro_id

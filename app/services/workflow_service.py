@@ -51,6 +51,20 @@ lead_manager = LeadManager()
 
 _IL_TZ = pytz.timezone("Asia/Jerusalem")
 
+# Internal deal marker the AI sometimes embeds in reply_to_user as a fallback
+# deal-detection signal. It must never reach the customer.
+DEAL_MARKER_RE = re.compile(r"\[DEAL:.*?\]", re.DOTALL)
+
+
+def _strip_deal_marker(text: str) -> str:
+    """Strip the internal [DEAL:...] marker from customer-facing text.
+
+    Detection must run on the original (raw) text before calling this —
+    this only cleans the copy that gets sent/logged.
+    """
+    cleaned = DEAL_MARKER_RE.sub("", text or "")
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
 # Pro business keywords that must always route to pro_flow, even mid-CUSTOMER_MODE
 PRO_BUSINESS_KEYWORDS = (
     set(Messages.Keywords.APPROVE_COMMANDS)
@@ -827,13 +841,15 @@ async def _process_incoming_message_inner(
             await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
             return
 
-        await whatsapp.send_message(chat_id, pro_response_obj.reply_to_user)
-        await lead_manager.log_message(chat_id, "model", pro_response_obj.reply_to_user)
-
-        # Check for deal
+        # Check for deal on the raw text, then send/log the cleaned copy —
+        # the [DEAL:...] marker must never reach the customer.
         is_deal = pro_response_obj.is_deal or bool(
-            re.search(r"\[DEAL:.*?\]", pro_response_obj.reply_to_user)
+            DEAL_MARKER_RE.search(pro_response_obj.reply_to_user)
         )
+        cleaned_reply = _strip_deal_marker(pro_response_obj.reply_to_user)
+        await whatsapp.send_message(chat_id, cleaned_reply)
+        await lead_manager.log_message(chat_id, "model", cleaned_reply)
+
         if is_deal:
             try:
                 await _finalize_deal(
@@ -1109,16 +1125,18 @@ async def _process_incoming_message_inner(
         pro_response_obj if (best_pro and pro_response_obj) else dispatcher_response
     )
 
-    # Send Message to User
-    await whatsapp.send_message(chat_id, final_response.reply_to_user)
-    await lead_manager.log_message(chat_id, "model", final_response.reply_to_user)
-
-    # 7. Check for [DEAL] or Structured Booking
+    # 7. Check for [DEAL] or Structured Booking — detect on the raw text
+    # before stripping the marker for the customer-facing send.
     is_deal = final_response.is_deal
 
-    deal_string_match = re.search(r"\[DEAL:.*?\]", final_response.reply_to_user)
+    deal_string_match = DEAL_MARKER_RE.search(final_response.reply_to_user)
     if deal_string_match:
         is_deal = True
+
+    # Send Message to User — cleaned copy, marker must never leak to the customer.
+    cleaned_reply = _strip_deal_marker(final_response.reply_to_user)
+    await whatsapp.send_message(chat_id, cleaned_reply)
+    await lead_manager.log_message(chat_id, "model", cleaned_reply)
 
     if is_deal and best_pro:
         try:
