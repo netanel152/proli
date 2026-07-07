@@ -1,5 +1,5 @@
 ---
-description: Pull a Linear issue, implement it on a feature branch, review + test + sync docs via subagents, open a PR, and move the issue to Done. One issue per run.
+description: Pull a Linear issue, implement it on a feature branch, review + test + sync docs via subagents, open a PR, and move the issue to In Review. One issue per run.
 argument-hint: <ISSUE-ID> (e.g. PRO-123)
 allowed-tools: Bash(git:*), Bash(gh:*), Bash(venv/Scripts/pytest:*), Bash(python -m pytest:*), Read, Grep, Glob, Edit, Write
 model: opus
@@ -22,6 +22,7 @@ Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live
 - **Stop if the working tree is dirty.** If `git status` above shows uncommitted changes, stop and tell me to stash or commit first — do not build on a dirty tree.
 - **Stuck > 15 min of effort or blocked on a real ambiguity → stop and ask.** Don't guess at unclear requirements; post what you need on the issue and pause.
 - **You are the implementer.** Write the production code yourself. Delegate review, tests, and docs to the subagents below — never delegate the implementation.
+- **Run all subagents in the foreground (blocking).** Never background a subagent and poll its output file with shell sleep loops.
 
 ## The loop
 
@@ -35,13 +36,13 @@ Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live
 
 **5. Implement.** Write the code, file by file. Respect every Proli convention: async safety, dependency injection through parameters in pro_flow/customer_flow, state writes through state_manager_service with the right WorkerConstants TTL, context cleared on flow exit, no hardcoded secrets, PII masked in logs.
 
-**6. Tests.** Delegate to the **test-writer** subagent to add coverage for the new/changed branches. Then delegate to the **test-runner** subagent to run the suite. Baseline is 281 passed, 6 skipped — confirm no regressions. If test-runner reports failures, fix the production code yourself and re-run until green.
+**6. Tests.** Delegate to the **test-writer** subagent to add coverage for the new/changed branches (it runs only its own new/changed test files). Then delegate to the **test-runner** subagent to run the full suite — exactly once per loop. The baseline lives in `docs/TESTING.md` ("Current status" line): fewer passed = regression; more passed = note "update baseline in docs/TESTING.md". If test-runner reports failures, fix the production code yourself and re-run until green.
 
 **7. Review.** Delegate to the **code-reviewer** subagent. If it returns BLOCKERS, fix them and re-review. WARNINGS: fix if quick, otherwise note them in the PR description. If the change touches `admin_panel/`, also delegate to the **ux-reviewer** subagent.
 
 **8. Sync docs.** Delegate to the **docs-syncer** subagent (incremental mode) to update any docs invalidated by this change.
 
-**9. Commit & PR.** Stage the changes, write a commit message referencing $1 (e.g. `feat($1): <summary>`), and open a PR with `gh pr create`. The PR body must include: a one-paragraph summary, the acceptance criteria checked off, the code-reviewer's verdict, and the test count (e.g. "281 → 287").
+**9. Commit & PR.** Stage the changes, write a commit message referencing $1 (e.g. `feat($1): <summary>`), and open a PR with `gh pr create`. The PR body must include: a one-paragraph summary, the acceptance criteria checked off, the code-reviewer's verdict, and the test count as "<old from docs/TESTING.md> → <new>". If the change touched `app/core/constants.py` (new state, TTL, or lifecycle value), add a PR checklist line: "Manually review `.claude/agents/flow-tracer.md` and `code-reviewer.md` for stale hardcoded facts."
 
 **10. Close the loop in Linear.** Post a comment on $1 summarizing what was implemented and link the PR. Move the issue to "In Review" (not Done — a human merges the PR). 
 
