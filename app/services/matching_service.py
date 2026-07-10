@@ -4,7 +4,9 @@ from app.core.constants import LeadStatus, WorkerConstants, ISRAEL_CITIES_COORDS
 from app.services.geocoding_service import resolve_city_to_coords
 from app.services.scheduling_service import check_pro_availability
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 from bson import ObjectId
+
 
 def get_coordinates(city_name: str):
     """
@@ -20,7 +22,10 @@ def get_coordinates(city_name: str):
         return None
     return ISRAEL_CITIES_COORDS.get(city_name.lower().strip())
 
-async def determine_best_pro(issue_type: str = None, location: str = None, excluded_pro_ids: list = None) -> dict:
+
+async def determine_best_pro(
+    issue_type: str = None, location: str = None, excluded_pro_ids: list = None
+) -> dict:
     """
     Intelligent Routing Engine with Progressive Geo-Spatial Search:
     1. Active Status
@@ -34,7 +39,7 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
         base_filter = {
             "is_active": True,
             "role": "professional",
-            "pending_approval": {"$ne": True}
+            "pending_approval": {"$ne": True},
         }
 
         if excluded_pro_ids:
@@ -55,7 +60,9 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
             geo_enabled = True
             # Progressive $geoNear — expand radius until we find candidates
             for radius in WorkerConstants.GEO_RADIUS_STEPS:
-                logger.info(f"📍 Geo-Spatial search at {radius // 1000}km for '{location}' at {coordinates}")
+                logger.info(
+                    f"📍 Geo-Spatial search at {radius // 1000}km for '{location}' at {coordinates}"
+                )
                 pipeline = [
                     {
                         "$geoNear": {
@@ -74,9 +81,13 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
                     matching_pros.append(doc)
 
                 if matching_pros:
-                    logger.info(f"✅ Found {len(matching_pros)} pros within {radius // 1000}km")
+                    logger.info(
+                        f"✅ Found {len(matching_pros)} pros within {radius // 1000}km"
+                    )
                     break
-                logger.info(f"No pros found within {radius // 1000}km, expanding radius...")
+                logger.info(
+                    f"No pros found within {radius // 1000}km, expanding radius..."
+                )
 
             if not matching_pros:
                 logger.critical(
@@ -86,16 +97,25 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
                 return None
         elif location:
             # Fallback to Regex on service_areas
-            query = {**base_filter, "service_areas": {"$regex": location, "$options": "i"}}
+            query = {
+                **base_filter,
+                "service_areas": {"$regex": location, "$options": "i"},
+            }
             logger.info(f"🔍 Text-based location query for '{location}'")
             cursor = users_collection.find(query)
             matching_pros = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
 
             # Reverse match (only if text-based search found nothing)
             if not matching_pros:
-                logger.info(f"No direct location match for '{location}', trying reverse match...")
-                all_pros_cursor = users_collection.find({"is_active": True, "role": "professional"})
-                all_pros = await all_pros_cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+                logger.info(
+                    f"No direct location match for '{location}', trying reverse match..."
+                )
+                all_pros_cursor = users_collection.find(
+                    {"is_active": True, "role": "professional"}
+                )
+                all_pros = await all_pros_cursor.to_list(
+                    length=WorkerConstants.DB_QUERY_LIMIT
+                )
 
                 for pro in all_pros:
                     areas = pro.get("service_areas", [])
@@ -105,17 +125,23 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
             logger.info("⚠️ No location provided for routing.")
 
         if not matching_pros:
-            logger.warning(f"No pros found for location '{location}'. Lead requires admin review.")
+            logger.warning(
+                f"No pros found for location '{location}'. Lead requires admin review."
+            )
             return None
 
         # 3. Load Balancing — batch-fetch active lead counts
         pro_ids = [pro["_id"] for pro in matching_pros]
         load_pipeline = [
-            {"$match": {
-                "pro_id": {"$in": pro_ids},
-                "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]}
-            }},
-            {"$group": {"_id": "$pro_id", "count": {"$sum": 1}}}
+            {
+                "$match": {
+                    "pro_id": {"$in": pro_ids},
+                    "status": {
+                        "$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]
+                    },
+                }
+            },
+            {"$group": {"_id": "$pro_id", "count": {"$sum": 1}}},
         ]
         load_counts = {}
         async for doc in leads_collection.aggregate(load_pipeline):
@@ -135,18 +161,24 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
                 except Exception:
                     pass
 
-                candidates.append({
-                    "pro": pro,
-                    "load": current_load,
-                    "rating": rating,
-                    "has_slots": has_slots,
-                    "no_shows": no_shows,
-                })
+                candidates.append(
+                    {
+                        "pro": pro,
+                        "load": current_load,
+                        "rating": rating,
+                        "has_slots": has_slots,
+                        "no_shows": no_shows,
+                    }
+                )
             else:
-                logger.debug(f"Skipping Pro '{pro.get('business_name')}' - Overloaded ({current_load} active leads)")
+                logger.debug(
+                    f"Skipping Pro '{pro.get('business_name')}' - Overloaded ({current_load} active leads)"
+                )
 
         if not candidates:
-            logger.warning("All matching pros are overloaded. No qualified pro available.")
+            logger.warning(
+                "All matching pros are overloaded. No qualified pro available."
+            )
             return None
 
         # 4. Final Selection — sort by composite score (rating + slots - no-shows)
@@ -162,19 +194,27 @@ async def determine_best_pro(issue_type: str = None, location: str = None, exclu
             f"✅ {route_type}-Routing: Selected '{selected['pro'].get('business_name')}' "
             f"(Rating: {selected['rating']}, Load: {selected['load']})"
         )
-        return selected['pro']
+        return selected["pro"]
 
     except Exception as e:
         logger.error(f"Error in determine_best_pro: {e}")
         return None
 
-async def book_slot_for_lead(pro_id: str, lead_created_at: datetime) -> bool:
+
+async def book_slot_for_lead(
+    pro_id: str, lead_created_at: datetime
+) -> Optional[ObjectId]:
     """
     Attempts to book a slot for the pro around the lead creation time.
+
+    Returns the booked slot's ``_id`` on success, or ``None`` when no slot
+    was available (or on error). Callers persist this id as the lead's
+    ``booked_slot_id`` so release/reschedule paths free the exact reserved
+    slot — never a sibling slot from another active job.
     """
     try:
         if not lead_created_at:
-            return False
+            return None
 
         # Ensure UTC
         if lead_created_at.tzinfo is None:
@@ -182,7 +222,9 @@ async def book_slot_for_lead(pro_id: str, lead_created_at: datetime) -> bool:
 
         # 1. Calculate Estimated Slot Time (Round up to next hour)
         # e.g., 14:15 -> 15:00
-        estimated_time = lead_created_at.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        estimated_time = lead_created_at.replace(
+            minute=0, second=0, microsecond=0
+        ) + timedelta(hours=1)
 
         # 2. Define Search Window (+/- 2 hours)
         start_window = estimated_time - timedelta(hours=2)
@@ -193,19 +235,23 @@ async def book_slot_for_lead(pro_id: str, lead_created_at: datetime) -> bool:
             {
                 "pro_id": ObjectId(pro_id) if isinstance(pro_id, str) else pro_id,
                 "is_taken": False,
-                "start_time": {"$gte": start_window, "$lte": end_window}
+                "start_time": {"$gte": start_window, "$lte": end_window},
             },
             {"$set": {"is_taken": True}},
-            sort=[("start_time", 1)]
+            sort=[("start_time", 1)],
         )
 
         if slot:
-            logger.info(f"📅 Booked slot {slot['_id']} for Pro {pro_id} at {slot['start_time']}")
-            return True
+            logger.info(
+                f"📅 Booked slot {slot['_id']} for Pro {pro_id} at {slot['start_time']}"
+            )
+            return slot["_id"]
         else:
-            logger.info(f"⚠️ No available slot found for Pro {pro_id} near {estimated_time}")
-            return False
+            logger.info(
+                f"⚠️ No available slot found for Pro {pro_id} near {estimated_time}"
+            )
+            return None
 
     except Exception as e:
         logger.error(f"Error in book_slot_for_lead: {e}")
-        return False
+        return None

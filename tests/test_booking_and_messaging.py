@@ -6,6 +6,7 @@ from app.services import matching_service, whatsapp_client_service
 
 # --- Task 1: Test Booking Logic ---
 
+
 @pytest.mark.asyncio
 async def test_book_slot_for_lead_success(mock_db, monkeypatch):
     """
@@ -17,32 +18,34 @@ async def test_book_slot_for_lead_success(mock_db, monkeypatch):
     # 2. Setup Data
     pro_id = ObjectId()
     lead_created_at = datetime.now(timezone.utc)
-    
+
     # Logic in matching_service:
     # estimated_time = lead_created_at + 1h (rounded to hour)
     # window = +/- 2h
     # So if now is 10:30, est is 11:30 -> 12:00? No, replace(minute=0) + 1h.
     # 10:30 -> 10:00 + 1h = 11:00.
     # Window: 09:00 to 13:00.
-    
+
     # Let's create a slot at 11:00
-    slot_time = lead_created_at.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    
-    await mock_db.slots.insert_one({
-        "pro_id": pro_id,
-        "is_taken": False,
-        "start_time": slot_time
-    })
+    slot_time = lead_created_at.replace(minute=0, second=0, microsecond=0) + timedelta(
+        hours=1
+    )
+
+    await mock_db.slots.insert_one(
+        {"pro_id": pro_id, "is_taken": False, "start_time": slot_time}
+    )
 
     # 3. Action
     result = await matching_service.book_slot_for_lead(str(pro_id), lead_created_at)
 
-    # 4. Assertion
-    assert result is True
-    
-    # Verify DB update
+    # 4. Assertion — returns the booked slot's ObjectId, not a bool.
     updated_slot = await mock_db.slots.find_one({"pro_id": pro_id})
+    assert result == updated_slot["_id"]
+    assert isinstance(result, ObjectId)
+
+    # Verify DB update
     assert updated_slot["is_taken"] is True
+
 
 @pytest.mark.asyncio
 async def test_book_slot_for_lead_no_slot(mock_db, monkeypatch):
@@ -50,15 +53,16 @@ async def test_book_slot_for_lead_no_slot(mock_db, monkeypatch):
     Test that booking fails gracefully when no slot is available.
     """
     monkeypatch.setattr(matching_service, "slots_collection", mock_db.slots)
-    
+
     pro_id = ObjectId()
     lead_created_at = datetime.now(timezone.utc)
-    
+
     # Ensure DB is empty for this pro
     await mock_db.slots.delete_many({"pro_id": pro_id})
 
     result = await matching_service.book_slot_for_lead(str(pro_id), lead_created_at)
-    assert result is False
+    assert result is None
+
 
 @pytest.mark.asyncio
 async def test_book_slot_for_lead_already_taken(mock_db, monkeypatch):
@@ -66,16 +70,16 @@ async def test_book_slot_for_lead_already_taken(mock_db, monkeypatch):
     Test that booking fails if the only matching slot is already taken.
     """
     monkeypatch.setattr(matching_service, "slots_collection", mock_db.slots)
-    
+
     pro_id = ObjectId()
     lead_created_at = datetime.now(timezone.utc)
-    slot_time = lead_created_at.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    slot_time = lead_created_at.replace(minute=0, second=0, microsecond=0) + timedelta(
+        hours=1
+    )
 
-    await mock_db.slots.insert_one({
-        "pro_id": pro_id,
-        "is_taken": True, # Already taken
-        "start_time": slot_time
-    })
+    await mock_db.slots.insert_one(
+        {"pro_id": pro_id, "is_taken": True, "start_time": slot_time}  # Already taken
+    )
 
     result = await matching_service.book_slot_for_lead(str(pro_id), lead_created_at)
-    assert result is False
+    assert result is None

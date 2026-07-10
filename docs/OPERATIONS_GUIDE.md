@@ -264,7 +264,7 @@ python scripts/generate_admin_hash.py
 
 ### Slot booking atomicity
 
-`book_slot_for_lead` uses MongoDB `find_one_and_update` to atomically find a free slot and mark it taken — preventing double-booking even under concurrent requests.
+`book_slot_for_lead` uses MongoDB `find_one_and_update` to atomically find a free slot and mark it taken — preventing double-booking even under concurrent requests. It returns the reserved slot's `_id` (`Optional[ObjectId]`, `None` if no slot was available), which the approve path persists as the lead's `booked_slot_id` so release/reschedule always free the exact reserved slot rather than a sibling slot from another active job.
 
 ---
 
