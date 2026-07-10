@@ -2,6 +2,7 @@
 Tests for workflow_service.process_incoming_message routing branches.
 Covers: reset, pro auto-detect, address collection, onboarding, deal finalization.
 """
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
@@ -32,27 +33,43 @@ def wf_mocks(monkeypatch, mock_db):
     monkeypatch.setattr(app.services.workflow_service, "ContextManager", mock_ctx)
 
     # Default: consent OK
-    monkeypatch.setattr(app.services.workflow_service, "has_consent", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        app.services.workflow_service, "has_consent", AsyncMock(return_value=True)
+    )
 
     mock_ai = MagicMock()
-    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
-        reply_to_user="AI response",
-        extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None),
-        transcription=None, is_deal=False,
-    ))
+    mock_ai.analyze_conversation = AsyncMock(
+        return_value=AIResponse(
+            reply_to_user="AI response",
+            extracted_data=ExtractedData(
+                city=None, issue=None, full_address=None, appointment_time=None
+            ),
+            transcription=None,
+            is_deal=False,
+        )
+    )
     mock_ai.detect_service_intent = AsyncMock(return_value=False)
     monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
 
     mock_lm = MagicMock()
     mock_lm.log_message = AsyncMock()
     mock_lm.get_chat_history = AsyncMock(return_value=[])
-    mock_lm.create_lead_from_dict = AsyncMock(return_value={"_id": ObjectId(), "full_address": "Test", "issue_type": "Leak", "appointment_time": "10:00", "chat_id": "user@c.us"})
+    mock_lm.create_lead_from_dict = AsyncMock(
+        return_value={
+            "_id": ObjectId(),
+            "full_address": "Test",
+            "issue_type": "Leak",
+            "appointment_time": "10:00",
+            "chat_id": "user@c.us",
+        }
+    )
     monkeypatch.setattr(app.services.workflow_service, "lead_manager", mock_lm)
 
     return mock_wa, mock_state, mock_ctx, mock_ai, mock_lm
 
 
 # --- Reset Commands ---
+
 
 @pytest.mark.asyncio
 async def test_reset_command_clears_state(wf_mocks):
@@ -62,7 +79,9 @@ async def test_reset_command_clears_state(wf_mocks):
 
     mock_state.clear_state.assert_called_with("972501111111@c.us")
     mock_ctx.clear_context.assert_called_with("972501111111@c.us")
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.System.RESET_SUCCESS)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.System.RESET_SUCCESS
+    )
 
 
 @pytest.mark.asyncio
@@ -72,7 +91,9 @@ async def test_help_command_sends_help_info_without_reset(wf_mocks):
 
     await process_incoming_message("972501111111@c.us", "תפריט")
 
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Customer.HELP_INFO)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Customer.HELP_INFO
+    )
     mock_state.clear_state.assert_not_called()
     mock_ctx.clear_context.assert_not_called()
 
@@ -85,7 +106,9 @@ async def test_politeness_interceptor_thanks_keyword(wf_mocks):
 
     await process_incoming_message("972501111111@c.us", "תודה")
 
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Customer.YOU_ARE_WELCOME)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Customer.YOU_ARE_WELCOME
+    )
     # Ensure other logic was skipped
     mock_ai.analyze_conversation.assert_not_called()
     # State should NOT be cleared or changed (other than get_state)
@@ -108,17 +131,20 @@ async def test_reset_skipped_for_pro_mode(wf_mocks):
 
 # --- Pro Auto-Detect ---
 
+
 @pytest.mark.asyncio
 async def test_pro_auto_detect_active(wf_mocks, mock_db):
     """Active pro auto-detected on first message -> PRO_MODE."""
     mock_wa, mock_state, _, _, _ = wf_mocks
 
-    await mock_db.users.insert_one({
-        "phone_number": "972509999999",
-        "role": "professional",
-        "is_active": True,
-        "business_name": "Test Pro",
-    })
+    await mock_db.users.insert_one(
+        {
+            "phone_number": "972509999999",
+            "role": "professional",
+            "is_active": True,
+            "business_name": "Test Pro",
+        }
+    )
 
     await process_incoming_message("972509999999@c.us", "שלום")
 
@@ -130,12 +156,14 @@ async def test_pending_pro_not_auto_detected(wf_mocks, mock_db):
     """Pending pro (is_active=False) not auto-detected -> customer flow."""
     mock_wa, mock_state, _, mock_ai, _ = wf_mocks
 
-    await mock_db.users.insert_one({
-        "phone_number": "972503333333",
-        "role": "professional",
-        "is_active": False,
-        "pending_approval": True,
-    })
+    await mock_db.users.insert_one(
+        {
+            "phone_number": "972503333333",
+            "role": "professional",
+            "is_active": False,
+            "pending_approval": True,
+        }
+    )
 
     await process_incoming_message("972503333333@c.us", "שלום")
 
@@ -145,6 +173,7 @@ async def test_pending_pro_not_auto_detected(wf_mocks, mock_db):
 
 # --- Awaiting Address ---
 
+
 @pytest.mark.asyncio
 async def test_awaiting_address_saves_valid(wf_mocks, mock_db):
     """User in AWAITING_ADDRESS sends a full 5-field address -> re-extracts, saves composed address, clears state."""
@@ -153,27 +182,40 @@ async def test_awaiting_address_saves_valid(wf_mocks, mock_db):
 
     # The new handler re-runs the AI dispatcher on the customer's reply — mock it to
     # return all five address parts so is_address_complete passes.
-    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
-        reply_to_user="",
-        extracted_data=ExtractedData(
-            city="תל אביב", issue="נזילה",
-            street="הרצל", street_number="15", floor="2", apartment="4",
-            appointment_time=None,
-        ),
-        transcription=None, is_deal=False,
-    ))
+    mock_ai.analyze_conversation = AsyncMock(
+        return_value=AIResponse(
+            reply_to_user="",
+            extracted_data=ExtractedData(
+                city="תל אביב",
+                issue="נזילה",
+                street="הרצל",
+                street_number="15",
+                floor="2",
+                apartment="4",
+                appointment_time=None,
+            ),
+            transcription=None,
+            is_deal=False,
+        )
+    )
 
     lead_id = ObjectId()
-    await mock_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": "972501111111@c.us",
-        "status": LeadStatus.NEW,
-        "created_at": "2026-01-01",
-    })
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": "972501111111@c.us",
+            "status": LeadStatus.NEW,
+            "created_at": "2026-01-01",
+        }
+    )
 
-    await process_incoming_message("972501111111@c.us", "הרצל 15, תל אביב קומה 2 דירה 4")
+    await process_incoming_message(
+        "972501111111@c.us", "הרצל 15, תל אביב קומה 2 דירה 4"
+    )
 
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Customer.ADDRESS_SAVED)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Customer.ADDRESS_SAVED
+    )
     mock_state.clear_state.assert_called()
 
     # Verify lead updated in DB with a composed canonical full_address
@@ -195,11 +237,16 @@ async def test_awaiting_address_too_short(wf_mocks):
 
     await process_incoming_message("972501111111@c.us", "hi")
 
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Customer.ADDRESS_INVALID)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Customer.ADDRESS_INVALID
+    )
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("idx,cancel_text", list(enumerate(["בטל", "עזוב לא משנה", "טעות", "cancel", "nevermind"])))
+@pytest.mark.parametrize(
+    "idx,cancel_text",
+    list(enumerate(["בטל", "עזוב לא משנה", "טעות", "cancel", "nevermind"])),
+)
 async def test_awaiting_address_cancel_bailout(wf_mocks, mock_db, idx, cancel_text):
     """
     Regression: a user stuck in AWAITING_ADDRESS who replies with a cancel
@@ -216,17 +263,21 @@ async def test_awaiting_address_cancel_bailout(wf_mocks, mock_db, idx, cancel_te
 
     chat_id = f"9725099{idx:05d}@c.us"
     lead_id = ObjectId()
-    await mock_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": chat_id,
-        "status": LeadStatus.NEW,
-        "street": "הרצל",
-        "created_at": "2026-01-01",
-    })
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.NEW,
+            "street": "הרצל",
+            "created_at": "2026-01-01",
+        }
+    )
 
     await process_incoming_message(chat_id, cancel_text)
 
-    mock_wa.send_message.assert_called_once_with(chat_id, Messages.Customer.REQUEST_CANCELLED)
+    mock_wa.send_message.assert_called_once_with(
+        chat_id, Messages.Customer.REQUEST_CANCELLED
+    )
     mock_state.clear_state.assert_called_with(chat_id)
     mock_ctx.clear_context.assert_called_with(chat_id)
 
@@ -254,13 +305,139 @@ async def test_awaiting_address_cancel_without_active_lead(wf_mocks, mock_db):
 
     await process_incoming_message(chat_id, "עזוב")
 
-    mock_wa.send_message.assert_called_once_with(chat_id, Messages.Customer.REQUEST_CANCELLED)
+    mock_wa.send_message.assert_called_once_with(
+        chat_id, Messages.Customer.REQUEST_CANCELLED
+    )
     mock_state.clear_state.assert_called_with(chat_id)
     mock_ctx.clear_context.assert_called_with(chat_id)
     mock_ai.analyze_conversation.assert_not_called()
 
 
+# --- PRO-32: customer cancel of a BOOKED lead must release the reserved slot ---
+
+
+@pytest.mark.asyncio
+async def test_customer_cancel_booked_lead_releases_slot(
+    wf_mocks, mock_db, monkeypatch
+):
+    """
+    Regression PRO-32: a customer with a confirmed BOOKED lead sends a cancel
+    keyword. The lead must flip to CANCELLED AND the slot it held must be
+    freed (is_taken -> False) so the pro regains that hour. Previously the
+    slot release was missing, orphaning the slot as permanently taken.
+
+    workflow_service imports slots_collection at module level but conftest
+    only patches its users/leads/reviews (see test_reschedule_flow.py docstring
+    for the equivalent gap in customer_flow), so slots_collection is
+    monkeypatched here too.
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    monkeypatch.setattr(
+        app.services.workflow_service, "slots_collection", mock_db.slots
+    )
+    mock_state.get_state.return_value = UserStates.IDLE
+
+    chat_id = "972509977001@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {"_id": pro_id, "phone_number": "972505551234", "business_name": "יוסי"}
+    )
+
+    slot_id = ObjectId()
+    await mock_db.slots.insert_one({"_id": slot_id, "is_taken": True})
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "booked_slot_id": slot_id,
+            "customer_name": "דנה",
+            "full_address": "הרצל 1, תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+
+    await process_incoming_message(chat_id, "בטל")
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    updated_slot = await mock_db.slots.find_one({"_id": slot_id})
+    assert updated_lead["status"] == LeadStatus.CANCELLED
+    assert updated_slot["is_taken"] is False
+
+    mock_wa.send_message.assert_any_call(
+        chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD
+    )
+    mock_state.clear_state.assert_called_with(chat_id)
+    mock_ctx.clear_context.assert_called_with(chat_id)
+
+    # Pro must be notified of the cancellation
+    mock_wa.send_message.assert_any_call(
+        "972505551234@c.us",
+        Messages.Pro.CUSTOMER_CANCELLED.format(
+            customer_name="דנה", address="הרצל 1, תל אביב"
+        ),
+    )
+
+    # Green API constraint: buttons are never used
+    mock_wa.send_interactive_buttons.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_customer_cancel_booked_lead_without_slot_id_is_noop_safe(
+    wf_mocks, mock_db, monkeypatch
+):
+    """
+    Acceptance criterion: legacy/emergency BOOKED leads with no booked_slot_id
+    must never raise when cancelled. The slot-release branch must be skipped
+    entirely (guarded), and the lead must still flip to CANCELLED normally.
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    mock_slots = MagicMock()
+    mock_slots.update_one = AsyncMock()
+    monkeypatch.setattr(app.services.workflow_service, "slots_collection", mock_slots)
+    mock_state.get_state.return_value = UserStates.IDLE
+
+    chat_id = "972509977002@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {"_id": pro_id, "phone_number": "972505559999", "business_name": "דני"}
+    )
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            # no booked_slot_id — legacy/emergency lead
+            "customer_name": "רון",
+            "full_address": "אלנבי 5, תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+
+    await process_incoming_message(chat_id, "בטל")
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["status"] == LeadStatus.CANCELLED
+
+    # Guarded: no slot update was attempted since there's no booked_slot_id
+    mock_slots.update_one.assert_not_called()
+
+    mock_wa.send_message.assert_any_call(
+        chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD
+    )
+    mock_state.clear_state.assert_called_with(chat_id)
+    mock_ctx.clear_context.assert_called_with(chat_id)
+    mock_wa.send_interactive_buttons.assert_not_called()
+
+
 # --- Register / Onboarding ---
+
 
 @pytest.mark.asyncio
 async def test_register_command_starts_onboarding(wf_mocks, monkeypatch):
@@ -275,6 +452,7 @@ async def test_register_command_starts_onboarding(wf_mocks, monkeypatch):
 
 # --- AI Failure ---
 
+
 @pytest.mark.asyncio
 async def test_ai_failure_sends_overload(wf_mocks):
     _, mock_wa, _, mock_ai, _ = wf_mocks
@@ -284,10 +462,13 @@ async def test_ai_failure_sends_overload(wf_mocks):
 
     await process_incoming_message("972501111111@c.us", "יש לי בעיה")
 
-    mock_wa.send_message.assert_any_call("972501111111@c.us", Messages.Errors.AI_OVERLOAD)
+    mock_wa.send_message.assert_any_call(
+        "972501111111@c.us", Messages.Errors.AI_OVERLOAD
+    )
 
 
 # --- Deal Finalization ---
+
 
 @pytest.mark.asyncio
 async def test_deal_finalization_notifies_pro(wf_mocks, monkeypatch, mock_db):
@@ -305,27 +486,52 @@ async def test_deal_finalization_notifies_pro(wf_mocks, monkeypatch, mock_db):
 
     dispatcher_resp = AIResponse(
         reply_to_user="מצאתי לך בעל מקצוע",
-        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Herzl 10", appointment_time="10:00"),
-        transcription=None, is_deal=False,
+        extracted_data=ExtractedData(
+            city="Tel Aviv",
+            issue="Leak",
+            full_address="Herzl 10",
+            appointment_time="10:00",
+        ),
+        transcription=None,
+        is_deal=False,
     )
     pro_resp = AIResponse(
         reply_to_user="[DEAL: 10:00 | Herzl 10 | Leak]",
-        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Herzl 10", appointment_time="10:00"),
-        transcription=None, is_deal=True,
+        extracted_data=ExtractedData(
+            city="Tel Aviv",
+            issue="Leak",
+            full_address="Herzl 10",
+            appointment_time="10:00",
+        ),
+        transcription=None,
+        is_deal=True,
     )
     mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
 
-    monkeypatch.setattr(app.services.workflow_service, "determine_best_pro", AsyncMock(return_value=pro_doc))
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "determine_best_pro",
+        AsyncMock(return_value=pro_doc),
+    )
 
     mock_lm.create_lead_from_dict.return_value = {
-        "_id": ObjectId(), "full_address": "Herzl 10", "issue_type": "Leak",
-        "appointment_time": "10:00", "chat_id": "972501111111@c.us",
+        "_id": ObjectId(),
+        "full_address": "Herzl 10",
+        "issue_type": "Leak",
+        "appointment_time": "10:00",
+        "chat_id": "972501111111@c.us",
     }
 
-    await process_incoming_message("972501111111@c.us", "יש לי נזילה ברחוב הרצל 10 בשעה 10")
+    await process_incoming_message(
+        "972501111111@c.us", "יש לי נזילה ברחוב הרצל 10 בשעה 10"
+    )
 
     # Pro should have been notified
-    pro_calls = [c for c in mock_wa.send_message.call_args_list if c.args[0] == "972500000000@c.us"]
+    pro_calls = [
+        c
+        for c in mock_wa.send_message.call_args_list
+        if c.args[0] == "972500000000@c.us"
+    ]
     assert len(pro_calls) >= 1
 
 
@@ -336,20 +542,30 @@ async def test_no_pro_found_dispatcher_response_only(wf_mocks, monkeypatch):
 
     resp = AIResponse(
         reply_to_user="לא מצאתי בעל מקצוע, אבל אני מחפש",
-        extracted_data=ExtractedData(city="Eilat", issue="Leak", full_address=None, appointment_time=None),
-        transcription=None, is_deal=False,
+        extracted_data=ExtractedData(
+            city="Eilat", issue="Leak", full_address=None, appointment_time=None
+        ),
+        transcription=None,
+        is_deal=False,
     )
     mock_ai.analyze_conversation.return_value = resp
-    monkeypatch.setattr(app.services.workflow_service, "determine_best_pro", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "determine_best_pro",
+        AsyncMock(return_value=None),
+    )
 
     await process_incoming_message("972501111111@c.us", "נזילה באילת")
 
     # AI called only once (dispatcher, no pro phase)
     assert mock_ai.analyze_conversation.call_count == 1
-    mock_wa.send_message.assert_any_call("972501111111@c.us", "לא מצאתי בעל מקצוע, אבל אני מחפש")
+    mock_wa.send_message.assert_any_call(
+        "972501111111@c.us", "לא מצאתי בעל מקצוע, אבל אני מחפש"
+    )
 
 
 # --- Soft Hold & Pause State Tests ---
+
 
 @pytest.mark.asyncio
 async def test_awaiting_pro_approval_blocks_ai(wf_mocks):
@@ -362,7 +578,9 @@ async def test_awaiting_pro_approval_blocks_ai(wf_mocks):
     # AI should NOT be called
     mock_ai.analyze_conversation.assert_not_called()
     # Customer should get the waiting message
-    mock_wa.send_message.assert_any_call("972501111111@c.us", Messages.Customer.STILL_WAITING)
+    mock_wa.send_message.assert_any_call(
+        "972501111111@c.us", Messages.Customer.STILL_WAITING
+    )
 
 
 @pytest.mark.asyncio
@@ -376,7 +594,9 @@ async def test_paused_for_human_bypasses_ai(wf_mocks):
     # AI should NOT be called
     mock_ai.analyze_conversation.assert_not_called()
     # Message should be logged silently
-    mock_lm.log_message.assert_called_once_with("972501111111@c.us", "user", "I need help")
+    mock_lm.log_message.assert_called_once_with(
+        "972501111111@c.us", "user", "I need help"
+    )
     # No WhatsApp message sent (silent bypass)
     mock_wa.send_message.assert_not_called()
 
@@ -388,26 +608,32 @@ async def test_sos_sets_paused_state_with_custom_ttl(wf_mocks):
     mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
 
     from app.core.constants import WorkerConstants
+
     await process_incoming_message("972501111111@c.us", "אני צריך נציג")
 
     # Verify PAUSED_FOR_HUMAN state with correct TTL
     mock_state.set_state.assert_called_once_with(
         "972501111111@c.us",
         UserStates.PAUSED_FOR_HUMAN,
-        ttl=WorkerConstants.PAUSE_TTL_SECONDS
+        ttl=WorkerConstants.PAUSE_TTL_SECONDS,
     )
 
     # Customer gets bot paused message
-    mock_wa.send_message.assert_any_call("972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_CUSTOMER)
+    mock_wa.send_message.assert_any_call(
+        "972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_CUSTOMER
+    )
 
 
 # --- Zero-Touch Intent Confirmation Tests ---
+
 
 @pytest.mark.asyncio
 async def test_intent_confirmation_yes_sets_customer_mode(wf_mocks, mock_db):
     """State=AWAITING_INTENT_CONFIRMATION, reply '1' -> CUSTOMER_MODE set, context cleared."""
     mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
-    mock_state.get_state = AsyncMock(return_value=UserStates.AWAITING_INTENT_CONFIRMATION)
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.AWAITING_INTENT_CONFIRMATION
+    )
 
     # Insert a pro in DB so find_one won't fail in consent check
     pro_phone = "972501111111"
@@ -415,16 +641,22 @@ async def test_intent_confirmation_yes_sets_customer_mode(wf_mocks, mock_db):
 
     await process_incoming_message(f"{pro_phone}@c.us", "1")
 
-    mock_state.set_state.assert_called_with(f"{pro_phone}@c.us", UserStates.CUSTOMER_MODE)
+    mock_state.set_state.assert_called_with(
+        f"{pro_phone}@c.us", UserStates.CUSTOMER_MODE
+    )
     mock_ctx.clear_context.assert_called_once()
-    mock_wa.send_message.assert_called_with(f"{pro_phone}@c.us", Messages.Pro.SWITCHED_TO_CUSTOMER)
+    mock_wa.send_message.assert_called_with(
+        f"{pro_phone}@c.us", Messages.Pro.SWITCHED_TO_CUSTOMER
+    )
 
 
 @pytest.mark.asyncio
 async def test_intent_confirmation_no_clears_state(wf_mocks, mock_db):
     """State=AWAITING_INTENT_CONFIRMATION, reply '2' -> state cleared, SWITCH_CANCELLED sent."""
     mock_wa, mock_state, _, _, _ = wf_mocks
-    mock_state.get_state = AsyncMock(return_value=UserStates.AWAITING_INTENT_CONFIRMATION)
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.AWAITING_INTENT_CONFIRMATION
+    )
 
     pro_phone = "972501111112"
     await mock_db.users.insert_one({"phone_number": pro_phone, "role": "professional"})
@@ -432,7 +664,9 @@ async def test_intent_confirmation_no_clears_state(wf_mocks, mock_db):
     await process_incoming_message(f"{pro_phone}@c.us", "2")
 
     mock_state.clear_state.assert_called_once_with(f"{pro_phone}@c.us")
-    mock_wa.send_message.assert_called_with(f"{pro_phone}@c.us", Messages.Pro.SWITCH_CANCELLED)
+    mock_wa.send_message.assert_called_with(
+        f"{pro_phone}@c.us", Messages.Pro.SWITCH_CANCELLED
+    )
 
 
 @pytest.mark.asyncio
@@ -441,6 +675,7 @@ async def test_intent_confirmation_other_falls_through(wf_mocks, mock_db):
     mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
 
     call_count = [0]
+
     async def get_state_side_effect(chat_id):
         call_count[0] += 1
         if call_count[0] == 1:
@@ -463,11 +698,13 @@ async def test_safety_bypass_from_customer_mode(wf_mocks, mock_db):
     mock_state.get_state = AsyncMock(return_value=UserStates.CUSTOMER_MODE)
 
     pro_phone = "972501111114"
-    await mock_db.users.insert_one({
-        "phone_number": pro_phone,
-        "role": "professional",
-        "is_active": True,
-    })
+    await mock_db.users.insert_one(
+        {
+            "phone_number": pro_phone,
+            "role": "professional",
+            "is_active": True,
+        }
+    )
 
     # We'll verify by checking state.set_state was called with PRO_MODE
     await process_incoming_message(f"{pro_phone}@c.us", "אשר")
@@ -478,6 +715,7 @@ async def test_safety_bypass_from_customer_mode(wf_mocks, mock_db):
 
 # --- Patch #2: PENDING_ADMIN_REVIEW short-circuit ---
 
+
 @pytest.mark.asyncio
 async def test_pending_admin_review_does_not_create_duplicate_lead(wf_mocks, mock_db):
     """
@@ -486,17 +724,20 @@ async def test_pending_admin_review_does_not_create_duplicate_lead(wf_mocks, moc
     create a second lead. It should log the message and send a throttled ack.
     """
     from datetime import datetime, timezone
+
     mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
 
     chat_id = "972501234567@c.us"
     await mock_db.leads.delete_many({})
-    await mock_db.leads.insert_one({
-        "chat_id": chat_id,
-        "status": LeadStatus.PENDING_ADMIN_REVIEW,
-        "issue_type": "Leak",
-        "full_address": "Unknown Address",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await mock_db.leads.insert_one(
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "issue_type": "Leak",
+            "full_address": "Unknown Address",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     await process_incoming_message(chat_id, "שלום, אני עדיין מחכה")
 
@@ -505,7 +746,9 @@ async def test_pending_admin_review_does_not_create_duplicate_lead(wf_mocks, moc
     # 2. Dispatcher must not be invoked
     mock_ai.analyze_conversation.assert_not_called()
     # 3. Customer gets the STILL_PENDING_REVIEW ack
-    mock_wa.send_message.assert_any_call(chat_id, Messages.Customer.STILL_PENDING_REVIEW)
+    mock_wa.send_message.assert_any_call(
+        chat_id, Messages.Customer.STILL_PENDING_REVIEW
+    )
     # 4. The message still gets logged for admin visibility
     mock_lm.log_message.assert_any_call(chat_id, "user", "שלום, אני עדיין מחכה")
 
@@ -517,18 +760,21 @@ async def test_pending_admin_review_ack_throttled(wf_mocks, mock_db):
     — just log the message silently. Prevents ack-spam on rapid-fire messages.
     """
     from datetime import datetime, timedelta, timezone
+
     mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
 
     chat_id = "972501234567@c.us"
     await mock_db.leads.delete_many({})
-    await mock_db.leads.insert_one({
-        "chat_id": chat_id,
-        "status": LeadStatus.PENDING_ADMIN_REVIEW,
-        "issue_type": "Leak",
-        "full_address": "Tel Aviv",
-        "created_at": datetime.now(timezone.utc) - timedelta(hours=2),
-        "last_pending_ack_at": datetime.now(timezone.utc) - timedelta(minutes=5),
-    })
+    await mock_db.leads.insert_one(
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "issue_type": "Leak",
+            "full_address": "Tel Aviv",
+            "created_at": datetime.now(timezone.utc) - timedelta(hours=2),
+            "last_pending_ack_at": datetime.now(timezone.utc) - timedelta(minutes=5),
+        }
+    )
 
     await process_incoming_message(chat_id, "היי, יש עדכון?")
 
@@ -536,14 +782,15 @@ async def test_pending_admin_review_ack_throttled(wf_mocks, mock_db):
     mock_lm.create_lead_from_dict.assert_not_called()
     mock_ai.analyze_conversation.assert_not_called()
     for call in mock_wa.send_message.call_args_list:
-        assert call.args[1] != Messages.Customer.STILL_PENDING_REVIEW, (
-            "Ack was re-sent within the 30-minute throttle window"
-        )
+        assert (
+            call.args[1] != Messages.Customer.STILL_PENDING_REVIEW
+        ), "Ack was re-sent within the 30-minute throttle window"
     # Message is still logged
     mock_lm.log_message.assert_any_call(chat_id, "user", "היי, יש עדכון?")
 
 
 # --- Emergency Logic Tests ---
+
 
 @pytest.mark.asyncio
 async def test_emergency_detection_and_ack(wf_mocks, mock_db):
@@ -555,18 +802,25 @@ async def test_emergency_detection_and_ack(wf_mocks, mock_db):
     mock_ai.analyze_conversation.return_value = AIResponse(
         reply_to_user="זיהיתי מצב חירום",
         extracted_data=ExtractedData(
-            city="תל אביב", issue="פיצוץ", 
-            full_address=None, appointment_time=None,
-            street=None, street_number=None, floor=None, apartment=None, customer_name=None
+            city="תל אביב",
+            issue="פיצוץ",
+            full_address=None,
+            appointment_time=None,
+            street=None,
+            street_number=None,
+            floor=None,
+            apartment=None,
+            customer_name=None,
         ),
-        transcription=None, is_deal=False,
+        transcription=None,
+        is_deal=False,
     )
 
     await process_incoming_message(chat_id, "יש לי פיצוץ מים בבית!")
 
     # Verify EMERGENCY_ACK sent
     mock_wa.send_message.assert_any_call(chat_id, Messages.Customer.EMERGENCY_ACK)
-    
+
     # Verify lead created with is_emergency=True
     mock_lm.create_lead_from_dict.assert_called()
     call_args = mock_lm.create_lead_from_dict.call_args.kwargs
@@ -581,13 +835,15 @@ async def test_emergency_bypass_address_gate(wf_mocks, monkeypatch, mock_db):
 
     # 1. Setup emergency lead in DB
     lead_id = ObjectId()
-    await mock_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": chat_id,
-        "status": LeadStatus.CONTACTED,
-        "is_emergency": True,
-        "city": "תל אביב",
-    })
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "is_emergency": True,
+            "city": "תל אביב",
+        }
+    )
 
     # 2. Mock AI to return a [DEAL] with ONLY city (incomplete address)
     pro_id = ObjectId()
@@ -597,47 +853,75 @@ async def test_emergency_bypass_address_gate(wf_mocks, monkeypatch, mock_db):
         "phone_number": "972500000001",
         "is_active": True,
     }
-    monkeypatch.setattr(app.services.workflow_service, "determine_best_pro", AsyncMock(return_value=pro_doc))
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "determine_best_pro",
+        AsyncMock(return_value=pro_doc),
+    )
 
     # Mock analyze_conversation: first call is dispatcher, second is pro-persona
     dispatcher_resp = AIResponse(
         reply_to_user="זיהיתי חירום",
         extracted_data=ExtractedData(
-            city="תל אביב", issue="הצפה",
-            full_address=None, appointment_time=None,
-            street=None, street_number=None, floor=None, apartment=None, customer_name=None
+            city="תל אביב",
+            issue="הצפה",
+            full_address=None,
+            appointment_time=None,
+            street=None,
+            street_number=None,
+            floor=None,
+            apartment=None,
+            customer_name=None,
         ),
-        transcription=None, is_deal=False,
+        transcription=None,
+        is_deal=False,
     )
     pro_resp = AIResponse(
         reply_to_user="[DEAL: בהקדם | תל אביב | הצפה]",
         extracted_data=ExtractedData(
-            city="תל אביב", issue="הצפה", street=None, street_number=None,
-            full_address="תל אביב", appointment_time="בהקדם",
-            floor=None, apartment=None, customer_name=None
+            city="תל אביב",
+            issue="הצפה",
+            street=None,
+            street_number=None,
+            full_address="תל אביב",
+            appointment_time="בהקדם",
+            floor=None,
+            apartment=None,
+            customer_name=None,
         ),
-        transcription=None, is_deal=True,
+        transcription=None,
+        is_deal=True,
     )
     mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
 
     await process_incoming_message(chat_id, "יש הצפה דחופה!")
 
     # Verify address gate bypass: customer gets AWAITING_APPROVAL_TRANSPARENT, NOT the address reason
-    expected_msg = Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(pro_name="Emergency Pro")
+    expected_msg = Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
+        pro_name="Emergency Pro"
+    )
     mock_wa.send_message.assert_any_call(chat_id, expected_msg)
-    
+
     # Pro should get EMERGENCY_LEAD_HEADER
-    pro_calls = [c for c in mock_wa.send_message.call_args_list if c.args[0] == "972500000001@c.us"]
-    found_emergency_header = any(Messages.Pro.EMERGENCY_LEAD_HEADER in str(call.args[1]) for call in pro_calls)
+    pro_calls = [
+        c
+        for c in mock_wa.send_message.call_args_list
+        if c.args[0] == "972500000001@c.us"
+    ]
+    found_emergency_header = any(
+        Messages.Pro.EMERGENCY_LEAD_HEADER in str(call.args[1]) for call in pro_calls
+    )
     assert found_emergency_header is True
 
 
 # --- Customer status command routing ---
 
+
 @pytest.mark.asyncio
 async def test_question_mark_alone_triggers_status(wf_mocks, mock_db):
     """Sending '?' returns the status reply and never reaches the AI dispatcher."""
     import asyncio
+
     mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
     mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
 
@@ -652,14 +936,19 @@ async def test_question_mark_alone_triggers_status(wf_mocks, mock_db):
 
 
 @pytest.mark.asyncio
-async def test_question_mark_inside_sentence_does_not_trigger_status(wf_mocks, monkeypatch):
+async def test_question_mark_inside_sentence_does_not_trigger_status(
+    wf_mocks, monkeypatch
+):
     """'מה השעה?' must NOT trigger status — only exact '?' should match."""
     import asyncio
+
     mock_wa, mock_state, _, mock_ai, _ = wf_mocks
     mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
 
     mock_status = AsyncMock(return_value="STATUS_RESPONSE")
-    monkeypatch.setattr(app.services.workflow_service, "_handle_status_query", mock_status)
+    monkeypatch.setattr(
+        app.services.workflow_service, "_handle_status_query", mock_status
+    )
 
     await process_incoming_message("972511111116@c.us", "מה השעה?")
     await asyncio.sleep(0)
@@ -671,11 +960,14 @@ async def test_question_mark_inside_sentence_does_not_trigger_status(wf_mocks, m
 async def test_status_command_skipped_in_pro_mode(wf_mocks, monkeypatch):
     """Pro in PRO_MODE sending 'סטטוס' must not hit the customer status handler."""
     import asyncio
+
     mock_wa, mock_state, _, _, _ = wf_mocks
     mock_state.get_state = AsyncMock(return_value=UserStates.PRO_MODE)
 
     mock_status = AsyncMock(return_value="STATUS_RESPONSE")
-    monkeypatch.setattr(app.services.workflow_service, "_handle_status_query", mock_status)
+    monkeypatch.setattr(
+        app.services.workflow_service, "_handle_status_query", mock_status
+    )
 
     await process_incoming_message("972524828796@c.us", "סטטוס")
     await asyncio.sleep(0)
@@ -738,7 +1030,9 @@ def test_strip_deal_marker_unclosed_bracket_is_not_stripped():
 
 
 @pytest.mark.asyncio
-async def test_assigned_pro_fast_path_strips_deal_marker_and_finalizes(wf_mocks, mock_db):
+async def test_assigned_pro_fast_path_strips_deal_marker_and_finalizes(
+    wf_mocks, mock_db
+):
     """
     Regression PRO-44: on the "pro already assigned" fast path, a raw [DEAL:...]
     marker embedded in reply_to_user (fallback signal because the AI didn't set
@@ -753,31 +1047,42 @@ async def test_assigned_pro_fast_path_strips_deal_marker_and_finalizes(wf_mocks,
     pro_id = ObjectId()
     lead_id = ObjectId()
 
-    await mock_db.users.insert_one({
-        "_id": pro_id,
-        "business_name": "Marker Pro",
-        "phone_number": "972500009999",
-        "is_active": True,
-    })
-    await mock_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": chat_id,
-        "status": LeadStatus.CONTACTED,
-        "pro_id": pro_id,
-        "created_at": "2026-01-01",
-    })
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "Marker Pro",
+            "phone_number": "972500009999",
+            "is_active": True,
+        }
+    )
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "pro_id": pro_id,
+            "created_at": "2026-01-01",
+        }
+    )
 
     raw_reply = "מעולה, נקבע! [DEAL: 10:00 | הרצל 10 | נזילה] נתראה מחר!"
-    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
-        reply_to_user=raw_reply,
-        extracted_data=ExtractedData(
-            city="תל אביב", issue="נזילה",
-            street="הרצל", street_number="10", floor="2", apartment="4",
-            appointment_time="10:00",
-        ),
-        # Structured flag missed by the AI — the marker is the fallback signal.
-        transcription=None, is_deal=False,
-    ))
+    mock_ai.analyze_conversation = AsyncMock(
+        return_value=AIResponse(
+            reply_to_user=raw_reply,
+            extracted_data=ExtractedData(
+                city="תל אביב",
+                issue="נזילה",
+                street="הרצל",
+                street_number="10",
+                floor="2",
+                apartment="4",
+                appointment_time="10:00",
+            ),
+            # Structured flag missed by the AI — the marker is the fallback signal.
+            transcription=None,
+            is_deal=False,
+        )
+    )
 
     await process_incoming_message(chat_id, "אפשר מחר בעשר")
 
@@ -803,7 +1108,8 @@ async def test_assigned_pro_fast_path_strips_deal_marker_and_finalizes(wf_mocks,
         ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
     )
     pro_calls = [
-        c for c in mock_wa.send_message.call_args_list
+        c
+        for c in mock_wa.send_message.call_args_list
         if c.args[0] == "972500009999@c.us"
     ]
     assert len(pro_calls) >= 1
@@ -842,33 +1148,45 @@ async def test_dispatcher_path_with_best_pro_strips_deal_marker_and_finalizes(
     # phase updates this real document instead of routing through the
     # (mocked) create_lead_from_dict — letting _finalize_deal's real
     # find_one/update_one calls resolve against an actual document.
-    await mock_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": chat_id,
-        "status": LeadStatus.CONTACTED,
-        "created_at": "2026-01-01",
-    })
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "created_at": "2026-01-01",
+        }
+    )
 
     dispatcher_resp = AIResponse(
         reply_to_user="מצאתי לך בעל מקצוע",
-        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", appointment_time=None),
-        transcription=None, is_deal=False,
+        extracted_data=ExtractedData(
+            city="Tel Aviv", issue="Leak", appointment_time=None
+        ),
+        transcription=None,
+        is_deal=False,
     )
     raw_pro_reply = "מעולה! [DEAL: 10:00 | Herzl 10 | Leak] מחכה לך!"
     pro_resp = AIResponse(
         reply_to_user=raw_pro_reply,
         extracted_data=ExtractedData(
-            city="Tel Aviv", issue="Leak",
-            street="Herzl", street_number="10", floor="2", apartment="4",
+            city="Tel Aviv",
+            issue="Leak",
+            street="Herzl",
+            street_number="10",
+            floor="2",
+            apartment="4",
             appointment_time="10:00",
         ),
         # Structured flag missed by the AI — the marker is the fallback signal.
-        transcription=None, is_deal=False,
+        transcription=None,
+        is_deal=False,
     )
     mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
 
     monkeypatch.setattr(
-        app.services.workflow_service, "determine_best_pro", AsyncMock(return_value=pro_doc)
+        app.services.workflow_service,
+        "determine_best_pro",
+        AsyncMock(return_value=pro_doc),
     )
 
     await process_incoming_message(chat_id, "יש לי נזילה בתל אביב")
@@ -893,7 +1211,8 @@ async def test_dispatcher_path_with_best_pro_strips_deal_marker_and_finalizes(
         ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
     )
     pro_calls = [
-        c for c in mock_wa.send_message.call_args_list
+        c
+        for c in mock_wa.send_message.call_args_list
         if c.args[0] == "972500001111@c.us"
     ]
     assert len(pro_calls) >= 1
