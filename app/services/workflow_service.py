@@ -9,7 +9,11 @@ from app.services.lead_manager_service import (
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
 from app.core.logger import logger
-from app.core.database import users_collection, leads_collection, reviews_collection
+from app.core.database import (
+    users_collection,
+    leads_collection,    
+    slots_collection
+)
 from app.core.messages import Messages
 from app.core.prompts import Prompts
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
@@ -64,6 +68,7 @@ def _strip_deal_marker(text: str) -> str:
     """
     cleaned = DEAL_MARKER_RE.sub("", text or "")
     return re.sub(r"\s{2,}", " ", cleaned).strip()
+
 
 # Pro business keywords that must always route to pro_flow, even mid-CUSTOMER_MODE
 PRO_BUSINESS_KEYWORDS = (
@@ -433,6 +438,14 @@ async def _process_incoming_message_inner(
                         }
                     },
                 )
+                # Free the reserved slot so the pro regains that hour.
+                # Mirrors the release in pro_flow._execute_cancel; guarded so
+                # legacy/emergency leads with no booked_slot_id are a no-op.
+                if booked_lead.get("booked_slot_id"):
+                    await slots_collection.update_one(
+                        {"_id": booked_lead["booked_slot_id"]},
+                        {"$set": {"is_taken": False}},
+                    )
                 await StateManager.clear_state(chat_id)
                 await ContextManager.clear_context(chat_id)
                 await whatsapp.send_message(
