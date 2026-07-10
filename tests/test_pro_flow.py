@@ -2,6 +2,7 @@
 Tests for pro_flow.py: all professional text commands.
 Covers: approve, reject, finish, active jobs, history, stats, reviews.
 """
+
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -52,25 +53,31 @@ def mock_lm():
 
 # --- Approve ---
 
+
 @pytest.mark.asyncio
 async def test_approve_with_pending_lead(pro_setup, mock_wa, mock_lm, monkeypatch):
     pro_doc, db = pro_setup
 
     lead_id = ObjectId()
-    await db.leads.insert_one({
-        "_id": lead_id,
-        "pro_id": pro_doc["_id"],
-        "status": LeadStatus.NEW,
-        "chat_id": "972501111111@c.us",
-        "issue_type": "נזילה",
-        "full_address": "תל אביב, הרצל 10",
-        "appointment_time": "10:00",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
-    # Mock book_slot_for_lead
+    # Mock book_slot_for_lead — returns the booked slot's ObjectId on success
     import app.services.pro_flow
-    monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=True))
+
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=ObjectId())
+    )
 
     result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
 
@@ -88,10 +95,14 @@ async def test_approve_no_pending(mock_db, mock_wa, mock_lm):
     pro_id = ObjectId()
     existing = await mock_db.users.find_one({"phone_number": "972502222222"})
     if not existing:
-        await mock_db.users.insert_one({
-            "_id": pro_id, "phone_number": "972502222222",
-            "role": "professional", "is_active": True,
-        })
+        await mock_db.users.insert_one(
+            {
+                "_id": pro_id,
+                "phone_number": "972502222222",
+                "role": "professional",
+                "is_active": True,
+            }
+        )
     result = await handle_pro_text_command("972502222222@c.us", "אשר", mock_wa, mock_lm)
     assert result == Messages.Pro.NO_PENDING_APPROVALS
 
@@ -100,28 +111,132 @@ async def test_approve_no_pending(mock_db, mock_wa, mock_lm):
 async def test_approve_with_number_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     """'1' is an alias for approve."""
     pro_doc, db = pro_setup
-    await db.leads.insert_one({
-        "pro_id": pro_doc["_id"], "status": LeadStatus.NEW,
-        "chat_id": "972501111111@c.us", "issue_type": "חשמל",
-        "full_address": "חיפה", "appointment_time": "14:00",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "חשמל",
+            "full_address": "חיפה",
+            "appointment_time": "14:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
     import app.services.pro_flow
-    monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=False))
+
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=None)
+    )
 
     result = await handle_pro_text_command("972500000000@c.us", "1", mock_wa, mock_lm)
     assert Messages.Pro.APPROVE_SUCCESS in result
 
 
+@pytest.mark.asyncio
+async def test_approve_persists_correct_slot_id_with_multiple_active_jobs(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """
+    PRO-43 regression: a pro with an existing booked job (already holding
+    slot A) approves a second, newer lead. book_slot_for_lead reserves a
+    DIFFERENT slot (B) for the new lead. The new lead must be persisted
+    with slot B's id — not slot A's, which the old "earliest taken slot"
+    heuristic would have incorrectly picked. The older lead's booked_slot_id
+    must be untouched.
+    """
+    pro_doc, db = pro_setup
+
+    slot_a_id = ObjectId()
+    slot_b_id = ObjectId()
+
+    # Existing older lead, already booked against slot A.
+    old_lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": old_lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.BOOKED,
+            "chat_id": "972503333333@c.us",
+            "issue_type": "חשמל",
+            "full_address": "רמת גן",
+            "appointment_time": "09:00",
+            "created_at": datetime.now(timezone.utc) - timedelta(days=1),
+            "booked_slot_id": slot_a_id,
+        }
+    )
+    await db.slots.insert_one(
+        {
+            "_id": slot_a_id,
+            "pro_id": pro_doc["_id"],
+            "is_taken": True,
+            "start_time": datetime.now(timezone.utc) - timedelta(hours=1),
+        }
+    )
+
+    # New lead pending approval.
+    new_lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": new_lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    await db.slots.insert_one(
+        {
+            "_id": slot_b_id,
+            "pro_id": pro_doc["_id"],
+            "is_taken": False,
+            "start_time": datetime.now(timezone.utc) + timedelta(hours=1),
+        }
+    )
+
+    import app.services.pro_flow
+
+    # book_slot_for_lead reserves slot B for the new lead — never slot A.
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=slot_b_id)
+    )
+
+    try:
+        result = await handle_pro_text_command(
+            "972500000000@c.us", "אשר", mock_wa, mock_lm
+        )
+
+        assert Messages.Pro.APPROVE_SUCCESS in result
+
+        updated_new_lead = await db.leads.find_one({"_id": new_lead_id})
+        updated_old_lead = await db.leads.find_one({"_id": old_lead_id})
+
+        assert updated_new_lead["booked_slot_id"] == slot_b_id
+        assert updated_old_lead["booked_slot_id"] == slot_a_id
+    finally:
+        # `mock_db` is module-scoped (shared across this file's tests) —
+        # remove the BOOKED lead we planted so it doesn't inflate the
+        # "active jobs" count for tests that run later in this module.
+        await db.leads.delete_many({"_id": {"$in": [old_lead_id, new_lead_id]}})
+        await db.slots.delete_many({"_id": {"$in": [slot_a_id, slot_b_id]}})
+
+
 # --- Reject ---
+
 
 @pytest.mark.asyncio
 async def test_reject_lead(pro_setup, mock_wa, mock_lm):
     pro_doc, db = pro_setup
-    await db.leads.insert_one({
-        "pro_id": pro_doc["_id"], "status": LeadStatus.NEW,
-        "chat_id": "972501111111@c.us", "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     result = await handle_pro_text_command("972500000000@c.us", "דחה", mock_wa, mock_lm)
     assert result == Messages.Pro.REJECT_SUCCESS
@@ -132,42 +247,66 @@ async def test_reject_lead(pro_setup, mock_wa, mock_lm):
 async def test_reject_no_pending(mock_db, mock_wa, mock_lm):
     existing = await mock_db.users.find_one({"phone_number": "972502222222"})
     if not existing:
-        await mock_db.users.insert_one({
-            "phone_number": "972502222222", "role": "professional", "is_active": True,
-        })
+        await mock_db.users.insert_one(
+            {
+                "phone_number": "972502222222",
+                "role": "professional",
+                "is_active": True,
+            }
+        )
     result = await handle_pro_text_command("972502222222@c.us", "דחה", mock_wa, mock_lm)
     assert result == Messages.Pro.NO_PENDING_APPROVALS
 
 
 # --- Finish ---
 
+
 @pytest.mark.asyncio
 async def test_finish_job_single(pro_setup, mock_wa, mock_lm):
     pro_doc, db = pro_setup
     lead_id = ObjectId()
-    await db.leads.insert_one({
-        "_id": lead_id, "pro_id": pro_doc["_id"],
-        "status": LeadStatus.BOOKED, "chat_id": "972501111111@c.us",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.BOOKED,
+            "chat_id": "972501111111@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
-    result = await handle_pro_text_command("972500000000@c.us", "סיימתי", mock_wa, mock_lm)
+    result = await handle_pro_text_command(
+        "972500000000@c.us", "סיימתי", mock_wa, mock_lm
+    )
     assert result == Messages.Pro.FINISH_SUCCESS
 
     # Lead should be completed
     lead = await db.leads.find_one({"_id": lead_id})
     assert lead["status"] == LeadStatus.COMPLETED
 
+
 @pytest.mark.asyncio
 async def test_finish_multiple_jobs_selection(pro_setup, mock_wa, mock_lm, monkeypatch):
     """If multiple BOOKED leads, pro enters selection state."""
     pro_doc, db = pro_setup
     chat_id = "972500000000@c.us"
-    
-    await db.leads.insert_many([
-        {"pro_id": pro_doc["_id"], "status": LeadStatus.BOOKED, "customer_name": "A", "created_at": datetime.now(timezone.utc)},
-        {"pro_id": pro_doc["_id"], "status": LeadStatus.BOOKED, "customer_name": "B", "created_at": datetime.now(timezone.utc) - timedelta(minutes=1)},
-    ])
+
+    await db.leads.insert_many(
+        [
+            {
+                "pro_id": pro_doc["_id"],
+                "status": LeadStatus.BOOKED,
+                "customer_name": "A",
+                "created_at": datetime.now(timezone.utc),
+            },
+            {
+                "pro_id": pro_doc["_id"],
+                "status": LeadStatus.BOOKED,
+                "customer_name": "B",
+                "created_at": datetime.now(timezone.utc) - timedelta(minutes=1),
+            },
+        ]
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -176,9 +315,11 @@ async def test_finish_multiple_jobs_selection(pro_setup, mock_wa, mock_lm, monke
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
     result = await handle_pro_text_command(chat_id, "סיימתי", mock_wa, mock_lm)
-    
+
     assert "איזו עבודה סיימת?" in result
-    mock_state.set_state.assert_called_with(chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH)
+    mock_state.set_state.assert_called_with(
+        chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH
+    )
     mock_state.set_metadata.assert_called_once()
 
 
@@ -186,25 +327,39 @@ async def test_finish_multiple_jobs_selection(pro_setup, mock_wa, mock_lm, monke
 async def test_finish_no_booked(mock_db, mock_wa, mock_lm):
     existing = await mock_db.users.find_one({"phone_number": "972502222222"})
     if not existing:
-        await mock_db.users.insert_one({
-            "phone_number": "972502222222", "role": "professional", "is_active": True,
-        })
-    result = await handle_pro_text_command("972502222222@c.us", "סיימתי", mock_wa, mock_lm)
+        await mock_db.users.insert_one(
+            {
+                "phone_number": "972502222222",
+                "role": "professional",
+                "is_active": True,
+            }
+        )
+    result = await handle_pro_text_command(
+        "972502222222@c.us", "סיימתי", mock_wa, mock_lm
+    )
     assert result == Messages.Pro.NO_ACTIVE_JOBS
 
 
 # --- Active Jobs ---
 
+
 @pytest.mark.asyncio
 async def test_active_jobs_list(pro_setup, mock_wa, mock_lm):
     pro_doc, db = pro_setup
-    await db.leads.insert_one({
-        "pro_id": pro_doc["_id"], "status": LeadStatus.BOOKED,
-        "issue_type": "נזילה", "full_address": "תל אביב",
-        "appointment_time": "10:00", "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.BOOKED,
+            "issue_type": "נזילה",
+            "full_address": "תל אביב",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
-    result = await handle_pro_text_command("972500000000@c.us", "עבודות", mock_wa, mock_lm)
+    result = await handle_pro_text_command(
+        "972500000000@c.us", "עבודות", mock_wa, mock_lm
+    )
     assert "עבודות פעילות" in result
     assert "נזילה" in result
 
@@ -214,27 +369,40 @@ async def test_active_jobs_empty(mock_db, mock_wa, mock_lm):
     """Pro with no active leads."""
     existing = await mock_db.users.find_one({"phone_number": "972502222222"})
     if not existing:
-        await mock_db.users.insert_one({
-            "phone_number": "972502222222", "role": "professional", "is_active": True,
-        })
+        await mock_db.users.insert_one(
+            {
+                "phone_number": "972502222222",
+                "role": "professional",
+                "is_active": True,
+            }
+        )
     # Use the pro that has no leads assigned to it
-    result = await handle_pro_text_command("972502222222@c.us", "עבודות", mock_wa, mock_lm)
+    result = await handle_pro_text_command(
+        "972502222222@c.us", "עבודות", mock_wa, mock_lm
+    )
     assert result == Messages.Pro.NO_ACTIVE_JOBS_LIST
 
 
 # --- History ---
 
+
 @pytest.mark.asyncio
 async def test_history(pro_setup, mock_wa, mock_lm):
     pro_doc, db = pro_setup
-    await db.leads.insert_one({
-        "pro_id": pro_doc["_id"], "status": LeadStatus.COMPLETED,
-        "issue_type": "חשמל", "full_address": "חיפה",
-        "completed_at": datetime(2026, 3, 15, tzinfo=timezone.utc),
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.COMPLETED,
+            "issue_type": "חשמל",
+            "full_address": "חיפה",
+            "completed_at": datetime(2026, 3, 15, tzinfo=timezone.utc),
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
-    result = await handle_pro_text_command("972500000000@c.us", "היסטוריה", mock_wa, mock_lm)
+    result = await handle_pro_text_command(
+        "972500000000@c.us", "היסטוריה", mock_wa, mock_lm
+    )
     assert "עבודות אחרונות" in result
     assert "חשמל" in result
 
@@ -243,22 +411,32 @@ async def test_history(pro_setup, mock_wa, mock_lm):
 async def test_history_empty(mock_db, mock_wa, mock_lm):
     existing = await mock_db.users.find_one({"phone_number": "972502222222"})
     if not existing:
-        await mock_db.users.insert_one({
-            "phone_number": "972502222222", "role": "professional", "is_active": True,
-        })
-    result = await handle_pro_text_command("972502222222@c.us", "היסטוריה", mock_wa, mock_lm)
+        await mock_db.users.insert_one(
+            {
+                "phone_number": "972502222222",
+                "role": "professional",
+                "is_active": True,
+            }
+        )
+    result = await handle_pro_text_command(
+        "972502222222@c.us", "היסטוריה", mock_wa, mock_lm
+    )
     assert result == Messages.Pro.NO_HISTORY
 
 
 # --- Stats ---
 
+
 @pytest.mark.asyncio
 async def test_stats(pro_setup, mock_wa, mock_lm):
     pro_doc, db = pro_setup
-    await db.leads.insert_one({
-        "pro_id": pro_doc["_id"], "status": LeadStatus.COMPLETED,
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.COMPLETED,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     result = await handle_pro_text_command("972500000000@c.us", "דוח", mock_wa, mock_lm)
     assert "סטטיסטיקות" in result
@@ -267,25 +445,34 @@ async def test_stats(pro_setup, mock_wa, mock_lm):
 
 # --- Reviews ---
 
+
 @pytest.mark.asyncio
 async def test_reviews_with_data(pro_setup, mock_wa, mock_lm):
     pro_doc, db = pro_setup
     # The _handle_reviews function matches reviews to leads via key = chat_id + rating
     chat_id = "972501234567@c.us"
-    await db.leads.insert_one({
-        "pro_id": pro_doc["_id"], "status": LeadStatus.COMPLETED,
-        "rating_given": 5, "chat_id": chat_id,
-        "completed_at": datetime.now(timezone.utc),
-        "created_at": datetime.now(timezone.utc),
-    })
-    await db.reviews.insert_one({
-        "pro_id": pro_doc["_id"],
-        "customer_chat_id": chat_id,
-        "rating": 5,
-        "comment": "שירות מצוין",
-    })
+    await db.leads.insert_one(
+        {
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.COMPLETED,
+            "rating_given": 5,
+            "chat_id": chat_id,
+            "completed_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    await db.reviews.insert_one(
+        {
+            "pro_id": pro_doc["_id"],
+            "customer_chat_id": chat_id,
+            "rating": 5,
+            "comment": "שירות מצוין",
+        }
+    )
 
-    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "ביקורות", mock_wa, mock_lm)
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "ביקורות", mock_wa, mock_lm
+    )
     assert result is not None
     assert "דירוגים" in result or "ביקורות" in result.lower()
     assert "5" in result  # Rating value shown
@@ -297,20 +484,27 @@ async def test_reviews_empty(pro_setup, mock_wa, mock_lm):
     # Remove any text reviews so the handler returns the no-reviews message
     await db.reviews.delete_many({"pro_id": PRO_ID})
 
-    result = await handle_pro_text_command("972500000000@c.us", "ביקורות", mock_wa, mock_lm)
+    result = await handle_pro_text_command(
+        "972500000000@c.us", "ביקורות", mock_wa, mock_lm
+    )
     assert result == Messages.Pro.NO_REVIEWS_WITH_TEXT
 
 
 # --- Unknown Command ---
 
+
 @pytest.mark.asyncio
-async def test_unknown_command_returns_dashboard(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_unknown_command_returns_dashboard(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """Now returns dashboard instead of None."""
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
-    result = await handle_pro_text_command("972500000000@c.us", "שלום", mock_wa, mock_lm)
+    result = await handle_pro_text_command(
+        "972500000000@c.us", "שלום", mock_wa, mock_lm
+    )
     assert "סטטוס: זמין" in result
     assert "יוסי אינסטלציה" in result
 
@@ -324,11 +518,14 @@ async def test_non_pro_returns_none(mock_db, mock_wa, mock_lm):
 
 # --- Text-Based Pro Approval Handlers ---
 
+
 @pytest.mark.asyncio
 async def test_approve_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     """Pro types 'אשר' -> lead becomes BOOKED, customer state cleared."""
     pro_doc, db = pro_setup
-    monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=ObjectId())
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -336,16 +533,18 @@ async def test_approve_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
     lead_id = ObjectId()
-    await db.leads.insert_one({
-        "_id": lead_id,
-        "pro_id": pro_doc["_id"],
-        "status": LeadStatus.NEW,
-        "chat_id": "972501111111@c.us",
-        "issue_type": "נזילה",
-        "full_address": "רחוב הרצל 5",
-        "appointment_time": "10:00",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "רחוב הרצל 5",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "אשר", mock_wa, mock_lm)
 
@@ -366,19 +565,23 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
     lead_id = ObjectId()
-    await db.leads.insert_one({
-        "_id": lead_id,
-        "pro_id": pro_doc["_id"],
-        "status": LeadStatus.NEW,
-        "chat_id": "972501111111@c.us",
-        "issue_type": "נזילה",
-        "full_address": "רחוב הרצל 5",
-        "appointment_time": "10:00",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "רחוב הרצל 5",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     # Note: "השהה" is now in BOT_PAUSE_COMMANDS
-    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "השהה", mock_wa, mock_lm)
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "השהה", mock_wa, mock_lm
+    )
 
     assert result == Messages.Pro.PAUSE_ACK
     # Customer state should be set with TTL
@@ -388,8 +591,9 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
         ttl=WorkerConstants.PAUSE_TTL_SECONDS,
     )
     # Customer notified
-    mock_wa.send_message.assert_called_with("972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_PRO)
-
+    mock_wa.send_message.assert_called_with(
+        "972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_PRO
+    )
 
 
 @pytest.mark.asyncio
@@ -403,16 +607,18 @@ async def test_reject_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch)
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
     lead_id = ObjectId()
-    await db.leads.insert_one({
-        "_id": lead_id,
-        "pro_id": pro_doc["_id"],
-        "status": LeadStatus.NEW,
-        "chat_id": "972501111111@c.us",
-        "issue_type": "נזילה",
-        "full_address": "רחוב הרצל 5",
-        "appointment_time": "10:00",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "רחוב הרצל 5",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "דחה", mock_wa, mock_lm)
 
@@ -432,24 +638,29 @@ async def test_resume_clears_pause(pro_setup, mock_wa, mock_lm, monkeypatch):
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
     lead_id = ObjectId()
-    await db.leads.insert_one({
-        "_id": lead_id,
-        "pro_id": pro_doc["_id"],
-        "status": LeadStatus.BOOKED,
-        "chat_id": "972501111111@c.us",
-        "issue_type": "נזילה",
-        "full_address": "רחוב הרצל 5",
-        "appointment_time": "10:00",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.BOOKED,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "רחוב הרצל 5",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
-    result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "המשך", mock_wa, mock_lm)
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "המשך", mock_wa, mock_lm
+    )
 
     assert "חזר לפעולה" in result
     mock_state.clear_state.assert_called_with("972501111111@c.us")
 
 
 # --- Zero-Touch Intent Detection ---
+
 
 @pytest.mark.asyncio
 async def test_intent_detected_prompts_switch(pro_setup, mock_wa, mock_lm, monkeypatch):
@@ -481,7 +692,9 @@ async def test_intent_detected_prompts_switch(pro_setup, mock_wa, mock_lm, monke
 
 
 @pytest.mark.asyncio
-async def test_intent_not_detected_returns_dashboard(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_intent_not_detected_returns_dashboard(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """Classifier returns False -> function returns Dashboard."""
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -498,9 +711,10 @@ async def test_intent_not_detected_returns_dashboard(pro_setup, mock_wa, mock_lm
     mock_ai.detect_service_intent.assert_called_once_with("סתם הודעה")
 
 
-
 @pytest.mark.asyncio
-async def test_known_command_skips_intent_detection(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_known_command_skips_intent_detection(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """Text 'אשר' always matches APPROVE_COMMANDS -> detect_service_intent is never called."""
     mock_ai = MagicMock()
     mock_ai.detect_service_intent = AsyncMock(return_value=True)
@@ -514,7 +728,9 @@ async def test_known_command_skips_intent_detection(pro_setup, mock_wa, mock_lm,
 
 
 @pytest.mark.asyncio
-async def test_intent_detection_no_ai_returns_dashboard(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_intent_detection_no_ai_returns_dashboard(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """When ai=None (default), unmatched text returns Dashboard."""
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -526,8 +742,8 @@ async def test_intent_detection_no_ai_returns_dashboard(pro_setup, mock_wa, mock
     assert "יוסי אינסטלציה" in result
 
 
-
 # --- Proactive Search (rate-limited) ---
+
 
 def _make_mock_redis():
     """Redis stub that simulates ttl / setex for _handle_search."""
@@ -562,7 +778,11 @@ async def test_search_no_stuck_leads_sets_cooldown(pro_setup, mock_wa):
     chat_id = f"{PRO_PHONE}@c.us"
     redis, store = _make_mock_redis()
 
-    with patch("app.services.pro_flow.get_redis_client", new_callable=AsyncMock, return_value=redis):
+    with patch(
+        "app.services.pro_flow.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
         result = await _handle_search(pro_doc, chat_id, mock_wa)
 
     assert result == Messages.Pro.NO_STUCK_LEADS
@@ -582,7 +802,11 @@ async def test_search_rate_limited_sends_wait_message(pro_setup, mock_wa):
         datetime.now(timezone.utc) + timedelta(seconds=360),
     )
 
-    with patch("app.services.pro_flow.get_redis_client", new_callable=AsyncMock, return_value=redis):
+    with patch(
+        "app.services.pro_flow.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
         result = await _handle_search(pro_doc, chat_id, mock_wa)
 
     assert result == ""  # sentinel: handler sent message itself
@@ -602,15 +826,21 @@ async def test_search_finds_stuck_lead_and_assigns(pro_setup, mock_wa):
     redis, store = _make_mock_redis()
 
     lead_id = ObjectId()
-    await db.leads.insert_one({
-        "_id": lead_id,
-        "status": LeadStatus.PENDING_ADMIN_REVIEW,
-        "issue_type": "נזילה",
-        "city": "תל אביב",
-        "created_at": datetime.now(timezone.utc) - timedelta(minutes=75),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "issue_type": "נזילה",
+            "city": "תל אביב",
+            "created_at": datetime.now(timezone.utc) - timedelta(minutes=75),
+        }
+    )
 
-    with patch("app.services.pro_flow.get_redis_client", new_callable=AsyncMock, return_value=redis):
+    with patch(
+        "app.services.pro_flow.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
         result = await _handle_search(pro_doc, chat_id, mock_wa)
 
     assert "נזילה" in result
@@ -622,6 +852,7 @@ async def test_search_finds_stuck_lead_and_assigns(pro_setup, mock_wa):
 
 
 # --- Help command does not clear context ---
+
 
 @pytest.mark.asyncio
 async def test_help_does_not_clear_context(pro_setup, mock_wa, mock_lm, monkeypatch):
@@ -645,8 +876,11 @@ async def test_help_does_not_clear_context(pro_setup, mock_wa, mock_lm, monkeypa
 
 # --- Contextual dashboard ---
 
+
 @pytest.mark.asyncio
-async def test_dashboard_omits_approve_when_no_pending(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_dashboard_omits_approve_when_no_pending(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """No NEW leads → 'אשר'/'דחה' line absent from dashboard."""
     pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
@@ -663,18 +897,22 @@ async def test_dashboard_omits_approve_when_no_pending(pro_setup, mock_wa, mock_
 
 
 @pytest.mark.asyncio
-async def test_dashboard_includes_approve_when_pending(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_dashboard_includes_approve_when_pending(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """A NEW lead present → dashboard shows 'אשר'/'דחה'."""
     pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
 
-    await db.leads.insert_one({
-        "_id": ObjectId(),
-        "pro_id": PRO_ID,
-        "status": LeadStatus.NEW,
-        "chat_id": "customer@c.us",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": PRO_ID,
+            "status": LeadStatus.NEW,
+            "chat_id": "customer@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -686,7 +924,9 @@ async def test_dashboard_includes_approve_when_pending(pro_setup, mock_wa, mock_
 
 
 @pytest.mark.asyncio
-async def test_dashboard_omits_finish_when_no_booked(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_dashboard_omits_finish_when_no_booked(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """No BOOKED leads → 'סיימתי'/'פרטים'/'ביטול' absent."""
     pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
@@ -704,18 +944,22 @@ async def test_dashboard_omits_finish_when_no_booked(pro_setup, mock_wa, mock_lm
 
 
 @pytest.mark.asyncio
-async def test_dashboard_includes_finish_when_booked(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_dashboard_includes_finish_when_booked(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """At least one BOOKED lead → dashboard shows finish/details/cancel commands."""
     pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
 
-    await db.leads.insert_one({
-        "_id": ObjectId(),
-        "pro_id": PRO_ID,
-        "status": LeadStatus.BOOKED,
-        "chat_id": "customer@c.us",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": PRO_ID,
+            "status": LeadStatus.BOOKED,
+            "chat_id": "customer@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -730,6 +974,7 @@ async def test_dashboard_includes_finish_when_booked(pro_setup, mock_wa, mock_lm
 
 # --- 'חפש' synonym for search ---
 
+
 @pytest.mark.asyncio
 async def test_search_via_chapesh_synonym(pro_setup, mock_wa):
     """Typing 'חפש' (not 'מצא') reaches _handle_search with rate-limit behavior."""
@@ -740,8 +985,11 @@ async def test_search_via_chapesh_synonym(pro_setup, mock_wa):
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
 
-    with patch("app.services.pro_flow.get_redis_client", new_callable=AsyncMock, return_value=redis), \
-         patch.object(app.services.pro_flow, "StateManager", mock_state):
+    with patch(
+        "app.services.pro_flow.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ), patch.object(app.services.pro_flow, "StateManager", mock_state):
         result = await handle_pro_text_command(chat_id, "חפש", mock_wa, MagicMock())
 
     assert result == Messages.Pro.NO_STUCK_LEADS
@@ -750,44 +998,53 @@ async def test_search_via_chapesh_synonym(pro_setup, mock_wa):
 
 # --- 'פרטים' command ---
 
+
 @pytest.mark.asyncio
-async def test_details_command_lists_booked_only(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_details_command_lists_booked_only(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """'פרטים' returns only BOOKED leads with phone/city/issue."""
     pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
 
-    await db.leads.insert_one({
-        "_id": ObjectId(),
-        "pro_id": PRO_ID,
-        "status": LeadStatus.NEW,
-        "customer_phone": "972501111111",
-        "city": "חיפה",
-        "issue_type": "נזילה",
-        "chat_id": "c1@c.us",
-        "created_at": datetime.now(timezone.utc),
-    })
-    await db.leads.insert_one({
-        "_id": ObjectId(),
-        "pro_id": PRO_ID,
-        "status": LeadStatus.BOOKED,
-        "customer_phone": "972502222222",
-        "city": "תל אביב",
-        "issue_type": "חשמל",
-        "appointment_time": "ראשון 10:00",
-        "chat_id": "c2@c.us",
-        "created_at": datetime.now(timezone.utc),
-    })
-    await db.leads.insert_one({
-        "_id": ObjectId(),
-        "pro_id": PRO_ID,
-        "status": LeadStatus.BOOKED,
-        "customer_phone": "972503333333",
-        "city": "ירושלים",
-        "issue_type": "אינסטלציה",
-        "appointment_time": "שני 14:00",
-        "chat_id": "c3@c.us",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": PRO_ID,
+            "status": LeadStatus.NEW,
+            "customer_phone": "972501111111",
+            "city": "חיפה",
+            "issue_type": "נזילה",
+            "chat_id": "c1@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": PRO_ID,
+            "status": LeadStatus.BOOKED,
+            "customer_phone": "972502222222",
+            "city": "תל אביב",
+            "issue_type": "חשמל",
+            "appointment_time": "ראשון 10:00",
+            "chat_id": "c2@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": PRO_ID,
+            "status": LeadStatus.BOOKED,
+            "customer_phone": "972503333333",
+            "city": "ירושלים",
+            "issue_type": "אינסטלציה",
+            "appointment_time": "שני 14:00",
+            "chat_id": "c3@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -820,6 +1077,7 @@ async def test_details_empty(pro_setup, mock_wa, mock_lm, monkeypatch):
 
 # --- 'ביטול' command ---
 
+
 @pytest.mark.asyncio
 async def test_cancel_single_booked_immediate(pro_setup, mock_wa, mock_lm, monkeypatch):
     """Single BOOKED lead: typing 'ביטול' cancels immediately without FSM."""
@@ -829,16 +1087,18 @@ async def test_cancel_single_booked_immediate(pro_setup, mock_wa, mock_lm, monke
     customer_chat = "customer@c.us"
     lead_id = ObjectId()
 
-    await db.leads.insert_one({
-        "_id": lead_id,
-        "pro_id": PRO_ID,
-        "status": LeadStatus.BOOKED,
-        "chat_id": customer_chat,
-        "customer_name": "דני",
-        "city": "תל אביב",
-        "issue_type": "נזילה",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": PRO_ID,
+            "status": LeadStatus.BOOKED,
+            "chat_id": customer_chat,
+            "customer_name": "דני",
+            "city": "תל אביב",
+            "issue_type": "נזילה",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -856,26 +1116,32 @@ async def test_cancel_single_booked_immediate(pro_setup, mock_wa, mock_lm, monke
     updated = await db.leads.find_one({"_id": lead_id})
     assert updated["status"] == LeadStatus.CANCELLED
     assert updated["cancel_reason"] == "pro_cancelled"
-    mock_wa.send_message.assert_called_once_with(customer_chat, Messages.Customer.PRO_CANCELLED_BOOKING)
+    mock_wa.send_message.assert_called_once_with(
+        customer_chat, Messages.Customer.PRO_CANCELLED_BOOKING
+    )
 
 
 @pytest.mark.asyncio
-async def test_cancel_multiple_booked_enters_selection(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_cancel_multiple_booked_enters_selection(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """Two BOOKED leads: typing 'ביטול' enters PRO_SELECTING_JOB_TO_CANCEL state."""
     pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
 
     for i in range(2):
-        await db.leads.insert_one({
-            "_id": ObjectId(),
-            "pro_id": PRO_ID,
-            "status": LeadStatus.BOOKED,
-            "chat_id": f"customer{i}@c.us",
-            "customer_name": f"לקוח {i}",
-            "city": "חיפה",
-            "issue_type": "חשמל",
-            "created_at": datetime.now(timezone.utc),
-        })
+        await db.leads.insert_one(
+            {
+                "_id": ObjectId(),
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "chat_id": f"customer{i}@c.us",
+                "customer_name": f"לקוח {i}",
+                "city": "חיפה",
+                "issue_type": "חשמל",
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -885,33 +1151,43 @@ async def test_cancel_multiple_booked_enters_selection(pro_setup, mock_wa, mock_
 
     result = await handle_pro_text_command(chat_id, "ביטול", mock_wa, mock_lm)
 
-    mock_state.set_state.assert_called_with(chat_id, UserStates.PRO_SELECTING_JOB_TO_CANCEL)
+    mock_state.set_state.assert_called_with(
+        chat_id, UserStates.PRO_SELECTING_JOB_TO_CANCEL
+    )
     assert "1." in result
     assert "2." in result
 
 
 @pytest.mark.asyncio
-async def test_cancel_selection_executes_cancel(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_cancel_selection_executes_cancel(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """In PRO_SELECTING_JOB_TO_CANCEL, typing '1' cancels that lead and clears state."""
     pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
     customer_chat = "customer_sel@c.us"
     lead_id = ObjectId()
 
-    await db.leads.insert_one({
-        "_id": lead_id,
-        "pro_id": PRO_ID,
-        "status": LeadStatus.BOOKED,
-        "chat_id": customer_chat,
-        "customer_name": "עמית",
-        "city": "רמת גן",
-        "issue_type": "מנעול",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": PRO_ID,
+            "status": LeadStatus.BOOKED,
+            "chat_id": customer_chat,
+            "customer_name": "עמית",
+            "city": "רמת גן",
+            "issue_type": "מנעול",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     mock_state = MagicMock()
-    mock_state.get_state = AsyncMock(return_value=UserStates.PRO_SELECTING_JOB_TO_CANCEL)
-    mock_state.get_metadata = AsyncMock(return_value={"cancelling_jobs_context": {"1": str(lead_id)}})
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.PRO_SELECTING_JOB_TO_CANCEL
+    )
+    mock_state.get_metadata = AsyncMock(
+        return_value={"cancelling_jobs_context": {"1": str(lead_id)}}
+    )
     mock_state.clear_state = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
@@ -925,7 +1201,9 @@ async def test_cancel_selection_executes_cancel(pro_setup, mock_wa, mock_lm, mon
     updated = await db.leads.find_one({"_id": lead_id})
     assert updated["status"] == LeadStatus.CANCELLED
     mock_state.clear_state.assert_any_call(chat_id)
-    mock_wa.send_message.assert_called_once_with(customer_chat, Messages.Customer.PRO_CANCELLED_BOOKING)
+    mock_wa.send_message.assert_called_once_with(
+        customer_chat, Messages.Customer.PRO_CANCELLED_BOOKING
+    )
 
 
 @pytest.mark.asyncio
@@ -935,17 +1213,23 @@ async def test_cancel_selection_abort(pro_setup, mock_wa, mock_lm, monkeypatch):
     chat_id = f"{PRO_PHONE}@c.us"
     lead_id = ObjectId()
 
-    await db.leads.insert_one({
-        "_id": lead_id,
-        "pro_id": PRO_ID,
-        "status": LeadStatus.BOOKED,
-        "chat_id": "cust@c.us",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": PRO_ID,
+            "status": LeadStatus.BOOKED,
+            "chat_id": "cust@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     mock_state = MagicMock()
-    mock_state.get_state = AsyncMock(return_value=UserStates.PRO_SELECTING_JOB_TO_CANCEL)
-    mock_state.get_metadata = AsyncMock(return_value={"cancelling_jobs_context": {"1": str(lead_id)}})
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.PRO_SELECTING_JOB_TO_CANCEL
+    )
+    mock_state.get_metadata = AsyncMock(
+        return_value={"cancelling_jobs_context": {"1": str(lead_id)}}
+    )
     mock_state.clear_state = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
@@ -958,8 +1242,11 @@ async def test_cancel_selection_abort(pro_setup, mock_wa, mock_lm, monkeypatch):
 
 # --- HELP_MENU (עזרה) ---
 
+
 @pytest.mark.asyncio
-async def test_help_returns_help_menu_not_dashboard(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_help_returns_help_menu_not_dashboard(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """Typing 'עזרה' returns the HELP_MENU command dictionary, not the dashboard."""
     pro_doc, _ = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
@@ -978,7 +1265,9 @@ async def test_help_returns_help_menu_not_dashboard(pro_setup, mock_wa, mock_lm,
 
 
 @pytest.mark.asyncio
-async def test_menu_returns_dashboard_not_help_menu(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_menu_returns_dashboard_not_help_menu(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """Typing 'תפריט' returns the contextual dashboard, not the HELP_MENU."""
     pro_doc, db = pro_setup
     await db.leads.delete_many({"pro_id": PRO_ID})
@@ -996,7 +1285,9 @@ async def test_menu_returns_dashboard_not_help_menu(pro_setup, mock_wa, mock_lm,
 
 
 @pytest.mark.asyncio
-async def test_help_does_not_clear_state_or_context(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_help_does_not_clear_state_or_context(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """'עזרה' must not touch StateManager or ContextManager."""
     pro_doc, _ = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
@@ -1020,8 +1311,11 @@ async def test_help_does_not_clear_state_or_context(pro_setup, mock_wa, mock_lm,
 
 # --- Dashboard discovery tip ---
 
+
 @pytest.mark.asyncio
-async def test_dashboard_includes_discovery_tip(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_dashboard_includes_discovery_tip(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """Dashboard ('תפריט') appends the discovery tip at the bottom."""
     pro_doc, db = pro_setup
     await db.leads.delete_many({"pro_id": PRO_ID})
@@ -1038,25 +1332,30 @@ async def test_dashboard_includes_discovery_tip(pro_setup, mock_wa, mock_lm, mon
 
 # --- Enhanced פרטים with links ---
 
+
 @pytest.mark.asyncio
-async def test_details_includes_whatsapp_and_waze_links(pro_setup, mock_wa, mock_lm, monkeypatch):
+async def test_details_includes_whatsapp_and_waze_links(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
     """פרטים row must contain a wa.me link and a waze link."""
     pro_doc, db = pro_setup
     await db.leads.delete_many({"pro_id": PRO_ID, "status": LeadStatus.BOOKED})
     chat_id = f"{PRO_PHONE}@c.us"
 
-    await db.leads.insert_one({
-        "_id": ObjectId(),
-        "pro_id": PRO_ID,
-        "status": LeadStatus.BOOKED,
-        "customer_phone": "972541234567",
-        "city": "תל אביב",
-        "street": "דיזנגוף",
-        "issue_type": "נזילה",
-        "appointment_time": "ראשון 10:00",
-        "chat_id": "c@c.us",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": PRO_ID,
+            "status": LeadStatus.BOOKED,
+            "customer_phone": "972541234567",
+            "city": "תל אביב",
+            "street": "דיזנגוף",
+            "issue_type": "נזילה",
+            "appointment_time": "ראשון 10:00",
+            "chat_id": "c@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -1071,6 +1370,7 @@ async def test_details_includes_whatsapp_and_waze_links(pro_setup, mock_wa, mock
 
 # --- סיכום command ---
 
+
 @pytest.mark.asyncio
 async def test_summary_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     """'סיכום' returns a motivating summary with completed/active/rating."""
@@ -1080,17 +1380,23 @@ async def test_summary_command(pro_setup, mock_wa, mock_lm, monkeypatch):
 
     now = datetime.now(timezone.utc)
     for _ in range(3):
-        await db.leads.insert_one({
-            "_id": ObjectId(), "pro_id": PRO_ID,
-            "status": LeadStatus.COMPLETED,
-            "completed_at": now,
+        await db.leads.insert_one(
+            {
+                "_id": ObjectId(),
+                "pro_id": PRO_ID,
+                "status": LeadStatus.COMPLETED,
+                "completed_at": now,
+                "created_at": now,
+            }
+        )
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": PRO_ID,
+            "status": LeadStatus.BOOKED,
             "created_at": now,
-        })
-    await db.leads.insert_one({
-        "_id": ObjectId(), "pro_id": PRO_ID,
-        "status": LeadStatus.BOOKED,
-        "created_at": now,
-    })
+        }
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
@@ -1120,6 +1426,7 @@ async def test_summary_via_statistics_keyword(pro_setup, mock_wa, mock_lm, monke
 
 # --- Enhanced ביקורות ---
 
+
 @pytest.mark.asyncio
 async def test_reviews_returns_text_reviews(pro_setup, mock_wa, mock_lm, monkeypatch):
     """'ביקורות' shows last 3 reviews with comment text from reviews_collection."""
@@ -1127,16 +1434,26 @@ async def test_reviews_returns_text_reviews(pro_setup, mock_wa, mock_lm, monkeyp
     chat_id = f"{PRO_PHONE}@c.us"
     now = datetime.now(timezone.utc)
 
-    await db.reviews.insert_one({
-        "_id": ObjectId(), "pro_id": PRO_ID,
-        "customer_chat_id": "c1@c.us", "rating": 5,
-        "comment": "שירות מצוין!", "created_at": now,
-    })
-    await db.reviews.insert_one({
-        "_id": ObjectId(), "pro_id": PRO_ID,
-        "customer_chat_id": "c2@c.us", "rating": 4,
-        "comment": "מגיע בזמן", "created_at": now,
-    })
+    await db.reviews.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": PRO_ID,
+            "customer_chat_id": "c1@c.us",
+            "rating": 5,
+            "comment": "שירות מצוין!",
+            "created_at": now,
+        }
+    )
+    await db.reviews.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": PRO_ID,
+            "customer_chat_id": "c2@c.us",
+            "rating": 4,
+            "comment": "מגיע בזמן",
+            "created_at": now,
+        }
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)

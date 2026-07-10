@@ -31,7 +31,9 @@ def _normalize(text: str) -> str:
     return text.strip().lower()
 
 
-async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manager, ai=None):
+async def handle_pro_text_command(
+    chat_id: str, text: str, whatsapp, lead_manager, ai=None
+):
     """
     Handles text commands from Professionals.
 
@@ -41,7 +43,9 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
       - str   → send verbatim to the pro
     """
     phone = chat_id.replace("@c.us", "")
-    pro = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}, "role": "professional"})
+    pro = await users_collection.find_one(
+        {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
+    )
     if not pro:
         return None
 
@@ -49,17 +53,23 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
     text = _normalize(text)
 
     # State: selecting job to finish or cancel
-    if current_state in (UserStates.PRO_SELECTING_JOB_TO_FINISH,
-                         UserStates.PRO_SELECTING_JOB_TO_CANCEL):
+    if current_state in (
+        UserStates.PRO_SELECTING_JOB_TO_FINISH,
+        UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+    ):
         return await _handle_job_selection(chat_id, text, pro, whatsapp, current_state)
 
     # Availability Toggles (Vacation Mode)
     if text in Messages.Keywords.PAUSE_COMMANDS:
-        await users_collection.update_one({"_id": pro["_id"]}, {"$set": {"is_active": False}})
+        await users_collection.update_one(
+            {"_id": pro["_id"]}, {"$set": {"is_active": False}}
+        )
         return Messages.Pro.STATUS_PAUSED
 
     if text in Messages.Keywords.RESUME_COMMANDS:
-        await users_collection.update_one({"_id": pro["_id"]}, {"$set": {"is_active": True}})
+        await users_collection.update_one(
+            {"_id": pro["_id"]}, {"$set": {"is_active": True}}
+        )
         return Messages.Pro.STATUS_RESUMED
 
     # Bot Pause/Resume
@@ -118,26 +128,36 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
         if is_service_intent:
             await whatsapp.send_message(chat_id, Messages.Pro.INTENT_DETECTED)
             # 5-minute TTL so a stale prompt doesn't linger
-            await StateManager.set_state(chat_id, UserStates.AWAITING_INTENT_CONFIRMATION, ttl=300)
+            await StateManager.set_state(
+                chat_id, UserStates.AWAITING_INTENT_CONFIRMATION, ttl=300
+            )
             logger.info(f"Pro {chat_id} received intent-switch prompt for: {text[:60]}")
-            return ""  # sentinel: handled internally, caller must not send PRO_HELP_MENU
+            return (
+                ""  # sentinel: handled internally, caller must not send PRO_HELP_MENU
+            )
 
     # Dynamic Timeout Reset
     latest_lead = await leads_collection.find_one(
         {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
-        sort=[("created_at", -1)]
+        sort=[("created_at", -1)],
     )
     if latest_lead and latest_lead.get("chat_id"):
         customer_chat_id = latest_lead["chat_id"]
         customer_state = await StateManager.get_state(customer_chat_id)
         if customer_state == UserStates.PAUSED_FOR_HUMAN:
-            await StateManager.set_state(customer_chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
+            await StateManager.set_state(
+                customer_chat_id,
+                UserStates.PAUSED_FOR_HUMAN,
+                ttl=WorkerConstants.PAUSE_TTL_SECONDS,
+            )
             # Update paused_at for SLA monitor
             await leads_collection.update_one(
                 {"_id": latest_lead["_id"]},
-                {"$set": {"paused_at": datetime.now(timezone.utc)}}
+                {"$set": {"paused_at": datetime.now(timezone.utc)}},
             )
-            logger.info(f"Pro {chat_id} sent a message; reset PAUSED_FOR_HUMAN TTL and updated paused_at for customer {customer_chat_id}")
+            logger.info(
+                f"Pro {chat_id} sent a message; reset PAUSED_FOR_HUMAN TTL and updated paused_at for customer {customer_chat_id}"
+            )
 
     # Fallback: show dashboard if no match
     return await _show_pro_dashboard(pro)
@@ -145,24 +165,31 @@ async def handle_pro_text_command(chat_id: str, text: str, whatsapp, lead_manage
 
 # --- Handlers ---
 
+
 async def _show_pro_dashboard(pro):
-    pro_name = pro.get('business_name', 'איש מקצוע')
-    rating = pro.get('candidate_score', 5.0)
-    is_active = pro.get('is_active', True)
+    pro_name = pro.get("business_name", "איש מקצוע")
+    rating = pro.get("candidate_score", 5.0)
+    is_active = pro.get("is_active", True)
     status_emoji = "🟢" if is_active else "🔴"
     status_text = "זמין" if is_active else "בהפסקה"
 
-    pending_count = await leads_collection.count_documents({"pro_id": pro["_id"], "status": LeadStatus.NEW})
-    booked_count = await leads_collection.count_documents({"pro_id": pro["_id"], "status": LeadStatus.BOOKED})
+    pending_count = await leads_collection.count_documents(
+        {"pro_id": pro["_id"], "status": LeadStatus.NEW}
+    )
+    booked_count = await leads_collection.count_documents(
+        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED}
+    )
 
-    lines = [Messages.Pro.PRO_DASHBOARD_HEADER.format(
-        pro_name=pro_name,
-        rating=rating,
-        status_emoji=status_emoji,
-        status_text=status_text,
-        active_jobs=booked_count,
-        max_jobs=WorkerConstants.MAX_PRO_LOAD,
-    )]
+    lines = [
+        Messages.Pro.PRO_DASHBOARD_HEADER.format(
+            pro_name=pro_name,
+            rating=rating,
+            status_emoji=status_emoji,
+            status_text=status_text,
+            active_jobs=booked_count,
+            max_jobs=WorkerConstants.MAX_PRO_LOAD,
+        )
+    ]
 
     if pending_count > 0:
         lines.append(Messages.Pro.PRO_DASHBOARD_CMD_APPROVE_REJECT)
@@ -184,14 +211,18 @@ async def _handle_job_selection(chat_id, text, pro, whatsapp, current_state):
 
     meta = await StateManager.get_metadata(chat_id)
     is_cancel_flow = current_state == UserStates.PRO_SELECTING_JOB_TO_CANCEL
-    context_key = "cancelling_jobs_context" if is_cancel_flow else "finishing_jobs_context"
+    context_key = (
+        "cancelling_jobs_context" if is_cancel_flow else "finishing_jobs_context"
+    )
     mapping = meta.get(context_key, {})
 
     if text not in mapping:
         return "בחירה לא תקינה. אנא בחר מספר מהרשימה או כתוב 'ביטול'."
 
     lead_id = mapping[text]
-    lead = await leads_collection.find_one({"_id": ObjectId(lead_id), "pro_id": pro["_id"]})
+    lead = await leads_collection.find_one(
+        {"_id": ObjectId(lead_id), "pro_id": pro["_id"]}
+    )
     if not lead:
         await StateManager.clear_state(chat_id)
         return Messages.Errors.GENERIC_ERROR
@@ -228,8 +259,7 @@ async def _recently_responded_lead(pro_id) -> bool:
 
 async def _handle_approve(pro, lead_manager, whatsapp):
     lead = await leads_collection.find_one(
-        {"pro_id": pro["_id"], "status": LeadStatus.NEW},
-        sort=[("created_at", -1)]
+        {"pro_id": pro["_id"], "status": LeadStatus.NEW}, sort=[("created_at", -1)]
     )
     if not lead:
         # Fat-finger guard
@@ -237,20 +267,17 @@ async def _handle_approve(pro, lead_manager, whatsapp):
             return Messages.Pro.ALREADY_RESPONDED
         return Messages.Pro.NO_PENDING_APPROVALS
 
-    await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.BOOKED, pro["_id"])
-    booking_success = await book_slot_for_lead(pro["_id"], lead["created_at"])
+    await lead_manager.update_lead_status(
+        str(lead["_id"]), LeadStatus.BOOKED, pro["_id"]
+    )
+    booked_slot_id = await book_slot_for_lead(pro["_id"], lead["created_at"])
+    booking_success = booked_slot_id is not None
 
-    if booking_success:
-        from app.core.database import slots_collection
-        booked_slot = await slots_collection.find_one(
-            {"pro_id": pro["_id"], "is_taken": True},
-            sort=[("start_time", 1)],
+    if booked_slot_id is not None:
+        await leads_collection.update_one(
+            {"_id": lead["_id"]},
+            {"$set": {"booked_slot_id": booked_slot_id}},
         )
-        if booked_slot:
-            await leads_collection.update_one(
-                {"_id": lead["_id"]},
-                {"$set": {"booked_slot_id": booked_slot["_id"]}},
-            )
 
     response_text = Messages.Pro.APPROVE_SUCCESS
     if booking_success:
@@ -262,6 +289,7 @@ async def _handle_approve(pro, lead_manager, whatsapp):
 
     # Profession label
     from app.core.messages import Messages as M
+
     type_labels = M.Onboarding.TYPE_LABELS
     profession_line = ""
     if pro.get("profession_type"):
@@ -303,8 +331,7 @@ async def _handle_approve(pro, lead_manager, whatsapp):
 
 async def _handle_reject(pro, lead_manager):
     lead = await leads_collection.find_one(
-        {"pro_id": pro["_id"], "status": LeadStatus.NEW},
-        sort=[("created_at", -1)]
+        {"pro_id": pro["_id"], "status": LeadStatus.NEW}, sort=[("created_at", -1)]
     )
     if not lead:
         if await _recently_responded_lead(pro["_id"]):
@@ -323,18 +350,22 @@ async def _handle_pause_bot(pro, whatsapp):
     """Pro clicked 'Pause Bot' — pause AI for the customer's chat."""
     lead = await leads_collection.find_one(
         {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
-        sort=[("created_at", -1)]
+        sort=[("created_at", -1)],
     )
     if not lead:
         return Messages.Pro.NO_PENDING_APPROVALS
 
     customer_chat_id = lead["chat_id"]
-    await StateManager.set_state(customer_chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
+    await StateManager.set_state(
+        customer_chat_id,
+        UserStates.PAUSED_FOR_HUMAN,
+        ttl=WorkerConstants.PAUSE_TTL_SECONDS,
+    )
 
     # Set is_paused flag and paused_at for SLA monitor
     await leads_collection.update_one(
         {"_id": lead["_id"]},
-        {"$set": {"is_paused": True, "paused_at": datetime.now(timezone.utc)}}
+        {"$set": {"is_paused": True, "paused_at": datetime.now(timezone.utc)}},
     )
 
     await whatsapp.send_message(customer_chat_id, Messages.Customer.BOT_PAUSED_BY_PRO)
@@ -346,7 +377,7 @@ async def _handle_resume(pro):
     """Pro resumes the bot after a pause."""
     lead = await leads_collection.find_one(
         {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
-        sort=[("created_at", -1)]
+        sort=[("created_at", -1)],
     )
     if not lead:
         return "אין שיחה מושהית כרגע."
@@ -357,8 +388,7 @@ async def _handle_resume(pro):
         await StateManager.clear_state(customer_chat_id)
         # Clear is_paused flag
         await leads_collection.update_one(
-            {"_id": lead["_id"]},
-            {"$set": {"is_paused": False}}
+            {"_id": lead["_id"]}, {"$set": {"is_paused": False}}
         )
         logger.info(f"Pro {pro['_id']} resumed bot for customer {customer_chat_id}")
         return "✅ הבוט חזר לפעולה."
@@ -366,7 +396,9 @@ async def _handle_resume(pro):
 
 
 async def _handle_finish(pro, whatsapp, chat_id):
-    cursor = leads_collection.find({"pro_id": pro["_id"], "status": LeadStatus.BOOKED}).sort("created_at", -1)
+    cursor = leads_collection.find(
+        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED}
+    ).sort("created_at", -1)
     leads = await cursor.to_list(length=10)
 
     if not leads:
@@ -395,12 +427,14 @@ async def _handle_finish(pro, whatsapp, chat_id):
 async def _execute_finish(lead, pro, whatsapp):
     await leads_collection.update_one(
         {"_id": lead["_id"]},
-        {"$set": {
-            "status": LeadStatus.COMPLETED,
-            "completed_at": datetime.now(timezone.utc),
-            "waiting_for_rating": True,
-            "is_paused": False
-        }}
+        {
+            "$set": {
+                "status": LeadStatus.COMPLETED,
+                "completed_at": datetime.now(timezone.utc),
+                "waiting_for_rating": True,
+                "is_paused": False,
+            }
+        },
     )
 
     # Clear cached context
@@ -416,7 +450,7 @@ async def _execute_finish(lead, pro, whatsapp):
 async def _handle_active_jobs(pro):
     cursor = leads_collection.find(
         {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
-        sort=[("created_at", -1)]
+        sort=[("created_at", -1)],
     )
     leads = await cursor.to_list(length=20)
 
@@ -430,18 +464,19 @@ async def _handle_active_jobs(pro):
         # `or` covers both key-missing and key-present-with-None (nullable full_address)
         address = lead.get("full_address") or "לא ידוע"
         time = lead.get("appointment_time", "לא נקבע")
-        lines.append(Messages.Pro.ACTIVE_JOB_ROW.format(
-            num=i, status=status_label, issue=issue, address=address, time=time
-        ))
+        lines.append(
+            Messages.Pro.ACTIVE_JOB_ROW.format(
+                num=i, status=status_label, issue=issue, address=address, time=time
+            )
+        )
 
-    lines.append(f"\n*סה\"כ: {len(leads)} עבודות*")
+    lines.append(f'\n*סה"כ: {len(leads)} עבודות*')
     return "\n".join(lines)
 
 
 async def _handle_details(pro):
     cursor = leads_collection.find(
-        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED},
-        sort=[("created_at", -1)]
+        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED}, sort=[("created_at", -1)]
     )
     leads = await cursor.to_list(length=20)
 
@@ -450,7 +485,9 @@ async def _handle_details(pro):
 
     lines = [Messages.Pro.DETAILS_HEADER]
     for i, lead in enumerate(leads, 1):
-        raw_phone = lead.get("customer_phone") or lead.get("chat_id", "").replace("@c.us", "")
+        raw_phone = lead.get("customer_phone") or lead.get("chat_id", "").replace(
+            "@c.us", ""
+        )
         # Local display (0XX) and international for wa.me link (972XX)
         if raw_phone.startswith("972"):
             customer_phone = "0" + raw_phone[3:]
@@ -462,23 +499,31 @@ async def _handle_details(pro):
         street = lead.get("street") or ""
         issue = lead.get("issue_type") or "לא ידוע"
         appt = lead.get("appointment_time") or "לא נקבע"
-        address_query = f"{street} {city}".strip() if (street or city) else (lead.get("full_address") or "ישראל")
+        address_query = (
+            f"{street} {city}".strip()
+            if (street or city)
+            else (lead.get("full_address") or "ישראל")
+        )
         address_encoded = urllib.parse.quote(address_query)
-        lines.append(Messages.Pro.DETAILS_ROW.format(
-            num=i,
-            customer_phone=customer_phone,
-            customer_phone_intl=customer_phone_intl,
-            city=city or "לא ידוע",
-            issue=issue,
-            appointment_time=appt,
-            address_encoded=address_encoded,
-        ))
+        lines.append(
+            Messages.Pro.DETAILS_ROW.format(
+                num=i,
+                customer_phone=customer_phone,
+                customer_phone_intl=customer_phone_intl,
+                city=city or "לא ידוע",
+                issue=issue,
+                appointment_time=appt,
+                address_encoded=address_encoded,
+            )
+        )
 
     return "\n".join(lines)
 
 
 async def _handle_cancel(pro, whatsapp, chat_id):
-    cursor = leads_collection.find({"pro_id": pro["_id"], "status": LeadStatus.BOOKED}).sort("created_at", -1)
+    cursor = leads_collection.find(
+        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED}
+    ).sort("created_at", -1)
     leads = await cursor.to_list(length=10)
 
     if not leads:
@@ -505,14 +550,17 @@ async def _handle_cancel(pro, whatsapp, chat_id):
 
 async def _execute_cancel(lead, pro, whatsapp):
     from app.core.database import slots_collection
+
     await leads_collection.update_one(
         {"_id": lead["_id"]},
-        {"$set": {
-            "status": LeadStatus.CANCELLED,
-            "cancelled_at": datetime.now(timezone.utc),
-            "cancel_reason": "pro_cancelled",
-            "is_paused": False,
-        }},
+        {
+            "$set": {
+                "status": LeadStatus.CANCELLED,
+                "cancelled_at": datetime.now(timezone.utc),
+                "cancel_reason": "pro_cancelled",
+                "is_paused": False,
+            }
+        },
     )
 
     if lead.get("booked_slot_id"):
@@ -524,7 +572,9 @@ async def _execute_cancel(lead, pro, whatsapp):
     if lead.get("chat_id"):
         await ContextManager.clear_context(lead["chat_id"])
         await StateManager.clear_state(lead["chat_id"])
-        await whatsapp.send_message(lead["chat_id"], Messages.Customer.PRO_CANCELLED_BOOKING)
+        await whatsapp.send_message(
+            lead["chat_id"], Messages.Customer.PRO_CANCELLED_BOOKING
+        )
 
     logger.info(f"Pro {pro['_id']} cancelled BOOKED lead {lead['_id']}")
 
@@ -532,7 +582,7 @@ async def _execute_cancel(lead, pro, whatsapp):
 async def _handle_history(pro):
     cursor = leads_collection.find(
         {"pro_id": pro["_id"], "status": LeadStatus.COMPLETED},
-        sort=[("completed_at", -1)]
+        sort=[("completed_at", -1)],
     )
     leads = await cursor.to_list(length=10)
 
@@ -551,9 +601,11 @@ async def _handle_history(pro):
                 date_str = str(completed_at)[:10]
         else:
             date_str = "לא ידוע"
-        lines.append(Messages.Pro.HISTORY_ROW.format(
-            num=i, issue=issue, address=address, date=date_str
-        ))
+        lines.append(
+            Messages.Pro.HISTORY_ROW.format(
+                num=i, issue=issue, address=address, date=date_str
+            )
+        )
 
     return "\n".join(lines)
 
@@ -580,15 +632,12 @@ async def _handle_stats(pro):
 
     rating_str = f"{rating:.1f} ⭐" if rating else "אין עדיין"
 
-    return (
-        Messages.Pro.STATS_HEADER
-        + Messages.Pro.STATS_BODY.format(
-            completed=completed,
-            active=active,
-            rating=rating_str,
-            reviews=review_count,
-            joined=joined,
-        )
+    return Messages.Pro.STATS_HEADER + Messages.Pro.STATS_BODY.format(
+        completed=completed,
+        active=active,
+        rating=rating_str,
+        reviews=review_count,
+        joined=joined,
     )
 
 
@@ -601,7 +650,11 @@ async def _handle_summary(pro):
         {"pro_id": pro_id, "status": LeadStatus.COMPLETED}
     )
     this_month = await leads_collection.count_documents(
-        {"pro_id": pro_id, "status": LeadStatus.COMPLETED, "completed_at": {"$gte": month_start}}
+        {
+            "pro_id": pro_id,
+            "status": LeadStatus.COMPLETED,
+            "completed_at": {"$gte": month_start},
+        }
     )
     active = await leads_collection.count_documents(
         {"pro_id": pro_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}}
@@ -645,10 +698,12 @@ async def _handle_reviews(pro):
 
     lines = [Messages.Pro.REVIEWS_HEADER.format(rating=rating_avg, count=count)]
     for rev in text_reviews:
-        lines.append(Messages.Pro.REVIEW_TEXT_ROW.format(
-            rating=rev.get("rating", "?"),
-            comment=rev.get("comment", ""),
-        ))
+        lines.append(
+            Messages.Pro.REVIEW_TEXT_ROW.format(
+                rating=rev.get("rating", "?"),
+                comment=rev.get("comment", ""),
+            )
+        )
 
     return "\n".join(lines)
 
@@ -689,11 +744,13 @@ async def _handle_search(pro, chat_id: str, whatsapp):
 
     await leads_collection.update_one(
         {"_id": stuck["_id"]},
-        {"$set": {
-            "pro_id": pro["_id"],
-            "status": LeadStatus.NEW,
-            "assigned_by_admin_at": datetime.now(timezone.utc),
-        }},
+        {
+            "$set": {
+                "pro_id": pro["_id"],
+                "status": LeadStatus.NEW,
+                "assigned_by_admin_at": datetime.now(timezone.utc),
+            }
+        },
     )
 
     wait_minutes = 0
@@ -701,7 +758,9 @@ async def _handle_search(pro, chat_id: str, whatsapp):
     if created_at:
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=timezone.utc)
-        wait_minutes = int((datetime.now(timezone.utc) - created_at).total_seconds() / 60)
+        wait_minutes = int(
+            (datetime.now(timezone.utc) - created_at).total_seconds() / 60
+        )
 
     logger.info(f"Pro {pro['_id']} claimed stuck lead {stuck['_id']} via search")
 
