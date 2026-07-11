@@ -32,6 +32,7 @@ You are the documentation syncer for the Proli project. Your job is to keep mark
 - `README.md` — setup, environment vars, commands
 - `GEMINI.md` — AI engine config (if exists)
 - `docs/*.md` — all files except the two below
+- `.claude/agents/flow-tracer.md` and `.claude/agents/code-reviewer.md` — **only** the embedded constants: the `UserStates` list, the `LeadStatus` lifecycle, and the four TTL/threshold values (`PAUSE_TTL_SECONDS`, `PRO_SEARCH_RATE_LIMIT_SECONDS`, `SOS_TIMEOUT_MINUTES`, `STALE_BOOKED_LEAD_HOURS`) in flow-tracer. These are guarded by `tests/test_agent_pack_drift.py`; when that test fails, fix the stale fact here to match `app/core/constants.py`. Never touch any other prose, headers, or the frontmatter in these two files, and edit no other file under `.claude/`.
 
 ## Rules
 
