@@ -275,6 +275,8 @@ Run these in order for a full system validation:
 11. **TC-14** → Emergency Lead Flow (Bypass)
 12. **TC-15** → Pro Availability & Vacation Mode
 13. **TC-16** → Multi-Job Finish Flow
+14. **TC-17** → Admin: Create Pro respects Verified checkbox
+15. **TC-18** → Admin: "Unassigned" clears pro_id
 
 After each test, verify in worker logs and database that the expected state changes occurred.
 
@@ -315,4 +317,41 @@ After each test, verify in worker logs and database that the expected state chan
 | 1 | 972524828796 | "סיימתי" | "איזו עבודה סיימת?" + Numbered list of active jobs | State = PRO_SELECTING_JOB_TO_FINISH |
 | 2 | 972524828796 | "1" | "✅ עודכן שהעבודה הסתיימה" | Selected lead status = COMPLETED |
 | 3 | 972524828796 | "תפריט" | Dashboard active job count decreased | State back to PRO_MODE |
+
+---
+
+## Admin Panel (Streamlit) Test Cases
+
+These cover admin-panel data-integrity paths that are thin UI wrappers over MongoDB
+writes (no WhatsApp involvement). Run in the Streamlit admin panel
+(`streamlit run admin_panel/main.py`).
+
+### TC-17: Create Pro Respects the "Verified" Checkbox (PRO-60 Bug 1)
+
+**Pre-condition:** Logged into the admin panel, on the Professionals view, "Add Pro" form open.
+
+| Step | Action | Expected | Verify |
+|------|--------|----------|--------|
+| 1 | Fill a new pro, leave **Verified** checkbox **unchecked**, submit | "Pro created" success | `db.users.findOne({business_name: "<name>"})` → `is_verified: false` |
+| 2 | Add another pro, **check** the Verified checkbox, submit | "Pro created" success | New pro doc → `is_verified: true` |
+| 3 | — | — | `audit_log` has a `create_pro` entry for each |
+
+**Regression guarded:** before the fix, every created pro was forced `is_verified: true`
+regardless of the checkbox.
+
+### TC-18: "Unassigned" Actually Clears pro_id (PRO-60 Bug 2)
+
+**Pre-condition:** A lead currently assigned to a pro (has a non-null `pro_id`). Open its
+Edit Lead form in the admin panel.
+
+| Step | Action | Expected | Verify |
+|------|--------|----------|--------|
+| 1 | In the Professional selectbox choose **"לא משויך"** (the unassigned option), Save Changes | "Lead updated" success | `db.leads.findOne({_id})` → `pro_id: null` AND `professional: "לא משויך"` |
+| 2 | Re-open the same lead, choose a real pro, Save | "Lead updated" | Lead doc → `pro_id` = that pro's `_id` |
+| 3 | — | — | `audit_log` has an `edit_lead` entry for each save |
+
+**Regression guarded:** before the fix, choosing the unassigned option changed only the
+displayed `professional` name; `pro_id` stayed pointed at the old pro (ghost assignment)
+so matching/healer/pro-flow still treated the lead as owned. The option now uses the
+localized `T["unknown_pro"]` (`"לא משויך"`) sentinel, consistent with every other view.
 
