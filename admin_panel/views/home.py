@@ -2,8 +2,18 @@ import streamlit as st
 import pandas as pd
 from bson.objectid import ObjectId
 from datetime import datetime
-from admin_panel.core.utils import users_collection, leads_collection, messages_collection, send_completion_check_sync
-from admin_panel.ui.components import render_chat_bubble, render_kanban_column, render_status_pill, STATUS_COLORS
+from admin_panel.core.utils import (
+    users_collection,
+    leads_collection,
+    messages_collection,
+    send_completion_check_sync,
+)
+from admin_panel.ui.components import (
+    render_chat_bubble,
+    render_kanban_column,
+    render_status_pill,
+    STATUS_COLORS,
+)
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.rbac import can_edit, has_permission
 import pytz
@@ -12,9 +22,17 @@ import sys
 from app.core.logger import logger
 from app.core.constants import AdminDefaults, Defaults, LeadStatus
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-KANBAN_STATUSES = ["new", "contacted", "booked", "completed", "rejected", "closed", "cancelled"]
+KANBAN_STATUSES = [
+    "new",
+    "contacted",
+    "booked",
+    "completed",
+    "rejected",
+    "closed",
+    "cancelled",
+]
 ALL_STATUSES = [s.value for s in LeadStatus]
 
 
@@ -23,16 +41,22 @@ def view_leads_dashboard(T):
     st.caption(T.get("page_desc_dashboard", "View and manage incoming leads."))
 
     # Tabs: Kanban | Table | Create
-    tab_kanban, tab_table, tab_create = st.tabs([
-        T.get("tab_kanban", "Board"),
-        T.get("tab_dashboard", "Table"),
-        T.get("tab_create_lead", "Create"),
-    ])
+    tab_kanban, tab_table, tab_create = st.tabs(
+        [
+            T.get("tab_kanban", "Board"),
+            T.get("tab_dashboard", "Table"),
+            T.get("tab_create_lead", "Create"),
+        ]
+    )
 
     # --- Shared Data ---
     all_pros = list(users_collection.find())
-    pro_map_id_to_name = {p["_id"]: p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros}
-    pro_map_name_to_id = {p.get("business_name", AdminDefaults.UNKNOWN_PRO): p["_id"] for p in all_pros}
+    pro_map_id_to_name = {
+        p["_id"]: p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros
+    }
+    pro_map_name_to_id = {
+        p.get("business_name", AdminDefaults.UNKNOWN_PRO): p["_id"] for p in all_pros
+    }
     pro_names = [p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros]
     pro_names.insert(0, T["unknown_pro"])
 
@@ -48,7 +72,11 @@ def view_leads_dashboard(T):
             appointment_time = l.get("appointment_time", l.get("time_preference", "?"))
             full_address = l.get("full_address", l.get("address", "?"))
 
-            if not l.get("issue_type") and not l.get("issue") and "[DEAL:" in str(l.get("details", "")):
+            if (
+                not l.get("issue_type")
+                and not l.get("issue")
+                and "[DEAL:" in str(l.get("details", ""))
+            ):
                 try:
                     parts = l["details"].split("[DEAL:")[1].split("]")[0].split("|")
                     if len(parts) >= 3:
@@ -67,15 +95,17 @@ def view_leads_dashboard(T):
             pro_id = l.get("pro_id")
             pro_name = pro_map_id_to_name.get(pro_id, T["unknown_pro"])
 
-            data.append({
-                "id": str(l["_id"]),
-                "date": l["created_at"].astimezone(pytz.timezone('Asia/Jerusalem')),
-                "client": l["chat_id"].replace("@c.us", ""),
-                "professional": pro_name,
-                "details_summary": display_details,
-                "status": l.get("status", "N/A"),
-                "_chat_id": l["chat_id"]
-            })
+            data.append(
+                {
+                    "id": str(l["_id"]),
+                    "date": l["created_at"].astimezone(pytz.timezone("Asia/Jerusalem")),
+                    "client": l["chat_id"].replace("@c.us", ""),
+                    "professional": pro_name,
+                    "details_summary": display_details,
+                    "status": l.get("status", "N/A"),
+                    "_chat_id": l["chat_id"],
+                }
+            )
         return pd.DataFrame(data)
 
     leads_df = get_leads_data()
@@ -106,22 +136,29 @@ def view_leads_dashboard(T):
             grouped = {}
             for status in KANBAN_STATUSES:
                 mask = leads_df["status"] == status
-                grouped[status] = leads_df[mask].to_dict('records')
+                grouped[status] = leads_df[mask].to_dict("records")
 
             # Render Kanban columns as horizontal scrollable row
             all_columns_html = ""
             for status in KANBAN_STATUSES:
-                all_columns_html += render_kanban_column(status, grouped.get(status, []), T)
+                all_columns_html += render_kanban_column(
+                    status, grouped.get(status, []), T
+                )
 
-            st.markdown(f"""<div style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px;">
+            st.markdown(
+                f"""<div style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px;">
 {all_columns_html}
-</div>""", unsafe_allow_html=True)
+</div>""",
+                unsafe_allow_html=True,
+            )
 
         st.markdown("")
 
         # Quick actions on selected lead (below Kanban)
         if not leads_df.empty:
-            _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id, tab_key="kanban")
+            _render_lead_detail_section(
+                leads_df, T, all_pros, pro_map_name_to_id, tab_key="kanban"
+            )
 
     # ==========================================
     # TAB 2: TABLE VIEW
@@ -138,13 +175,13 @@ def view_leads_dashboard(T):
 
         if not leads_df.empty:
             # Export CSV
-            csv = leads_df.to_csv(index=False).encode('utf-8-sig')
+            csv = leads_df.to_csv(index=False).encode("utf-8-sig")
             st.download_button(
                 label=T.get("export_csv", "Export CSV"),
                 data=csv,
                 file_name=f'proli_leads_{datetime.now().strftime("%Y-%m-%d")}.csv',
-                mime='text/csv',
-                key="export_leads_csv"
+                mime="text/csv",
+                key="export_leads_csv",
             )
 
         if leads_df.empty:
@@ -154,7 +191,7 @@ def view_leads_dashboard(T):
 
             status_options = ALL_STATUSES
 
-            if 'original_leads_df' not in st.session_state:
+            if "original_leads_df" not in st.session_state:
                 st.session_state.original_leads_df = leads_df.copy()
 
             edited_df = st.data_editor(
@@ -167,22 +204,23 @@ def view_leads_dashboard(T):
                         T["col_date"],
                         format="D MMM YYYY, h:mm a",
                         width="medium",
-                        disabled=True
+                        disabled=True,
                     ),
-                    "client": st.column_config.TextColumn(T["col_client"], width="small", disabled=True),
+                    "client": st.column_config.TextColumn(
+                        T["col_client"], width="small", disabled=True
+                    ),
                     "professional": st.column_config.SelectboxColumn(
-                        T["col_pro"],
-                        width="medium",
-                        options=pro_names,
-                        required=False
+                        T["col_pro"], width="medium", options=pro_names, required=False
                     ),
-                    "details_summary": st.column_config.TextColumn(T["col_details"], width="large"),
+                    "details_summary": st.column_config.TextColumn(
+                        T["col_details"], width="large"
+                    ),
                     "status": st.column_config.SelectboxColumn(
                         T["col_status"],
                         options=status_options,
                         width="small",
-                        required=True
-                    )
+                        required=True,
+                    ),
                 },
                 use_container_width=True,
                 hide_index=True,
@@ -191,48 +229,73 @@ def view_leads_dashboard(T):
 
             # Save changes button
             if can_edit(get_current_role()):
-                if st.button(T.get("save_btn", "Save Changes"), type="primary", key="save_dashboard_changes"):
+                if st.button(
+                    T.get("save_btn", "Save Changes"),
+                    type="primary",
+                    key="save_dashboard_changes",
+                ):
                     changes = st.session_state.leads_editor.get("edited_rows", {})
                     if not changes:
                         st.toast(T.get("no_changes", "No changes."))
                     else:
                         updated_count = 0
                         for row_idx, changed_data in changes.items():
-                            lead_id = st.session_state.original_leads_df.iloc[row_idx]["id"]
+                            lead_id = st.session_state.original_leads_df.iloc[row_idx][
+                                "id"
+                            ]
                             update_payload = {}
 
                             if "status" in changed_data:
                                 update_payload["status"] = changed_data["status"]
                             if "details_summary" in changed_data:
-                                update_payload["details"] = changed_data["details_summary"]
-                                update_payload["issue_type"] = changed_data["details_summary"]
+                                update_payload["details"] = changed_data[
+                                    "details_summary"
+                                ]
+                                update_payload["issue_type"] = changed_data[
+                                    "details_summary"
+                                ]
                             if "professional" in changed_data:
                                 new_pro_name = changed_data["professional"]
                                 if new_pro_name == T["unknown_pro"]:
                                     update_payload["pro_id"] = None
                                 else:
-                                    update_payload["pro_id"] = pro_map_name_to_id.get(new_pro_name)
+                                    update_payload["pro_id"] = pro_map_name_to_id.get(
+                                        new_pro_name
+                                    )
 
                             if update_payload:
-                                leads_collection.update_one({"_id": ObjectId(lead_id)}, {"$set": update_payload})
-                                log_audit("edit_lead", {"lead_id": lead_id, "changes": update_payload})
+                                leads_collection.update_one(
+                                    {"_id": ObjectId(lead_id)}, {"$set": update_payload}
+                                )
+                                log_audit(
+                                    "edit_lead",
+                                    {"lead_id": lead_id, "changes": update_payload},
+                                )
                                 updated_count += 1
 
-                        st.success(f"{updated_count} {T.get('msg_changes', 'changes saved')}!")
+                        st.success(
+                            f"{updated_count} {T.get('msg_changes', 'changes saved')}!"
+                        )
                         st.cache_data.clear()
                         st.rerun()
 
             st.markdown("")
 
             # Lead selection and actions (below table)
-            _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id, tab_key="table")
+            _render_lead_detail_section(
+                leads_df, T, all_pros, pro_map_name_to_id, tab_key="table"
+            )
 
     # ==========================================
     # TAB 3: CREATE LEAD
     # ==========================================
     with tab_create:
         if not can_edit(get_current_role()):
-            st.warning(T.get("no_permission_create", "You don't have permission to create leads."))
+            st.warning(
+                T.get(
+                    "no_permission_create", "You don't have permission to create leads."
+                )
+            )
             return
 
         st.header(T.get("create_lead_title", "Create a New Lead"))
@@ -240,27 +303,39 @@ def view_leads_dashboard(T):
         with st.form("create_lead_form"):
             c1, c2 = st.columns(2)
             with c1:
-                new_phone = st.text_input(T.get("input_client_phone", "Phone (WhatsApp)"), placeholder="972501234567")
+                new_phone = st.text_input(
+                    T.get("input_client_phone", "Phone (WhatsApp)"),
+                    placeholder="972501234567",
+                )
                 new_status = st.selectbox(
                     T.get("input_status", "Initial Status"),
                     options=["new", "contacted", "booked", "closed"],
-                    index=0
+                    index=0,
                 )
             with c2:
-                pro_names_create = [p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros]
+                pro_names_create = [
+                    p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros
+                ]
                 pro_names_create.insert(0, T["unknown_pro"])
-                selected_pro_name = st.selectbox(T.get("input_pro", "Assign Professional"), options=pro_names_create)
+                selected_pro_name = st.selectbox(
+                    T.get("input_pro", "Assign Professional"), options=pro_names_create
+                )
 
-            new_details = st.text_area(T.get("input_issue", "Issue / Details"), placeholder="e.g., Leaking faucet in the kitchen...")
+            new_details = st.text_area(
+                T.get("input_issue", "Issue / Details"),
+                placeholder="e.g., Leaking faucet in the kitchen...",
+            )
 
-            submitted = st.form_submit_button(T.get("submit_create_lead", "Create Lead"), type="primary")
+            submitted = st.form_submit_button(
+                T.get("submit_create_lead", "Create Lead"), type="primary"
+            )
 
             if submitted:
                 if not new_phone:
                     st.error(T.get("error_phone_required", "Phone number is required."))
                 else:
                     try:
-                        clean_phone = ''.join(filter(str.isdigit, new_phone))
+                        clean_phone = "".join(filter(str.isdigit, new_phone))
                         chat_id = f"{clean_phone}@c.us"
 
                         assigned_pro_id = None
@@ -276,39 +351,52 @@ def view_leads_dashboard(T):
                             "created_at": datetime.now(pytz.utc),
                             "full_address": AdminDefaults.MANUAL_LABEL,
                             "appointment_time": AdminDefaults.MANUAL_LABEL,
-                            "source": AdminDefaults.MANUAL_SOURCE
+                            "source": AdminDefaults.MANUAL_SOURCE,
                         }
 
                         leads_collection.insert_one(new_lead_doc)
-                        log_audit("create_lead", {"chat_id": chat_id, "status": new_status})
+                        log_audit(
+                            "create_lead", {"chat_id": chat_id, "status": new_status}
+                        )
                         logger.info(f"Admin manually created lead for {chat_id}")
-                        st.success(T.get("create_lead_success", "Lead created successfully!"))
+                        st.success(
+                            T.get("create_lead_success", "Lead created successfully!")
+                        )
                         st.cache_data.clear()
                     except Exception as e:
                         st.error(f"Error creating lead: {e}")
 
 
-def _render_lead_detail_section(leads_df, T, all_pros, pro_map_name_to_id, tab_key="kanban"):
+def _render_lead_detail_section(
+    leads_df, T, all_pros, pro_map_name_to_id, tab_key="kanban"
+):
     """Render the lead detail / quick-action section below the Kanban board."""
     st.markdown("---")
     st.subheader(T.get("lead_quick_actions", "Lead Details"))
 
-    lead_options = [f"{row['client']} — {row['status']} — {str(row.get('details_summary',''))[:40]}" for _, row in leads_df.iterrows()]
+    lead_options = [
+        f"{row['client']} — {row['status']} — {str(row.get('details_summary',''))[:40]}"
+        for _, row in leads_df.iterrows()
+    ]
     selected_idx = st.selectbox(
         T.get("select_lead", "Select Lead"),
         range(len(lead_options)),
         format_func=lambda i: lead_options[i],
-        key=f"{tab_key}_lead_select"
+        key=f"{tab_key}_lead_select",
     )
 
     if selected_idx is not None:
         selected_lead = leads_df.iloc[selected_idx]
-        _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id, tab_key=tab_key)
+        _render_selected_lead_actions(
+            selected_lead, T, pro_map_name_to_id, tab_key=tab_key
+        )
 
 
-def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id, tab_key="kanban"):
+def _render_selected_lead_actions(
+    selected_lead, T, pro_map_name_to_id, tab_key="kanban"
+):
     """Render actions for a selected lead (shared between Kanban and Table views)."""
-    lid = selected_lead['id']
+    lid = selected_lead["id"]
     k = f"{tab_key}_{lid}"
     c1, c2 = st.columns([1, 3])
 
@@ -321,12 +409,16 @@ def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id, tab_key=
 
         # Delete action
         if has_permission(get_current_role(), "delete_leads"):
-            if st.button(T.get('delete_btn', 'Delete Lead'), key=f"delete_{k}", type="secondary"):
+            if st.button(
+                T.get("delete_btn", "Delete Lead"), key=f"delete_{k}", type="secondary"
+            ):
                 st.session_state[f"confirm_delete_{k}"] = True
 
         # Manual customer check
         if can_edit(get_current_role()):
-            if st.button(T.get("check_customer_btn", "Customer Check"), key=f"check_{k}"):
+            if st.button(
+                T.get("check_customer_btn", "Customer Check"), key=f"check_{k}"
+            ):
                 try:
                     send_completion_check_sync(lid)
                     log_audit("send_completion_check", {"lead_id": lid})
@@ -339,22 +431,42 @@ def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id, tab_key=
             with st.expander(T.get("edit_lead_btn", "Edit Lead")):
                 with st.form(key=f"edit_lead_form_{k}"):
                     current_status = selected_lead.get("status", "new")
-                    status_options = ALL_STATUSES if current_status in ALL_STATUSES else ALL_STATUSES + [current_status]
+                    status_options = (
+                        ALL_STATUSES
+                        if current_status in ALL_STATUSES
+                        else ALL_STATUSES + [current_status]
+                    )
                     new_status = st.selectbox(
                         T.get("status_label", "Status"),
                         status_options,
                         index=status_options.index(current_status),
-                        format_func=lambda x: T.get(x, x.capitalize())
+                        format_func=lambda x: T.get(x, x.capitalize()),
                     )
-                    new_client = st.text_input(T.get("client_name_label", "Client Name"), value=selected_lead.get("client", ""))
-                    new_phone = st.text_input(T.get("phone_number_label", "Phone Number"), value=selected_lead.get("phone_number", ""))
-                    new_details = st.text_area(T.get("details_label", "Details"), value=selected_lead.get("details_summary", ""))
+                    new_client = st.text_input(
+                        T.get("client_name_label", "Client Name"),
+                        value=selected_lead.get("client", ""),
+                    )
+                    new_phone = st.text_input(
+                        T.get("phone_number_label", "Phone Number"),
+                        value=selected_lead.get("phone_number", ""),
+                    )
+                    new_details = st.text_area(
+                        T.get("details_label", "Details"),
+                        value=selected_lead.get("details_summary", ""),
+                    )
 
-                    pro_names = ["Unassigned"] + list(pro_map_name_to_id.keys())
-                    current_pro_name = selected_lead.get("professional", "Unassigned")
+                    unassigned_label = T["unknown_pro"]
+                    pro_names = [unassigned_label] + list(pro_map_name_to_id.keys())
+                    current_pro_name = selected_lead.get(
+                        "professional", unassigned_label
+                    )
                     if current_pro_name not in pro_names:
                         pro_names.append(current_pro_name)
-                    new_pro = st.selectbox(T.get("professional_label", "Professional"), pro_names, index=pro_names.index(current_pro_name))
+                    new_pro = st.selectbox(
+                        T.get("professional_label", "Professional"),
+                        pro_names,
+                        index=pro_names.index(current_pro_name),
+                    )
 
                     if st.form_submit_button(T.get("save_changes_btn", "Save Changes")):
                         update_data = {
@@ -362,12 +474,24 @@ def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id, tab_key=
                             "client": new_client,
                             "phone_number": new_phone,
                             "details_summary": new_details,
-                            "professional": new_pro
+                            "professional": new_pro,
                         }
-                        if new_pro != "Unassigned" and new_pro in pro_map_name_to_id:
-                            update_data["pro_id"] = ObjectId(pro_map_name_to_id[new_pro])
+                        if new_pro == unassigned_label:
+                            # Explicitly unassigning must actually release ownership
+                            # — clear pro_id so matching/healer/pro-flow stop treating
+                            # the lead as owned. Otherwise the lead only *displays* as
+                            # unassigned while pro_id still points at the old pro
+                            # (ghost assignment). Uses the localized T["unknown_pro"]
+                            # sentinel so the option matches every other view (RTL).
+                            update_data["pro_id"] = None
+                        elif new_pro in pro_map_name_to_id:
+                            update_data["pro_id"] = ObjectId(
+                                pro_map_name_to_id[new_pro]
+                            )
 
-                        leads_collection.update_one({"_id": ObjectId(lid)}, {"$set": update_data})
+                        leads_collection.update_one(
+                            {"_id": ObjectId(lid)}, {"$set": update_data}
+                        )
                         log_audit("edit_lead", {"lead_id": lid})
                         st.success(T.get("lead_updated", "Lead updated successfully!"))
                         st.cache_data.clear()
@@ -397,7 +521,13 @@ def _render_selected_lead_actions(selected_lead, T, pro_map_name_to_id, tab_key=
         with st.expander(f"{T['chat_history']} ({len(msgs)})", expanded=True):
             if msgs:
                 with st.container(height=350, border=False):
-                    html_chat = "".join(render_chat_bubble(m['text'], m['role'], m.get('timestamp'), T) for m in msgs)
-                    st.markdown(f'<div class="chat-container">{html_chat}</div>', unsafe_allow_html=True)
+                    html_chat = "".join(
+                        render_chat_bubble(m["text"], m["role"], m.get("timestamp"), T)
+                        for m in msgs
+                    )
+                    st.markdown(
+                        f'<div class="chat-container">{html_chat}</div>',
+                        unsafe_allow_html=True,
+                    )
             else:
                 st.info(T["no_chat"])
