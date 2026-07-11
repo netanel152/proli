@@ -16,9 +16,11 @@ sys.modules["google.genai"] = MagicMock()
 # Also mock google.genai.types
 sys.modules["google.genai.types"] = MagicMock()
 
+
 @pytest.fixture(scope="module")
 def mock_db():
     return AsyncMongoMockClient().proli_db
+
 
 @pytest.fixture(autouse=True)
 def patch_dependencies(request, monkeypatch, mock_db):
@@ -41,6 +43,7 @@ def patch_dependencies(request, monkeypatch, mock_db):
     admins = mock_db.admins
 
     import app.core.database
+
     monkeypatch.setattr(app.core.database, "users_collection", users)
     monkeypatch.setattr(app.core.database, "messages_collection", messages)
     monkeypatch.setattr(app.core.database, "leads_collection", leads)
@@ -53,28 +56,34 @@ def patch_dependencies(request, monkeypatch, mock_db):
 
     # Patch Scheduler Collections
     import app.scheduler
+
     monkeypatch.setattr(app.scheduler, "users_collection", users)
     monkeypatch.setattr(app.scheduler, "leads_collection", leads)
     monkeypatch.setattr(app.scheduler, "settings_collection", settings_col)
 
     # Patch Lead Manager Collections (Since it does 'from ... import ...')
     import app.services.lead_manager_service
+
     monkeypatch.setattr(app.services.lead_manager_service, "leads_collection", leads)
-    monkeypatch.setattr(app.services.lead_manager_service, "messages_collection", messages)
+    monkeypatch.setattr(
+        app.services.lead_manager_service, "messages_collection", messages
+    )
 
     # Patch Workflow Collections
     import app.services.workflow_service
+
     monkeypatch.setattr(app.services.workflow_service, "users_collection", users)
     monkeypatch.setattr(app.services.workflow_service, "leads_collection", leads)
-    monkeypatch.setattr(app.services.workflow_service, "reviews_collection", reviews)
 
     # Patch extracted flow modules (they import collections directly)
     import app.services.customer_flow
+
     monkeypatch.setattr(app.services.customer_flow, "users_collection", users)
     monkeypatch.setattr(app.services.customer_flow, "leads_collection", leads)
     monkeypatch.setattr(app.services.customer_flow, "reviews_collection", reviews)
 
     import app.services.pro_flow
+
     monkeypatch.setattr(app.services.pro_flow, "users_collection", users)
     monkeypatch.setattr(app.services.pro_flow, "leads_collection", leads)
     monkeypatch.setattr(app.services.pro_flow, "reviews_collection", reviews)
@@ -85,35 +94,49 @@ def patch_dependencies(request, monkeypatch, mock_db):
     mock_ctx.get_history = AsyncMock(return_value=None)
     mock_ctx.update_history = AsyncMock()
     import app.services.context_manager_service
-    monkeypatch.setattr(app.services.context_manager_service, "ContextManager", mock_ctx)
+
+    monkeypatch.setattr(
+        app.services.context_manager_service, "ContextManager", mock_ctx
+    )
     monkeypatch.setattr(app.services.pro_flow, "ContextManager", mock_ctx)
     monkeypatch.setattr(app.services.customer_flow, "ContextManager", mock_ctx)
 
     # Patch Matching Service Collections
     import app.services.matching_service
+
     monkeypatch.setattr(app.services.matching_service, "users_collection", users)
     monkeypatch.setattr(app.services.matching_service, "leads_collection", leads)
 
     # Patch Notification Service Collections
     import app.services.notification_service
+
     monkeypatch.setattr(app.services.notification_service, "users_collection", users)
     monkeypatch.setattr(app.services.notification_service, "leads_collection", leads)
 
     # Patch Pro Onboarding Service Collections
     import app.services.pro_onboarding_service
+
     monkeypatch.setattr(app.services.pro_onboarding_service, "users_collection", users)
 
     # Patch Data Management Service Collections
     import app.services.data_management_service
-    monkeypatch.setattr(app.services.data_management_service, "consent_collection", consent)
+
+    monkeypatch.setattr(
+        app.services.data_management_service, "consent_collection", consent
+    )
     monkeypatch.setattr(app.services.data_management_service, "users_collection", users)
     monkeypatch.setattr(app.services.data_management_service, "leads_collection", leads)
-    monkeypatch.setattr(app.services.data_management_service, "messages_collection", messages)
-    monkeypatch.setattr(app.services.data_management_service, "reviews_collection", reviews)
+    monkeypatch.setattr(
+        app.services.data_management_service, "messages_collection", messages
+    )
+    monkeypatch.setattr(
+        app.services.data_management_service, "reviews_collection", reviews
+    )
     monkeypatch.setattr(app.services.data_management_service, "slots_collection", slots)
 
     # Patch Analytics Service Collections
     import app.services.analytics_service
+
     monkeypatch.setattr(app.services.analytics_service, "leads_collection", leads)
     monkeypatch.setattr(app.services.analytics_service, "messages_collection", messages)
     monkeypatch.setattr(app.services.analytics_service, "users_collection", users)
@@ -121,17 +144,21 @@ def patch_dependencies(request, monkeypatch, mock_db):
 
     # Patch Audit Service Collections
     import app.services.audit_service
+
     monkeypatch.setattr(app.services.audit_service, "audit_log_collection", audit_log)
 
     # Patch Scheduling Service Collections
     import app.services.scheduling_service
+
     monkeypatch.setattr(app.services.scheduling_service, "users_collection", users)
     monkeypatch.setattr(app.services.scheduling_service, "slots_collection", slots)
     monkeypatch.setattr(app.services.scheduling_service, "leads_collection", leads)
 
     # Default: bypass consent check so existing tests pass
     # Tests that specifically test consent flow can override this
-    monkeypatch.setattr(app.services.workflow_service, "has_consent", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        app.services.workflow_service, "has_consent", AsyncMock(return_value=True)
+    )
 
     # Patch New Services in Workflow
     mock_whatsapp = MagicMock()
@@ -141,23 +168,33 @@ def patch_dependencies(request, monkeypatch, mock_db):
 
     mock_ai = MagicMock()
     from app.services.ai_engine_service import AIResponse, ExtractedData
-    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
-        reply_to_user="Mock AI Response",
-        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Tel Aviv, Rotshild 10", appointment_time="10:00"),
-        transcription=None,
-        is_deal=False
-    ))
+
+    mock_ai.analyze_conversation = AsyncMock(
+        return_value=AIResponse(
+            reply_to_user="Mock AI Response",
+            extracted_data=ExtractedData(
+                city="Tel Aviv",
+                issue="Leak",
+                full_address="Tel Aviv, Rotshild 10",
+                appointment_time="10:00",
+            ),
+            transcription=None,
+            is_deal=False,
+        )
+    )
     # Default False so existing tests don't accidentally trigger the intent-detection path
     mock_ai.detect_service_intent = AsyncMock(return_value=False)
 
     import app.services.workflow_service
+
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_whatsapp)
     monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
-    
+
     # Also patch scheduler's whatsapp instance if it's imported separately
     monkeypatch.setattr(app.scheduler, "whatsapp", mock_whatsapp)
-    
+
     return mock_db
+
 
 @pytest_asyncio.fixture
 async def integration_db(monkeypatch):
@@ -191,6 +228,7 @@ async def integration_db(monkeypatch):
 
     # Patch app.core.database
     import app.core.database
+
     monkeypatch.setattr(app.core.database, "users_collection", users)
     monkeypatch.setattr(app.core.database, "messages_collection", messages)
     monkeypatch.setattr(app.core.database, "leads_collection", leads)
@@ -201,34 +239,43 @@ async def integration_db(monkeypatch):
 
     # Patch Lead Manager
     import app.services.lead_manager_service
+
     monkeypatch.setattr(app.services.lead_manager_service, "leads_collection", leads)
-    monkeypatch.setattr(app.services.lead_manager_service, "messages_collection", messages)
+    monkeypatch.setattr(
+        app.services.lead_manager_service, "messages_collection", messages
+    )
 
     # --- Patch Workflow Service ---
     import app.services.workflow_service
+
     monkeypatch.setattr(app.services.workflow_service, "users_collection", users)
     monkeypatch.setattr(app.services.workflow_service, "leads_collection", leads)
-    monkeypatch.setattr(app.services.workflow_service, "reviews_collection", reviews)
 
     # Bypass consent for integration tests
-    monkeypatch.setattr(app.services.workflow_service, "has_consent", AsyncMock(return_value=True))
+    monkeypatch.setattr(
+        app.services.workflow_service, "has_consent", AsyncMock(return_value=True)
+    )
 
     import app.services.customer_flow
+
     monkeypatch.setattr(app.services.customer_flow, "users_collection", users)
     monkeypatch.setattr(app.services.customer_flow, "leads_collection", leads)
     monkeypatch.setattr(app.services.customer_flow, "reviews_collection", reviews)
 
     import app.services.pro_flow
+
     monkeypatch.setattr(app.services.pro_flow, "users_collection", users)
     monkeypatch.setattr(app.services.pro_flow, "leads_collection", leads)
 
     # --- Patch Matching Service ---
     import app.services.matching_service
+
     monkeypatch.setattr(app.services.matching_service, "users_collection", users)
     monkeypatch.setattr(app.services.matching_service, "leads_collection", leads)
 
     # --- Patch Notification Service ---
     import app.services.notification_service
+
     monkeypatch.setattr(app.services.notification_service, "users_collection", users)
     monkeypatch.setattr(app.services.notification_service, "leads_collection", leads)
 
@@ -242,12 +289,20 @@ async def integration_db(monkeypatch):
     # Optional: Mock AI to avoid API costs during tests
     mock_ai = MagicMock()
     from app.services.ai_engine_service import AIResponse, ExtractedData
-    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
-        reply_to_user="Mock AI Response",
-        extracted_data=ExtractedData(city="Tel Aviv", issue="Leak", full_address="Tel Aviv, Rotshild 10", appointment_time="10:00"),
-        transcription=None,
-        is_deal=False
-    ))
+
+    mock_ai.analyze_conversation = AsyncMock(
+        return_value=AIResponse(
+            reply_to_user="Mock AI Response",
+            extracted_data=ExtractedData(
+                city="Tel Aviv",
+                issue="Leak",
+                full_address="Tel Aviv, Rotshild 10",
+                appointment_time="10:00",
+            ),
+            transcription=None,
+            is_deal=False,
+        )
+    )
     mock_ai.detect_service_intent = AsyncMock(return_value=False)
     monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
 
