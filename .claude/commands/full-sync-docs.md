@@ -146,6 +146,17 @@ No code-derived facts — costs and pricing only. **Skip — no checks needed.**
 | Context-clear trigger keywords | Any reset keyword referenced must match `RESET_COMMANDS` (not "תפריט") |
 | Lead lifecycle | Matches Phase 1.1 `LeadStatus` |
 
+### `.claude/agents/flow-tracer.md` and `.claude/agents/code-reviewer.md`
+Only the embedded constants are in scope — leave all other prose and the frontmatter untouched.
+| Section | What to check |
+|---------|---------------|
+| flow-tracer `## UserStates` | Every `UserStates` member from Phase 1.1 is present (the five `ONBOARDING_*` states are intentionally collapsed to `ONBOARDING_*`); no stale/renamed states listed |
+| flow-tracer `## LeadStatus Lifecycle` | Every value matches Phase 1.1 |
+| flow-tracer `## TTL Constants` | `PAUSE_TTL_SECONDS`, `PRO_SEARCH_RATE_LIMIT_SECONDS`, `SOS_TIMEOUT_MINUTES`, `STALE_BOOKED_LEAD_HOURS` values match Phase 1.1 |
+| code-reviewer lead-status lifecycle | Every `LeadStatus` value from Phase 1.1 is present |
+
+> All of the above is enforced automatically by `tests/test_agent_pack_drift.py` — a failing run there points at the exact stale fact to fix.
+
 ---
 
 ## Phase 3 — Apply Edits
@@ -153,7 +164,7 @@ No code-derived facts — costs and pricing only. **Skip — no checks needed.**
 For every stale claim found in Phase 2:
 1. Use `Edit` to apply the minimal fix — change only the stale fragment. Do not rewrite surrounding prose.
 2. If a whole table row is missing, insert it. If a row describes a removed feature, delete it.
-3. Never create a new `.md` file. Never edit files under `venv/`, `.pytest_cache/`, `.claude/`, or `GEMINI.md`'s skills sections.
+3. Never create a new `.md` file. Never edit files under `venv/` or `.pytest_cache/`, or `GEMINI.md`'s skills sections. The **only** editable files under `.claude/` are the embedded-constants facts in `.claude/agents/flow-tracer.md` and `.claude/agents/code-reviewer.md` (the `UserStates` list, the `LeadStatus` lifecycle, and flow-tracer's four TTL values) — fix those to match `app/core/constants.py` when `tests/test_agent_pack_drift.py` flags drift. Leave every other `.claude/` file, and all other prose in those two agent files, untouched.
 4. Do not commit.
 
 ---
