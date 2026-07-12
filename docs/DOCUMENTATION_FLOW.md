@@ -21,6 +21,8 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 | `closed` | Max reassignments reached | `monitor_service.py` |
 | `pending_admin_review` | No replacement pro found at any radius | `monitor_service.py` / `workflow_service.py` |
 
+Each transition is appended to the lead's `status_history` array (`{status, at, by}`) via `set_lead_status()`, the single writer for lead status in `lead_manager_service.py`.
+
 ---
 
 ## 2. AI Engine — Two-Phase Architecture

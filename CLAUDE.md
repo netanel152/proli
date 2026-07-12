@@ -54,7 +54,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected: **318 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`). The authoritative baseline lives in `docs/TESTING.md` ("Current status" line).
+Expected: **332 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`). The authoritative baseline lives in `docs/TESTING.md` ("Current status" line).
 
 ### Linting / Formatting
 

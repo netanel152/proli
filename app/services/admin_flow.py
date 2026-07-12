@@ -3,14 +3,17 @@ from bson import ObjectId
 
 from app.core.logger import logger
 from app.core.messages import Messages
-from app.core.constants import LeadStatus, UserStates, WorkerConstants
+from app.core.constants import LeadStatus, UserStates, WorkerConstants, Actor
+from app.services.lead_manager_service import set_lead_status
 from app.core.config import settings
 from app.core.database import leads_collection, users_collection
 
 ADMIN_TTL = 900  # 15-minute wizard session
 
 
-async def handle_admin_message(chat_id, user_text, current_state, state_manager, redis_client, whatsapp, db):
+async def handle_admin_message(
+    chat_id, user_text, current_state, state_manager, redis_client, whatsapp, db
+):
     """
     Entry point for all messages from the admin phone number.
     redis_client is accepted for signature compatibility but unused —
@@ -37,6 +40,7 @@ async def handle_admin_message(chat_id, user_text, current_state, state_manager,
 # ---------------------------------------------------------------------------
 # Wizard steps
 # ---------------------------------------------------------------------------
+
 
 async def _start_wizard(chat_id, state_manager, whatsapp):
     """List all PENDING_ADMIN_REVIEW leads and enter lead-selection state."""
@@ -72,7 +76,9 @@ async def _start_wizard(chat_id, state_manager, whatsapp):
     lines.append("\nהשב/י מספר לבחירה או 'ביטול' ליציאה.")
 
     await state_manager.set_metadata(chat_id, {"admin_leads_context": leads_map})
-    await state_manager.set_state(chat_id, UserStates.ADMIN_SELECTING_LEAD, ttl=ADMIN_TTL)
+    await state_manager.set_state(
+        chat_id, UserStates.ADMIN_SELECTING_LEAD, ttl=ADMIN_TTL
+    )
     await whatsapp.send_message(chat_id, "\n".join(lines))
 
 
@@ -87,14 +93,14 @@ async def _handle_lead_selection(chat_id, text, state_manager, whatsapp):
     leads_map = meta.get("admin_leads_context", {})
 
     if not text.isdigit() or text not in leads_map:
-        await whatsapp.send_message(
-            chat_id, "❌ מספר לא חוקי. נסה שוב או שלח 'ביטול'."
-        )
+        await whatsapp.send_message(chat_id, "❌ מספר לא חוקי. נסה שוב או שלח 'ביטול'.")
         return
 
     meta["selected_lead_id"] = leads_map[text]
     await state_manager.set_metadata(chat_id, meta)
-    await state_manager.set_state(chat_id, UserStates.ADMIN_SELECTING_ACTION, ttl=ADMIN_TTL)
+    await state_manager.set_state(
+        chat_id, UserStates.ADMIN_SELECTING_ACTION, ttl=ADMIN_TTL
+    )
     await whatsapp.send_message(
         chat_id,
         "בחרת בליד. למי להעביר?\n1. קח את הליד לעצמך\n2. הצג רשימת אנשי מקצוע פנויים",
@@ -112,10 +118,14 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
     lead_id = meta.get("selected_lead_id")
 
     if text == "1":
-        admin_pro = await users_collection.find_one({
-            "phone_number": {"$in": [settings.ADMIN_PHONE, f"{settings.ADMIN_PHONE}@c.us"]},
-            "role": "professional",
-        })
+        admin_pro = await users_collection.find_one(
+            {
+                "phone_number": {
+                    "$in": [settings.ADMIN_PHONE, f"{settings.ADMIN_PHONE}@c.us"]
+                },
+                "role": "professional",
+            }
+        )
         if not admin_pro:
             await whatsapp.send_message(
                 chat_id,
@@ -168,7 +178,9 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
 
         meta["admin_pros_context"] = pros_map
         await state_manager.set_metadata(chat_id, meta)
-        await state_manager.set_state(chat_id, UserStates.ADMIN_SELECTING_PRO, ttl=ADMIN_TTL)
+        await state_manager.set_state(
+            chat_id, UserStates.ADMIN_SELECTING_PRO, ttl=ADMIN_TTL
+        )
         await whatsapp.send_message(chat_id, "\n".join(lines))
 
     else:
@@ -187,9 +199,7 @@ async def _handle_pro_selection(chat_id, text, state_manager, whatsapp):
     lead_id = meta.get("selected_lead_id")
 
     if not text.isdigit() or text not in pros_map:
-        await whatsapp.send_message(
-            chat_id, "❌ מספר לא חוקי. נסה שוב או שלח 'ביטול'."
-        )
+        await whatsapp.send_message(chat_id, "❌ מספר לא חוקי. נסה שוב או שלח 'ביטול'.")
         return
 
     pro_id = pros_map[text]
@@ -206,15 +216,17 @@ async def _handle_pro_selection(chat_id, text, state_manager, whatsapp):
 # Shared assignment helper
 # ---------------------------------------------------------------------------
 
+
 async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
     """Update the lead in Mongo, notify the pro, clear admin wizard state."""
-    await leads_collection.update_one(
-        {"_id": ObjectId(lead_id)},
-        {"$set": {
+    await set_lead_status(
+        lead_id,
+        LeadStatus.NEW,
+        Actor.ADMIN,
+        extra_set={
             "pro_id": pro["_id"],
-            "status": LeadStatus.NEW,
             "assigned_by_admin_at": datetime.now(timezone.utc),
-        }},
+        },
     )
 
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
@@ -226,10 +238,17 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
     if pro_phone and lead:
         try:
             customer_phone = (lead.get("chat_id") or "").replace("@c.us", "")
-            extra_info = f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
-            header = Messages.Pro.EMERGENCY_LEAD_HEADER if lead.get("is_emergency") else Messages.Pro.NEW_LEAD_HEADER
+            extra_info = (
+                f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
+            )
+            header = (
+                Messages.Pro.EMERGENCY_LEAD_HEADER
+                if lead.get("is_emergency")
+                else Messages.Pro.NEW_LEAD_HEADER
+            )
             msg = (
-                header + "\n\n"
+                header
+                + "\n\n"
                 + Messages.Pro.NEW_LEAD_DETAILS.format(
                     customer_name=lead.get("customer_name") or "לקוח",
                     full_address=lead.get("full_address") or "לא ידוע",
@@ -241,9 +260,13 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
             )
             await whatsapp.send_message(pro_phone, msg)
         except Exception as e:
-            logger.error(f"[admin_flow] Failed to notify pro {pro_phone} for lead {lead_id}: {e}")
+            logger.error(
+                f"[admin_flow] Failed to notify pro {pro_phone} for lead {lead_id}: {e}"
+            )
 
     await state_manager.clear_state(chat_id)
     pro_name = pro.get("business_name") or "איש המקצוע"
     await whatsapp.send_message(chat_id, f"✅ הליד הועבר ל-{pro_name}.")
-    logger.info(f"[admin_flow] Lead {lead_id} assigned to pro {pro.get('_id')} by admin {chat_id}")
+    logger.info(
+        f"[admin_flow] Lead {lead_id} assigned to pro {pro.get('_id')} by admin {chat_id}"
+    )

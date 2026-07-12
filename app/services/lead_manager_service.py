@@ -4,9 +4,57 @@ from bson import ObjectId
 from pymongo import ReturnDocument
 from app.core.database import leads_collection, messages_collection
 from app.core.logger import logger
-from app.core.constants import LeadStatus
+from app.core.constants import LeadStatus, Actor
 from app.core.config import settings
+from app.core.lead_history import status_history_entry
 from app.services.context_manager_service import ContextManager
+
+
+async def set_lead_status(
+    lead_id,
+    status: str,
+    actor: str,
+    extra_set: Optional[dict] = None,
+    extra_unset: Optional[dict] = None,
+    expected_status=None,
+):
+    """Canonical lead status transition — the single writer of ``lead.status``.
+
+    Sets ``status`` + ``updated_at``, pushes a ``status_history`` entry, and
+    applies any caller-supplied ``extra_set`` / ``extra_unset`` fields in the
+    same atomic update. Returns the updated document (``ReturnDocument.AFTER``)
+    or ``None`` if no lead matched (e.g. the ``expected_status`` guard failed).
+
+    Write failures are intentionally NOT swallowed: an exception propagates so
+    the caller aborts rather than proceeding as if the transition happened
+    (e.g. the SOS healer must not free slots / notify a new pro if the status
+    write failed). Callers that already run inside a per-item ``try`` — the
+    scheduler jobs — keep isolating one lead's failure from the batch.
+
+    Every status write in the app must go through here (or
+    ``LeadManager.update_lead_status``, which delegates to it) so the funnel
+    history stays complete — see ``tests/test_status_history.py`` which flags
+    any direct ``$set`` of ``status`` that bypasses this helper.
+
+    ``expected_status`` adds a guard to the filter so a transition can be made
+    conditional (and race-safe) on the lead's current status.
+    """
+    oid = lead_id if isinstance(lead_id, ObjectId) else ObjectId(lead_id)
+    set_fields = {"status": status, "updated_at": datetime.now(timezone.utc)}
+    if extra_set:
+        set_fields.update(extra_set)
+    update = {
+        "$set": set_fields,
+        "$push": {"status_history": status_history_entry(status, actor)},
+    }
+    if extra_unset:
+        update["$unset"] = extra_unset
+    query = {"_id": oid}
+    if expected_status is not None:
+        query["status"] = expected_status
+    return await leads_collection.find_one_and_update(
+        query, update, return_document=ReturnDocument.AFTER
+    )
 
 
 def is_address_complete(extracted_data) -> tuple[bool, str]:
@@ -27,17 +75,25 @@ def is_address_complete(extracted_data) -> tuple[bool, str]:
     if not (getattr(extracted_data, "apartment", None) or "").strip():
         missing.append("מספר דירה")
     if missing:
-        return False, "כדי שבעל המקצוע יגיע למקום המדויק אני צריך/ה עוד פרטים לכתובת: " + ", ".join(missing)
+        return (
+            False,
+            "כדי שבעל המקצוע יגיע למקום המדויק אני צריך/ה עוד פרטים לכתובת: "
+            + ", ".join(missing),
+        )
     return True, ""
 
 
 def compose_full_address(extracted_data) -> str:
     """Build a canonical single-line address string from extracted parts."""
-    return f"{extracted_data.street} {extracted_data.street_number}, {extracted_data.city}"
+    return (
+        f"{extracted_data.street} {extracted_data.street_number}, {extracted_data.city}"
+    )
 
 
 class LeadManager:
-    async def create_lead(self, deal_string: str, chat_id: str, pro_id: ObjectId = None) -> dict:
+    async def create_lead(
+        self, deal_string: str, chat_id: str, pro_id: ObjectId = None
+    ) -> dict:
         """
         Parses [DEAL: time|city|address|issue] and saves to DB.
         Note: The prompt in AIEngine asks for [DEAL: Time | Full Address | Issue Summary]
@@ -46,7 +102,7 @@ class LeadManager:
             # Remove brackets and split
             content = deal_string.replace("[DEAL:", "").replace("]", "").strip()
             parts = [p.strip() for p in content.split("|")]
-            
+
             # Flexible parsing depending on how many parts returned
             if len(parts) >= 3:
                 appointment_time = parts[0]
@@ -66,9 +122,9 @@ class LeadManager:
                 full_address=full_address,
                 appointment_time=appointment_time,
                 status=LeadStatus.NEW,
-                pro_id=pro_id
+                pro_id=pro_id,
             )
-            
+
         except Exception as e:
             logger.error(f"Failed to create lead from string '{deal_string}': {e}")
             return None
@@ -114,6 +170,7 @@ class LeadManager:
                 "is_emergency": is_emergency,
                 "created_at": datetime.now(timezone.utc),
                 "history": [],
+                "status_history": [status_history_entry(status, Actor.SYSTEM)],
                 "pro_id": pro_id,
                 "street": street,
                 "street_number": street_number,
@@ -121,7 +178,7 @@ class LeadManager:
                 "floor": floor,
                 "apartment": apartment,
                 "customer_name": customer_name,
-                "media_urls": []
+                "media_urls": [],
             }
             if media_url:
                 lead_doc["media_urls"] = [media_url]
@@ -129,21 +186,29 @@ class LeadManager:
             if status == LeadStatus.CONTACTED and not pro_id:
                 # Atomic find-or-create: prevents duplicate active leads per customer
                 result = await leads_collection.find_one_and_update(
-                    {"chat_id": chat_id, "status": LeadStatus.CONTACTED, "pro_id": None},
+                    {
+                        "chat_id": chat_id,
+                        "status": LeadStatus.CONTACTED,
+                        "pro_id": None,
+                    },
                     {"$setOnInsert": lead_doc},
                     upsert=True,
-                    return_document=ReturnDocument.AFTER
+                    return_document=ReturnDocument.AFTER,
                 )
-                logger.info(f"Lead found-or-created: {result['_id']} (Status: {status})")
+                logger.info(
+                    f"Lead found-or-created: {result['_id']} (Status: {status})"
+                )
                 return result
 
             result = await leads_collection.insert_one(lead_doc)
             lead_doc["_id"] = result.inserted_id
-            logger.info(f"Lead created/inserted: {result.inserted_id} (Status: {status})")
+            logger.info(
+                f"Lead created/inserted: {result.inserted_id} (Status: {status})"
+            )
             return lead_doc
         except Exception as e:
-             logger.error(f"Error creating lead dict: {e}")
-             return None
+            logger.error(f"Error creating lead dict: {e}")
+            return None
 
     async def log_message(self, chat_id: str, role: str, text: str):
         # 1. MongoDB Insert (Safety)
@@ -151,14 +216,16 @@ class LeadManager:
             "chat_id": chat_id,
             "role": role,
             "text": text,
-            "timestamp": datetime.now(timezone.utc)
+            "timestamp": datetime.now(timezone.utc),
         }
         await messages_collection.insert_one(msg_doc)
-        
+
         # 2. Redis Cache Update (Performance)
         await ContextManager.update_history(chat_id, role, text)
 
-    async def get_chat_history(self, chat_id: str, limit: int = settings.MAX_CHAT_HISTORY) -> list:
+    async def get_chat_history(
+        self, chat_id: str, limit: int = settings.MAX_CHAT_HISTORY
+    ) -> list:
         # 1. Try fetching from ContextManager (Redis)
         cached_history = await ContextManager.get_history(chat_id)
 
@@ -201,7 +268,12 @@ class LeadManager:
 
         formatted = []
         for m in msgs:
-            formatted.append({"role": "user" if m["role"] == "user" else "model", "parts": [m["text"]]})
+            formatted.append(
+                {
+                    "role": "user" if m["role"] == "user" else "model",
+                    "parts": [m["text"]],
+                }
+            )
 
         # 3. Save to ContextManager
         await ContextManager.set_history(chat_id, formatted)
@@ -215,13 +287,18 @@ class LeadManager:
             logger.error(f"Error getting lead {lead_id}: {e}")
             return None
 
-    async def update_lead_status(self, lead_id: str, status: str, pro_id: str = None):
-        update_fields = {"status": status}
-        if pro_id:
-            update_fields["pro_id"] = pro_id
-        
-        await leads_collection.update_one(
-            {"_id": ObjectId(lead_id)},
-            {"$set": update_fields}
+    async def update_lead_status(
+        self, lead_id: str, status: str, pro_id: str = None, actor: str = Actor.SYSTEM
+    ):
+        """Transition a lead's status (and optionally its ``pro_id``).
+
+        Thin wrapper over the module-level :func:`set_lead_status` so the
+        ``status_history`` push happens here too. ``actor`` defaults to
+        ``Actor.SYSTEM``; pass ``Actor.PRO`` / ``Actor.CUSTOMER`` / ``Actor.ADMIN``
+        from the relevant flow.
+        """
+        extra_set = {"pro_id": pro_id} if pro_id else None
+        await set_lead_status(lead_id, status, actor, extra_set=extra_set)
+        logger.info(
+            f"Lead {lead_id} updated: Status -> {status}, Pro -> {pro_id or 'Unchanged'}"
         )
-        logger.info(f"Lead {lead_id} updated: Status -> {status}, Pro -> {pro_id or 'Unchanged'}")

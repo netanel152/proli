@@ -1,7 +1,13 @@
-from app.core.database import users_collection, leads_collection, reviews_collection, slots_collection
+from app.core.database import (
+    users_collection,
+    leads_collection,
+    reviews_collection,
+    slots_collection,
+)
 from app.core.logger import logger
 from app.core.messages import Messages
-from app.core.constants import LeadStatus, Defaults
+from app.core.constants import LeadStatus, Defaults, Actor
+from app.services.lead_manager_service import set_lead_status
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
 from bson import ObjectId
@@ -11,23 +17,33 @@ import pytz
 _IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 
-async def send_customer_completion_check(lead_id: str, whatsapp, triggered_by: str = "auto"):
+async def send_customer_completion_check(
+    lead_id: str, whatsapp, triggered_by: str = "auto"
+):
     """Asks the customer if the job has been completed using interactive buttons."""
     try:
         lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
         if not lead or lead.get("status") != LeadStatus.BOOKED:
-            logger.warning(f"send_customer_completion_check called for invalid/non-booked lead: {lead_id}")
+            logger.warning(
+                f"send_customer_completion_check called for invalid/non-booked lead: {lead_id}"
+            )
             return
 
         customer_chat_id = lead["chat_id"]
         pro = await users_collection.find_one({"_id": lead["pro_id"]})
-        pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME) if pro else Defaults.GENERIC_PRO_NAME
+        pro_name = (
+            pro.get("business_name", Defaults.GENERIC_PRO_NAME)
+            if pro
+            else Defaults.GENERIC_PRO_NAME
+        )
 
         await whatsapp.send_message(
             customer_chat_id,
             Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name),
         )
-        logger.success(f"Sent customer completion check for lead {lead_id} (Trigger: {triggered_by})")
+        logger.success(
+            f"Sent customer completion check for lead {lead_id} (Trigger: {triggered_by})"
+        )
     except Exception as e:
         logger.error(f"Error in send_customer_completion_check for lead {lead_id}: {e}")
 
@@ -46,25 +62,23 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     if not is_completion:
         return None
 
-    lead = await leads_collection.find_one({
-        "chat_id": chat_id,
-        "status": LeadStatus.BOOKED
-    }, sort=[("created_at", -1)])
+    lead = await leads_collection.find_one(
+        {"chat_id": chat_id, "status": LeadStatus.BOOKED}, sort=[("created_at", -1)]
+    )
 
     if not lead:
         return None
 
     pro = await users_collection.find_one({"_id": lead["pro_id"]})
 
-    await leads_collection.update_one(
-        {"_id": lead["_id"]},
-        {
-            "$set": {
-                "status": LeadStatus.COMPLETED,
-                "completed_at": datetime.now(timezone.utc),
-                "waiting_for_rating": True
-            }
-        }
+    await set_lead_status(
+        lead["_id"],
+        LeadStatus.COMPLETED,
+        Actor.CUSTOMER,
+        extra_set={
+            "completed_at": datetime.now(timezone.utc),
+            "waiting_for_rating": True,
+        },
     )
     logger.success(f"✅ Lead {lead['_id']} marked as COMPLETED by customer.")
 
@@ -72,10 +86,18 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     await ContextManager.clear_context(chat_id)
 
     if pro and pro.get("phone_number"):
-        pro_chat_id = f"{pro['phone_number']}@c.us" if not pro['phone_number'].endswith('@c.us') else pro['phone_number']
-        await whatsapp.send_message(pro_chat_id, Messages.Pro.CUSTOMER_REPORTED_COMPLETION)
+        pro_chat_id = (
+            f"{pro['phone_number']}@c.us"
+            if not pro["phone_number"].endswith("@c.us")
+            else pro["phone_number"]
+        )
+        await whatsapp.send_message(
+            pro_chat_id, Messages.Pro.CUSTOMER_REPORTED_COMPLETION
+        )
 
-    pro_name = pro.get('business_name', Defaults.EXPERT_NAME) if pro else Defaults.EXPERT_NAME
+    pro_name = (
+        pro.get("business_name", Defaults.EXPERT_NAME) if pro else Defaults.EXPERT_NAME
+    )
     return Messages.Customer.COMPLETION_ACK.format(pro_name=pro_name)
 
 
@@ -87,10 +109,9 @@ async def handle_customer_rating_text(chat_id: str, text: str):
 
     rating = int(text)
 
-    lead = await leads_collection.find_one({
-        "chat_id": chat_id,
-        "waiting_for_rating": True
-    })
+    lead = await leads_collection.find_one(
+        {"chat_id": chat_id, "waiting_for_rating": True}
+    )
 
     if not lead:
         return None
@@ -111,22 +132,26 @@ async def handle_customer_rating_text(chat_id: str, text: str):
 
         await users_collection.update_one(
             {"_id": pro_id},
-            {"$set": {
-                "social_proof.rating": new_rating,
-                "social_proof.review_count": new_count
-            }}
+            {
+                "$set": {
+                    "social_proof.rating": new_rating,
+                    "social_proof.review_count": new_count,
+                }
+            },
         )
 
         await leads_collection.update_one(
             {"_id": lead["_id"]},
-            {"$set": {
-                "waiting_for_rating": False,
-                "rating_given": rating,
-                "waiting_for_review_comment": True
-            }}
+            {
+                "$set": {
+                    "waiting_for_rating": False,
+                    "rating_given": rating,
+                    "waiting_for_review_comment": True,
+                }
+            },
         )
 
-        business_name = pro.get('business_name', Defaults.GENERIC_PRO_NAME)
+        business_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME)
         logger.success(f"⭐ Rating {rating} saved for {business_name}")
         return Messages.Customer.REVIEW_REQUEST
     except Exception as e:
@@ -136,17 +161,18 @@ async def handle_customer_rating_text(chat_id: str, text: str):
 
 async def handle_customer_review_comment(chat_id: str, text: str):
     """Checks if the user sent a textual review after rating."""
-    lead = await leads_collection.find_one({
-        "chat_id": chat_id,
-        "waiting_for_review_comment": True
-    })
+    lead = await leads_collection.find_one(
+        {"chat_id": chat_id, "waiting_for_review_comment": True}
+    )
 
     if not lead:
         return None
 
     pro_id = lead.get("pro_id")
     if not pro_id:
-        logger.warning(f"handle_customer_review_comment: lead {lead['_id']} has no pro_id, skipping review")
+        logger.warning(
+            f"handle_customer_review_comment: lead {lead['_id']} has no pro_id, skipping review"
+        )
         return None
 
     rating_given = lead.get("rating_given", 5)
@@ -156,14 +182,13 @@ async def handle_customer_review_comment(chat_id: str, text: str):
         "customer_chat_id": chat_id,
         "rating": rating_given,
         "comment": text,
-        "created_at": datetime.now(timezone.utc)
+        "created_at": datetime.now(timezone.utc),
     }
 
     await reviews_collection.insert_one(review_doc)
 
     await leads_collection.update_one(
-        {"_id": lead["_id"]},
-        {"$set": {"waiting_for_review_comment": False}}
+        {"_id": lead["_id"]}, {"$set": {"waiting_for_review_comment": False}}
     )
 
     # Clear context so the next conversation starts fresh
@@ -186,7 +211,9 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
     pick = user_text.strip()
 
     if pick not in slots_context:
-        await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_INVALID_CHOICE)
+        await whatsapp.send_message(
+            chat_id, Messages.Customer.RESCHEDULE_INVALID_CHOICE
+        )
         return  # state preserved — let customer retry
 
     slot_id = ObjectId(slots_context[pick])
@@ -206,7 +233,9 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         {"$set": {"is_taken": True}},
     )
     if not chosen_slot:
-        await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_INVALID_CHOICE)
+        await whatsapp.send_message(
+            chat_id, Messages.Customer.RESCHEDULE_INVALID_CHOICE
+        )
         return  # state preserved — let customer retry
 
     # Free previously booked slot if we have a reference to it
@@ -222,16 +251,20 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
 
     await leads_collection.update_one(
         {"_id": lead["_id"]},
-        {"$set": {
-            "appointment_time": new_time,
-            "booked_slot_id": slot_id,
-            "rescheduled_at": datetime.now(timezone.utc),
-            "rescheduled_count": lead.get("rescheduled_count", 0) + 1,
-        }},
+        {
+            "$set": {
+                "appointment_time": new_time,
+                "booked_slot_id": slot_id,
+                "rescheduled_at": datetime.now(timezone.utc),
+                "rescheduled_count": lead.get("rescheduled_count", 0) + 1,
+            }
+        },
     )
 
     await StateManager.clear_state(chat_id)
-    await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_SUCCESS.format(new_time=new_time))
+    await whatsapp.send_message(
+        chat_id, Messages.Customer.RESCHEDULE_SUCCESS.format(new_time=new_time)
+    )
 
     pro = await users_collection.find_one({"_id": lead["pro_id"]})
     if pro and pro.get("phone_number"):
@@ -247,7 +280,9 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
                 new_time=new_time,
             ),
         )
-    logger.success(f"📅 Lead {lead['_id']} rescheduled to {new_time} by customer {chat_id}")
+    logger.success(
+        f"📅 Lead {lead['_id']} rescheduled to {new_time} by customer {chat_id}"
+    )
 
 
 def _format_il_datetime(dt) -> str:
