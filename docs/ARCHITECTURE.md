@@ -76,7 +76,7 @@ Customer (WhatsApp)
 - Lead CRUD with inline editing and bulk operations
 - Professional profile management and approval workflow
 - Schedule management (daily editor, bulk generator, weekly templates)
-- Analytics (lead funnel, daily volume, pro performance)
+- Analytics (lead funnel, daily volume, pro performance, median NEW→BOOKED time, contacted→booked conversion rate)
 - RBAC: Owner / Editor / Viewer roles with audit logging
 - Bilingual Hebrew/English with RTL support
 
@@ -261,6 +261,8 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | `cancelled` | Customer cancelled |
 | `pending_admin_review` | No pro found after all radius/fallback attempts |
 
+Every transition is recorded as a `{status, at, by}` entry in the lead's `status_history` array, written by the single `set_lead_status()` writer in `lead_manager_service.py`.
+
 ---
 
 ## 7. Data Layer
@@ -270,7 +272,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | Collection | Purpose |
 |-----------|---------|
 | `users` | Professionals and customers. Pros have `location` (2dsphere), `service_areas`, `price_list`, `social_proof`, `total_tokens_used` |
-| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `appointment_time`, `media_url`, `reassignment_count` |
+| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `appointment_time`, `media_url`, `reassignment_count` |
 | `messages` | Chat history log per `chat_id` |
 | `slots` | Appointment slots per pro with atomic locking (`is_taken`) |
 | `settings` | Scheduler config toggles (`sos_healer_active`, etc.) |

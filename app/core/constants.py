@@ -12,6 +12,15 @@ class LeadStatus(str, Enum):
     PENDING_ADMIN_REVIEW = "pending_admin_review"
 
 
+class Actor(str, Enum):
+    """Who caused a lead status transition — recorded in each status_history entry."""
+
+    SYSTEM = "system"  # scheduler / monitor / automated healing
+    PRO = "pro"
+    CUSTOMER = "customer"
+    ADMIN = "admin"
+
+
 class UserStates(str, Enum):
     IDLE = "idle"  # Default state
     PRO_MODE = "pro_mode"  # User is acting as a Professional
