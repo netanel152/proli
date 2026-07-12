@@ -1,7 +1,8 @@
 import time
 from datetime import datetime, timedelta, timezone
 from app.core.database import leads_collection, users_collection
-from app.core.constants import LeadStatus, UserStates, WorkerConstants, Defaults
+from app.core.constants import LeadStatus, UserStates, WorkerConstants, Defaults, Actor
+from app.services.lead_manager_service import set_lead_status
 from app.core.config import settings
 from app.core.logger import logger
 from app.core.redis_client import get_redis_client
@@ -68,14 +69,11 @@ async def check_and_reassign_stale_leads():
                     f"no usable location (full_address={raw_location!r}). "
                     f"Escalating to PENDING_ADMIN_REVIEW without retry loop."
                 )
-                await leads_collection.update_one(
-                    {"_id": lead_id},
-                    {
-                        "$set": {
-                            "status": LeadStatus.PENDING_ADMIN_REVIEW,
-                            "escalation_reason": "no_usable_location",
-                        }
-                    },
+                await set_lead_status(
+                    lead_id,
+                    LeadStatus.PENDING_ADMIN_REVIEW,
+                    Actor.SYSTEM,
+                    extra_set={"escalation_reason": "no_usable_location"},
                 )
                 await StateManager.clear_state(chat_id)
                 continue
@@ -100,14 +98,11 @@ async def check_and_reassign_stale_leads():
 
             # Hard stop: if max reassignments reached, close the lead
             if reassignment_count >= WorkerConstants.MAX_REASSIGNMENTS:
-                await leads_collection.update_one(
-                    {"_id": lead_id},
-                    {
-                        "$set": {
-                            "status": LeadStatus.CLOSED,
-                            "closed_reason": "max_reassignments",
-                        }
-                    },
+                await set_lead_status(
+                    lead_id,
+                    LeadStatus.CLOSED,
+                    Actor.SYSTEM,
+                    extra_set={"closed_reason": "max_reassignments"},
                 )
                 try:
                     await whatsapp.send_message(
@@ -125,16 +120,15 @@ async def check_and_reassign_stale_leads():
                 new_pro_id = new_pro["_id"]
 
                 # 3. Update Lead — increment counter, reset timer
-                await leads_collection.update_one(
-                    {"_id": lead_id},
-                    {
-                        "$set": {
-                            "pro_id": new_pro_id,
-                            "status": LeadStatus.NEW,
-                            "created_at": datetime.now(timezone.utc),
-                            "reassigned_from": current_pro_id,
-                            "reassignment_count": reassignment_count + 1,
-                        }
+                await set_lead_status(
+                    lead_id,
+                    LeadStatus.NEW,
+                    Actor.SYSTEM,
+                    extra_set={
+                        "pro_id": new_pro_id,
+                        "created_at": datetime.now(timezone.utc),
+                        "reassigned_from": current_pro_id,
+                        "reassignment_count": reassignment_count + 1,
                     },
                 )
 
@@ -196,9 +190,8 @@ async def check_and_reassign_stale_leads():
                 logger.warning(
                     f"⚠️ [SOS Healer] Could not find replacement for lead {lead_id} — escalating to PENDING_ADMIN_REVIEW."
                 )
-                await leads_collection.update_one(
-                    {"_id": lead_id},
-                    {"$set": {"status": LeadStatus.PENDING_ADMIN_REVIEW}},
+                await set_lead_status(
+                    lead_id, LeadStatus.PENDING_ADMIN_REVIEW, Actor.SYSTEM
                 )
                 try:
                     await whatsapp.send_message(
@@ -252,14 +245,11 @@ async def auto_reject_unassigned_leads():
             lead_id = lead["_id"]
             chat_id = lead.get("chat_id")
 
-            await leads_collection.update_one(
-                {"_id": lead_id},
-                {
-                    "$set": {
-                        "status": LeadStatus.CLOSED,
-                        "closed_reason": "no_pro_available",
-                    }
-                },
+            await set_lead_status(
+                lead_id,
+                LeadStatus.CLOSED,
+                Actor.SYSTEM,
+                extra_set={"closed_reason": "no_pro_available"},
             )
 
             if chat_id:

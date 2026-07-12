@@ -9,14 +9,11 @@ from app.services.lead_manager_service import (
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
 from app.core.logger import logger
-from app.core.database import (
-    users_collection,
-    leads_collection,    
-    slots_collection
-)
+from app.core.database import users_collection, leads_collection, slots_collection
 from app.core.messages import Messages
 from app.core.prompts import Prompts
-from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
+from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
+from app.services.lead_manager_service import set_lead_status
 from app.core.redis_client import (
     acquire_chat_lock,
     release_chat_lock,
@@ -428,14 +425,13 @@ async def _process_incoming_message_inner(
             pro_id = booked_lead.get("pro_id")
 
             if any(kw in normalized_text for kw in Messages.Keywords.CANCEL_KEYWORDS):
-                await leads_collection.update_one(
-                    {"_id": booked_lead["_id"]},
-                    {
-                        "$set": {
-                            "status": LeadStatus.CANCELLED,
-                            "cancelled_at": datetime.now(timezone.utc),
-                            "cancel_reason": "customer_requested",
-                        }
+                await set_lead_status(
+                    booked_lead["_id"],
+                    LeadStatus.CANCELLED,
+                    Actor.CUSTOMER,
+                    extra_set={
+                        "cancelled_at": datetime.now(timezone.utc),
+                        "cancel_reason": "customer_requested",
                     },
                 )
                 # Free the reserved slot so the pro regains that hour.
@@ -550,14 +546,13 @@ async def _process_incoming_message_inner(
                 sort=[("created_at", -1)],
             )
             if cancelled_lead:
-                await leads_collection.update_one(
-                    {"_id": cancelled_lead["_id"]},
-                    {
-                        "$set": {
-                            "status": LeadStatus.CANCELLED,
-                            "cancelled_at": datetime.now(timezone.utc),
-                            "cancel_reason": "user_bailout_awaiting_address",
-                        }
+                await set_lead_status(
+                    cancelled_lead["_id"],
+                    LeadStatus.CANCELLED,
+                    Actor.CUSTOMER,
+                    extra_set={
+                        "cancelled_at": datetime.now(timezone.utc),
+                        "cancel_reason": "user_bailout_awaiting_address",
                     },
                 )
                 logger.info(
@@ -1061,9 +1056,8 @@ async def _process_incoming_message_inner(
         if not best_pro and current_lead_id:
             existing_lead = await leads_collection.find_one({"_id": current_lead_id})
             if existing_lead and not existing_lead.get("pro_id"):
-                await leads_collection.update_one(
-                    {"_id": current_lead_id},
-                    {"$set": {"status": LeadStatus.PENDING_ADMIN_REVIEW}},
+                await set_lead_status(
+                    current_lead_id, LeadStatus.PENDING_ADMIN_REVIEW, Actor.SYSTEM
                 )
                 logger.critical(
                     f"Lead {current_lead_id} for {chat_id} requires admin review — no pro available"
@@ -1301,7 +1295,6 @@ async def _finalize_deal(
     d_name = final_response.extracted_data.customer_name or extracted_name
 
     lead_update = {
-        "status": LeadStatus.NEW,
         "appointment_time": d_time,
         "full_address": d_address,
         "street": final_response.extracted_data.street,
@@ -1316,12 +1309,17 @@ async def _finalize_deal(
         lead_update["customer_name"] = d_name
 
     if current_lead_id:
-        mongo_ops = {"$set": lead_update}
+        # CONTACTED -> NEW once the routing engine has matched a pro. Goes
+        # through set_lead_status so the transition lands in status_history.
+        lead = await set_lead_status(
+            current_lead_id, LeadStatus.NEW, Actor.SYSTEM, extra_set=lead_update
+        )
         if media_url:
-            mongo_ops["$addToSet"] = {"media_urls": media_url}
-
-        await leads_collection.update_one({"_id": current_lead_id}, mongo_ops)
-        lead = await leads_collection.find_one({"_id": current_lead_id})
+            await leads_collection.update_one(
+                {"_id": current_lead_id},
+                {"$addToSet": {"media_urls": media_url}},
+            )
+            lead = await leads_collection.find_one({"_id": current_lead_id})
     else:
         lead = await lead_manager.create_lead_from_dict(
             chat_id=chat_id,

@@ -20,7 +20,8 @@ import pytz
 import os
 import sys
 from app.core.logger import logger
-from app.core.constants import AdminDefaults, Defaults, LeadStatus
+from app.core.constants import AdminDefaults, Defaults, LeadStatus, Actor
+from app.core.lead_history import status_history_entry
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -264,8 +265,15 @@ def view_leads_dashboard(T):
                                     )
 
                             if update_payload:
+                                update_op = {"$set": update_payload}
+                                if "status" in update_payload:
+                                    update_op["$push"] = {
+                                        "status_history": status_history_entry(
+                                            update_payload["status"], Actor.ADMIN
+                                        )
+                                    }
                                 leads_collection.update_one(
-                                    {"_id": ObjectId(lead_id)}, {"$set": update_payload}
+                                    {"_id": ObjectId(lead_id)}, update_op
                                 )
                                 log_audit(
                                     "edit_lead",
@@ -347,6 +355,9 @@ def view_leads_dashboard(T):
                             "details": new_details,
                             "issue_type": new_details,
                             "status": new_status,
+                            "status_history": [
+                                status_history_entry(new_status, Actor.ADMIN)
+                            ],
                             "pro_id": assigned_pro_id,
                             "created_at": datetime.now(pytz.utc),
                             "full_address": AdminDefaults.MANUAL_LABEL,
@@ -489,9 +500,14 @@ def _render_selected_lead_actions(
                                 pro_map_name_to_id[new_pro]
                             )
 
-                        leads_collection.update_one(
-                            {"_id": ObjectId(lid)}, {"$set": update_data}
-                        )
+                        update_op = {"$set": update_data}
+                        if new_status != selected_lead.get("status"):
+                            update_op["$push"] = {
+                                "status_history": status_history_entry(
+                                    new_status, Actor.ADMIN
+                                )
+                            }
+                        leads_collection.update_one({"_id": ObjectId(lid)}, update_op)
                         log_audit("edit_lead", {"lead_id": lid})
                         st.success(T.get("lead_updated", "Lead updated successfully!"))
                         st.cache_data.clear()
