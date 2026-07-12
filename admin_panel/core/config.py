@@ -1,14 +1,14 @@
 # מילון התרגומים המרכזי
 TRANS = {
     "HE": {
-        "dir": "rtl", "align": "right",
+        "dir": "rtl",
+        "align": "right",
         "nav_title": "תפריט ראשי",
         "nav_dashboard": "📊 דשבורד ולידים",
         "nav_schedule": "📅 יומן עבודה",
         "nav_settings": "⚙️ הגדרות מערכת",
         "nav_professionals": "👷 אנשי מקצוע",
         "nav_analytics": "📊 אנליטיקס",
-
         "welcome_message": "ברוך הבא למרכז השליטה",
         "admin_username_label": "שם משתמש",
         "admin_password_label": "סיסמת מנהל",
@@ -21,7 +21,6 @@ TRANS = {
         "fatal_no_admin": "שגיאה: לא הוגדרו חשבונות מנהל. הגדר ADMIN_PASSWORD_HASH או צור חשבונות בבסיס הנתונים.",
         "plain_password_warning": "נעשה שימוש ב-ADMIN_PASSWORD ללא הצפנה. צור Hash באמצעות scripts/generate_admin_hash.py",
         "lang_label": "שפה / Language",
-
         "title_dashboard": "מרכז שליטה וניהול",
         "page_desc_dashboard": "צפה ונהל לידים נכנסים, עדכן את הסטטוס שלהם וסקור את היסטוריית השיחות.",
         "metric_total": 'סה"כ לידים',
@@ -49,7 +48,6 @@ TRANS = {
         "check_customer_btn": "בדיקת לקוח",
         "check_sent": "הבדיקה נשלחה!",
         "no_permission_create": "אין לך הרשאה ליצור לידים.",
-
         "pros_title": "צוות אנשי המקצוע",
         "page_desc_professionals": "נהל את רשימת אנשי המקצוע, הוסף חדשים, ערוך את פרטיהם והגדר את זמינותם.",
         "add_pro_title": "הוספת איש מקצוע חדש",
@@ -111,7 +109,6 @@ TRANS = {
         "reject_btn": "דחה",
         "confirm_reject_pro": "לדחות את איש המקצוע? הוא יקבל הודעה.",
         "registered_at": "נרשם בתאריך",
-
         "title_schedule": "ניהול יומן ותורים",
         "page_desc_schedule": "ערוך את לוח הזמנים היומי והשבועי של כל איש מקצוע.",
         "sch_select_pro": "בחר יומן עבודה",
@@ -143,13 +140,18 @@ TRANS = {
         "sch_clear_btn": "נקה סלוטים עתידיים",
         "sch_msg_generated": "הסלוטים נוצרו בהצלחה ביומן!",
         "sch_msg_cleared": "כל הסלוטים העתידיים נמחקו בהצלחה!",
-        "day_0": "ראשון", "day_1": "שני", "day_2": "שלישי", "day_3": "רביעי", "day_4": "חמישי", "day_5": "שישי", "day_6": "שבת",
+        "day_0": "ראשון",
+        "day_1": "שני",
+        "day_2": "שלישי",
+        "day_3": "רביעי",
+        "day_4": "חמישי",
+        "day_5": "שישי",
+        "day_6": "שבת",
         "no_slots": "אין תורים מוגדרים לתאריך זה.",
         "slot_help": "סמן בתיבה כדי לחסום את התור",
         "schedule_empty": "היומן ריק כרגע. ניתן להשתמש ב'מחולל האוטומטי' כדי להגדיר שעות עבודה.",
         "sch_msg_no_slots": "לא נוצרו סלוטים. בדוק את ההגדרות שלך.",
         "no_active_pros_for_schedule": "לא נמצאו אנשי מקצוע פעילים. אנא הוסף או הפעל איש מקצוע כדי לנהל את לוח הזמנים שלו.",
-
         "settings_title": "הגדרות מערכת ובוט AI",
         "page_desc_settings": "הגדר הגדרות מערכת גלובליות, כגון המתזמן האוטומטי.",
         "select_pro": "בחר פרופיל לעריכה",
@@ -198,7 +200,6 @@ TRANS = {
         "audit_col_user": "משתמש",
         "audit_col_action": "פעולה",
         "audit_col_details": "פרטים",
-
         # Analytics
         "analytics_title": "אנליטיקס ודוחות",
         "analytics_desc": "מדדים עסקיים, משפכי לידים וביצועי אנשי מקצוע.",
@@ -219,18 +220,21 @@ TRANS = {
         "contacted_rate": "אחוז יצירת קשר",
         "booked_rate": "אחוז הזמנות",
         "completed_rate": "אחוז השלמה",
+        "time_in_stage_caption": "זמן בשלב והמרה (מהיסטוריית הסטטוסים)",
+        "median_new_booked": "זמן חציוני לשיבוץ (new · booked)",
+        "contacted_booked_conv": "המרה לשיבוץ (מתוך מי שנוצר קשר)",
+        "leads_with_history": "לידים עם היסטוריה",
+        "contacted_leads": "לידים שנוצר איתם קשר",
         "no_data": "אין נתונים זמינים לתקופה זו.",
         "col_pro_name": "איש מקצוע",
-        "col_total": "סה\"כ לידים",
+        "col_total": 'סה"כ לידים',
         "col_completed": "הושלמו",
         "col_rejected": "נדחו",
         "col_booked": "הוזמנו",
         "col_rate": "אחוז השלמה",
         "col_rating": "דירוג ממוצע",
-
         "auto_refresh": "רענון אוטומטי",
         "refresh_interval": "תדירות",
-
         "status": "סטטוס נוכחי",
         "new": "חדש",
         "contacted": "בטיפול",
@@ -239,7 +243,6 @@ TRANS = {
         "rejected": "נדחה",
         "booked": "נקבעה פגישה",
         "completed": "הושלם",
-
         "unknown_pro": "לא משויך",
         "select_lead": "בחר ליד לטיפול",
         "select_status": "עדכן סטטוס ל...",
@@ -255,7 +258,6 @@ TRANS = {
         "select_row_prompt": "בחר שורה בטבלה כדי לראות פעולות כמו היסטוריית צ'אט או מחיקה.",
         "confirm_clear_slots_title": "אישור מחיקה",
         "confirm_clear_slots_body": "האם למחוק את כל הסלוטים העתידיים שאינם תפוסים בטווח התאריכים שנבחר? פעולה זו אינה הפיכה.",
-
         "create_lead_title": "יצירת ליד חדש",
         "create_lead_success": "הליד נוצר בהצלחה!",
         "input_client_name": "שם הלקוח",
@@ -267,14 +269,14 @@ TRANS = {
         "error_phone_required": "מספר טלפון חובה.",
     },
     "EN": {
-        "dir": "ltr", "align": "left",
+        "dir": "ltr",
+        "align": "left",
         "nav_title": "Main Menu",
         "nav_dashboard": "📊 Dashboard",
         "nav_schedule": "📅 Schedule",
         "nav_settings": "⚙️ System Settings",
         "nav_professionals": "👷 Professionals",
         "nav_analytics": "📊 Analytics",
-
         "welcome_message": "Welcome to Proli Control Center",
         "admin_username_label": "Username",
         "admin_password_label": "Admin Password",
@@ -287,7 +289,6 @@ TRANS = {
         "fatal_no_admin": "FATAL: No admin accounts configured. Set ADMIN_PASSWORD_HASH or create admins in database.",
         "plain_password_warning": "Using plain-text ADMIN_PASSWORD. Generate a hash with scripts/generate_admin_hash.py",
         "lang_label": "Language / שפה",
-
         "title_dashboard": "Control Center",
         "page_desc_dashboard": "View and manage incoming leads, update their status, and review conversation history.",
         "metric_total": "Total Leads",
@@ -315,7 +316,6 @@ TRANS = {
         "check_customer_btn": "Customer Check",
         "check_sent": "Check sent!",
         "no_permission_create": "You don't have permission to create leads.",
-
         "pros_title": "Professional Team",
         "page_desc_professionals": "Manage the list of professionals, add new ones, edit their details, and set their availability.",
         "add_pro_title": "Add New Professional",
@@ -377,7 +377,6 @@ TRANS = {
         "reject_btn": "Reject",
         "confirm_reject_pro": "Reject this professional? They will be notified.",
         "registered_at": "Registered",
-
         "title_schedule": "Schedule Management",
         "page_desc_schedule": "Edit the daily and weekly work schedule for each professional.",
         "sch_select_pro": "Select Calendar",
@@ -409,13 +408,18 @@ TRANS = {
         "sch_clear_btn": "Clear Future Slots",
         "sch_msg_generated": "Schedule generated successfully!",
         "sch_msg_cleared": "Future schedule cleared successfully!",
-        "day_0": "Sunday", "day_1": "Monday", "day_2": "Tuesday", "day_3": "Wednesday", "day_4": "Thursday", "day_5": "Friday", "day_6": "Saturday",
+        "day_0": "Sunday",
+        "day_1": "Monday",
+        "day_2": "Tuesday",
+        "day_3": "Wednesday",
+        "day_4": "Thursday",
+        "day_5": "Friday",
+        "day_6": "Saturday",
         "no_slots": "No slots defined for this date.",
         "slot_help": "Check to block this slot",
         "schedule_empty": "Schedule is empty. Use the Bulk Generator to create slots.",
         "sch_msg_no_slots": "No slots were generated. Check your settings.",
         "no_active_pros_for_schedule": "No active professionals found. Please add or activate a professional to manage their schedule.",
-
         "settings_title": "System & AI Settings",
         "page_desc_settings": "Configure system-wide settings, such as the auto-scheduler.",
         "select_pro": "Select Profile",
@@ -464,7 +468,6 @@ TRANS = {
         "audit_col_user": "User",
         "audit_col_action": "Action",
         "audit_col_details": "Details",
-
         # Analytics
         "analytics_title": "Analytics & Reporting",
         "analytics_desc": "Business metrics, lead funnels, and professional performance.",
@@ -485,6 +488,11 @@ TRANS = {
         "contacted_rate": "Contacted Rate",
         "booked_rate": "Booked Rate",
         "completed_rate": "Completed Rate",
+        "time_in_stage_caption": "Time-in-stage & conversion (from status history)",
+        "median_new_booked": "Median time to book (NEW→BOOKED)",
+        "contacted_booked_conv": "Booked (of contacted)",
+        "leads_with_history": "leads with history",
+        "contacted_leads": "contacted leads",
         "no_data": "No data available for this period.",
         "col_pro_name": "Professional",
         "col_total": "Total",
@@ -493,10 +501,8 @@ TRANS = {
         "col_booked": "Booked",
         "col_rate": "Completion %",
         "col_rating": "Avg Rating",
-
         "auto_refresh": "Auto-refresh",
         "refresh_interval": "Interval",
-
         "status": "Current Status",
         "new": "New",
         "contacted": "In Progress",
@@ -505,7 +511,6 @@ TRANS = {
         "rejected": "Rejected",
         "booked": "Booked",
         "completed": "Completed",
-
         "unknown_pro": "Unassigned",
         "select_lead": "Select Lead",
         "select_status": "Change Status To",
@@ -521,7 +526,6 @@ TRANS = {
         "select_row_prompt": "Select a row in the table to see actions like chat history or delete.",
         "confirm_clear_slots_title": "Confirm Deletion",
         "confirm_clear_slots_body": "Are you sure you want to delete all future non-booked slots within the selected date range? This action is irreversible.",
-
         "create_lead_title": "Create a New Lead",
         "create_lead_success": "Lead created successfully!",
         "input_client_name": "Client Name",
@@ -531,5 +535,5 @@ TRANS = {
         "input_pro": "Assign Professional",
         "submit_create_lead": "Create Lead",
         "error_phone_required": "Phone number is required.",
-    }
+    },
 }

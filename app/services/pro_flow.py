@@ -4,7 +4,8 @@ from bson import ObjectId
 from app.core.database import users_collection, leads_collection, reviews_collection
 from app.core.logger import logger
 from app.core.messages import Messages
-from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
+from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
+from app.services.lead_manager_service import set_lead_status
 from app.core.redis_client import get_redis_client
 from app.services.matching_service import book_slot_for_lead
 from app.services.context_manager_service import ContextManager
@@ -268,7 +269,7 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         return Messages.Pro.NO_PENDING_APPROVALS
 
     await lead_manager.update_lead_status(
-        str(lead["_id"]), LeadStatus.BOOKED, pro["_id"]
+        str(lead["_id"]), LeadStatus.BOOKED, pro["_id"], actor=Actor.PRO
     )
     booked_slot_id = await book_slot_for_lead(pro["_id"], lead["created_at"])
     booking_success = booked_slot_id is not None
@@ -338,7 +339,9 @@ async def _handle_reject(pro, lead_manager):
             return Messages.Pro.ALREADY_RESPONDED
         return Messages.Pro.NO_PENDING_APPROVALS
 
-    await lead_manager.update_lead_status(str(lead["_id"]), LeadStatus.REJECTED)
+    await lead_manager.update_lead_status(
+        str(lead["_id"]), LeadStatus.REJECTED, actor=Actor.PRO
+    )
     # Clear cached context and customer state so next conversation starts fresh
     if lead.get("chat_id"):
         await ContextManager.clear_context(lead["chat_id"])
@@ -425,15 +428,14 @@ async def _handle_finish(pro, whatsapp, chat_id):
 
 
 async def _execute_finish(lead, pro, whatsapp):
-    await leads_collection.update_one(
-        {"_id": lead["_id"]},
-        {
-            "$set": {
-                "status": LeadStatus.COMPLETED,
-                "completed_at": datetime.now(timezone.utc),
-                "waiting_for_rating": True,
-                "is_paused": False,
-            }
+    await set_lead_status(
+        lead["_id"],
+        LeadStatus.COMPLETED,
+        Actor.PRO,
+        extra_set={
+            "completed_at": datetime.now(timezone.utc),
+            "waiting_for_rating": True,
+            "is_paused": False,
         },
     )
 
@@ -551,15 +553,14 @@ async def _handle_cancel(pro, whatsapp, chat_id):
 async def _execute_cancel(lead, pro, whatsapp):
     from app.core.database import slots_collection
 
-    await leads_collection.update_one(
-        {"_id": lead["_id"]},
-        {
-            "$set": {
-                "status": LeadStatus.CANCELLED,
-                "cancelled_at": datetime.now(timezone.utc),
-                "cancel_reason": "pro_cancelled",
-                "is_paused": False,
-            }
+    await set_lead_status(
+        lead["_id"],
+        LeadStatus.CANCELLED,
+        Actor.PRO,
+        extra_set={
+            "cancelled_at": datetime.now(timezone.utc),
+            "cancel_reason": "pro_cancelled",
+            "is_paused": False,
         },
     )
 
@@ -742,14 +743,13 @@ async def _handle_search(pro, chat_id: str, whatsapp):
     if not stuck:
         return Messages.Pro.NO_STUCK_LEADS
 
-    await leads_collection.update_one(
-        {"_id": stuck["_id"]},
-        {
-            "$set": {
-                "pro_id": pro["_id"],
-                "status": LeadStatus.NEW,
-                "assigned_by_admin_at": datetime.now(timezone.utc),
-            }
+    await set_lead_status(
+        stuck["_id"],
+        LeadStatus.NEW,
+        Actor.PRO,
+        extra_set={
+            "pro_id": pro["_id"],
+            "assigned_by_admin_at": datetime.now(timezone.utc),
         },
     )
 
