@@ -668,6 +668,8 @@ async def test_intent_detected_prompts_switch(pro_setup, mock_wa, mock_lm, monke
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
     mock_state.set_state = AsyncMock()
+    mock_state.get_metadata = AsyncMock(return_value={})
+    mock_state.set_metadata = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
     mock_ai = MagicMock()

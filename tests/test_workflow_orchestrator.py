@@ -26,6 +26,8 @@ def wf_mocks(monkeypatch, mock_db):
     mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
     mock_state.set_state = AsyncMock()
     mock_state.clear_state = AsyncMock()
+    mock_state.get_metadata = AsyncMock(return_value={})
+    mock_state.set_metadata = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "StateManager", mock_state)
 
     mock_ctx = MagicMock()
@@ -670,9 +672,28 @@ async def test_intent_confirmation_no_clears_state(wf_mocks, mock_db):
 
 
 @pytest.mark.asyncio
-async def test_intent_confirmation_other_falls_through(wf_mocks, mock_db):
-    """State=AWAITING_INTENT_CONFIRMATION, other text -> state cleared, falls through to routing."""
+async def test_intent_confirmation_other_reprompts_once(wf_mocks, mock_db):
+    """PRO-69 FM-2: first unmatched reply re-prompts and keeps the state."""
     mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.AWAITING_INTENT_CONFIRMATION
+    )
+    mock_state.get_metadata = AsyncMock(return_value={})
+
+    pro_phone = "972501111113"
+    await process_incoming_message(f"{pro_phone}@c.us", "לא יודע")
+
+    mock_state.clear_state.assert_not_called()
+    mock_wa.send_message.assert_called_with(
+        f"{pro_phone}@c.us", Messages.Pro.INTENT_REPROMPT
+    )
+
+
+@pytest.mark.asyncio
+async def test_intent_confirmation_second_miss_falls_through(wf_mocks, mock_db):
+    """PRO-69 FM-2: after one re-prompt, a second miss clears state and routes normally."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    mock_state.get_metadata = AsyncMock(return_value={"intent_reprompted": True})
 
     call_count = [0]
 
@@ -693,7 +714,8 @@ async def test_intent_confirmation_other_falls_through(wf_mocks, mock_db):
 
 @pytest.mark.asyncio
 async def test_safety_bypass_from_customer_mode(wf_mocks, mock_db):
-    """Pro in CUSTOMER_MODE types 'אשר' -> snapped back to PRO_MODE, pro_flow called."""
+    """Pro in CUSTOMER_MODE types 'אשר' with no open lead of their own
+    -> snapped back to PRO_MODE, pro_flow called (PRO-69 FM-4 negative case)."""
     mock_wa, mock_state, _, mock_ai, _ = wf_mocks
     mock_state.get_state = AsyncMock(return_value=UserStates.CUSTOMER_MODE)
 
