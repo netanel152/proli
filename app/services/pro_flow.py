@@ -132,6 +132,10 @@ async def handle_pro_text_command(
             await StateManager.set_state(
                 chat_id, UserStates.AWAITING_INTENT_CONFIRMATION, ttl=300
             )
+            # Each fresh prompt gets its own re-prompt budget
+            meta = await StateManager.get_metadata(chat_id) or {}
+            meta.pop("intent_reprompted", None)
+            await StateManager.set_metadata(chat_id, meta)
             logger.info(f"Pro {chat_id} received intent-switch prompt for: {text[:60]}")
             return (
                 ""  # sentinel: handled internally, caller must not send PRO_HELP_MENU
