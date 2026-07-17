@@ -14,6 +14,7 @@ from app.core.messages import Messages
 from app.core.prompts import Prompts
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
 from app.services.lead_manager_service import set_lead_status
+from app.core.datetime_utils import parse_iso_to_utc
 from app.core.redis_client import (
     acquire_chat_lock,
     release_chat_lock,
@@ -1349,6 +1350,7 @@ async def _build_pro_response(
         extracted_city=extracted_city,
         extracted_issue=extracted_issue,
         transcription=transcription or Defaults.DEFAULT_TRANSCRIPTION,
+        current_datetime=datetime.now(_IL_TZ).strftime("%Y-%m-%d %H:%M (%A)"),
     )
 
     return await ai.analyze_conversation(
@@ -1431,6 +1433,9 @@ async def _finalize_deal(
     logger.info(f"✅ Address gate PASSED for {chat_id}")
 
     d_time = final_response.extracted_data.appointment_time or Defaults.ASAP_TIME
+    # Resolved absolute datetime (UTC) — used by the pro agenda and stale-lead
+    # nudger. None when the customer gave no concrete time; read paths tolerate that.
+    d_datetime = parse_iso_to_utc(final_response.extracted_data.appointment_datetime)
 
     if bypass_address_logic and not (ed.street and ed.street_number):
         d_address = ed.city or extracted_city
@@ -1445,6 +1450,7 @@ async def _finalize_deal(
 
     lead_update = {
         "appointment_time": d_time,
+        "appointment_datetime": d_datetime,
         "full_address": d_address,
         "street": final_response.extracted_data.street,
         "street_number": final_response.extracted_data.street_number,
@@ -1475,6 +1481,7 @@ async def _finalize_deal(
             issue_type=d_issue,
             full_address=d_address,
             appointment_time=d_time,
+            appointment_datetime=d_datetime,
             status=LeadStatus.NEW,
             pro_id=best_pro["_id"],
             street=final_response.extracted_data.street,
