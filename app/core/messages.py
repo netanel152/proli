@@ -236,8 +236,16 @@ class Messages:
             "השב *1* — כן, עבור למצב לקוח 👤\n"
             "השב *2* — לא, אני ממשיך כטכנאי 🛠️"
         )
+        INTENT_REPROMPT = (
+            "לא הבנתי 🤔 בוא ננסה שוב:\n\n"
+            "השב *1* (או 'כן') — עבור למצב לקוח 👤\n"
+            "השב *2* (או 'לא') — המשך כטכנאי 🛠️"
+        )
         SWITCHED_TO_CUSTOMER = "מעולה, עברת למצב לקוח 👤. כעת אטפל בך כמו בכל לקוח שלנו. ספר לי שוב, מה התקלה?"
         SWITCH_CANCELLED = "👍 ממשיכים כרגיל במצב טכנאי."
+        # Currently unsent: PRO-69 removed the auto-return at dispatch time (it fired
+        # while the pro's own request was still live). Kept for the follow-up that
+        # announces the return when their lead actually closes.
         AUTO_RETURNED_TO_PRO = (
             "הקריאה שלך הועברה לאיש המקצוע לאישור. בינתיים, החזרתי אותך למצב טכנאי 🛠️ "
             "כדי שתוכל להמשיך לנהל את העסק כרגיל."
@@ -486,6 +494,9 @@ class Messages:
         DETAILS_COMMANDS = ["פרטים", "details"]
         CANCEL_BOOKED_COMMANDS = ["ביטול"]
         SUMMARY_COMMANDS = ["סיכום", "סטטיסטיקה"]
+        # Explicit "I need service myself" switch for a registered pro.
+        # Deterministic — never routed through the AI intent detector.
+        CUSTOMER_MODE_COMMANDS = ["לקוח", "אני לקוח", "מצב לקוח", "customer"]
         RESET_COMMANDS = ["reset", "התחלה"]
         MENU_COMMANDS = ["תפריט", "menu"]
         HELP_COMMANDS = ["עזרה", "help"]
