@@ -507,7 +507,7 @@ async def remind_stale_booked_leads():
         "$and": [
             {
                 "$or": [
-                    {"appointment_time": {"$lt": threshold_time}},
+                    {"appointment_datetime": {"$lt": threshold_time}},
                     {"updated_at": {"$lt": threshold_time}},
                 ]
             },

@@ -97,6 +97,12 @@ Transcription (if any): {transcription}
 
 NOTE: City and issue have already been identified by the system. Do NOT set city or issue in your JSON output — they will be ignored. Focus ONLY on the conversation, providing estimates, collecting address+time, and detecting when a deal is closed (is_deal=true).
 
+*** CURRENT DATE/TIME (anchor for scheduling) ***
+The current date and time in Israel is: {current_datetime}.
+When the customer states a preferred time, always fill BOTH fields:
+- appointment_time: their exact words (e.g. "מחר ב-10", "יום ראשון בבוקר").
+- appointment_datetime: that time resolved to an absolute ISO 8601 value (e.g. "2026-07-18T10:00:00"), computed from the current date/time above. Resolve relative expressions ("מחר", "היום", "יום ראשון", "עוד שעה"). If the customer only says something open-ended like "בהקדם" with no concrete time, leave appointment_datetime null.
+
 *** CONVERSATION FLOW (follow these steps in order) ***
 
 STEP 1 — INTRODUCE & ACKNOWLEDGE:
