@@ -1,12 +1,16 @@
 """
 PRO-20 — Green API instance deauth monitor.
 
-Tests cover three units:
+Tests cover four units:
   1. WhatsAppClient.get_state_instance()  — happy path + error swallow (2 tests)
   2. send_oncall_alert()                  — SMS-first routing, fallback, failure (5 tests)
-  3. check_whatsapp_instance_state()      — all 8 FSM/Redis behavioral branches (8 tests)
+  3. check_whatsapp_instance_state()      — every FSM/Redis behavioral branch (10 tests)
+  4. on-call routing                      — ONCALL_PHONE vs ADMIN_PHONE (2 tests)
 
-Total: 15 tests.
+Total: 19 tests.
+
+Time anchors are computed per-test, never at module scope — see _below_threshold_ts
+(PRO-68).
 
 Fake-Redis pattern lifted from tests/test_rate_limit.py: a hand-rolled async stub so we
 have zero external dependencies and full nx/ex control without fakeredis.
@@ -77,7 +81,12 @@ class _FakeRedis:
 
 
 def _ts_minutes_ago(minutes: float) -> str:
-    """Return a stringified unix timestamp that is ``minutes`` minutes in the past."""
+    """Return a stringified unix timestamp that is ``minutes`` minutes in the past.
+
+    Call this *inside* a test, never at module scope: the monitor compares the anchor
+    against the wall clock at assertion time, so an anchor frozen at import drifts by
+    however long the suite takes to reach the test (PRO-68).
+    """
     return str(time.time() - minutes * 60)
 
 
@@ -91,13 +100,33 @@ _DOWN_SINCE_KEY = "wa:instance:down_since"
 _ALERTED_KEY = "wa:instance:alerted"
 _LAST_ALERT_KEY = "wa:instance:last_alert"
 
-# Convenience timestamps relative to the configured threshold
-_ABOVE_THRESHOLD_TS = _ts_minutes_ago(
-    WorkerConstants.WA_STATE_ALERT_THRESHOLD_MINUTES + 5
-)
-_BELOW_THRESHOLD_TS = _ts_minutes_ago(
-    max(0, WorkerConstants.WA_STATE_ALERT_THRESHOLD_MINUTES - 2)
-)
+# Convenience anchors relative to the configured threshold. These are functions, not
+# module constants: as constants they were evaluated once at import, and a suite run
+# long enough to drift past the threshold turned the below-threshold anchor into an
+# above-threshold one, spuriously failing the no-page assertion (PRO-68).
+
+
+def _above_threshold_ts() -> str:
+    """An outage that started well before the paging threshold — the monitor should page.
+
+    The fixed ``+ 5`` is safe here in a way it would not be below: drift only ever grows
+    the measured downtime, which pushes this anchor further into the paging branch the
+    callers assert on. Erring later is erring in the assertion's favour.
+    """
+    return _ts_minutes_ago(WorkerConstants.WA_STATE_ALERT_THRESHOLD_MINUTES + 5)
+
+
+def _below_threshold_ts() -> str:
+    """A fresh outage that has not yet earned a page.
+
+    Anchored at half the threshold rather than "threshold minus 2 minutes": the margin
+    is now a fraction of the threshold instead of a fixed constant, so shortening
+    WA_STATE_ALERT_THRESHOLD_MINUTES can't quietly squeeze it to zero.
+    """
+    assert (
+        WorkerConstants.WA_STATE_ALERT_THRESHOLD_MINUTES > 0
+    ), "A zero/negative paging threshold has no 'below threshold' case to anchor."
+    return _ts_minutes_ago(WorkerConstants.WA_STATE_ALERT_THRESHOLD_MINUTES / 2)
 
 
 # ===========================================================================
@@ -249,7 +278,7 @@ async def test_wa_monitor_authorized_with_prior_outage_sends_recovery_and_clears
     """(a) authorized + down_since + alerted → WHATSAPP_RECOVERED alert sent; all 3 keys deleted."""
     redis = _FakeRedis(
         {
-            _DOWN_SINCE_KEY: _ABOVE_THRESHOLD_TS,
+            _DOWN_SINCE_KEY: _above_threshold_ts(),
             _ALERTED_KEY: "1",
             _LAST_ALERT_KEY: "1",
         }
@@ -312,7 +341,7 @@ async def test_wa_monitor_not_authorized_first_detection_starts_timer_no_page(
 @pytest.mark.asyncio
 async def test_wa_monitor_not_authorized_below_threshold_no_page(monkeypatch):
     """(d) not authorized, downtime < WA_STATE_ALERT_THRESHOLD_MINUTES → no page yet."""
-    redis = _FakeRedis({_DOWN_SINCE_KEY: _BELOW_THRESHOLD_TS})
+    redis = _FakeRedis({_DOWN_SINCE_KEY: _below_threshold_ts()})
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value="notAuthorized")
     mock_alert = AsyncMock()
@@ -321,9 +350,17 @@ async def test_wa_monitor_not_authorized_below_threshold_no_page(monkeypatch):
     monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
     monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
 
+    down_since_before = redis._store[_DOWN_SINCE_KEY]
+
     await monitor_module.check_whatsapp_instance_state()
 
     mock_alert.assert_not_awaited()
+    # Pin the branch. "No page" is also what first-detection (test c) does, so without
+    # this the two tests are indistinguishable and a down_since key rename would quietly
+    # turn this into a duplicate of (c) — green, but no longer covering the timer.
+    assert (
+        redis._store[_DOWN_SINCE_KEY] == down_since_before
+    ), "Existing deauth timer must be left intact, not restarted as a first detection"
 
 
 @pytest.mark.asyncio
@@ -332,7 +369,7 @@ async def test_wa_monitor_not_authorized_above_threshold_first_page_sets_keys_an
 ):
     """(e) downtime > threshold, last_alert absent → pages once, sets alerted + last_alert,
     emits logger.critical."""
-    redis = _FakeRedis({_DOWN_SINCE_KEY: _ABOVE_THRESHOLD_TS})
+    redis = _FakeRedis({_DOWN_SINCE_KEY: _above_threshold_ts()})
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value="notAuthorized")
     mock_alert = AsyncMock(return_value=True)
@@ -365,7 +402,7 @@ async def test_wa_monitor_not_authorized_above_threshold_dedup_prevents_repage(
     """(f) last_alert already set (dedup key) → no re-page within the realert window."""
     redis = _FakeRedis(
         {
-            _DOWN_SINCE_KEY: _ABOVE_THRESHOLD_TS,
+            _DOWN_SINCE_KEY: _above_threshold_ts(),
             _LAST_ALERT_KEY: "1",  # still within WA_STATE_REALERT_MINUTES window
         }
     )
@@ -430,7 +467,7 @@ async def test_wa_monitor_authorized_quiet_blip_no_recovery_alert_but_clears_key
 ):
     """(a') authorized + down_since present but NEVER paged (no alerted key) → the
     'quiet blip' case: stay silent (no recovery notice) yet still clear the timer."""
-    redis = _FakeRedis({_DOWN_SINCE_KEY: _BELOW_THRESHOLD_TS})  # no _ALERTED_KEY
+    redis = _FakeRedis({_DOWN_SINCE_KEY: _below_threshold_ts()})  # no _ALERTED_KEY
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value="authorized")
     mock_alert = AsyncMock()
