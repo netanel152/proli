@@ -82,6 +82,91 @@ PRO_BUSINESS_KEYWORDS = (
     | set(Messages.Keywords.BOT_PAUSE_COMMANDS)
 )
 
+# Subset of the above that a *customer-side* prompt may legitimately expect:
+# every bare digit (menu picks — slot lists, rating 1-5, yes/no prompts) plus the
+# words that read the same in both roles. In CUSTOMER_MODE these must not blindly
+# snap a pro back to PRO_MODE while a customer-side interaction is pending;
+# everything else (סיימתי, חפש, הפסקה, זמין, ...) still bypasses unconditionally.
+AMBIGUOUS_PRO_KEYWORDS = {kw for kw in PRO_BUSINESS_KEYWORDS if kw.isdigit()} | {
+    "אשר",
+    "דחה",
+    "המשך",
+    "resume",
+    "השהה",
+    "pause",
+}
+
+# The rest bypass unconditionally — no customer-side prompt ever expects them.
+PRO_ONLY_KEYWORDS = PRO_BUSINESS_KEYWORDS - AMBIGUOUS_PRO_KEYWORDS
+
+# States in which the *customer* side of the conversation is holding a numbered
+# question open, so a bare digit belongs to it rather than to the pro dashboard.
+CUSTOMER_PROMPT_STATES = (
+    UserStates.AWAITING_RESCHEDULE_TIME,
+    UserStates.AWAITING_LOYALTY_CONFIRMATION,
+)
+
+# Lead statuses that mean the pro-as-customer still has a live request of their
+# own. COMPLETED counts until rating *and* free-text review are collected.
+CUSTOMER_ACTIVE_STATUSES = [
+    LeadStatus.CONTACTED,
+    LeadStatus.NEW,
+    LeadStatus.BOOKED,
+]
+
+
+async def _is_registered_pro(chat_id: str):
+    """Return the professional doc for this chat, or None."""
+    phone = chat_id.replace("@c.us", "")
+    return await users_collection.find_one(
+        {
+            "phone_number": {"$in": [phone, chat_id]},
+            "role": "professional",
+            "is_active": True,
+        }
+    )
+
+
+async def _get_active_customer_lead(chat_id: str):
+    """Return this chat's own open lead (as a customer), or None.
+
+    Keeps a pro who is currently being served as a customer inside CUSTOMER_MODE:
+    the post-dispatch auto-return and the IDLE auto-detect both defer to it.
+    """
+    return await leads_collection.find_one(
+        {
+            "chat_id": chat_id,
+            "$or": [
+                {"status": {"$in": CUSTOMER_ACTIVE_STATUSES}},
+                {"status": LeadStatus.COMPLETED, "waiting_for_rating": True},
+                {"status": LeadStatus.COMPLETED, "waiting_for_review_comment": True},
+            ],
+        },
+        sort=[("created_at", -1)],
+    )
+
+
+async def _customer_prompt_pending(chat_id: str, current_state: str) -> bool:
+    """True when a customer-side question is open and expecting this reply.
+
+    Deliberately narrower than "has an open lead": a BOOKED lead can sit for days,
+    and blocking אשר/דחה for that whole window would stop the pro from answering
+    incoming job offers — the very lockout this ticket is fixing.
+    """
+    if current_state in CUSTOMER_PROMPT_STATES:
+        return True
+    return bool(
+        await leads_collection.find_one(
+            {
+                "chat_id": chat_id,
+                "$or": [
+                    {"waiting_for_rating": True},
+                    {"waiting_for_review_comment": True},
+                ],
+            }
+        )
+    )
+
 
 # --- Public API (used by scheduler, admin panel, arq_worker) ---
 
@@ -211,6 +296,11 @@ async def _process_incoming_message_inner(
     # Zero-Touch: transient confirmation after intent was detected in pro_flow
     if current_state == UserStates.AWAITING_INTENT_CONFIRMATION:
         if normalized_text == "1" or normalized_text in ("כן", "yes"):
+            # set_state (not clear_state) leaves state_meta alive on its own 4h TTL,
+            # so retire the re-prompt flag by hand or the next prompt inherits it.
+            meta = await StateManager.get_metadata(chat_id) or {}
+            meta.pop("intent_reprompted", None)
+            await StateManager.set_metadata(chat_id, meta)
             await StateManager.set_state(chat_id, UserStates.CUSTOMER_MODE)
             await ContextManager.clear_context(chat_id)
             await whatsapp.send_message(chat_id, Messages.Pro.SWITCHED_TO_CUSTOMER)
@@ -219,7 +309,23 @@ async def _process_incoming_message_inner(
             await StateManager.clear_state(chat_id)
             await whatsapp.send_message(chat_id, Messages.Pro.SWITCH_CANCELLED)
             return
-        # Any other reply: clear transient state and fall through to normal routing
+        # Unmatched reply: re-prompt once before giving up. Clearing the state on
+        # the first miss dumped the pro back to the dashboard mid-question, which
+        # read as the bot ignoring them. A cry for a human still gets out on the
+        # first try — the SOS handler runs further down the dispatch.
+        meta = await StateManager.get_metadata(chat_id) or {}
+        asking_for_human = any(
+            k in normalized_text for k in Messages.Keywords.SOS_COMMANDS
+        )
+        if not asking_for_human and not meta.get("intent_reprompted"):
+            meta["intent_reprompted"] = True
+            await StateManager.set_metadata(chat_id, meta)
+            await StateManager.set_state(
+                chat_id, UserStates.AWAITING_INTENT_CONFIRMATION, ttl=300
+            )
+            await whatsapp.send_message(chat_id, Messages.Pro.INTENT_REPROMPT)
+            return
+        # Second miss: clear transient state and fall through to normal routing
         await StateManager.clear_state(chat_id)
         current_state = await StateManager.get_state(chat_id)
 
@@ -338,10 +444,18 @@ async def _process_incoming_message_inner(
         await whatsapp.send_message(chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER)
         return
 
-    # Soft Hold — customer is waiting for pro approval
+    # Soft Hold — customer is waiting for pro approval.
+    # A pro who ordered service for themselves parks here for up to an hour
+    # (PRO_APPROVAL_TTL_SECONDS), so an unconditional hold would lock them out of
+    # their own business for that whole window. Pro-only keywords escape; anything
+    # a customer prompt could plausibly mean does not.
     if current_state == UserStates.AWAITING_PRO_APPROVAL:
-        await whatsapp.send_message(chat_id, Messages.Customer.STILL_WAITING)
-        return
+        pro_escaping = (
+            normalized_text in PRO_ONLY_KEYWORDS and await _is_registered_pro(chat_id)
+        )
+        if not pro_escaping:
+            await whatsapp.send_message(chat_id, Messages.Customer.STILL_WAITING)
+            return
 
     # Bot Paused — pro or customer triggered human handoff (auto-expires via Redis TTL)
     if current_state == UserStates.PAUSED_FOR_HUMAN:
@@ -501,16 +615,38 @@ async def _process_incoming_message_inner(
             return
         # booked_lead is None — fall through to normal routing
 
+    # Explicit mode switch: a registered pro who types "לקוח" needs service for
+    # themselves. Deterministic — no AI, no confirmation prompt. Works from
+    # PRO_MODE and from IDLE (where auto-detect would otherwise force PRO_MODE).
+    if (
+        normalized_text in Messages.Keywords.CUSTOMER_MODE_COMMANDS
+        and current_state in (UserStates.PRO_MODE, UserStates.IDLE)
+    ):
+        if await _is_registered_pro(chat_id):
+            await StateManager.set_state(chat_id, UserStates.CUSTOMER_MODE)
+            await ContextManager.clear_context(chat_id)
+            await whatsapp.send_message(chat_id, Messages.Pro.SWITCHED_TO_CUSTOMER)
+            logger.info(f"Pro ...{chat_id[-8:]} switched to CUSTOMER_MODE via keyword")
+            return
+
     # Safety Bypass: a registered pro typing a business keyword always routes to pro_flow,
     # even if they're currently in CUSTOMER_MODE — snap them back to PRO_MODE first.
+    # Ambiguous keywords (bare digits, אשר/דחה, ...) yield to a customer-side question
+    # that is actually open: mid-reschedule, a "3" is a slot pick, not a job approval.
     if normalized_text in PRO_BUSINESS_KEYWORDS:
-        phone = chat_id.replace("@c.us", "")
-        is_pro_doc = await users_collection.find_one(
-            {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
-        )
+        is_pro_doc = await _is_registered_pro(chat_id)
         if is_pro_doc and current_state != UserStates.PRO_MODE:
-            await StateManager.set_state(chat_id, UserStates.PRO_MODE)
-            current_state = UserStates.PRO_MODE
+            defer_to_customer_flow = normalized_text in AMBIGUOUS_PRO_KEYWORDS and (
+                await _customer_prompt_pending(chat_id, current_state)
+            )
+            if defer_to_customer_flow:
+                logger.info(
+                    f"Pro ...{chat_id[-8:]} sent ambiguous keyword with a customer "
+                    f"prompt open — staying in {current_state}"
+                )
+            else:
+                await StateManager.set_state(chat_id, UserStates.PRO_MODE)
+                current_state = UserStates.PRO_MODE
 
     # Handle Pro Mode
     if current_state == UserStates.PRO_MODE:
@@ -683,15 +819,28 @@ async def _process_incoming_message_inner(
             }
         )
         if is_pro:
-            await StateManager.set_state(chat_id, UserStates.PRO_MODE)
-            pro_resp = await _handle_pro_cmd(
-                chat_id, user_text, whatsapp, lead_manager, ai=ai
-            )
-            if pro_resp:
-                await whatsapp.send_message(chat_id, pro_resp)
-            return
-            # empty string "" means pro_flow already sent everything internally
-            return
+            # Redis TTL edge: a pro being served as a customer whose CUSTOMER_MODE
+            # key expired lands here mid-request. Re-entering PRO_MODE would answer
+            # their next message with the dashboard, so restore CUSTOMER_MODE while
+            # their own lead is still open.
+            if await _get_active_customer_lead(chat_id):
+                await StateManager.set_state(chat_id, UserStates.CUSTOMER_MODE)
+                # Not read again on this pass — the customer dispatcher below is
+                # already the correct destination. Kept so the local view of state
+                # matches Redis for anyone extending this block.
+                current_state = UserStates.CUSTOMER_MODE
+                logger.info(
+                    f"Restored CUSTOMER_MODE for pro ...{chat_id[-8:]} — own lead still open"
+                )
+            else:
+                await StateManager.set_state(chat_id, UserStates.PRO_MODE)
+                pro_resp = await _handle_pro_cmd(
+                    chat_id, user_text, whatsapp, lead_manager, ai=ai
+                )
+                if pro_resp:
+                    await whatsapp.send_message(chat_id, pro_resp)
+                # empty string "" means pro_flow already sent everything internally
+                return
 
     # Patch #2: Short-circuit PENDING_ADMIN_REVIEW.
     # If this chat has a lead already sitting in PENDING_ADMIN_REVIEW, an admin
@@ -1404,15 +1553,14 @@ async def _finalize_deal(
                 pro_phone, lead["full_address"], Messages.Pro.NAVIGATE_TO
             )
 
-    # Zero-Touch: if the "customer" is actually a registered pro (came via CUSTOMER_MODE),
-    # snap them back to PRO_MODE so they can keep running their own business.
-    phone = chat_id.replace("@c.us", "")
-    customer_is_pro = await users_collection.find_one(
-        {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
-    )
-    if customer_is_pro:
-        await StateManager.set_state(chat_id, UserStates.PRO_MODE)
-        await whatsapp.send_message(chat_id, Messages.Pro.AUTO_RETURNED_TO_PRO)
+    # PRO-69 FM-3: a pro-as-customer used to be snapped back to PRO_MODE right here,
+    # the instant their own lead was dispatched. That is the worst possible moment —
+    # their assigned pro is about to start messaging them, so every follow-up
+    # ("מתי הוא מגיע?") got answered with the pro dashboard. They now stay on the
+    # customer side for the life of their own request; the way back to PRO_MODE is a
+    # pro keyword (Safety Bypass) or the IDLE auto-detect once the lead is closed.
+    if await _is_registered_pro(chat_id):
         logger.info(
-            f"Auto-returned pro-as-customer {chat_id} to PRO_MODE after lead dispatched"
+            f"Keeping pro-as-customer ...{chat_id[-8:]} on the customer side — "
+            f"own lead {lead['_id'] if lead else 'n/a'} just dispatched"
         )
