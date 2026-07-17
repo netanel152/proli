@@ -32,7 +32,7 @@ Each transition is appended to the lead's `status_history` array (`{status, at, 
 Activated when no pro is assigned to the active lead.
 
 - Receives the last **5 conversational turns** (10 messages max — centrally trimmed in `ai_engine_service.py`)
-- Extracts `city`, `issue`, `street`, `street_number`, `floor`, `apartment`, `appointment_time` from the conversation
+- Extracts `city`, `issue`, `street`, `street_number`, `floor`, `apartment`, `appointment_time`, `appointment_datetime` (ISO 8601, resolved from relative expressions; left null for open-ended times like "בהקדם") from the conversation
 - If `city` + `issue` are found → calls `matching_service.determine_best_pro()`
 - If `city` or `issue` missing → sends a clarifying reply, waits for next message
 - If pro found → calls Phase 2 immediately
@@ -61,7 +61,7 @@ If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatc
 
 When Phase 2 returns `is_deal=True`:
 
-1. Create or update lead with `status=new`, `pro_id`, `full_address` (composed), `street`, `street_number`, `city`, `floor`, `apartment`, `issue_type`, `appointment_time`, `media_url`
+1. Create or update lead with `status=new`, `pro_id`, `full_address` (composed), `street`, `street_number`, `city`, `floor`, `apartment`, `issue_type`, `appointment_time`, `appointment_datetime` (parsed to a BSON UTC date via `parse_iso_to_utc`), `media_url`
 2. Set customer state to `AWAITING_PRO_APPROVAL` (customer sees a soft-hold message on next message)
 3. Send customer `Messages.Customer.AWAITING_APPROVAL`
 4. Send pro a text-based approval request (e.g., "Reply 'אשר' or '1' to approve")
@@ -141,7 +141,7 @@ All jobs run inside the Worker process via APScheduler.
 
 | Job | Schedule | What it does |
 |-----|----------|-------------|
-| Daily agendas | 08:00 IL (daily) | Sends each pro a list of their booked jobs for the day |
+| Daily agendas | 08:00 IL (daily) | Sends each pro a list of their booked jobs for the day, keyed on `appointment_datetime`; leads without a resolved `appointment_datetime` (e.g. ASAP) are not included |
 | Stale monitor | Every 30 min | Tier 1 (4–6 h): reminder to pro. Tier 2 (6–24 h): completion check to customer. Tier 3 (>24 h): flag for admin |
 | SOS Healer | Every 10 min | Reassigns stuck leads or escalates to `PENDING_ADMIN_REVIEW` |
 | SLA Monitor | Every 5 min | Wakes up silent `PAUSED_FOR_HUMAN` chats after 15m; offers phone call |

@@ -45,16 +45,20 @@ async def send_daily_reminders():
             {
                 "pro_id": pro["_id"],
                 "status": LeadStatus.BOOKED,
-                "created_at": {"$gte": start_utc, "$lt": end_utc},
+                "appointment_datetime": {"$gte": start_utc, "$lt": end_utc},
             }
-        ).sort("created_at", 1)
+        ).sort("appointment_datetime", 1)
 
         booked_jobs = await booked_jobs_cursor.to_list(length=50)
 
         if booked_jobs:
             msg = f"☀️ *בוקר טוב {pro['business_name']}!* \nהנה העבודות שלך להיום ({today_start.strftime('%d/%m')}):"
             for job in booked_jobs:
-                job_time = job["created_at"].replace(tzinfo=pytz.utc).astimezone(IL_TZ)
+                job_time = (
+                    job["appointment_datetime"]
+                    .replace(tzinfo=pytz.utc)
+                    .astimezone(IL_TZ)
+                )
                 time_str = job_time.strftime("%H:%M")
                 client_phone = job["chat_id"].replace("@c.us", "")
                 details = job.get("details", "פרטים חסרים")
