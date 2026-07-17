@@ -66,6 +66,8 @@ When Phase 2 returns `is_deal=True`:
 3. Send customer `Messages.Customer.AWAITING_APPROVAL`
 4. Send pro a text-based approval request (e.g., "Reply 'אשר' or '1' to approve")
 
+If the customer is themselves a registered pro, they are **not** returned to `PRO_MODE` here — they stay on the customer side until their own lead closes, so follow-ups like "מתי הוא מגיע?" aren't answered with the pro dashboard. The ways back are a pro business keyword (Safety Bypass) or the IDLE auto-detect once the lead is done.
+
 ---
 
 ## 4. Customer State Machine (Key States)
@@ -74,9 +76,9 @@ When Phase 2 returns `is_deal=True`:
 |-------|---------|-------------|
 | `IDLE` | Default | Full AI flow runs |
 | `PRO_MODE` | Sender is an active pro | `pro_flow.handle_pro_text_command()` called |
-| `CUSTOMER_MODE` | Pro needs a service (Zero-Touch) | Pro treated as customer, context cleared |
-| `AWAITING_INTENT_CONFIRMATION` | AI detects pro needs service | Prompt pro to switch modes |
-| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI |
+| `CUSTOMER_MODE` | Pro types `לקוח`, or confirms the intent prompt | Pro treated as customer, context cleared; sticky while their own lead is open |
+| `AWAITING_INTENT_CONFIRMATION` | AI detects pro needs service | Prompt pro to switch modes; `1`/`כן` accepts, `2`/`לא` declines, anything else re-prompts once |
+| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI — unless the sender is a pro using an unambiguous business keyword |
 | `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged, 15m rolling TTL resets |
 | `AWAITING_ADDRESS` | Address missing parts | AI re-extracts parts from next message, state cleared if complete |
 
