@@ -65,6 +65,7 @@ pytest -m integration
 | `test_consent_flow.py` | Privacy consent gate |
 | `test_media_handler.py` | Media type detection, image download, audio/video URL handling |
 | `test_notification_service.py` | WhatsApp + SMS notifications |
+| `test_whatsapp_state_monitor.py` | PRO-20 Green API deauth monitor: `get_state_instance`, `send_oncall_alert` SMS-first routing, `check_whatsapp_instance_state` FSM/Redis branches |
 | `test_analytics_service.py` | Lead funnel and performance aggregations |
 | `test_audit_service.py` | Admin action logging |
 | `test_scheduling_service.py` | Recurring templates, slot generation |
@@ -171,6 +172,7 @@ async def test_something(mock_db, monkeypatch):
 - Use `mock_db` fixture for DB access in unit tests
 - Use `monkeypatch` (not `unittest.mock.patch`) to stay compatible with the autouse fixture
 - For `$geoNear` tests, mock `users_collection.aggregate` as an async generator (mongomock does not support `$geoNear`)
+- **Never anchor time at module scope.** A `time.time()` / `datetime.now()` constant at the top of a test file is evaluated once at import, so a long suite run drifts the wall clock away from it before the test executes — the test then passes or fails on how long the suite took. Compute time anchors inside the test or a fixture. Prefer margins expressed as a fraction of the threshold under test rather than a fixed offset, so tightening the constant can't silently erase the margin (PRO-68).
 
 ---
 
