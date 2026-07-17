@@ -123,7 +123,9 @@ process_incoming_message(chat_id, text, media_url)
         │      └─ log message, reset TTL to 900 s, update lead.paused_at, return
         │
         ├─ State == AWAITING_PRO_APPROVAL?
-        │      └─ send STILL_WAITING, return
+        │      └─ registered pro + PRO_ONLY_KEYWORDS? → fall through (soft-hold escape:
+        │         a pro-as-customer parks here up to 1h and must still run their business)
+        │      └─ otherwise send STILL_WAITING, return
         │
         ├─ State == PRO_MODE?
         │      └─ handle_pro_text_command(pro, text)
@@ -140,13 +142,29 @@ process_incoming_message(chat_id, text, media_url)
         │            └─ fallback → show Dynamic Dashboard (rating, active jobs, status)
         │            └─ detect_service_intent() → if True, prompt for CUSTOMER_MODE
         │
-        ├─ State == AWAITING_INTENT_CONFIRMATION?
-        │      └─ "1" → set CUSTOMER_MODE, clear context
-        │      └─ "2" → back to PRO_MODE
+        ├─ State == AWAITING_INTENT_CONFIRMATION?   (5-min TTL)
+        │      └─ "1" / "כן" → set CUSTOMER_MODE, clear context
+        │      └─ "2" / "לא" → back to PRO_MODE
+        │      └─ anything else → re-prompt once (INTENT_REPROMPT, flag in state_meta);
+        │         second miss → clear state and fall through. SOS keywords skip the
+        │         re-prompt so a cry for a human gets out on the first try.
         │
         ├─ State == AWAITING_ADDRESS? → re-extract missing address parts, save, clear state if complete
         │
+        ├─ Registered pro types "לקוח" (from PRO_MODE or IDLE)?
+        │      └─ set CUSTOMER_MODE, clear context, send SWITCHED_TO_CUSTOMER, return
+        │         (deterministic — never routed through the AI intent detector)
+        │
+        ├─ Registered pro types a PRO_BUSINESS_KEYWORDS word while not in PRO_MODE?
+        │      └─ Safety Bypass → snap back to PRO_MODE
+        │      └─ except AMBIGUOUS_PRO_KEYWORDS (bare digits, אשר/דחה, ...) when a
+        │         customer-side question is actually open (AWAITING_RESCHEDULE_TIME,
+        │         AWAITING_LOYALTY_CONFIRMATION, or a pending rating/review prompt) —
+        │         mid-reschedule a "3" is a slot pick, not a job approval
+        │
         ├─ Phone matches active pro? → set PRO_MODE, handle pro flow
+        │      └─ unless the pro has an open lead of their own (_get_active_customer_lead)
+        │         → restore CUSTOMER_MODE instead (covers the Redis TTL expiry edge)
         │
         ├─ Register keyword? → start_onboarding()
         │
@@ -171,6 +189,8 @@ process_incoming_message(chat_id, text, media_url)
                       set customer state AWAITING_PRO_APPROVAL
                       send customer AWAITING_APPROVAL
                       send pro approval request (EMERGENCY_LEAD_HEADER if urgent)
+                      a pro-as-customer is NOT snapped back to PRO_MODE here — they stay
+                      on the customer side for the life of their own request
 ```
 
 ---
@@ -221,8 +241,8 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 |-------|-------------|
 | `IDLE` | Default — no active flow |
 | `PRO_MODE` | Sender is an active professional |
-| `CUSTOMER_MODE` | Professional temporarily acting as a customer (Zero-Touch) |
-| `AWAITING_INTENT_CONFIRMATION` | Prompting Pro to switch to `CUSTOMER_MODE` |
+| `CUSTOMER_MODE` | Professional acting as a customer. Entered via the `לקוח` keyword or a confirmed intent prompt; sticky until their own lead closes |
+| `AWAITING_INTENT_CONFIRMATION` | Prompting Pro to switch to `CUSTOMER_MODE` (5m TTL, one re-prompt) |
 | `CUSTOMER_FLOW` | Customer is actively in a booking conversation |
 | `AWAITING_ADDRESS` | Waiting for customer to provide missing parts of 5-field address |
 | `AWAITING_MEDIA` | Waiting for customer to send a photo or video of the issue |
