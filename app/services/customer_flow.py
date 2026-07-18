@@ -7,6 +7,7 @@ from app.core.database import (
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, Defaults, Actor
+from app.core.phone import to_chat_id
 from app.services.lead_manager_service import set_lead_status
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
@@ -86,11 +87,7 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     await ContextManager.clear_context(chat_id)
 
     if pro and pro.get("phone_number"):
-        pro_chat_id = (
-            f"{pro['phone_number']}@c.us"
-            if not pro["phone_number"].endswith("@c.us")
-            else pro["phone_number"]
-        )
+        pro_chat_id = to_chat_id(pro["phone_number"])
         await whatsapp.send_message(
             pro_chat_id, Messages.Pro.CUSTOMER_REPORTED_COMPLETION
         )
@@ -268,9 +265,7 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
 
     pro = await users_collection.find_one({"_id": lead["pro_id"]})
     if pro and pro.get("phone_number"):
-        pro_phone = pro["phone_number"]
-        if not pro_phone.endswith("@c.us"):
-            pro_phone = f"{pro_phone}@c.us"
+        pro_phone = to_chat_id(pro["phone_number"])
         await whatsapp.send_message(
             pro_phone,
             Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS.format(

@@ -18,6 +18,7 @@ from app.services.monitor_service import (
 )
 from datetime import datetime, timedelta
 from app.core.constants import LeadStatus, WorkerConstants
+from app.core.phone import to_chat_id, strip_suffix
 from app.core.datetime_utils import within_business_hours
 import os
 import pytz
@@ -62,7 +63,7 @@ async def send_daily_reminders():
                     .astimezone(IL_TZ)
                 )
                 time_str = job_time.strftime("%H:%M")
-                client_phone = job["chat_id"].replace("@c.us", "")
+                client_phone = strip_suffix(job["chat_id"])
                 details = job.get("details", "פרטים חסרים")
                 msg += f"\n🛠️ *{time_str}* - {details}\n   📞 {client_phone}\n"
 
@@ -70,9 +71,7 @@ async def send_daily_reminders():
 
             chat_id = pro.get("phone_number")
             if chat_id:
-                chat_id = (
-                    f"{chat_id}@c.us" if not chat_id.endswith("@c.us") else chat_id
-                )
+                chat_id = to_chat_id(chat_id)
                 try:
                     await whatsapp.send_message(chat_id, msg)
                 except Exception as e:

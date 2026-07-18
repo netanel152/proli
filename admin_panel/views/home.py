@@ -21,6 +21,7 @@ import os
 import sys
 from app.core.logger import logger
 from app.core.constants import AdminDefaults, Defaults, LeadStatus, Actor
+from app.core.phone import to_chat_id, strip_suffix
 from app.core.lead_history import status_history_entry
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -100,7 +101,7 @@ def view_leads_dashboard(T):
                 {
                     "id": str(l["_id"]),
                     "date": l["created_at"].astimezone(pytz.timezone("Asia/Jerusalem")),
-                    "client": l["chat_id"].replace("@c.us", ""),
+                    "client": strip_suffix(l["chat_id"]),
                     "professional": pro_name,
                     "details_summary": display_details,
                     "status": l.get("status", "N/A"),
@@ -344,7 +345,7 @@ def view_leads_dashboard(T):
                 else:
                     try:
                         clean_phone = "".join(filter(str.isdigit, new_phone))
-                        chat_id = f"{clean_phone}@c.us"
+                        chat_id = to_chat_id(clean_phone)
 
                         assigned_pro_id = None
                         if selected_pro_name != T["unknown_pro"]:

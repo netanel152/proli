@@ -13,6 +13,7 @@ from app.core.database import users_collection, leads_collection, slots_collecti
 from app.core.messages import Messages
 from app.core.prompts import Prompts
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
+from app.core.phone import to_chat_id, strip_suffix
 from app.services.lead_manager_service import set_lead_status
 from app.core.datetime_utils import parse_iso_to_utc
 from app.core.redis_client import (
@@ -136,7 +137,7 @@ CUSTOMER_ACTIVE_STATUSES = [
 
 async def _is_registered_pro(chat_id: str):
     """Return the professional doc for this chat, or None."""
-    phone = chat_id.replace("@c.us", "")
+    phone = strip_suffix(chat_id)
     return await users_collection.find_one(
         {
             "phone_number": {"$in": [phone, chat_id]},
@@ -242,7 +243,7 @@ async def _process_incoming_message_inner(
 
     # Admin routing wizard — must come before all other checks so the admin-as-pro
     # isn't trapped by consent, SOS, or paused-for-human gates.
-    admin_chat_id = f"{settings.ADMIN_PHONE}@c.us"
+    admin_chat_id = to_chat_id(settings.ADMIN_PHONE)
     if chat_id == admin_chat_id:
         if (user_text and user_text.strip() == "ניהול") or (
             current_state or ""
@@ -280,12 +281,11 @@ async def _process_incoming_message_inner(
 
     # PRO-21 — per-customer abuse / cost protection. Pros and the admin are exempt;
     # is_exempt is reused below to gate the daily AI-call cap at each AI call site.
-    is_exempt = (
-        current_state == UserStates.PRO_MODE
-        or chat_id == f"{settings.ADMIN_PHONE}@c.us"
+    is_exempt = current_state == UserStates.PRO_MODE or chat_id == to_chat_id(
+        settings.ADMIN_PHONE
     )
     if not is_exempt:
-        phone = chat_id.replace("@c.us", "")
+        phone = strip_suffix(chat_id)
         is_exempt = bool(
             await users_collection.find_one(
                 {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
@@ -351,7 +351,7 @@ async def _process_incoming_message_inner(
     # Consent Check (skip for professionals — they're added by admin)
 
     if current_state != UserStates.PRO_MODE:
-        phone = chat_id.replace("@c.us", "")
+        phone = strip_suffix(chat_id)
         is_pro = await users_collection.find_one(
             {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
         )
@@ -455,9 +455,7 @@ async def _process_incoming_message_inner(
         if pro_id:
             pro = await users_collection.find_one({"_id": pro_id})
             if pro and pro.get("phone_number"):
-                pro_phone = pro["phone_number"]
-                if not pro_phone.endswith("@c.us"):
-                    pro_phone = f"{pro_phone}@c.us"
+                pro_phone = to_chat_id(pro["phone_number"])
                 await whatsapp.send_message(pro_phone, Messages.Pro.PAUSE_NOTIFICATION)
 
         await whatsapp.send_message(chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER)
@@ -621,8 +619,7 @@ async def _process_incoming_message_inner(
                     pro = await users_collection.find_one({"_id": pro_id})
                     if pro and pro.get("phone_number"):
                         pro_phone = pro["phone_number"]
-                        if not pro_phone.endswith("@c.us"):
-                            pro_phone = f"{pro_phone}@c.us"
+                        pro_phone = to_chat_id(pro_phone)
                         await whatsapp.send_message(
                             pro_phone,
                             Messages.Pro.CUSTOMER_CANCELLED.format(
@@ -1294,8 +1291,7 @@ async def _process_incoming_message_inner(
                 try:
                     pro_phone = best_pro.get("phone_number")
                     if pro_phone:
-                        if not pro_phone.endswith("@c.us"):
-                            pro_phone = f"{pro_phone}@c.us"
+                        pro_phone = to_chat_id(pro_phone)
                         notify_msg = (
                             Messages.Pro.EARLY_LEAD_HEADER
                             + "\n\n"
@@ -1601,10 +1597,9 @@ async def _finalize_deal(
         # 2. Send pro approval request with interactive buttons
         pro_phone = best_pro.get("phone_number")
         if pro_phone:
-            if not pro_phone.endswith("@c.us"):
-                pro_phone = f"{pro_phone}@c.us"
+            pro_phone = to_chat_id(pro_phone)
 
-            customer_phone = chat_id.replace("@c.us", "")
+            customer_phone = strip_suffix(chat_id)
             extra_info = (
                 f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
             )

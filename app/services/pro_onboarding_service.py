@@ -7,6 +7,7 @@ Creates user with is_active=False pending admin approval.
 
 from app.core.database import users_collection
 from app.core.constants import UserStates, ISRAEL_CITIES_COORDS
+from app.core.phone import strip_suffix
 from app.core.messages import Messages
 from app.core.logger import logger
 from app.services.state_manager_service import StateManager
@@ -25,12 +26,14 @@ ONBOARDING_STATES = {
 async def start_onboarding(chat_id: str, whatsapp) -> bool:
     """Start the onboarding flow for a new professional.
     Returns True if onboarding started, False if already registered."""
-    phone = chat_id.replace("@c.us", "")
+    phone = strip_suffix(chat_id)
 
-    existing = await users_collection.find_one({
-        "phone_number": {"$in": [phone, chat_id]},
-        "role": "professional",
-    })
+    existing = await users_collection.find_one(
+        {
+            "phone_number": {"$in": [phone, chat_id]},
+            "role": "professional",
+        }
+    )
     if existing:
         if existing.get("pending_approval"):
             await whatsapp.send_message(chat_id, Messages.Onboarding.PENDING_ALREADY)
@@ -69,7 +72,9 @@ async def handle_onboarding_step(chat_id: str, text: str, state: str, whatsapp):
 
 async def _handle_name(chat_id: str, text: str, whatsapp):
     if len(text) < 2 or len(text) > 100:
-        await whatsapp.send_message(chat_id, "שם העסק חייב להיות בין 2 ל-100 תווים. נסה שוב:")
+        await whatsapp.send_message(
+            chat_id, "שם העסק חייב להיות בין 2 ל-100 תווים. נסה שוב:"
+        )
         return
 
     meta = await StateManager.get_metadata(chat_id)
@@ -99,7 +104,9 @@ async def _handle_type(chat_id: str, text: str, whatsapp):
 async def _handle_areas(chat_id: str, text: str, whatsapp):
     areas = [a.strip() for a in text.replace("،", ",").split(",") if a.strip()]
     if not areas:
-        await whatsapp.send_message(chat_id, "לא זיהיתי ערים. שלח רשימת ערים מופרדות בפסיקים:")
+        await whatsapp.send_message(
+            chat_id, "לא זיהיתי ערים. שלח רשימת ערים מופרדות בפסיקים:"
+        )
         return
 
     meta = await StateManager.get_metadata(chat_id)
@@ -122,7 +129,9 @@ async def _handle_prices(chat_id: str, text: str, whatsapp):
     await StateManager.set_metadata(chat_id, {"onboarding": data})
     await StateManager.set_state(chat_id, UserStates.ONBOARDING_CONFIRM)
 
-    type_label = Messages.Onboarding.TYPE_LABELS.get(data.get("type", ""), data.get("type", ""))
+    type_label = Messages.Onboarding.TYPE_LABELS.get(
+        data.get("type", ""), data.get("type", "")
+    )
     areas_str = ", ".join(data.get("areas", []))
     prices_str = data.get("prices") or "לא צוין"
 
@@ -150,7 +159,7 @@ async def _handle_confirm(chat_id: str, text: str, whatsapp):
 
 
 async def _create_pending_pro(chat_id: str, data: dict):
-    phone = chat_id.replace("@c.us", "")
+    phone = strip_suffix(chat_id)
     areas = data.get("areas", [])
 
     # Try to resolve coordinates from first known city

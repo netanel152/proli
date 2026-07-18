@@ -480,12 +480,9 @@ def _notify_pro_approved(phone_number: str):
     try:
         import httpx
         from app.core.config import settings
+        from app.core.phone import to_chat_id
 
-        chat_id = (
-            f"{phone_number}@c.us"
-            if not phone_number.endswith("@c.us")
-            else phone_number
-        )
+        chat_id = to_chat_id(phone_number)
         from app.core.messages import Messages
 
         url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}/sendMessage/{settings.GREEN_API_TOKEN}"
@@ -507,12 +504,9 @@ def _notify_pro_rejected(phone_number: str):
     try:
         import httpx
         from app.core.config import settings
+        from app.core.phone import to_chat_id
 
-        chat_id = (
-            f"{phone_number}@c.us"
-            if not phone_number.endswith("@c.us")
-            else phone_number
-        )
+        chat_id = to_chat_id(phone_number)
         from app.core.messages import Messages
 
         url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}/sendMessage/{settings.GREEN_API_TOKEN}"
