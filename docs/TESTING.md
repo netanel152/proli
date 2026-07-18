@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 371 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 389 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -181,7 +181,7 @@ async def test_something(mock_db, monkeypatch):
 | Tool | Command | Purpose |
 |------|---------|---------|
 | Webhook simulator | `python scripts/simulate_webhook.py` | Interactive — craft any message and POST to local backend |
-| Automated scenarios | `python scripts/simulate_test.py` | Runs TC1–TC12: consent, rejection, SOS, media, idempotency |
+| Automated scenarios | `python tests/simulate_test.py` | Runs TC1–TC12: consent, rejection, SOS, media, idempotency |
 | Environment reset | `python scripts/reset_test.py` | Clear test leads, Redis state/context/webhook keys |
 | DB seeding | `python scripts/seed_db.py` | Populate with sample professionals |
 | Manual test plan | `docs/MANUAL_TEST_PLAN.md` | Step-by-step via real WhatsApp |
