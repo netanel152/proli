@@ -76,11 +76,6 @@ class Settings(BaseSettings):
     # directly from the environment; no need to re-declare them here.
     BACKUP_S3_BUCKET: str | None = None
 
-    # SMS fallback (optional)
-    SMS_API_KEY: str | None = None
-    SMS_SENDER_ID: str = "Proli"
-    SMS_API_URL: str = "https://api.inforu.co.il/SendSMS/SendSMS"
-
     # Sentry (optional — error reporting for worker)
     # When unset, Sentry is disabled (no-op). When set, only CRITICAL-level
     # log events are forwarded as issues; regular INFO/WARNING/ERROR stays in
