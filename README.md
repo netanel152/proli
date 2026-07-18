@@ -150,7 +150,7 @@ pytest tests/test_matching_service.py
 pytest -m integration
 ```
 
-Expected result: **389 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set). The authoritative baseline lives in `docs/TESTING.md`.
+Expected result: the full unit suite passes. The authoritative pass/skip baseline lives in `docs/TESTING.md` ("Current status" line) — integration tests are skipped without `MONGO_TEST_URI`.
 
 ---
 

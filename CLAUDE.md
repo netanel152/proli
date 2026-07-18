@@ -54,7 +54,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected: **389 passed, 6 skipped** (integration tests skipped without `MONGO_TEST_URI`). The authoritative baseline lives in `docs/TESTING.md` ("Current status" line).
+Expected baseline lives in `docs/TESTING.md` ("Current status" line) — the single source of truth for the pass/skip count. Integration tests are skipped without `MONGO_TEST_URI`.
 
 ### Linting / Formatting
 
@@ -139,4 +139,4 @@ All config is in `app/core/config.py` via `pydantic-settings`. Required env vars
 - Skip files over 100KB unless explicitly required.
 - Suggest `/cost` when a session is running long to monitor cache ratio.
 - Recommend starting a new session when switching to an unrelated task.
-- After finishing a code-change task, run `/sync-docs` to update any `.md` files made stale by the diff.
+- After finishing a code-change task, delegate to the **docs-syncer** subagent (incremental mode) to update any `.md` files made stale by the diff.

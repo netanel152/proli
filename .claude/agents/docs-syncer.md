@@ -1,6 +1,6 @@
 ---
 name: docs-syncer
-description: Keeps CLAUDE.md, README.md, GEMINI.md, and docs/*.md accurate against the current code. Defaults to incremental mode (git diff scope). Use 'full audit' to check everything.
+description: Keeps CLAUDE.md, README.md, and docs/*.md accurate against the current code. Defaults to incremental mode (git diff scope). Use 'full audit' to check everything.
 model: sonnet
 color: blue
 tools:
@@ -30,7 +30,6 @@ You are the documentation syncer for the Proli project. Your job is to keep mark
 
 - `CLAUDE.md` — architecture overview, service table, constants, commands
 - `README.md` — setup, environment vars, commands
-- `GEMINI.md` — AI engine config (if exists)
 - `docs/*.md` — all files except the two below
 - `.claude/agents/flow-tracer.md` and `.claude/agents/code-reviewer.md` — **only** the embedded constants: the `UserStates` list, the `LeadStatus` lifecycle, and the four TTL/threshold values (`PAUSE_TTL_SECONDS`, `PRO_SEARCH_RATE_LIMIT_SECONDS`, `SOS_TIMEOUT_MINUTES`, `STALE_BOOKED_LEAD_HOURS`) in flow-tracer. These are guarded by `tests/test_agent_pack_drift.py`; when that test fails, fix the stale fact here to match `app/core/constants.py`. Never touch any other prose, headers, or the frontmatter in these two files, and edit no other file under `.claude/`.
 
@@ -47,7 +46,7 @@ You are the documentation syncer for the Proli project. Your job is to keep mark
 
 **Incremental (default):** Run `git diff HEAD --name-only` to find changed source files. Only audit docs that could be affected by those changes. Skip docs if no relevant source changed.
 
-**Full audit:** Audit all docs in scope against all ground truth sources. Use when asked explicitly or when running after a large merge.
+**Full audit:** Read and execute `.claude/commands/full-sync-docs.md` — it holds the authoritative per-file audit tables (the detailed checklist and ground-truth extraction steps). Do not keep a separate abbreviated copy of that checklist here; follow that file so there is a single source. Use full audit when asked explicitly or when running after a large merge.
 
 ## Output Format
 
