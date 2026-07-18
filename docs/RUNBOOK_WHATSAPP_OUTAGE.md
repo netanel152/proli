@@ -78,6 +78,25 @@ downtime is manual (§4).
 
 ## 3. Recovery
 
+> ### ⚠️ `yellowCard` specifically — what does NOT work
+> `yellowCard` is a **WhatsApp-side** restriction on the *phone number's reputation*, not a
+> Green API session problem. It is **not cleared** by any of the following (all operate on the
+> wrong layer — WhatsApp never sees the change):
+> - **Rotating the Green API token** — that's just the API credential.
+> - **Rebooting the instance** — restarts Green API's session; the flag persists.
+> - **Re-scanning the QR** — re-links the device (fixes `notAuthorized`, irrelevant to a flag).
+>
+> The **only** things that lift a `yellowCard`:
+> 1. **Silence + time** — stop ALL outbound (the PRO-71 breaker + `WHATSAPP_DRY_RUN=true` do
+>    this) and wait. WhatsApp auto-lifts, typically a few hours, up to ~24–48h.
+> 2. **Rebuild trust with real, low-volume human use** — on the phone holding the number, use
+>    WhatsApp normally (a few genuine 1:1 messages, reply to inbound), low volume, never cold.
+>
+> **Do not send test messages to "check if it's back"** — every send while flagged pushes
+> yellow → red (`blocked`, a permanent ban). Poll `getStateInstance` / `/health` instead; the
+> watchdog already does this every 2 min. If it hasn't cleared after ~48h of silence, or flips
+> to `blocked`, treat the number as burned and rotate to a fresh, warmed number (§3b).
+
 ### 3a. Re-link / re-authorize the existing instance (most common)
 1. Open the Green API console → your instance → **QR / Authorization**.
 2. On the phone running the WhatsApp account: **WhatsApp → Settings → Linked Devices →
