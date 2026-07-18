@@ -166,10 +166,14 @@ class Messages:
             "📍 *כתובת:* {full_address}\n"
             "ℹ️ *פרטים נוספים:* {extra_info}\n"
             "🛠️ *תקלה:* {issue_type}\n"
-            "⏰ *תאריך ושעה:* {appointment_time}\n\n"
-            "כדי לאשר השב: *אשר*\n"
+            "⏰ *תאריך ושעה:* {appointment_time}\n"
+            "{price_line}"
+            "\nכדי לאשר השב: *אשר*\n"
             "כדי לדחות השב: *דחה*"
         )
+        # PRO-55: the AI-quoted price the customer was promised, shown to the pro
+        # before approval. Appended to APPROVAL_REQUEST only when a quote exists.
+        APPROVAL_PRICE_LINE = "💰 *הערכת מחיר שניתנה ללקוח:* {quoted_price}₪\n"
         PAUSE_ACK = (
             "⏸️ הבוט הושהה. תוכל לדבר עם הלקוח ישירות.\n"
             "הבוט יחזור לפעולה אוטומטית בעוד שעתיים או כשתשלח 'המשך'."
