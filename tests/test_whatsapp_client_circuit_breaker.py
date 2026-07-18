@@ -182,3 +182,44 @@ async def test_is_outbound_paused_false_when_key_absent(monkeypatch):
     client = WhatsAppClient()
 
     assert await client._is_outbound_paused() is False
+
+
+# --- PRO-79: WHATSAPP_DRY_RUN (local/dev never sends real WhatsApp) ---
+
+
+@pytest.mark.asyncio
+async def test_send_message_dry_run_does_not_call_send_request(monkeypatch):
+    client = WhatsAppClient()
+    mock_send_request = AsyncMock()
+    monkeypatch.setattr(client, "_send_request", mock_send_request)
+    monkeypatch.setattr(wa_module.settings, "WHATSAPP_DRY_RUN", True)
+
+    await client.send_message(CHAT_ID, "hello")
+
+    mock_send_request.assert_not_awaited()  # logged, never transmitted
+
+
+@pytest.mark.asyncio
+async def test_send_file_dry_run_does_not_call_send_request(monkeypatch):
+    client = WhatsAppClient()
+    mock_send_request = AsyncMock()
+    monkeypatch.setattr(client, "_send_request", mock_send_request)
+    monkeypatch.setattr(wa_module.settings, "WHATSAPP_DRY_RUN", True)
+
+    await client.send_file_by_url(CHAT_ID, "https://example.com/a.jpg")
+
+    mock_send_request.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_dry_run_off_sends_normally(monkeypatch):
+    """Sanity: with dry-run off the send path runs (regression guard on the gate)."""
+    client = WhatsAppClient()
+    mock_send_request = AsyncMock(return_value={"idMessage": "abc"})
+    monkeypatch.setattr(client, "_send_request", mock_send_request)
+    monkeypatch.setattr(wa_module.settings, "WHATSAPP_DRY_RUN", False)
+    monkeypatch.setattr(wa_module, "get_redis_client", _redis_factory(False))
+
+    await client.send_message(CHAT_ID, "hello")
+
+    mock_send_request.assert_awaited_once()

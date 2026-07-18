@@ -23,10 +23,12 @@ def _pii_filter(record):
     record["message"] = mask_pii(record["message"])
     return True
 
+
 # Create logs directory if it doesn't exist
 log_dir = os.path.join(os.getcwd(), "logs")
 if not os.path.exists(log_dir):
     os.makedirs(log_dir)
+
 
 def json_formatter(record):
     """
@@ -40,20 +42,22 @@ def json_formatter(record):
         "function": record["function"],
         "line": record["line"],
     }
-    
+
     # Include trace_id if available in extra context
     if "trace_id" in record["extra"]:
         subset["trace_id"] = record["extra"]["trace_id"]
-        
+
     if record["exception"]:
         subset["exception"] = record["exception"]
 
     return json.dumps(subset) + "\n"
 
+
 class InterceptHandler(logging.Handler):
     """
     Redirect standard logging to Loguru.
     """
+
     def emit(self, record):
         try:
             level = logger.level(record.levelname).name
@@ -68,6 +72,7 @@ class InterceptHandler(logging.Handler):
         logger.opt(depth=depth, exception=record.exc_info).log(
             level, record.getMessage()
         )
+
 
 def setup_logging():
     """
@@ -111,11 +116,18 @@ def setup_logging():
     )
 
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
-    
+
     for log_name in ["uvicorn", "uvicorn.error", "uvicorn.access", "fastapi"]:
         logging_logger = logging.getLogger(log_name)
         logging_logger.handlers = [InterceptHandler()]
         logging_logger.propagate = False
+
+    # PRO-79: httpx/httpcore log "HTTP Request: GET <url>" at INFO. Green API puts
+    # the auth token in the URL path, so raise these to WARNING to keep the token
+    # out of the logs entirely.
+    for noisy in ["httpx", "httpcore"]:
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
 
 setup_logging()
 __all__ = ["logger", "setup_logging"]
