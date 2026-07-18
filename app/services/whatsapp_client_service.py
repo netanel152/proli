@@ -66,6 +66,11 @@ class WhatsAppClient:
         wait=wait_exponential(multiplier=1, min=2, max=10),
     )
     async def send_message(self, chat_id: str, text: str):
+        if settings.WHATSAPP_DRY_RUN:
+            logger.info(
+                f"🧪 [DRY-RUN] send_message to ...{chat_id[-8:]}: {text[:100]!r}"
+            )
+            return
         if await self._is_outbound_paused():
             logger.warning(
                 f"⛔ Outbound halted (WhatsApp instance not authorized) — "
@@ -124,6 +129,8 @@ class WhatsAppClient:
     async def send_chat_state_typing(self, chat_id: str) -> None:
         """Show 'typing...' indicator via Green API sendChatStateTyping. Best-effort: failures are
         logged and swallowed so they cannot block real message processing."""
+        if settings.WHATSAPP_DRY_RUN:
+            return
         if await self._is_outbound_paused():
             return  # no point showing typing when outbound is halted
         try:
@@ -153,6 +160,9 @@ class WhatsAppClient:
     async def send_file_by_url(
         self, chat_id: str, url: str, caption: str = "", file_name: str = "media.jpg"
     ):
+        if settings.WHATSAPP_DRY_RUN:
+            logger.info(f"🧪 [DRY-RUN] send_file_by_url to ...{chat_id[-8:]}: {url}")
+            return
         if await self._is_outbound_paused():
             logger.warning(
                 f"⛔ Outbound halted (WhatsApp instance not authorized) — "
