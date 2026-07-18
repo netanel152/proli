@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 443 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 449 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -55,7 +55,8 @@ pytest -m integration
 | `test_matching_service.py` | `$geoNear` pipeline, progressive radius (10→20→30 km), no-pro-at-max-radius returns None, text fallback, load balancing, excluded pro IDs, rating sort |
 | `test_geocoding_service.py` | Static dict lookup, Redis cache hits/misses, Google Maps API calls with bounding-box validation, fallback chain |   
 | `test_stale_nudger.py` | Periodic reminders for booked leads > 24h old |
-| `test_approval_sla.py` | PRO-56 approval SLA: T+10 pro nudge, T+25 customer reassignment offer, emergency-halved thresholds, idempotency, and the customer 1/2 reply handling |
+| `test_approval_sla.py` | PRO-56 approval SLA: T+10 pro nudge, T+25 customer reassignment offer, emergency-halved thresholds, idempotency, business-hours gate, and the customer 1/2 reply handling |
+| `test_scheduler_gating.py` | PRO-73 gating primitives: `within_business_hours` (Israel 08–21) and the `_customer_cold_job_allowed` toggle+hours gate (default OFF) for cold customer-facing jobs |
 ### Infrastructure
 
 | File | What it covers |

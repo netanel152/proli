@@ -6,6 +6,7 @@ from app.services.lead_manager_service import set_lead_status
 from app.core.config import settings
 from app.core.logger import logger
 from app.core.redis_client import get_redis_client
+from app.core.datetime_utils import within_business_hours
 from app.services.whatsapp_client_service import WhatsAppClient
 from app.services import matching_service
 from app.services.notification_service import send_oncall_alert
@@ -513,7 +514,15 @@ async def check_pro_approval_sla():
             # overlapping ticks — or a Redis-down scheduler lock that fails open —
             # can't double-send. NOTE: quiet-hours / Shabbat gating of this
             # customer-facing message is deferred to PRO-73.
-            if waited_min >= offer_after and not lead.get("reassign_offered"):
+            # PRO-73: the customer-facing offer is gated to business hours — never
+            # message a customer at 3am. Outside hours we skip (reassign_offered
+            # stays False) so it fires on the next in-hours tick. The pro nudge
+            # below is pro-facing and stays ungated.
+            if (
+                waited_min >= offer_after
+                and not lead.get("reassign_offered")
+                and within_business_hours()
+            ):
                 claimed = await leads_collection.update_one(
                     {
                         "_id": lead["_id"],
