@@ -6,14 +6,19 @@ Requirements: Only 2 phones needed:
   - Green API bot phone (sends messages)
   - Your real phone (972524828796) — registered as pro, receives real WhatsApp messages
 
-The customer (972523651414) is virtual — responses appear in worker logs.
+⚠️  The customer (972523651414) also receives REAL WhatsApp messages. Only the
+    inbound webhook is simulated — every simulated inbound makes the worker send a
+    genuine Green API reply to this number. It must be a dedicated QA SIM with real
+    two-way conversation history, never the pilot number. Running --test all against
+    the production instance is a cold-initiate burst (the #1 yellowCard trigger), so
+    the script aborts on the production instance unless --i-know-this-is-production.
 
 Usage:
-    python scripts/simulate_test.py                    # Run all tests
-    python scripts/simulate_test.py --test tc3         # Run specific test
-    python scripts/simulate_test.py --test tc1,tc3,tc5 # Run multiple tests
-    python scripts/simulate_test.py --list             # List available tests
-    python scripts/simulate_test.py --base-url http://localhost:8001  # Custom URL
+    python tests/simulate_test.py                    # Run all tests
+    python tests/simulate_test.py --test tc3         # Run specific test
+    python tests/simulate_test.py --test tc1,tc3,tc5 # Run multiple tests
+    python tests/simulate_test.py --list             # List available tests
+    python tests/simulate_test.py --base-url http://localhost:8001  # Custom URL
 """
 
 import httpx
@@ -28,11 +33,19 @@ from pymongo import uri_parser
 import certifi
 from dotenv import load_dotenv
 
+try:
+    from tests.qa_safety import preflight_or_abort
+except ImportError:  # run directly as `python tests/simulate_test.py`
+    from qa_safety import preflight_or_abort
+
 load_dotenv()
 
 # --- Config ---
 BASE_URL = os.getenv("SMOKE_BASE_URL", "http://localhost:8000")
-INSTANCE_ID = int(os.getenv("GREEN_API_INSTANCE_ID", "7105567180"))
+# No hardcoded instance ID in source (PRO-72). Reads the live id from env; empty
+# when unset, which the preflight guard treats as "cannot verify" → aborts.
+_ENV_INSTANCE_ID = (os.getenv("GREEN_API_INSTANCE_ID") or "").strip()
+INSTANCE_ID = int(_ENV_INSTANCE_ID) if _ENV_INSTANCE_ID.isdigit() else 0
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
 
 # Virtual customer (no real phone needed)
@@ -60,18 +73,13 @@ def make_text_payload(chat_id: str, text: str, sender_name: str = "Test User") -
         "instanceData": {
             "idInstance": INSTANCE_ID,
             "wid": f"{chat_id}",
-            "typeInstance": "whatsapp"
+            "typeInstance": "whatsapp",
         },
-        "senderData": {
-            "chatId": chat_id,
-            "senderName": sender_name
-        },
+        "senderData": {"chatId": chat_id, "senderName": sender_name},
         "messageData": {
             "typeMessage": "textMessage",
-            "textMessageData": {
-                "textMessage": text
-            }
-        }
+            "textMessageData": {"textMessage": text},
+        },
     }
 
 
@@ -83,14 +91,22 @@ def _webhook_url() -> str:
     return url
 
 
-async def send_message(client: httpx.AsyncClient, chat_id: str, text: str, sender_name: str = "Test User") -> dict:
+async def send_message(
+    client: httpx.AsyncClient, chat_id: str, text: str, sender_name: str = "Test User"
+) -> dict:
     """Send a simulated webhook and return the response."""
     payload = make_text_payload(chat_id, text, sender_name)
     resp = await client.post(_webhook_url(), json=payload)
     return resp.json()
 
 
-async def send_and_wait(client: httpx.AsyncClient, chat_id: str, text: str, sender_name: str = "Test User", wait: float = 4.0) -> dict:
+async def send_and_wait(
+    client: httpx.AsyncClient,
+    chat_id: str,
+    text: str,
+    sender_name: str = "Test User",
+    wait: float = 4.0,
+) -> dict:
     """Send message and wait for the worker to process it."""
     result = await send_message(client, chat_id, text, sender_name)
     # Wait for ARQ worker to pick up and process
@@ -106,7 +122,7 @@ def header(title: str):
 
 def step(num: int, who: str, text: str):
     role_color = YELLOW if "Customer" in who else GREEN
-    print(f"\n  {BOLD}Step {num}:{RESET} {role_color}{who}{RESET} sends: \"{text}\"")
+    print(f'\n  {BOLD}Step {num}:{RESET} {role_color}{who}{RESET} sends: "{text}"')
 
 
 def info(msg: str):
@@ -125,11 +141,14 @@ def warn(msg: str):
 # TEST CASES
 # ============================================================
 
+
 async def tc1_consent_flow(client: httpx.AsyncClient):
     """TC-1: Customer Consent Flow (First Contact)"""
     header("TC-1: Customer Consent Flow")
     info("Pre-condition: Customer has no consent. Run reset_test.py --all first.")
-    input(f"  {YELLOW}Press Enter to start (make sure you ran reset_test.py --all)...{RESET}")
+    input(
+        f"  {YELLOW}Press Enter to start (make sure you ran reset_test.py --all)...{RESET}"
+    )
 
     step(1, "Customer (virtual)", "שלום")
     r = await send_and_wait(client, CUSTOMER_CHAT_ID, "שלום", "עדי")
@@ -173,19 +192,29 @@ async def tc3_full_happy_path(client: httpx.AsyncClient):
     info("Bot should ask about the problem. Check worker logs.")
 
     step(2, "Customer (virtual)", "נוזל מים מהברז במטבח כבר יומיים")
-    await send_and_wait(client, CUSTOMER_CHAT_ID, "נוזל מים מהברז במטבח כבר יומיים", "עדי")
+    await send_and_wait(
+        client, CUSTOMER_CHAT_ID, "נוזל מים מהברז במטבח כבר יומיים", "עדי"
+    )
     info("Bot should ask about location. Check worker logs.")
 
     step(3, "Customer (virtual)", "תל אביב")
     await send_and_wait(client, CUSTOMER_CHAT_ID, "תל אביב", "עדי", wait=5)
     warn(f"CHECK YOUR PHONE ({PRO_PHONE}): You should receive '📢 הצעת עבודה חדשה'")
-    info("Bot (as pro persona) should now ask the customer for full address + preferred time.")
-    input(f"  {YELLOW}Read the bot's response above, then Press Enter to send the address...{RESET}")
+    info(
+        "Bot (as pro persona) should now ask the customer for full address + preferred time."
+    )
+    input(
+        f"  {YELLOW}Read the bot's response above, then Press Enter to send the address...{RESET}"
+    )
 
     step(4, "Customer (virtual)", "ברקוביץ 4 תל אביב, יום חמישי ב-16:00")
-    await send_and_wait(client, CUSTOMER_CHAT_ID, "ברקוביץ 4 תל אביב, יום חמישי ב-16:00", "עדי", wait=5)
+    await send_and_wait(
+        client, CUSTOMER_CHAT_ID, "ברקוביץ 4 תל אביב, יום חמישי ב-16:00", "עדי", wait=5
+    )
     info("Check logs: is_deal=true → _finalize_deal runs")
-    warn(f"CHECK YOUR PHONE ({PRO_PHONE}): You should receive '✅ הלקוח אישר! פרטי העבודה'")
+    warn(
+        f"CHECK YOUR PHONE ({PRO_PHONE}): You should receive '✅ הלקוח אישר! פרטי העבודה'"
+    )
 
     step(5, f"Pro (YOUR phone {PRO_PHONE})", "אשר")
     info("NOW: Send 'אשר' from your real phone to the bot!")
@@ -201,13 +230,17 @@ async def tc4_pro_reject(client: httpx.AsyncClient):
     info("Pre-condition: Run TC-3 up to step 4 (lead exists with status NEW)")
 
     step(1, "Customer (virtual)", "היי יש לי נזילה בתל אביב, מהברז במטבח")
-    await send_and_wait(client, CUSTOMER_CHAT_ID, "היי יש לי נזילה בתל אביב, מהברז במטבח", "עדי", wait=5)
+    await send_and_wait(
+        client, CUSTOMER_CHAT_ID, "היי יש לי נזילה בתל אביב, מהברז במטבח", "עדי", wait=5
+    )
     warn(f"CHECK YOUR PHONE ({PRO_PHONE}): early notification should arrive")
     info("Bot (as pro) should be asking for address and time.")
     input(f"  {YELLOW}Press Enter to send address+time...{RESET}")
 
     step(2, "Customer (virtual)", "ברקוביץ 4, מחר ב-10:00")
-    await send_and_wait(client, CUSTOMER_CHAT_ID, "ברקוביץ 4, מחר ב-10:00", "עדי", wait=5)
+    await send_and_wait(
+        client, CUSTOMER_CHAT_ID, "ברקוביץ 4, מחר ב-10:00", "עדי", wait=5
+    )
     warn(f"CHECK YOUR PHONE ({PRO_PHONE}): '✅ הלקוח אישר' should arrive now")
 
     step(3, f"Pro ({PRO_PHONE})", "דחה")
@@ -279,7 +312,9 @@ async def tc9_sos(client: httpx.AsyncClient):
 
     step(2, "Customer (virtual)", "sos")
     await send_and_wait(client, CUSTOMER_CHAT_ID, "sos", "עדי")
-    info("Check logs: SOS triggered again (note: 'עזרה' is now a reset command, use 'נציג' or 'sos' for SOS)")
+    info(
+        "Check logs: SOS triggered again (note: 'עזרה' is now a reset command, use 'נציג' or 'sos' for SOS)"
+    )
 
 
 async def tc12_idempotency(client: httpx.AsyncClient):
@@ -311,6 +346,7 @@ async def tc12_idempotency(client: httpx.AsyncClient):
 # TC-10: Pro Onboarding (Self-Registration)
 # ============================================================
 
+
 async def tc10_pro_onboarding(client: httpx.AsyncClient):
     """TC-10: Pro Onboarding — full self-registration flow"""
     header("TC-10: Pro Onboarding (Self-Registration)")
@@ -340,7 +376,9 @@ async def tc10_pro_onboarding(client: httpx.AsyncClient):
     step(6, "New Pro (virtual)", "אשר")
     await send_and_wait(client, CUSTOMER_CHAT_ID, "אשר", "מועמד")
     info("Check logs: pro created with pending_approval=true")
-    check("TC-10 done — verify in MongoDB: db.users.findOne({business_name: 'בדיקה שרברב'})")
+    check(
+        "TC-10 done — verify in MongoDB: db.users.findOne({business_name: 'בדיקה שרברב'})"
+    )
     warn("NOTE: TC-10 created a pending pro entry for customer phone.")
     warn("To run TC-11 cleanly, delete it first:")
     warn("  db.users.deleteOne({phone_number: '972523651414', pending_approval: true})")
@@ -349,6 +387,7 @@ async def tc10_pro_onboarding(client: httpx.AsyncClient):
 # ============================================================
 # TC-11: Pro Onboarding Cancel
 # ============================================================
+
 
 async def tc11_pro_onboarding_cancel(client: httpx.AsyncClient):
     """TC-11: Pro Onboarding Cancel"""
@@ -372,10 +411,13 @@ async def tc11_pro_onboarding_cancel(client: httpx.AsyncClient):
 # TC-13: Media Message (simulated with fake URL)
 # ============================================================
 
+
 async def tc13_media(client: httpx.AsyncClient):
     """TC-13: Media Message — image and audio simulation"""
     header("TC-13: Media Message (Image + Audio)")
-    info("Sending fake media webhooks — AI will fail to download but flow is validated.")
+    info(
+        "Sending fake media webhooks — AI will fail to download but flow is validated."
+    )
 
     # Image with caption
     step(1, "Customer (virtual)", "[photo] + 'נזילה בתל אביב'")
@@ -390,9 +432,9 @@ async def tc13_media(client: httpx.AsyncClient):
                 "downloadUrl": "https://example.com/fake_leak.jpg",
                 "caption": "נזילה בתל אביב",
                 "mimeType": "image/jpeg",
-                "fileName": "leak.jpg"
-            }
-        }
+                "fileName": "leak.jpg",
+            },
+        },
     }
     r = await client.post(_webhook_url(), json=payload)
     info(f"Webhook response: {r.json()}")
@@ -408,8 +450,8 @@ async def tc13_media(client: httpx.AsyncClient):
             "downloadUrl": "https://example.com/fake_voice.ogg",
             "caption": "",
             "mimeType": "audio/ogg",
-            "fileName": "voice.ogg"
-        }
+            "fileName": "voice.ogg",
+        },
     }
     r = await client.post(_webhook_url(), json=payload)
     info(f"Webhook response: {r.json()}")
@@ -422,6 +464,7 @@ async def tc13_media(client: httpx.AsyncClient):
 # TC-PRO: Pro Menu Commands
 # ============================================================
 
+
 async def tc_pro_commands(client: httpx.AsyncClient):
     """TC-PRO: Test all pro menu commands"""
     header("TC-PRO: Pro Menu Commands")
@@ -430,11 +473,11 @@ async def tc_pro_commands(client: httpx.AsyncClient):
 
     commands = [
         ("תפריט", "תפריט איש המקצוע"),
-        ("עזרה",  "תפריט איש המקצוע (alias)"),
-        ("4",     "עבודות פעילות"),
-        ("5",     "היסטוריה"),
-        ('דו"ח',  "סטטיסטיקות"),
-        ("7",     "ביקורות"),
+        ("עזרה", "תפריט איש המקצוע (alias)"),
+        ("4", "עבודות פעילות"),
+        ("5", "היסטוריה"),
+        ('דו"ח', "סטטיסטיקות"),
+        ("7", "ביקורות"),
     ]
 
     for cmd, desc in commands:
@@ -451,10 +494,13 @@ async def tc_pro_commands(client: httpx.AsyncClient):
 # FULL HAPPY PATH (automated, minimal interaction)
 # ============================================================
 
+
 async def full_lifecycle(client: httpx.AsyncClient):
     """Run the complete lifecycle: consent → lead → deal → approve → finish → rating"""
     header("FULL LIFECYCLE TEST")
-    info(f"This tests the complete flow. Your phone ({PRO_PHONE}) will receive messages.")
+    info(
+        f"This tests the complete flow. Your phone ({PRO_PHONE}) will receive messages."
+    )
     info("You'll need to interact at 2 points: 'אשר' and 'סיימתי'")
     input(f"  {YELLOW}Press Enter to begin...{RESET}")
 
@@ -469,18 +515,30 @@ async def full_lifecycle(client: httpx.AsyncClient):
     await send_and_wait(client, CUSTOMER_CHAT_ID, "היי, יש לי נזילה מהברז במטבח", "עדי")
     info("Bot should ask follow-up questions about the problem.")
 
-    await send_and_wait(client, CUSTOMER_CHAT_ID, "כבר יומיים, לא דחוף אבל מפריע", "עדי")
+    await send_and_wait(
+        client, CUSTOMER_CHAT_ID, "כבר יומיים, לא דחוף אבל מפריע", "עדי"
+    )
     info("Bot should ask about location.")
 
     await send_and_wait(client, CUSTOMER_CHAT_ID, "אני בתל אביב", "עדי", wait=5)
-    warn(f"CHECK YOUR PHONE ({PRO_PHONE}): early notification '📢 הצעת עבודה חדשה' should have arrived")
-    info("Bot (as pro persona) is now asking the customer for full address + preferred time.")
-    input(f"  {YELLOW}Read the bot's response in worker logs, then Press Enter to send address...{RESET}")
+    warn(
+        f"CHECK YOUR PHONE ({PRO_PHONE}): early notification '📢 הצעת עבודה חדשה' should have arrived"
+    )
+    info(
+        "Bot (as pro persona) is now asking the customer for full address + preferred time."
+    )
+    input(
+        f"  {YELLOW}Read the bot's response in worker logs, then Press Enter to send address...{RESET}"
+    )
 
     # 3. Deal closure
     print(f"\n{BOLD}--- Phase 3: Deal Closure ---{RESET}")
-    await send_and_wait(client, CUSTOMER_CHAT_ID, "ברקוביץ 4 תל אביב, יום חמישי ב-16:00", "עדי", wait=5)
-    warn(f"CHECK YOUR PHONE ({PRO_PHONE}): '✅ הלקוח אישר! פרטי העבודה' should arrive now")
+    await send_and_wait(
+        client, CUSTOMER_CHAT_ID, "ברקוביץ 4 תל אביב, יום חמישי ב-16:00", "עדי", wait=5
+    )
+    warn(
+        f"CHECK YOUR PHONE ({PRO_PHONE}): '✅ הלקוח אישר! פרטי העבודה' should arrive now"
+    )
 
     # 4. Pro approves
     print(f"\n{BOLD}--- Phase 4: Pro Approval ---{RESET}")
@@ -514,21 +572,24 @@ async def full_lifecycle(client: httpx.AsyncClient):
 # ============================================================
 
 TESTS = {
-    "tc2":   ("Consent Decline",           tc2_consent_decline),   # runs first: no consent → decline
-    "tc1":   ("Consent Flow",              tc1_consent_flow),      # runs second: consent=False → re-ask → accept
-    "tc3":   ("Full Happy Path",           tc3_full_happy_path),
-    "tc4":   ("Pro Reject",                tc4_pro_reject),
-    "tc5":   ("Pro Finish",                tc5_pro_finish),
-    "tc6":   ("Rating + Review",           tc6_rating_review),
-    "tc7":   ("Pro Help Menu",             tc7_pro_help),
-    "tc8":   ("Reset Command",             tc8_reset),
-    "tc9":   ("SOS Handoff",               tc9_sos),
-    "tc12":  ("Idempotency",               tc12_idempotency),   # must run before tc10 (no pending pro)
-    "tc13":  ("Media Message",             tc13_media),         # must run before tc10 (no pending pro)
-    "tc10":  ("Pro Onboarding",            tc10_pro_onboarding),
-    "tc11":  ("Pro Onboarding Cancel",     tc11_pro_onboarding_cancel),
-    "tcpro": ("Pro Menu Commands",         tc_pro_commands),
-    "full":  ("Full Lifecycle",            full_lifecycle),
+    "tc2": ("Consent Decline", tc2_consent_decline),  # runs first: no consent → decline
+    "tc1": (
+        "Consent Flow",
+        tc1_consent_flow,
+    ),  # runs second: consent=False → re-ask → accept
+    "tc3": ("Full Happy Path", tc3_full_happy_path),
+    "tc4": ("Pro Reject", tc4_pro_reject),
+    "tc5": ("Pro Finish", tc5_pro_finish),
+    "tc6": ("Rating + Review", tc6_rating_review),
+    "tc7": ("Pro Help Menu", tc7_pro_help),
+    "tc8": ("Reset Command", tc8_reset),
+    "tc9": ("SOS Handoff", tc9_sos),
+    "tc12": ("Idempotency", tc12_idempotency),  # must run before tc10 (no pending pro)
+    "tc13": ("Media Message", tc13_media),  # must run before tc10 (no pending pro)
+    "tc10": ("Pro Onboarding", tc10_pro_onboarding),
+    "tc11": ("Pro Onboarding Cancel", tc11_pro_onboarding_cancel),
+    "tcpro": ("Pro Menu Commands", tc_pro_commands),
+    "full": ("Full Lifecycle", full_lifecycle),
 }
 
 
@@ -536,14 +597,32 @@ async def main():
     global BASE_URL, INSTANCE_ID, WEBHOOK_TOKEN
 
     parser = argparse.ArgumentParser(description="Simulate Proli test flow via webhook")
-    parser.add_argument("--test", type=str, default="full",
-                        help="Test(s) to run: tc1,tc3,tc5 or 'full' or 'all'")
+    parser.add_argument(
+        "--test",
+        type=str,
+        default="full",
+        help="Test(s) to run: tc1,tc3,tc5 or 'full' or 'all'",
+    )
     parser.add_argument("--list", action="store_true", help="List available tests")
     parser.add_argument("--base-url", type=str, default=BASE_URL, help="Server URL")
-    parser.add_argument("--instance-id", type=int, default=INSTANCE_ID, help="Green API instance ID")
-    parser.add_argument("--token", type=str, default=WEBHOOK_TOKEN, help="Webhook token (overrides .env)")
-    parser.add_argument("--mongo-uri", default=os.getenv("MONGO_URI") or os.getenv("MONGODB_URI"))
+    parser.add_argument(
+        "--instance-id", type=int, default=INSTANCE_ID, help="Green API instance ID"
+    )
+    parser.add_argument(
+        "--token",
+        type=str,
+        default=WEBHOOK_TOKEN,
+        help="Webhook token (overrides .env)",
+    )
+    parser.add_argument(
+        "--mongo-uri", default=os.getenv("MONGO_URI") or os.getenv("MONGODB_URI")
+    )
     parser.add_argument("--db", default=os.getenv("MONGO_DB_NAME"))
+    parser.add_argument(
+        "--i-know-this-is-production",
+        action="store_true",
+        help="Override the production-instance guard (sends REAL WhatsApp to real numbers).",
+    )
     args = parser.parse_args()
 
     if args.list:
@@ -569,6 +648,18 @@ async def main():
         except Exception:
             db_name = "proli_db"
 
+    # PRO-72 guard: every simulated webhook makes the worker send a REAL
+    # outbound WhatsApp to CUSTOMER_PHONE/PRO_PHONE. Refuse to run against the
+    # production Green API instance unless the operator explicitly opts in.
+    preflight_or_abort(
+        instance_id=INSTANCE_ID,
+        base_url=BASE_URL,
+        db_name=db_name or "(none)",
+        recipients=[CUSTOMER_PHONE, PRO_PHONE],
+        allow_production=args.i_know_this_is_production,
+        destructive=False,
+    )
+
     # Determine which tests to run
     if args.test == "all":
         test_keys = [k for k in TESTS if k != "full"]
@@ -587,7 +678,7 @@ async def main():
     print(f"{BOLD}{'='*60}{RESET}")
     print(f"  Server:   {BASE_URL}")
     print(f"  Instance: {INSTANCE_ID}")
-    print(f"  Customer: {CUSTOMER_PHONE} (virtual — no phone needed)")
+    print(f"  Customer: {CUSTOMER_PHONE} (receives REAL WhatsApp — QA SIM only)")
     print(f"  Pro:      {PRO_PHONE} (your real phone)")
     print(f"  Tests:    {', '.join(test_keys)}")
 
@@ -610,19 +701,27 @@ async def main():
             kwargs = {"tlsCAFile": ca_file} if ca_file else {}
             m_client = AsyncIOMotorClient(mongo_uri, **kwargs)
             m_db = m_client[db_name]
-            pro = await m_db.users.find_one({"phone_number": PRO_PHONE, "role": "professional"})
+            pro = await m_db.users.find_one(
+                {"phone_number": PRO_PHONE, "role": "professional"}
+            )
             if not pro:
-                print(f"  Pro Check: {RED}✗ Pro {PRO_PHONE} not found in DB {db_name}{RESET}")
+                print(
+                    f"  Pro Check: {RED}✗ Pro {PRO_PHONE} not found in DB {db_name}{RESET}"
+                )
                 print(f"             Run 'python scripts/seed_db.py' first.")
                 m_client.close()
                 return
             if not pro.get("is_active"):
-                print(f"  Pro Check: {YELLOW}⚠ Pro {PRO_PHONE} found but is_active=False{RESET}")
+                print(
+                    f"  Pro Check: {YELLOW}⚠ Pro {PRO_PHONE} found but is_active=False{RESET}"
+                )
             else:
                 print(f"  Pro Check: {GREEN}✓ Pro seeded and active{RESET}")
             m_client.close()
         except Exception as e:
-            print(f"  Pro Check: {YELLOW}⚠ Could not verify pro in DB (skipping check): {e}{RESET}")
+            print(
+                f"  Pro Check: {YELLOW}⚠ Could not verify pro in DB (skipping check): {e}{RESET}"
+            )
 
     async with httpx.AsyncClient(timeout=30) as client:
         for key in test_keys:
