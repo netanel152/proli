@@ -96,6 +96,15 @@ Simulates a 15-minute silence for a specific `chat_id` by setting its Redis stat
 python scripts/simulate_sla_deflection.py 972501234567
 ```
 
+### `simulate_approval_sla.py`
+
+Fast-forwards the PRO-56 pro-approval SLA clock so pilot E2E scenario 3 is testable in seconds instead of waiting 10–25 min. Ages a customer's NEW lead's `pro_notified_at` and sets Redis state to `AWAITING_PRO_APPROVAL`, so the next `run_pro_approval_sla` tick (every 5 min) fires. Prefers the customer's existing lead (real pro assigned); `offer` mode only sends during business hours (PRO-73 gate).
+
+```bash
+python scripts/simulate_approval_sla.py 972501234567 nudge   # → nudge the pro (~T+10)
+python scripts/simulate_approval_sla.py 972501234567 offer   # → customer reassignment offer (~T+25, in-hours)
+```
+
 ### `simulate_test.py`
 ...
 
