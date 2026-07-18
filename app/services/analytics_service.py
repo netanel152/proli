@@ -7,7 +7,12 @@ All functions are async (Motor) for use by both API and admin panel.
 
 from datetime import datetime, timedelta, timezone
 from bson.objectid import ObjectId
-from app.core.database import leads_collection, messages_collection, users_collection, reviews_collection
+from app.core.database import (
+    leads_collection,
+    messages_collection,
+    users_collection,
+    reviews_collection,
+)
 from app.core.constants import LeadStatus
 from app.core.logger import logger
 
@@ -44,10 +49,12 @@ async def get_daily_volume(days: int = 30) -> list[dict]:
 
     pipeline = [
         {"$match": {"created_at": {"$gte": cutoff}}},
-        {"$group": {
-            "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
-            "count": {"$sum": 1},
-        }},
+        {
+            "$group": {
+                "_id": {"$dateToString": {"format": "%Y-%m-%d", "date": "$created_at"}},
+                "count": {"$sum": 1},
+            }
+        },
         {"$sort": {"_id": 1}},
     ]
 
@@ -65,19 +72,32 @@ async def get_pro_performance(pro_id: str | None = None, days: int = 30) -> list
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    match_stage = {"created_at": {"$gte": cutoff}, "pro_id": {"$exists": True, "$ne": None}}
+    match_stage = {
+        "created_at": {"$gte": cutoff},
+        "pro_id": {"$exists": True, "$ne": None},
+    }
     if pro_id:
         match_stage["pro_id"] = ObjectId(pro_id)
 
     pipeline = [
         {"$match": match_stage},
-        {"$group": {
-            "_id": "$pro_id",
-            "total_leads": {"$sum": 1},
-            "completed": {"$sum": {"$cond": [{"$eq": ["$status", LeadStatus.COMPLETED]}, 1, 0]}},
-            "rejected": {"$sum": {"$cond": [{"$eq": ["$status", LeadStatus.REJECTED]}, 1, 0]}},
-            "booked": {"$sum": {"$cond": [{"$eq": ["$status", LeadStatus.BOOKED]}, 1, 0]}},
-        }},
+        {
+            "$group": {
+                "_id": "$pro_id",
+                "total_leads": {"$sum": 1},
+                "completed": {
+                    "$sum": {
+                        "$cond": [{"$eq": ["$status", LeadStatus.COMPLETED]}, 1, 0]
+                    }
+                },
+                "rejected": {
+                    "$sum": {"$cond": [{"$eq": ["$status", LeadStatus.REJECTED]}, 1, 0]}
+                },
+                "booked": {
+                    "$sum": {"$cond": [{"$eq": ["$status", LeadStatus.BOOKED]}, 1, 0]}
+                },
+            }
+        },
         {"$sort": {"total_leads": -1}},
     ]
 
@@ -100,16 +120,18 @@ async def get_pro_performance(pro_id: str | None = None, days: int = 30) -> list
         async for r in reviews_collection.aggregate(rating_pipeline):
             avg_rating = round(r["avg"], 1) if r["avg"] else None
 
-        results.append({
-            "pro_id": str(pid),
-            "name": pro_name,
-            "total_leads": total,
-            "completed": completed,
-            "rejected": doc["rejected"],
-            "booked": doc["booked"],
-            "completion_rate": completion_rate,
-            "avg_rating": avg_rating,
-        })
+        results.append(
+            {
+                "pro_id": str(pid),
+                "name": pro_name,
+                "total_leads": total,
+                "completed": completed,
+                "rejected": doc["rejected"],
+                "booked": doc["booked"],
+                "completion_rate": completion_rate,
+                "avg_rating": avg_rating,
+            }
+        )
 
     return results
 
@@ -122,10 +144,12 @@ async def get_response_time_stats(days: int = 30) -> dict:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     # Get leads that have pro_id assigned
-    leads_cursor = leads_collection.find({
-        "created_at": {"$gte": cutoff},
-        "pro_id": {"$exists": True, "$ne": None},
-    }).limit(500)
+    leads_cursor = leads_collection.find(
+        {
+            "created_at": {"$gte": cutoff},
+            "pro_id": {"$exists": True, "$ne": None},
+        }
+    ).limit(500)
 
     response_times = []
     async for lead in leads_cursor:
@@ -171,13 +195,23 @@ async def get_overview_metrics() -> dict:
     week_start = now - timedelta(days=7)
 
     total_leads = await leads_collection.count_documents({})
-    leads_today = await leads_collection.count_documents({"created_at": {"$gte": today_start}})
-    leads_this_week = await leads_collection.count_documents({"created_at": {"$gte": week_start}})
-    active_pros = await users_collection.count_documents({"is_active": True, "role": "professional"})
-    completed_leads = await leads_collection.count_documents({"status": LeadStatus.COMPLETED})
+    leads_today = await leads_collection.count_documents(
+        {"created_at": {"$gte": today_start}}
+    )
+    leads_this_week = await leads_collection.count_documents(
+        {"created_at": {"$gte": week_start}}
+    )
+    active_pros = await users_collection.count_documents(
+        {"is_active": True, "role": "professional"}
+    )
+    completed_leads = await leads_collection.count_documents(
+        {"status": LeadStatus.COMPLETED}
+    )
     total_reviews = await reviews_collection.count_documents({})
 
-    conversion_rate = round((completed_leads / total_leads * 100), 1) if total_leads > 0 else 0
+    conversion_rate = (
+        round((completed_leads / total_leads * 100), 1) if total_leads > 0 else 0
+    )
 
     return {
         "total_leads": total_leads,
@@ -198,29 +232,78 @@ async def get_leads_by_pro_type(days: int = 30) -> list[dict]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
     pipeline = [
-        {"$match": {"created_at": {"$gte": cutoff}, "pro_id": {"$exists": True, "$ne": None}}},
-        {"$lookup": {
-            "from": "users",
-            "localField": "pro_id",
-            "foreignField": "_id",
-            "as": "pro",
-        }},
+        {
+            "$match": {
+                "created_at": {"$gte": cutoff},
+                "pro_id": {"$exists": True, "$ne": None},
+            }
+        },
+        {
+            "$lookup": {
+                "from": "users",
+                "localField": "pro_id",
+                "foreignField": "_id",
+                "as": "pro",
+            }
+        },
         {"$unwind": {"path": "$pro", "preserveNullAndEmptyArrays": True}},
-        {"$group": {
-            "_id": "$pro.type",
-            "count": {"$sum": 1},
-        }},
+        {
+            "$group": {
+                "_id": "$pro.type",
+                "count": {"$sum": 1},
+            }
+        },
         {"$sort": {"count": -1}},
     ]
 
     results = []
     async for doc in leads_collection.aggregate(pipeline):
-        results.append({
-            "type": doc["_id"] or "unassigned",
-            "count": doc["count"],
-        })
+        results.append(
+            {
+                "type": doc["_id"] or "unassigned",
+                "count": doc["count"],
+            }
+        )
 
     return results
+
+
+async def get_revenue_stats(days: int = 30) -> dict:
+    """Monetization metrics (PRO-33): GMV = sum(final_price) and platform
+    commission = sum(commission_amount) over COMPLETED leads that have a recorded
+    price in the window. Leads without a final_price are excluded (nullable field —
+    fully backward compatible). Returns zeros when nothing is priced yet.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    pipeline = [
+        {
+            "$match": {
+                "created_at": {"$gte": cutoff},
+                "status": LeadStatus.COMPLETED,
+                "final_price": {"$exists": True, "$ne": None},
+            }
+        },
+        {
+            "$group": {
+                "_id": None,
+                "gmv": {"$sum": "$final_price"},
+                "commission": {"$sum": "$commission_amount"},
+                "priced_jobs": {"$sum": 1},
+            }
+        },
+    ]
+
+    result = {"gmv": 0, "commission": 0, "priced_jobs": 0, "avg_ticket": None}
+    async for doc in leads_collection.aggregate(pipeline):
+        gmv = doc.get("gmv") or 0
+        priced = doc.get("priced_jobs") or 0
+        result = {
+            "gmv": round(gmv, 2),
+            "commission": round(doc.get("commission") or 0, 2),
+            "priced_jobs": priced,
+            "avg_ticket": round(gmv / priced, 2) if priced else None,
+        }
+    return result
 
 
 async def get_finops_stats() -> list[dict]:
@@ -228,15 +311,22 @@ async def get_finops_stats() -> list[dict]:
     Fetch AI token usage per professional (Async version).
     """
     pipeline = [
-        {"$match": {"role": "professional", "total_tokens_used": {"$exists": True, "$gt": 0}}},
-        {"$project": {
-            "name": {"$ifNull": ["$business_name", "$name"]},
-            "tokens": "$total_tokens_used",
-            "phone": "$phone_number"
-        }},
-        {"$sort": {"tokens": -1}}
+        {
+            "$match": {
+                "role": "professional",
+                "total_tokens_used": {"$exists": True, "$gt": 0},
+            }
+        },
+        {
+            "$project": {
+                "name": {"$ifNull": ["$business_name", "$name"]},
+                "tokens": "$total_tokens_used",
+                "phone": "$phone_number",
+            }
+        },
+        {"$sort": {"tokens": -1}},
     ]
-    
+
     results = []
     async for doc in users_collection.aggregate(pipeline):
         results.append(doc)

@@ -49,6 +49,10 @@ class UserStates(str, Enum):
     # Pro flow
     PRO_SELECTING_JOB_TO_FINISH = "pro_selecting_job_to_finish"
     PRO_SELECTING_JOB_TO_CANCEL = "pro_selecting_job_to_cancel"
+    # PRO-33: after a job is marked COMPLETED, the pro is asked what they charged.
+    # Skippable and never gates completion — the lead is already COMPLETED when
+    # this state is set, so a missed/garbage reply just leaves final_price null.
+    PRO_AWAITING_FINAL_PRICE = "pro_awaiting_final_price"
     # Loyalty flow
     AWAITING_LOYALTY_CONFIRMATION = "awaiting_loyalty_confirmation"
 
@@ -82,6 +86,12 @@ class WorkerConstants:
     )
     PRO_SEARCH_RATE_LIMIT_SECONDS = (
         600  # 10 min — per-pro cool-down on proactive "מצא" command
+    )
+    # PRO-33 monetization: platform take-rate applied to a recorded final_price to
+    # derive commission_amount. GMV = sum(final_price); commission = sum(commission_amount).
+    COMMISSION_RATE = 0.10  # 10% — configurable take-rate for unit economics
+    FINAL_PRICE_TTL_SECONDS = (
+        600  # 10 min — window for the pro to answer "how much did you charge?"
     )
     # PRO-21 — abuse / cost protection (customers only; pros & admin exempt)
     INBOUND_RATE_LIMIT_MAX = 20  # max inbound messages per sliding window

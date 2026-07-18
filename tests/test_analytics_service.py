@@ -2,6 +2,7 @@
 Tests for analytics_service.py: business metrics and aggregation pipelines.
 Note: mongomock has limited aggregation support. Tests focus on basic scenarios.
 """
+
 import pytest
 import pytest_asyncio
 from bson import ObjectId
@@ -9,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from app.core.constants import LeadStatus
 from app.services.analytics_service import (
     get_overview_metrics,
+    get_revenue_stats,
 )
 
 
@@ -18,27 +20,47 @@ async def analytics_db(mock_db):
     now = datetime.now(timezone.utc)
 
     pro_id = ObjectId()
-    await mock_db.users.insert_one({
-        "_id": pro_id, "business_name": "Test Pro",
-        "role": "professional", "is_active": True,
-    })
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "Test Pro",
+            "role": "professional",
+            "is_active": True,
+        }
+    )
 
-    await mock_db.leads.insert_one({
-        "status": LeadStatus.NEW, "created_at": now, "pro_id": pro_id,
-        "chat_id": "analytics_user1@c.us",
-    })
-    await mock_db.leads.insert_one({
-        "status": LeadStatus.COMPLETED, "created_at": now, "pro_id": pro_id,
-        "chat_id": "analytics_user2@c.us",
-    })
-    await mock_db.leads.insert_one({
-        "status": LeadStatus.COMPLETED, "created_at": now, "pro_id": pro_id,
-        "chat_id": "analytics_user3@c.us",
-    })
-    await mock_db.leads.insert_one({
-        "status": LeadStatus.REJECTED, "created_at": now, "pro_id": pro_id,
-        "chat_id": "analytics_user4@c.us",
-    })
+    await mock_db.leads.insert_one(
+        {
+            "status": LeadStatus.NEW,
+            "created_at": now,
+            "pro_id": pro_id,
+            "chat_id": "analytics_user1@c.us",
+        }
+    )
+    await mock_db.leads.insert_one(
+        {
+            "status": LeadStatus.COMPLETED,
+            "created_at": now,
+            "pro_id": pro_id,
+            "chat_id": "analytics_user2@c.us",
+        }
+    )
+    await mock_db.leads.insert_one(
+        {
+            "status": LeadStatus.COMPLETED,
+            "created_at": now,
+            "pro_id": pro_id,
+            "chat_id": "analytics_user3@c.us",
+        }
+    )
+    await mock_db.leads.insert_one(
+        {
+            "status": LeadStatus.REJECTED,
+            "created_at": now,
+            "pro_id": pro_id,
+            "chat_id": "analytics_user4@c.us",
+        }
+    )
 
     await mock_db.reviews.insert_one({"pro_id": pro_id, "rating": 5})
 
@@ -46,6 +68,7 @@ async def analytics_db(mock_db):
 
 
 # --- get_overview_metrics ---
+
 
 @pytest.mark.asyncio
 async def test_overview_metrics(analytics_db):
@@ -71,3 +94,62 @@ async def test_overview_metrics_structure(mock_db):
     assert "conversion_rate" in result
     assert "leads_today" in result
     assert "leads_this_week" in result
+
+
+# --- get_revenue_stats (PRO-33) ---
+
+
+@pytest.mark.asyncio
+async def test_revenue_stats_sums_gmv_and_commission(mock_db):
+    now = datetime.now(timezone.utc)
+    pro_id = ObjectId()
+    # Two priced completed jobs + one completed with no price + one non-completed priced
+    await mock_db.leads.insert_many(
+        [
+            {
+                "status": LeadStatus.COMPLETED,
+                "created_at": now,
+                "pro_id": pro_id,
+                "final_price": 400,
+                "commission_amount": 40.0,
+                "chat_id": "rev1@c.us",
+            },
+            {
+                "status": LeadStatus.COMPLETED,
+                "created_at": now,
+                "pro_id": pro_id,
+                "final_price": 600,
+                "commission_amount": 60.0,
+                "chat_id": "rev2@c.us",
+            },
+            {
+                "status": LeadStatus.COMPLETED,
+                "created_at": now,
+                "pro_id": pro_id,
+                "chat_id": "rev3@c.us",
+            },  # no price → excluded
+            {
+                "status": LeadStatus.BOOKED,
+                "created_at": now,
+                "pro_id": pro_id,
+                "final_price": 999,
+                "commission_amount": 99.9,
+                "chat_id": "rev4@c.us",
+            },  # not completed → excluded
+        ]
+    )
+
+    result = await get_revenue_stats(days=30)
+
+    assert result["gmv"] == 1000
+    assert result["commission"] == 100.0
+    assert result["priced_jobs"] == 2
+    assert result["avg_ticket"] == 500
+
+
+@pytest.mark.asyncio
+async def test_revenue_stats_empty_returns_zeros(mock_db):
+    # mock_db is module-scoped, so clear leads to assert the true no-data path.
+    await mock_db.leads.delete_many({})
+    result = await get_revenue_stats(days=30)
+    assert result == {"gmv": 0, "commission": 0, "priced_jobs": 0, "avg_ticket": None}
