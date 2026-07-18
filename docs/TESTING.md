@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 452 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 458 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -80,6 +80,7 @@ pytest -m integration
 | `test_pre_bash_guard.py` | Bash pre-tool guard `evaluate()`: blocks `git commit`/`push` on main/master, force-push, `rm -rf` on protected paths, `.env` redirects, mongo `drop()`; allows feature-branch work |
 | `test_whatsapp_client_circuit_breaker.py` | PRO-71 outbound breaker: `send_message`/`send_file_by_url` suppress (no HTTP) when `wa:instance:paused` is set; fail-open when Redis is down |
 | `test_health_whatsapp_status.py` | `/health` WhatsApp state mapping: `authorized`→up, `yellowCard`→degraded, else down; raw `state` surfaced |
+| `test_logger_redaction.py` | PRO-80 log scrubbing: `mask_pii` phone masking + `redact_secrets` (GREEN_API_TOKEN / WEBHOOK_TOKEN redacted in query string & URL path, None-safe) applied by the `_pii_filter` sink |
 
 ### Health & Regression
 

@@ -31,6 +31,13 @@ def patch_dependencies(request, monkeypatch, mock_db):
     if request.node.get_closest_marker("integration"):
         return
 
+    # Tests must be deterministic regardless of the developer's local .env. A local
+    # WHATSAPP_DRY_RUN=true (needed for safe /simulate — see PRO-79) otherwise makes
+    # every WhatsApp-client test short-circuit at the dry-run guard before the
+    # _send_request/pause-check they assert on. Force the production default here;
+    # the dry-run-specific tests opt back in with their own monkeypatch.
+    monkeypatch.setattr(settings, "WHATSAPP_DRY_RUN", False)
+
     # Patch Database Collections
     users = mock_db.users
     messages = mock_db.messages
