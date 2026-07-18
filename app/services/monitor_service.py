@@ -362,13 +362,17 @@ async def check_whatsapp_instance_state():
     DOWN_SINCE_KEY = "wa:instance:down_since"
     ALERTED_KEY = "wa:instance:alerted"
     LAST_ALERT_KEY = "wa:instance:last_alert"
+    PAUSED_KEY = "wa:instance:paused"  # PRO-71 outbound circuit breaker
 
     try:
         if is_authorized:
             # Recovery path: only announce if we previously paged.
             down_since = await redis.get(DOWN_SINCE_KEY)
             alerted = await redis.get(ALERTED_KEY)
-            await redis.delete(DOWN_SINCE_KEY, ALERTED_KEY, LAST_ALERT_KEY)
+            # Release the auto breaker on recovery. The manual kill switch lives in
+            # a separate key (wa:instance:paused:manual) the monitor never touches,
+            # so an operator-set halt survives instance recovery.
+            await redis.delete(DOWN_SINCE_KEY, ALERTED_KEY, LAST_ALERT_KEY, PAUSED_KEY)
             if down_since and alerted:
                 logger.info(
                     "✅ [WA Monitor] Green API instance recovered (authorized)."
@@ -380,6 +384,16 @@ async def check_whatsapp_instance_state():
 
         # Non-authorized (or unreachable → state is None).
         now = time.time()
+        # Circuit breaker (PRO-71): halt outbound IMMEDIATELY on the first
+        # non-authorized tick — before the paging threshold — so we stop feeding
+        # messages into a filtering/blocked instance. The TTL is a safety net: a
+        # live monitor refreshes it every tick; if the monitor dies the breaker
+        # auto-releases so outbound is never halted forever.
+        await redis.set(
+            PAUSED_KEY,
+            state or "unreachable",
+            ex=WorkerConstants.WA_STATE_PAUSE_TTL_SECONDS,
+        )
         down_since_raw = await redis.get(DOWN_SINCE_KEY)
         if not down_since_raw:
             # First detection — start the clock, don't page yet.
@@ -414,11 +428,19 @@ async def check_whatsapp_instance_state():
         # send an on-call alert over WhatsApp here: WhatsApp is the down channel,
         # so paging over it would only amplify the outage (PRO-75). The structured
         # context below (state, downtime, instance) makes the Sentry email actionable.
+        # yellowCard is the insidious case: Green API returns 200 and the message
+        # is silently filtered (accepted, never delivered). notAuthorized/blocked/
+        # unreachable stop processing outright. Branch the text so a paged operator
+        # looks in the right place.
+        if state == "yellowCard":
+            impact = "messages are being silently filtered by WhatsApp (accepted, never delivered)"
+        else:
+            impact = "no messages are being processed"
         logger.critical(
             f"🚨 [WA Monitor] Green API instance NON-AUTHORIZED for "
             f"~{downtime_minutes:.0f}m (state={state or 'unreachable'}, "
-            f"instance=***{str(settings.GREEN_API_INSTANCE_ID)[-4:]}) — outbound "
-            "messages are being silently dropped/filtered. Paging on-call via Sentry email."
+            f"instance=***{str(settings.GREEN_API_INSTANCE_ID)[-4:]}) — {impact}. "
+            "Outbound is halted (circuit breaker). Paging on-call via Sentry email."
         )
     except Exception as e:
         logger.error(f"[WA Monitor] Error during instance-state check: {e}")

@@ -99,6 +99,8 @@ def _redis_factory(redis_instance: _FakeRedis) -> AsyncMock:
 _DOWN_SINCE_KEY = "wa:instance:down_since"
 _ALERTED_KEY = "wa:instance:alerted"
 _LAST_ALERT_KEY = "wa:instance:last_alert"
+_PAUSED_KEY = "wa:instance:paused"  # PRO-71 auto circuit breaker
+_PAUSED_MANUAL_KEY = "wa:instance:paused:manual"  # PRO-71 operator kill switch
 
 # Convenience anchors relative to the configured threshold. These are functions, not
 # module constants: as constants they were evaluated once at import, and a suite run
@@ -494,6 +496,156 @@ async def test_wa_monitor_inner_exception_fails_open(monkeypatch):
     await monitor_module.check_whatsapp_instance_state()
 
     mock_alert.assert_not_awaited()
+
+
+# ===========================================================================
+# Section 3b — PRO-71 outbound circuit breaker (wa:instance:paused)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_wa_monitor_not_authorized_first_detection_sets_paused_key_immediately(
+    monkeypatch,
+):
+    """The circuit breaker halts outbound on the very FIRST non-authorized
+    tick — before the paging threshold is ever reached — so we stop feeding
+    a filtering/blocked instance immediately, not after WA_STATE_ALERT_
+    THRESHOLD_MINUTES of silent failures."""
+    redis = _FakeRedis()
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="notAuthorized")
+    mock_alert = AsyncMock()
+
+    monkeypatch.setattr(monitor_module, "whatsapp", mock_wa)
+    monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
+    monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
+
+    await monitor_module.check_whatsapp_instance_state()
+
+    assert redis._store.get(_PAUSED_KEY) == "notAuthorized"
+
+
+@pytest.mark.asyncio
+async def test_wa_monitor_not_authorized_above_threshold_also_sets_paused_key(
+    monkeypatch,
+):
+    """The breaker stays set (refreshed) on later ticks too, not just first
+    detection — covers the threshold-crossed/paging branch."""
+    redis = _FakeRedis({_DOWN_SINCE_KEY: _above_threshold_ts()})
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="yellowCard")
+    mock_alert = AsyncMock()
+
+    monkeypatch.setattr(monitor_module, "whatsapp", mock_wa)
+    monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
+    monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
+
+    await monitor_module.check_whatsapp_instance_state()
+
+    assert redis._store.get(_PAUSED_KEY) == "yellowCard"
+
+
+@pytest.mark.asyncio
+async def test_wa_monitor_authorized_recovery_with_prior_outage_deletes_paused_key(
+    monkeypatch,
+):
+    """A real tracked outage (down_since present) recovering to authorized
+    releases the outbound circuit breaker."""
+    redis = _FakeRedis(
+        {
+            _DOWN_SINCE_KEY: _above_threshold_ts(),
+            _ALERTED_KEY: "1",
+            _PAUSED_KEY: "notAuthorized",
+        }
+    )
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="authorized")
+    mock_alert = AsyncMock(return_value=True)
+
+    monkeypatch.setattr(monitor_module, "whatsapp", mock_wa)
+    monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
+    monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
+
+    await monitor_module.check_whatsapp_instance_state()
+
+    assert _PAUSED_KEY not in redis._store
+
+
+@pytest.mark.asyncio
+async def test_wa_monitor_authorized_releases_auto_pause_but_not_manual_kill_switch(
+    monkeypatch,
+):
+    """On recovery the monitor releases the AUTO breaker (wa:instance:paused) but
+    must never touch the operator's manual kill switch
+    (wa:instance:paused:manual) — the two are separate keys so an authorized tick
+    can't wipe a deliberate operator halt."""
+    redis = _FakeRedis(
+        {_PAUSED_KEY: "notAuthorized", _PAUSED_MANUAL_KEY: "operator-hold"}
+    )
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="authorized")
+    mock_alert = AsyncMock()
+
+    monkeypatch.setattr(monitor_module, "whatsapp", mock_wa)
+    monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
+    monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
+
+    await monitor_module.check_whatsapp_instance_state()
+
+    # Auto breaker released; manual kill switch untouched.
+    assert _PAUSED_KEY not in redis._store
+    assert redis._store.get(_PAUSED_MANUAL_KEY) == "operator-hold"
+
+
+@pytest.mark.asyncio
+async def test_wa_monitor_yellowcard_critical_text_mentions_silent_filtering(
+    monkeypatch,
+):
+    """yellowCard is the insidious case (Green API returns 200, message is
+    silently filtered) — the paged critical text must say so distinctly
+    from a hard-down state, so the operator looks in the right place."""
+    redis = _FakeRedis({_DOWN_SINCE_KEY: _above_threshold_ts()})
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="yellowCard")
+    mock_alert = AsyncMock()
+    mock_logger = MagicMock()
+
+    monkeypatch.setattr(monitor_module, "whatsapp", mock_wa)
+    monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
+    monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
+    monkeypatch.setattr(monitor_module, "logger", mock_logger)
+
+    await monitor_module.check_whatsapp_instance_state()
+
+    mock_logger.critical.assert_called_once()
+    critical_text = mock_logger.critical.call_args[0][0]
+    assert "silently filtered by WhatsApp" in critical_text
+
+
+@pytest.mark.asyncio
+async def test_wa_monitor_not_authorized_critical_text_mentions_no_processing(
+    monkeypatch,
+):
+    """notAuthorized/blocked/unreachable are the hard-down case — the paged
+    text must say processing has stopped, not the yellowCard silent-filter
+    wording."""
+    redis = _FakeRedis({_DOWN_SINCE_KEY: _above_threshold_ts()})
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="notAuthorized")
+    mock_alert = AsyncMock()
+    mock_logger = MagicMock()
+
+    monkeypatch.setattr(monitor_module, "whatsapp", mock_wa)
+    monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
+    monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
+    monkeypatch.setattr(monitor_module, "logger", mock_logger)
+
+    await monitor_module.check_whatsapp_instance_state()
+
+    mock_logger.critical.assert_called_once()
+    critical_text = mock_logger.critical.call_args[0][0]
+    assert "no messages are being processed" in critical_text
+    assert "silently filtered by WhatsApp" not in critical_text
 
 
 # ===========================================================================

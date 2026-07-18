@@ -19,11 +19,13 @@ Checks the health of all external dependencies (MongoDB, Redis, WhatsApp/Green A
     "mongodb": {"status": "up", "latency_ms": 4.2},
     "redis": {"status": "up", "latency_ms": 1.1},
     "worker": {"status": "up", "last_heartbeat": "1715000000.0"},
-    "whatsapp": {"status": "up"}
+    "whatsapp": {"status": "up", "state": "authorized"}
   },
   "uptime_seconds": 3600
 }
 ```
+
+`whatsapp.status` is `up` (authorized), `degraded` (yellowCard — instance alive but WhatsApp is silently filtering outbound), or `down` (notAuthorized/blocked/unreachable). `whatsapp.state` is the raw Green API `stateInstance` value.
 
 **Response (503 Service Unavailable):**
 ```json

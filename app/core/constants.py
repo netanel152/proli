@@ -94,6 +94,11 @@ class WorkerConstants:
         5  # page only after the instance has been non-authorized > this long
     )
     WA_STATE_REALERT_MINUTES = 60  # re-page interval while the instance stays down
+    # PRO-71 circuit breaker: TTL on the `wa:instance:paused` outbound-halt key.
+    # Refreshed every WA_STATE_CHECK_INTERVAL_MINUTES tick while the instance is
+    # non-authorized; if the monitor stops running the breaker auto-releases after
+    # this window so a dead monitor never halts outbound forever (fail-open).
+    WA_STATE_PAUSE_TTL_SECONDS = 360  # 6 min (3× the 2-min poll interval)
     # ADMIN_PHONE moved to config.py / env var
 
 
