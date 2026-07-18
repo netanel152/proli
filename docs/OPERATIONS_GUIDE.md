@@ -54,6 +54,12 @@ Log patterns to watch:
 | `[SOS Healer]` | Auto-recovery running |
 | `[Janitor]` | Cleaning up unassigned stale leads |
 | `worker:heartbeat` | Worker liveness key (120 s expiry) |
+| `[WA Monitor]` | Green API instance state watchdog (deauth / yellowCard) |
+| `⛔ Outbound halted` | Circuit breaker suppressing sends — instance not authorized |
+
+### Incident runbooks
+
+- **WhatsApp instance banned / disconnected** → [`RUNBOOK_WHATSAPP_OUTAGE.md`](RUNBOOK_WHATSAPP_OUTAGE.md) — detection, the automatic circuit breaker, recovery (re-link / rotate), the manual kill switch, and prevention.
 
 ---
 
