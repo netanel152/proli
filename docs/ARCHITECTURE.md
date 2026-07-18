@@ -46,7 +46,7 @@ Customer (WhatsApp)
 
 **ARQ task:** `process_message_task` → `workflow_service.process_incoming_message`
 
-**APScheduler jobs (10 total):**
+**APScheduler jobs (11 total):**
 
 | Job | Schedule | Function |
 |-----|----------|----------|
@@ -55,6 +55,7 @@ Customer (WhatsApp)
 | Stale Lead Nudger | Every 4 h | Remind pros of booked leads > 24h old to close them |
 | SOS Healer | Every 10 min | Reassign leads stuck > 60 min; escalate to `PENDING_ADMIN_REVIEW` if no replacement |
 | SLA Monitor | Every 5 min | Wake up silent `PAUSED_FOR_HUMAN` chats after 15m; offer phone call |
+| Pro-Approval SLA | Every 5 min | Nudge a silent pro at T+10m, then offer the customer a reassignment at T+25m (half thresholds for emergency leads) |
 | SOS Reporter | Every 4 h | Send batched summary of stuck leads to admin WhatsApp |
 | Lead Janitor | Every 6 h | Auto-reject `CONTACTED` leads with no assigned pro after 24 h |
 | Slot Regeneration | Sunday 01:00 IL | Regenerate appointment slots from recurring weekly templates |
@@ -325,7 +326,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | Language | Python 3.12+ | |
 | API framework | FastAPI | Async, OpenAPI built-in |
 | Task queue | ARQ | Lightweight, Redis-backed |
-| Scheduler | APScheduler | 10 cron/interval jobs |
+| Scheduler | APScheduler | 11 cron/interval jobs |
 | AI | Google Gemini (google-genai) | Flash Lite 2.5 → Flash 2.5 → Flash 1.5 fallback |
 | Database | MongoDB 6.0 + Motor | Async driver |
 | Cache/State | Redis | Context, FSM, rate limit, idempotency |

@@ -469,6 +469,40 @@ async def _process_incoming_message_inner(
     # their own business for that whole window. Pro-only keywords escape; anything
     # a customer prompt could plausibly mean does not.
     if current_state == UserStates.AWAITING_PRO_APPROVAL:
+        # PRO-56: if the pro stayed silent and we offered the customer a
+        # reassignment (reassign_offered), handle their 1/2 reply before the
+        # generic soft-hold. 1 → find another pro; 2 → keep waiting (restart timer).
+        if normalized_text in ("1", "2"):
+            offered_lead = await leads_collection.find_one(
+                {
+                    "chat_id": chat_id,
+                    "status": LeadStatus.NEW,
+                    "reassign_offered": True,
+                },
+                sort=[("created_at", -1)],
+            )
+            if offered_lead:
+                if normalized_text == "1":
+                    from app.services import monitor_service
+
+                    await monitor_service.reassign_lead(offered_lead)
+                else:  # "2" — keep waiting; fully restart the SLA window so both
+                    # the pro nudge (T+10) and the offer (T+25) re-arm.
+                    await leads_collection.update_one(
+                        {"_id": offered_lead["_id"]},
+                        {
+                            "$set": {
+                                "reassign_offered": False,
+                                "approval_nudged": False,
+                                "pro_notified_at": datetime.now(timezone.utc),
+                            }
+                        },
+                    )
+                    await whatsapp.send_message(
+                        chat_id, Messages.Customer.REASSIGN_WAIT_ACK
+                    )
+                return
+
         pro_escaping = (
             normalized_text in PRO_ONLY_KEYWORDS and await _is_registered_pro(chat_id)
         )
@@ -1500,6 +1534,11 @@ async def _finalize_deal(
         "apartment": final_response.extracted_data.apartment,
         "issue_type": d_issue,
         "pro_id": best_pro["_id"],
+        # PRO-56 approval-SLA clock (the pro is notified right after this) + the
+        # idempotency flags the SLA job flips.
+        "pro_notified_at": datetime.now(timezone.utc),
+        "approval_nudged": False,
+        "reassign_offered": False,
     }
     if d_name:
         lead_update["customer_name"] = d_name
