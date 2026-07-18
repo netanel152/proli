@@ -363,8 +363,9 @@ async def test_reject_no_pending(mock_db, mock_wa, mock_lm):
 
 
 @pytest.mark.asyncio
-async def test_finish_job_single(pro_setup, mock_wa, mock_lm):
+async def test_finish_job_single(pro_setup, mock_wa, mock_lm, monkeypatch):
     pro_doc, db = pro_setup
+    chat_id = "972500000000@c.us"
     lead_id = ObjectId()
     await db.leads.insert_one(
         {
@@ -376,14 +377,27 @@ async def test_finish_job_single(pro_setup, mock_wa, mock_lm):
         }
     )
 
-    result = await handle_pro_text_command(
-        "972500000000@c.us", "סיימתי", mock_wa, mock_lm
-    )
-    assert result == Messages.Pro.FINISH_SUCCESS
+    # Mock StateManager so the new PRO_AWAITING_FINAL_PRICE state (PRO-33) isn't
+    # written to real Redis where it would leak into later pro tests sharing this chat.
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    mock_state.set_state = AsyncMock()
+    mock_state.set_metadata = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
-    # Lead should be completed
+    result = await handle_pro_text_command(chat_id, "סיימתי", mock_wa, mock_lm)
+    # PRO-33: completion now asks for the charged price as a non-blocking follow-up.
+    assert result == Messages.Pro.FINISH_SUCCESS_ASK_PRICE
+
+    # Lead should be completed BEFORE the price is asked (never gated)
     lead = await db.leads.find_one({"_id": lead_id})
     assert lead["status"] == LeadStatus.COMPLETED
+
+    # Pro is placed in the price-capture state with the lead id in metadata
+    mock_state.set_state.assert_called_once()
+    assert mock_state.set_state.call_args.args[1] == UserStates.PRO_AWAITING_FINAL_PRICE
+    meta_arg = mock_state.set_metadata.call_args.args[1]
+    assert meta_arg["final_price_lead_id"] == str(lead_id)
 
 
 @pytest.mark.asyncio
@@ -422,6 +436,115 @@ async def test_finish_multiple_jobs_selection(pro_setup, mock_wa, mock_lm, monke
         chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH
     )
     mock_state.set_metadata.assert_called_once()
+
+
+# --- Final price capture (PRO-33) ---
+
+
+def _mock_price_state(monkeypatch, lead_id):
+    """StateManager mock: pro is in PRO_AWAITING_FINAL_PRICE for the given lead."""
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=UserStates.PRO_AWAITING_FINAL_PRICE)
+    mock_state.get_metadata = AsyncMock(
+        return_value={"final_price_lead_id": str(lead_id)}
+    )
+    mock_state.clear_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+    return mock_state
+
+
+@pytest.mark.asyncio
+async def test_final_price_valid_records_price_and_commission(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.COMPLETED,
+            "chat_id": "972501111111@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_state = _mock_price_state(monkeypatch, lead_id)
+
+    result = await handle_pro_text_command("972500000000@c.us", "450", mock_wa, mock_lm)
+
+    assert result == Messages.Pro.FINAL_PRICE_RECORDED.format(price=450)
+    lead = await db.leads.find_one({"_id": lead_id})
+    assert lead["final_price"] == 450
+    # commission = 450 * COMMISSION_RATE (0.10) = 45.0
+    assert lead["commission_amount"] == round(450 * WorkerConstants.COMMISSION_RATE, 2)
+    assert lead["status"] == LeadStatus.COMPLETED  # unchanged
+    mock_state.clear_state.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_final_price_skip_leaves_null(pro_setup, mock_wa, mock_lm, monkeypatch):
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.COMPLETED,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_state = _mock_price_state(monkeypatch, lead_id)
+
+    result = await handle_pro_text_command("972500000000@c.us", "דלג", mock_wa, mock_lm)
+
+    assert result == Messages.Pro.FINAL_PRICE_SKIPPED
+    lead = await db.leads.find_one({"_id": lead_id})
+    assert "final_price" not in lead
+    mock_state.clear_state.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_final_price_non_numeric_leaves_null_no_crash(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.COMPLETED,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_state = _mock_price_state(monkeypatch, lead_id)
+
+    result = await handle_pro_text_command(
+        "972500000000@c.us", "תודה רבה", mock_wa, mock_lm
+    )
+
+    assert result == Messages.Pro.FINAL_PRICE_INVALID
+    lead = await db.leads.find_one({"_id": lead_id})
+    assert "final_price" not in lead  # left null, COMPLETED preserved
+    assert lead["status"] == LeadStatus.COMPLETED
+    mock_state.clear_state.assert_awaited_once()
+
+
+def test_parse_final_price_shapes():
+    from app.services.pro_flow import _parse_final_price
+
+    assert _parse_final_price("450") == 450
+    assert _parse_final_price("450₪") == 450
+    assert _parse_final_price("450 שח") == 450
+    assert _parse_final_price("1,200") == 1200
+    assert _parse_final_price("99.5") == 99.5
+    # Rejected: empty, non-numeric, ambiguous range, phone, out-of-bounds
+    assert _parse_final_price("") is None
+    assert _parse_final_price("דלג") is None
+    assert _parse_final_price("400-600") is None  # range → ambiguous
+    assert _parse_final_price("0501234567") is None  # phone-shaped, out of bounds
+    assert _parse_final_price("0") is None
+    assert _parse_final_price("2000000") is None  # above sanity ceiling
 
 
 @pytest.mark.asyncio

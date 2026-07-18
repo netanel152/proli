@@ -149,6 +149,16 @@ class Messages:
         REJECT_SUCCESS = "העבודה נדחתה. נחפש איש מקצוע אחר."
         NO_PENDING_REJECT = "לא מצאתי עבודה חדשה לדחייה."
         FINISH_SUCCESS = "✅ עודכן שהעבודה הסתיימה. תודה!"
+        # PRO-33: the job is already COMPLETED when this is sent — the price is a
+        # non-blocking follow-up, always skippable.
+        FINISH_SUCCESS_ASK_PRICE = (
+            "✅ עודכן שהעבודה הסתיימה. תודה!\n\n"
+            "💰 כמה גבית על העבודה? (בשקלים)\n"
+            "שלח מספר בלבד, או 'דלג' לדילוג."
+        )
+        FINAL_PRICE_RECORDED = "💰 נרשם: {price}₪. תודה!"
+        FINAL_PRICE_SKIPPED = "👍 דילגתי על רישום המחיר."
+        FINAL_PRICE_INVALID = "לא זוהה סכום — דילגתי על רישום המחיר. אפשר להמשיך כרגיל."
         NO_ACTIVE_FINISH = "לא מצאתי עבודה פעילה לסיום."
         STATUS_PAUSED = "☕ *הסטטוס שלך שונה ל'בהפסקה'.* לא תקבל הצעות עבודה חדשות עד שתכתוב 'זמין'."
         STATUS_RESUMED = "🚀 *הסטטוס שלך שונה ל'זמין'.* חזרת לקבל הצעות עבודה!"
@@ -499,6 +509,8 @@ class Messages:
         APPROVE_COMMANDS = ["אשר", "1", "approve"]
         REJECT_COMMANDS = ["דחה", "2", "reject"]
         FINISH_COMMANDS = ["סיימתי", "3", "finish", "done"]
+        # PRO-33: skip the optional "how much did you charge?" price prompt.
+        SKIP_COMMANDS = ["דלג", "דילוג", "skip", "-"]
         ACTIVE_JOBS_COMMANDS = ["עבודות", "4", "jobs", "active"]
         HISTORY_COMMANDS = ["היסטוריה", "5", "history"]
         STATS_COMMANDS = ["דוח", 'דו"ח', "6", "stats", "report"]
