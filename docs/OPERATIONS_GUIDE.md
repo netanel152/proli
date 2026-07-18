@@ -76,7 +76,9 @@ db.settings.update_one(
 )
 ```
 
-Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `whatsapp_monitor_active`.
+Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `whatsapp_monitor_active`, `lead_janitor_active`, `sla_monitor_active`.
+
+**PRO-73 pilot posture:** `sos_healer_active`, `lead_janitor_active`, and `sla_monitor_active` gate *cold, customer-facing* re-engagement jobs and **default OFF** in the config `$setOnInsert` — they stay dark until an operator turns them on after the WhatsApp number is warmed up. Even when on, these three only run inside business hours (08:00–21:00 Israel time; see `within_business_hours()` in `app/core/datetime_utils.py`). Enable one via the same `settings_collection.update_one` pattern above, e.g. `{"$set": {"lead_janitor_active": True}}`.
 
 ---
 
@@ -84,7 +86,7 @@ Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active
 
 ### How it works
 
-The **SOS Healer** (every 10 min) finds leads in `new`, `contacted`, or `pending_admin_review` status older than 60 minutes:
+The **SOS Healer** (every 10 min; PRO-73: business hours + `sos_healer_active` toggle, default OFF) finds leads in `new`, `contacted`, or `pending_admin_review` status older than 60 minutes:
 
 1. Notifies customer of the delay
 2. Searches for a replacement pro (excluding the current one)
@@ -97,13 +99,13 @@ The **Stale Lead Nudger** (every 4 h) finds leads in `BOOKED` status older than 
 2. Helps prevent `MAX_PRO_LOAD` (3) issues by ensuring completed jobs are cleared from the system.
 3. Limits reminders to `MAX_PRO_REMINDERS` (3) per lead.
 
-The **SLA Monitor** (every 5 min) checks chats in the `PAUSED_FOR_HUMAN` state:
+The **SLA Monitor** (every 5 min; PRO-73: business hours + `sla_monitor_active` toggle, default OFF) checks chats in the `PAUSED_FOR_HUMAN` state:
 1. If 15 minutes of silence pass, the bot sends `Messages.Customer.SLA_DEFLECTION_MESSAGE`.
 2. This proactive "wake up" offers the customer a telephone call escalation if the Pro is unresponsive.
 
 The **Pro-Approval SLA** monitor (every 5 min) chases a silent pro on a `NEW` lead awaiting approval, timed from `pro_notified_at`, instead of waiting for the 60-min SOS Healer:
 1. At T+10 min (`APPROVAL_NUDGE_MINUTES`), nudges the pro once.
-2. At T+25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`), offers the customer a reassignment once.
+2. At T+25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`), offers the customer a reassignment once — gated to business hours (PRO-73); the pro nudge in step 1 is not gated.
 3. Emergency leads use half of both thresholds. Both steps are idempotent via boolean flags on the lead.
 
 The **SOS Reporter** (every 4 h) sends a batched WhatsApp summary of all still-stuck leads to the admin number (`ADMIN_PHONE`).
