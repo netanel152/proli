@@ -56,16 +56,25 @@ async def health_check(response: Response):
     except Exception as e:
         logger.error(f"Health Check: Redis failed: {e}")
 
-    # WhatsApp Check
+    # WhatsApp Check — must compare to "authorized", not just truthiness:
+    # "yellowCard" and "blocked" are truthy strings but mean the account is
+    # filtered/blocked, so a truthiness check reports green while outbound is dead.
     whatsapp_status = "down"
+    whatsapp_state = None
     try:
         client = await whatsapp._get_client()
         url = f"{whatsapp.api_url}/getStateInstance/{whatsapp.api_token}"
         resp = await client.get(url)
         resp.raise_for_status()
-        wa_resp = resp.json()
-        if wa_resp.get("stateInstance"):
+        whatsapp_state = resp.json().get("stateInstance")
+        if whatsapp_state == "authorized":
             whatsapp_status = "up"
+        elif whatsapp_state == "yellowCard":
+            # Instance alive but WhatsApp is silently filtering outbound — degraded.
+            whatsapp_status = "degraded"
+        else:
+            # notAuthorized / blocked / starting / None → down.
+            whatsapp_status = "down"
     except Exception as e:
         logger.warning(f"Health Check: WhatsApp check failed: {e}")
 
@@ -87,6 +96,7 @@ async def health_check(response: Response):
         },
         "whatsapp": {
             "status": whatsapp_status,
+            "state": whatsapp_state,
         },
     }
 
@@ -94,7 +104,11 @@ async def health_check(response: Response):
 
     if not is_critical_up:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "unhealthy", "checks": checks, "uptime_seconds": uptime_seconds}
+        return {
+            "status": "unhealthy",
+            "checks": checks,
+            "uptime_seconds": uptime_seconds,
+        }
 
     return {"status": "healthy", "checks": checks, "uptime_seconds": uptime_seconds}
 
@@ -128,7 +142,9 @@ async def leads_health(response: Response):
     """
     try:
         now = datetime.now(timezone.utc)
-        stuck_threshold = now - timedelta(hours=WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS)
+        stuck_threshold = now - timedelta(
+            hours=WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS
+        )
 
         pending_review_count = await leads_collection.count_documents(
             {"status": LeadStatus.PENDING_ADMIN_REVIEW}
