@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     ONCALL_PHONE: str | None = None
     WEBHOOK_TOKEN: str | None = None
     ENVIRONMENT: str = "development"  # "production" or "development"
+    # PRO-79: when True, WhatsAppClient logs outbound sends instead of calling
+    # Green API. Set WHATSAPP_DRY_RUN=true in local .env so dev / simulation never
+    # cold-initiates a real message from the pilot number. Default False keeps
+    # staging & production sending for real (never coupled to ENVIRONMENT — a
+    # misconfigured env silently disabling prod sends would be worse than this).
+    WHATSAPP_DRY_RUN: bool = False
     LOG_LEVEL: str = "INFO"
 
     # Backup (optional - S3 upload). AWS credentials are read by boto3
