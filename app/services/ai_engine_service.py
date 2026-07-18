@@ -49,6 +49,10 @@ class ExtractedData(BaseModel):
         default=None,
         description="The appointment resolved to an absolute ISO 8601 datetime (e.g. '2026-07-18T10:00:00'). Compute it from the CURRENT DATE/TIME given in the system prompt and the customer's stated time, resolving relative expressions ('מחר', 'היום', 'יום ראשון', 'עוד שעה'). Leave null if the customer gave no specific time or only said something open-ended like 'בהקדם'.",
     )
+    quoted_price: Optional[str] = Field(
+        default=None,
+        description="The price range you quoted the customer, as DIGITS ONLY, e.g. '400-600' for 'בסביבות 400-600₪'. No ₪ symbol, no words. Leave null if you have not given a price estimate.",
+    )
 
 
 class AIResponse(BaseModel):

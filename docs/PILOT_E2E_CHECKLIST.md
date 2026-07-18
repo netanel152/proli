@@ -47,7 +47,7 @@ ticket merges. Re-verify this table before each run.
 | **PRO-44** ([DEAL:] strip) | ✅ yes | Scenario 1 no-leak check is a valid regression |
 | **PRO-32 / PRO-43** (cancel frees slot) | ✅ yes | Scenario 4 is a valid regression |
 | **PRO-60** (`is_verified` not auto-true) | ✅ holds — defaults false in admin, absent in onboarding | Scenario 10 valid |
-| **PRO-55** (quoted price to pro) | ❌ **not built** — `APPROVAL_REQUEST` has no price; `quoted_price` unused | Scenario 1's price sub-check **fails until PRO-55 ships** |
+| **PRO-55** (quoted price to pro) | ✅ built — `quoted_price` persisted, shown in `APPROVAL_REQUEST` **and** `PRO_FOUND` | Scenario 1's price check is valid |
 | **PRO-56** (10-min nudge / 25-min offer) | ❌ **not built** — no approval-nudge job exists | Scenario 3 **fails until PRO-56 ships** |
 | **PRO-48** (ADMIN_PHONE not hard-coded) | ⚠️ config check | Verify the admin phone is set via env, not the default |
 
@@ -58,7 +58,7 @@ ticket merges. Re-verify this table before each run.
 For each: run the steps on the real devices, compare to **Expected**, tick Pass or File.
 "File" = open a Linear ticket with the observed behavior and link it here.
 
-### 1. Happy path — full customer journey  ·  regresses PRO-44 (PRO-55 pending)
+### 1. Happy path — full customer journey  ·  regresses PRO-44, PRO-55
 **Steps (C):** send a first message → accept consent (`כן`) → describe the issue **with a photo**
 (e.g. "נזילה מתחת לכיור" + image) → provide full address when asked (street, number, city,
 floor, apartment) → provide a time → receive the AI estimate → **(P)** approve with `1`/`אשר` →
@@ -66,9 +66,9 @@ floor, apartment) → provide a time → receive the AI estimate → **(P)** app
 **Expected:**
 - Bot asks for exactly the missing address parts; only proceeds when all five (street, number, city, floor, apartment) are present.
 - **No `[DEAL:]` / marker text ever appears in a customer-facing message** (PRO-44 — in code).
-- Pro's approval request shows customer name, phone, full address, floor/apartment, issue, and time. It does **not** currently show a price — the AI estimate goes to the *customer*, not the pro. ⚠️ **PRO-55 (price to pro) is not built**; tick the price sub-box only once it ships.
+- Pro's approval request shows customer name, phone, full address, floor/apartment, issue, time, **and the AI-quoted price** (`💰 הערכת מחיר שניתנה ללקוח`) when the AI gave an estimate (PRO-55). The **same** figure is shown to the customer on approval (`PRO_FOUND`) — single source of truth. A deal with no estimate shows no price line (not a broken/empty line).
 - Booking confirmed to C; slot marked taken; completion + rating recorded.
-- [ ] Pass (core journey)  ·  [ ] Pass (price-to-pro — needs PRO-55)  ·  [ ] File: ______
+- [ ] Pass  ·  [ ] File: ______
 
 ### 2. Emergency lane  ·  emergency keywords
 **Steps (C):** from a fresh chat, send **"יש לי הצפה!!"**.
@@ -144,7 +144,7 @@ reflects real current lead states (no stale columns). Mutations show success fee
 
 ## Exit criteria
 
-- [ ] **All 11 scenarios Pass** on a single clean run (production config) — note this requires **PRO-55 and PRO-56 to have shipped first** (scenario 1's price sub-check and scenario 3 depend on them; see the dependency table). The checklist cannot reach 100% until then.
+- [ ] **All 11 scenarios Pass** on a single clean run (production config) — note scenario 3 still requires **PRO-56** to ship first (see the dependency table); PRO-55 is now in code. The checklist cannot reach 100% until PRO-56 lands.
 - [ ] Every failure encountered has a linked Linear ticket, fixed and re-verified.
 - [ ] The run is signed off below.
 
