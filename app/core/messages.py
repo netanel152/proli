@@ -357,14 +357,9 @@ class Messages:
 
     class Alerts:
         # PRO-20 — infra paging for Green API instance deauth (SPOF).
-        WHATSAPP_DOWN = (
-            "🚨 *התראת מערכת — Proli*\n\n"
-            "חיבור ה-WhatsApp (Green API) אינו מורשה!\n"
-            "מצב נוכחי: {state}\n"
-            "משך ההשבתה: כ-{minutes} דקות\n\n"
-            "⚠️ אף הודעה מלקוחות או אנשי מקצוע אינה מעובדת כרגע.\n"
-            "יש לבדוק את חיבור המכשיר והרשאת המופע באופן מיידי."
-        )
+        # The WA-down page is now an out-of-band logger.critical → Sentry email
+        # (PRO-75); we never send a WA-down alert over WhatsApp. Only the recovery
+        # notice (instance authorized again) goes over WhatsApp.
         WHATSAPP_RECOVERED = (
             "✅ *מערכת Proli התאוששה*\n\n"
             "חיבור ה-WhatsApp (Green API) חזר למצב 'authorized'.\n"
