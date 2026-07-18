@@ -90,7 +90,7 @@ When the customer sends a trigger phrase (e.g., "אני צריך נציג"):
 2. `send_sos_alert()` sends alerts to both the assigned pro (if any) and admin
 3. Customer receives `Messages.Customer.BOT_PAUSED_BY_CUSTOMER`
 4. All subsequent messages reset the 15-minute TTL.
-5. If 15 minutes of silence pass, the **SLA Monitor** triggers `SLA_DEFLECTION_MESSAGE`.
+5. If 15 minutes of silence pass, the **SLA Monitor** triggers `SLA_DEFLECTION_MESSAGE` (PRO-73: business hours + `sla_monitor_active` toggle, default OFF).
 
 ### Edge-Case Bailouts
 
@@ -109,7 +109,7 @@ The Dispatcher AI extracts and stores `customer_name` from the conversation. The
 
 ## 5. SOS Auto-Recovery ("The Healer")
 
-Runs every 10 minutes via APScheduler.
+Runs every 10 minutes via APScheduler. PRO-73: gated to business hours (08:00–21:00 IL) and the `sos_healer_active` toggle (default OFF).
 
 Queries leads with status `new`, `contacted`, or `pending_admin_review` older than `WorkerConstants.SOS_TIMEOUT_MINUTES` (60 min).
 
@@ -143,15 +143,15 @@ All jobs run inside the Worker process via APScheduler.
 |-----|----------|-------------|
 | Daily agendas | 08:00 IL (daily) | Sends each pro a list of their booked jobs for the day, keyed on `appointment_datetime`; leads without a resolved `appointment_datetime` (e.g. ASAP) are not included |
 | Stale monitor | Every 30 min | Tier 1 (4–6 h): reminder to pro. Tier 2 (6–24 h): completion check to customer. Tier 3 (>24 h): flag for admin |
-| SOS Healer | Every 10 min | Reassigns stuck leads or escalates to `PENDING_ADMIN_REVIEW` |
-| SLA Monitor | Every 5 min | Wakes up silent `PAUSED_FOR_HUMAN` chats after 15m; offers phone call |
+| SOS Healer | Every 10 min | Reassigns stuck leads or escalates to `PENDING_ADMIN_REVIEW`. PRO-73: gated to business hours (08:00–21:00 IL) + `sos_healer_active` toggle (default OFF) |
+| SLA Monitor | Every 5 min | Wakes up silent `PAUSED_FOR_HUMAN` chats after 15m; offers phone call. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default OFF) |
 | SOS Reporter | Every 4 h | Sends batched admin report of all still-stuck leads |
 | Stale Lead Nudger | Every 4 h | Reminds pros to close booked leads older than 24 h |
-| Lead Janitor | Every 6 h | Closes `CONTACTED` leads with no assigned pro after 24 h |
+| Lead Janitor | Every 6 h | Closes `CONTACTED` leads with no assigned pro after 24 h. PRO-73: gated to business hours (08:00–21:00 IL) + `lead_janitor_active` toggle (default OFF) |
 | Slot Regeneration | Sunday 01:00 IL | Generates appointment slots from recurring weekly templates |
 | Daily Backup | 02:00 IL (daily) | Creates gzipped `mongodump`; uploads to S3 if configured |
 
-Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "scheduler_config"}` with fields `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`.
+Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "scheduler_config"}` with fields `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `lead_janitor_active`, `sla_monitor_active`. The last two, plus `sos_healer_active`, gate cold customer-facing re-engagement jobs and default OFF (pilot safety, PRO-73) until enabled post warm-up.
 
 ---
 

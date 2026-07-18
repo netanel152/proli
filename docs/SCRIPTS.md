@@ -90,7 +90,7 @@ python scripts/simulate_webhook.py
 
 ### `simulate_sla_deflection.py`
 
-Simulates a 15-minute silence for a specific `chat_id` by setting its Redis state to `PAUSED_FOR_HUMAN` and backdating its `paused_at` timestamp in MongoDB. This triggers the SLA Monitor on its next run.
+Simulates a 15-minute silence for a specific `chat_id` by setting its Redis state to `PAUSED_FOR_HUMAN` and backdating its `paused_at` timestamp in MongoDB. This triggers the SLA Monitor on its next run — provided it's business hours (08:00–21:00 IL) and `sla_monitor_active` is enabled (defaults OFF, PRO-73).
 
 ```bash
 python scripts/simulate_sla_deflection.py 972501234567

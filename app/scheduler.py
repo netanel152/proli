@@ -18,6 +18,7 @@ from app.services.monitor_service import (
 )
 from datetime import datetime, timedelta
 from app.core.constants import LeadStatus, WorkerConstants
+from app.core.datetime_utils import within_business_hours
 import os
 import pytz
 from app.services.scheduling_service import regenerate_all_templates
@@ -136,11 +137,22 @@ async def monitor_unfinished_jobs():
 # --- Wrappers for Imported Services ---
 
 
+async def _customer_cold_job_allowed(toggle_key: str) -> bool:
+    """PRO-73 gate for *cold customer-facing* scheduler jobs (SOS healer, lead
+    janitor, SLA deflection): run only **inside business hours** AND when the
+    per-job toggle is enabled. Toggles **default OFF** — these re-engagement jobs
+    that message a customer because the chat went silent stay dark until an
+    operator turns them on after the WhatsApp number is warmed up (pilot safety)."""
+    if not within_business_hours():
+        return False
+    config = await settings_collection.find_one({"_id": "scheduler_config"})
+    return bool(config and config.get(toggle_key, False))
+
+
 @with_scheduler_lock("run_sos_healer", ttl=500)
 async def run_sos_healer():
-    """Wrapper for SOS Auto-Healer with Toggle Check"""
-    config = await settings_collection.find_one({"_id": "scheduler_config"})
-    if config and not config.get("sos_healer_active", True):
+    """Wrapper for SOS Auto-Healer — gated (business hours + toggle, PRO-73)."""
+    if not await _customer_cold_job_allowed("sos_healer_active"):
         return
     await check_and_reassign_stale_leads()
 
@@ -191,13 +203,17 @@ async def run_sos_reporter():
 
 @with_scheduler_lock("run_lead_janitor", ttl=20000)
 async def run_lead_janitor():
-    """Auto-reject CONTACTED leads with no pro after timeout."""
+    """Auto-reject CONTACTED leads with no pro — gated (business hours + toggle, PRO-73)."""
+    if not await _customer_cold_job_allowed("lead_janitor_active"):
+        return
     await auto_reject_unassigned_leads()
 
 
 @with_scheduler_lock("run_sla_monitor", ttl=270)
 async def run_sla_monitor():
-    """Check for silent handoffs and deflect if necessary."""
+    """Silent-handoff deflection — gated (business hours + toggle, PRO-73)."""
+    if not await _customer_cold_job_allowed("sla_monitor_active"):
+        return
     await check_sla_deflection()
 
 
@@ -241,7 +257,11 @@ async def daily_reminders_job():
                     "is_active": True,
                     "last_run_date": None,
                     "stale_monitor_active": True,
-                    "sos_healer_active": True,
+                    # PRO-73: the three cold customer-facing jobs default OFF —
+                    # enable per-toggle once the WhatsApp number is warmed up.
+                    "sos_healer_active": False,
+                    "lead_janitor_active": False,
+                    "sla_monitor_active": False,
                     "sos_reporter_active": True,
                     "whatsapp_monitor_active": True,
                 }
