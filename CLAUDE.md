@@ -95,7 +95,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 | `lead_manager_service.py` | CRUD for leads in MongoDB |
 | `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts; on-call paging via `send_oncall_alert` (WhatsApp when the instance is authorized, else `logger.critical` → Sentry/email page) |
 | `monitor_service.py` | Stale job detection, reassignment, stale lead reminders (nudger), escalation to PENDING_ADMIN_REVIEW, and Green API deauth detection (`check_whatsapp_instance_state`) |
-| `whatsapp_client_service.py` | Green API HTTP client — text-only messages (interactive buttons not supported by Green API) |
+| `whatsapp_client_service.py` | Green API HTTP client — text-only messages (interactive buttons not supported by Green API); outbound circuit breaker suppresses sends (no HTTP call) while `wa:instance:paused` (auto) or `wa:instance:paused:manual` (operator kill switch) is set in Redis, fail-open on Redis error |
 | `cloudinary_client_service.py` | Media upload/retrieval |
 | `security_service.py` | Rate limiting via Redis — coarse fixed-window webhook DDoS shield (`check_rate_limit`), per-customer inbound sliding window (`check_sliding_window`), and daily per-chat AI/multimodal cost cap (`check_and_increment_daily_ai_cap`, Israel-time reset). Pros/admins exempt; all checks fail-open |
 
@@ -120,6 +120,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 - `WorkerConstants.WA_STATE_CHECK_INTERVAL_MINUTES = 2`: how often the worker polls Green API `getStateInstance`
 - `WorkerConstants.WA_STATE_ALERT_THRESHOLD_MINUTES = 5`: page on-call only after the instance has been non-authorized > this many minutes
 - `WorkerConstants.WA_STATE_REALERT_MINUTES = 60`: re-page interval while the instance stays deauthorized
+- `WorkerConstants.WA_STATE_PAUSE_TTL_SECONDS = 360`: TTL on the `wa:instance:paused` outbound-halt key; auto-releases if the monitor dies
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions
