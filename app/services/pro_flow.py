@@ -1,4 +1,5 @@
 import math
+import re
 import urllib.parse
 from bson import ObjectId
 from app.core.database import users_collection, leads_collection, reviews_collection
@@ -59,6 +60,11 @@ async def handle_pro_text_command(
         UserStates.PRO_SELECTING_JOB_TO_CANCEL,
     ):
         return await _handle_job_selection(chat_id, text, pro, whatsapp, current_state)
+
+    # State: awaiting the final charged price after a job was completed (PRO-33).
+    # The lead is already COMPLETED — this only records final_price, never gates.
+    if current_state == UserStates.PRO_AWAITING_FINAL_PRICE:
+        return await _handle_final_price_reply(chat_id, text, pro)
 
     # Availability Toggles (Vacation Mode)
     if text in Messages.Keywords.PAUSE_COMMANDS:
@@ -237,8 +243,7 @@ async def _handle_job_selection(chat_id, text, pro, whatsapp, current_state):
         await _execute_cancel(lead, pro, whatsapp)
         return Messages.Pro.CANCEL_SUCCESS
     else:
-        await _execute_finish(lead, pro, whatsapp)
-        return Messages.Pro.FINISH_SUCCESS
+        return await _execute_finish(lead, pro, whatsapp, chat_id)
 
 
 _RESPONSE_WINDOW_SECONDS = 60 * 5  # "just responded" = within 5 minutes
@@ -410,8 +415,7 @@ async def _handle_finish(pro, whatsapp, chat_id):
         return Messages.Pro.NO_ACTIVE_JOBS
 
     if len(leads) == 1:
-        await _execute_finish(leads[0], pro, whatsapp)
-        return Messages.Pro.FINISH_SUCCESS
+        return await _execute_finish(leads[0], pro, whatsapp, chat_id)
 
     # Multiple leads: Ask to select
     lines = []
@@ -429,7 +433,10 @@ async def _handle_finish(pro, whatsapp, chat_id):
     return Messages.Pro.SELECT_JOB_TO_FINISH.format(jobs_list="\n".join(lines))
 
 
-async def _execute_finish(lead, pro, whatsapp):
+async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
+    """Mark a lead COMPLETED, notify the customer for a rating, then ask the pro
+    what they charged (PRO-33). Returns the message to send the pro — completion
+    is done *before* the price ask, so recording the price can never block it."""
     await set_lead_status(
         lead["_id"],
         LeadStatus.COMPLETED,
@@ -449,6 +456,67 @@ async def _execute_finish(lead, pro, whatsapp):
     feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
     await whatsapp.send_message(lead["chat_id"], feedback_msg)
     logger.info(f"Lead {lead['_id']} marked as COMPLETED by pro {pro['_id']}")
+
+    # PRO-33: job is COMPLETED; now ask (optionally) what was charged. The lead id
+    # rides in state metadata so the pro's next reply is attributed to this job.
+    await StateManager.set_state(
+        pro_chat_id,
+        UserStates.PRO_AWAITING_FINAL_PRICE,
+        ttl=WorkerConstants.FINAL_PRICE_TTL_SECONDS,
+    )
+    await StateManager.set_metadata(
+        pro_chat_id, {"final_price_lead_id": str(lead["_id"])}
+    )
+    return Messages.Pro.FINISH_SUCCESS_ASK_PRICE
+
+
+def _parse_final_price(text: str):
+    """Parse a charged amount from a free-text pro reply. Returns an int/float in
+    ILS, or None when the input isn't an unambiguous single positive number.
+
+    Strips currency symbols and thousands separators. A range or a phone number
+    (multiple digit groups) is rejected → caller leaves final_price null."""
+    if not text:
+        return None
+    cleaned = text.replace(",", "").replace("₪", " ")
+    nums = re.findall(r"\d+(?:\.\d+)?", cleaned)
+    if len(nums) != 1:  # zero, or ambiguous (range / phone) → not a clean price
+        return None
+    val = float(nums[0])
+    if val <= 0 or val > 1_000_000:  # sanity bounds
+        return None
+    return int(val) if val.is_integer() else round(val, 2)
+
+
+async def _handle_final_price_reply(chat_id, text, pro) -> str:
+    """Record (or skip) the final charged price for the just-completed job (PRO-33).
+    Always clears the PRO_AWAITING_FINAL_PRICE state so the pro is never trapped —
+    the lead is already COMPLETED, so any outcome here is non-blocking."""
+    meta = await StateManager.get_metadata(chat_id) or {}
+    lead_id = meta.get("final_price_lead_id")
+    await StateManager.clear_state(chat_id)
+
+    if not lead_id:
+        # State without context (e.g. expired metadata) — nothing to attribute.
+        return Messages.Pro.FINAL_PRICE_SKIPPED
+
+    if text in Messages.Keywords.SKIP_COMMANDS:
+        return Messages.Pro.FINAL_PRICE_SKIPPED
+
+    price = _parse_final_price(text)
+    if price is None:
+        return Messages.Pro.FINAL_PRICE_INVALID
+
+    commission = round(price * WorkerConstants.COMMISSION_RATE, 2)
+    await leads_collection.update_one(
+        {"_id": ObjectId(lead_id), "pro_id": pro["_id"]},
+        {"$set": {"final_price": price, "commission_amount": commission}},
+    )
+    logger.info(
+        f"Lead {lead_id}: final_price={price} commission={commission} "
+        f"recorded by pro {pro['_id']}"
+    )
+    return Messages.Pro.FINAL_PRICE_RECORDED.format(price=price)
 
 
 async def _handle_active_jobs(pro):

@@ -8,7 +8,7 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient
 from app.core.config import settings
-from app.core.constants import LeadStatus
+from app.core.constants import LeadStatus, WorkerConstants
 from app.core.database import DB_NAME
 import certifi
 
@@ -203,6 +203,40 @@ def _get_leads_by_type(days: int = 30) -> list[dict]:
     ]
 
 
+def _get_revenue_stats(days: int = 30) -> dict:
+    """GMV + platform commission over COMPLETED leads with a recorded final_price
+    (PRO-33). Mirrors analytics_service.get_revenue_stats for the sync admin panel."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    pipeline = [
+        {
+            "$match": {
+                "created_at": {"$gte": cutoff},
+                "status": LeadStatus.COMPLETED,
+                "final_price": {"$exists": True, "$ne": None},
+            }
+        },
+        {
+            "$group": {
+                "_id": None,
+                "gmv": {"$sum": "$final_price"},
+                "commission": {"$sum": "$commission_amount"},
+                "priced_jobs": {"$sum": 1},
+            }
+        },
+    ]
+    result = {"gmv": 0, "commission": 0, "priced_jobs": 0, "avg_ticket": None}
+    for doc in _db.leads.aggregate(pipeline):
+        gmv = doc.get("gmv") or 0
+        priced = doc.get("priced_jobs") or 0
+        result = {
+            "gmv": round(gmv, 2),
+            "commission": round(doc.get("commission") or 0, 2),
+            "priced_jobs": priced,
+            "avg_ticket": round(gmv / priced, 2) if priced else None,
+        }
+    return result
+
+
 def _get_finops_stats() -> list[dict]:
     """Fetch AI token usage per professional."""
     pipeline = [
@@ -271,12 +305,13 @@ def view_analytics(T):
     st.markdown("")
 
     # --- Tabs ---
-    tab_funnel, tab_volume, tab_pros, tab_types, tab_finops = st.tabs(
+    tab_funnel, tab_volume, tab_pros, tab_types, tab_revenue, tab_finops = st.tabs(
         [
             T.get("tab_funnel", "Lead Funnel"),
             T.get("tab_volume", "Daily Volume"),
             T.get("tab_pro_perf", "Pro Performance"),
             T.get("tab_by_type", "By Service Type"),
+            T.get("tab_revenue", "Revenue (GMV)"),
             "FinOps (AI Costs)",
         ]
     )
@@ -418,6 +453,42 @@ def view_analytics(T):
             st.bar_chart(df, x="type", y="count", color="#2563EB")
         else:
             st.info(T.get("no_data", "No data available for this period."))
+
+    with tab_revenue:
+        st.subheader(T.get("revenue_title", "Revenue & Commission (GMV)"))
+        st.caption(
+            T.get(
+                "revenue_desc",
+                "Captured deal value on completed jobs. GMV = sum of final prices; "
+                "commission = platform take-rate. Jobs with no recorded price are excluded.",
+            )
+        )
+
+        rev = _get_revenue_stats(days)
+        if rev["priced_jobs"] > 0:
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric(f"{T.get('revenue_gmv', 'GMV')} ({days}d)", f"₪{rev['gmv']:,.0f}")
+            r2.metric(
+                f"{T.get('revenue_commission', 'Commission')} ({days}d)",
+                f"₪{rev['commission']:,.2f}",
+            )
+            r3.metric(T.get("revenue_priced_jobs", "Priced jobs"), rev["priced_jobs"])
+            avg_ticket = rev["avg_ticket"]
+            r4.metric(
+                T.get("revenue_avg_ticket", "Avg ticket"),
+                f"₪{avg_ticket:,.0f}" if avg_ticket is not None else "—",
+            )
+            st.caption(
+                T.get("revenue_takerate_note", "Take-rate")
+                + f": {WorkerConstants.COMMISSION_RATE:.0%}"
+            )
+        else:
+            st.info(
+                T.get(
+                    "revenue_no_data",
+                    "No priced jobs yet — pros record the charged amount after completing a job.",
+                )
+            )
 
     with tab_finops:
         st.subheader("FinOps: Lifetime AI Token Usage")
