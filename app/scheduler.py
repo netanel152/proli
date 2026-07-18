@@ -12,6 +12,7 @@ from app.services.monitor_service import (
     send_periodic_admin_report,
     auto_reject_unassigned_leads,
     check_sla_deflection,
+    check_pro_approval_sla,
     remind_stale_booked_leads,
     check_whatsapp_instance_state,
 )
@@ -200,6 +201,12 @@ async def run_sla_monitor():
     await check_sla_deflection()
 
 
+@with_scheduler_lock("run_pro_approval_sla", ttl=270)
+async def run_pro_approval_sla():
+    """PRO-56 — nudge silent pros (T+10) + offer the customer a reassignment (T+25)."""
+    await check_pro_approval_sla()
+
+
 @with_scheduler_lock("run_stale_lead_nudger", ttl=3000)
 async def run_stale_lead_nudger():
     """Wrapper for Stale Lead Nudger"""
@@ -327,6 +334,14 @@ def start_scheduler():
         run_sla_monitor,
         IntervalTrigger(minutes=5),
         id="sla_deflection_monitor",
+        replace_existing=True,
+    )
+
+    # Job 8b: Pro-Approval SLA — nudge silent pros + reassignment offer (PRO-56)
+    scheduler.add_job(
+        run_pro_approval_sla,
+        IntervalTrigger(minutes=WorkerConstants.APPROVAL_SLA_CHECK_INTERVAL_MINUTES),
+        id="pro_approval_sla",
         replace_existing=True,
     )
 

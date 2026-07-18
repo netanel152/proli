@@ -101,6 +101,11 @@ The **SLA Monitor** (every 5 min) checks chats in the `PAUSED_FOR_HUMAN` state:
 1. If 15 minutes of silence pass, the bot sends `Messages.Customer.SLA_DEFLECTION_MESSAGE`.
 2. This proactive "wake up" offers the customer a telephone call escalation if the Pro is unresponsive.
 
+The **Pro-Approval SLA** monitor (every 5 min) chases a silent pro on a `NEW` lead awaiting approval, timed from `pro_notified_at`, instead of waiting for the 60-min SOS Healer:
+1. At T+10 min (`APPROVAL_NUDGE_MINUTES`), nudges the pro once.
+2. At T+25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`), offers the customer a reassignment once.
+3. Emergency leads use half of both thresholds. Both steps are idempotent via boolean flags on the lead.
+
 The **SOS Reporter** (every 4 h) sends a batched WhatsApp summary of all still-stuck leads to the admin number (`ADMIN_PHONE`).
 
 ### Customer-triggered pause

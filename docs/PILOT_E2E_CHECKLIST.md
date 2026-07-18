@@ -48,7 +48,7 @@ ticket merges. Re-verify this table before each run.
 | **PRO-32 / PRO-43** (cancel frees slot) | ✅ yes | Scenario 4 is a valid regression |
 | **PRO-60** (`is_verified` not auto-true) | ✅ holds — defaults false in admin, absent in onboarding | Scenario 10 valid |
 | **PRO-55** (quoted price to pro) | ✅ built — `quoted_price` persisted, shown in `APPROVAL_REQUEST` **and** `PRO_FOUND` | Scenario 1's price check is valid |
-| **PRO-56** (10-min nudge / 25-min offer) | ❌ **not built** — no approval-nudge job exists | Scenario 3 **fails until PRO-56 ships** |
+| **PRO-56** (10-min nudge / 25-min offer) | ✅ built — `check_pro_approval_sla` job runs every 5 min | Scenario 3 is a valid regression |
 | **PRO-48** (ADMIN_PHONE not hard-coded) | ⚠️ config check | Verify the admin phone is set via env, not the default |
 
 ---
@@ -77,11 +77,10 @@ notification carries the emergency header; the address gate is relaxed for emerg
 enough to dispatch). Copy reads as urgent, not the normal slow intake.
 - [ ] Pass  · [ ] File: ______
 
-### 3. Pro silent — SLA nudge + reassignment offer  ·  ⚠️ requires PRO-56 (not built)
+### 3. Pro silent — SLA nudge + reassignment offer  ·  regresses PRO-56
 **Steps:** create a fresh lead (C) that routes to P; **do not approve on P**. Wait.
-**Expected (target, PRO-56):** at ~10 min P receives an approval nudge; at ~25 min C receives a reassignment offer.
-**Current code (until PRO-56 ships):** there is **no 10-min approval nudge and no 25-min customer offer**. What exists instead: the **SOS Healer** reassigns a stale `new`/`contacted` lead after **60 min** (`SOS_TIMEOUT_MINUTES`), and a customer parked in `AWAITING_PRO_APPROVAL` holds on a bounded TTL. So this scenario **fails today by design** — it's a launch-gate reminder that PRO-56 must land before pilot.
-- [ ] Pass (needs PRO-56)  ·  [ ] File: ______
+**Expected:** at ~10 min (`APPROVAL_NUDGE_MINUTES`) P receives an approval nudge; at ~25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`) C receives a reassignment offer (half the thresholds for emergency leads). The **SOS Healer** still reassigns a stale `new`/`contacted` lead after 60 min (`SOS_TIMEOUT_MINUTES`) as a backstop if this scenario is somehow missed.
+- [ ] Pass  ·  [ ] File: ______
 
 ### 4. Customer cancels a BOOKED lead  ·  regresses PRO-32 / PRO-43
 **Steps (C):** with a **BOOKED** lead, send **`בטל`**.
@@ -144,7 +143,7 @@ reflects real current lead states (no stale columns). Mutations show success fee
 
 ## Exit criteria
 
-- [ ] **All 11 scenarios Pass** on a single clean run (production config) — note scenario 3 still requires **PRO-56** to ship first (see the dependency table); PRO-55 is now in code. The checklist cannot reach 100% until PRO-56 lands.
+- [ ] **All 11 scenarios Pass** on a single clean run (production config) — PRO-55 and PRO-56 are now in code (see the dependency table).
 - [ ] Every failure encountered has a linked Linear ticket, fixed and re-verified.
 - [ ] The run is signed off below.
 
