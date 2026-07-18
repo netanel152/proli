@@ -13,19 +13,34 @@ tools:
 
 You are the FSM and message-flow specialist for the Proli project. You know the full dispatch order, every state, and every lifecycle invariant by heart.
 
-## Dispatch Order (workflow_service.py)
+## Dispatch Order (workflow_service._process_incoming_message_inner)
 
-Every incoming message is evaluated in this exact order. The first matching branch wins:
+Every incoming message is evaluated top-down; the **first** branch whose condition matches handles it. Most branches return immediately. Some are **conditional interceptors** that fire only when a sub-condition also holds (e.g. a BOOKED lead exists) and otherwise fall through to a later branch — these are marked *(conditional)*. One, the pro safety-bypass (16), deliberately mutates state to `PRO_MODE` and falls into branch 17 rather than returning — marked *(↩ falls through)*. `is_emergency_detected` is computed **once at the top** of the function and applied *inline* during lead creation/dispatch — it is **not** a standalone branch.
 
-1. Admin keyword (`ניהול`) → ADMIN_MODE_IDLE
-2. Reset keywords → clear state + context → IDLE
-3. Help / politeness / status keywords → handled inline, no state change
-4. SOS state → SOS handler
-5. Emergency bypass → routes around FSM for urgent keywords
-6. PAUSED_FOR_HUMAN → drop message (human takeover active)
-7. AWAITING_PRO_APPROVAL → pro approval handler
-8. PRO_MODE (identified pro) → pro_flow.py
-9. Smart Dispatcher → classify new user as customer or pro, route accordingly
+> The bold branch labels and their order are guarded by `tests/test_agent_pack_drift.py`: each is pinned to a unique anchor in `workflow_service.py`, and the test asserts the anchors appear in this order. The guard covers the **relative order** of these branches — not the exhaustiveness of every nested sub-branch. Reorder a branch in the code, or edit a label here, without updating the other, and the test goes red.
+
+1. **Admin routing wizard** — `chat_id` is the admin AND (`ניהול` or state starts with `admin_`) → `admin_flow.handle_admin_message`.
+2. **Global reset** — text in `RESET_COMMANDS` and not `PRO_MODE` → clear state + context → IDLE.
+3. **Help / menu** — text in `HELP_COMMANDS` + `MENU_COMMANDS` and not `PRO_MODE` → send help info, no state change.
+4. **Inbound rate-limit gate** — PRO-21 per-customer sliding window (pros/admin exempt); over the limit → RATE_LIMITED, drop.
+5. **AWAITING_INTENT_CONFIRMATION** — zero-touch confirm after a pro→customer intent switch: `1`/`כן` → CUSTOMER_MODE; `2`/`לא` → cancel; unmatched → re-prompt once, then fall through.
+6. **Consent gate** — non-pro without stored consent: handle an `AWAITING_CONSENT` reply, or on first contact / prior decline → send consent request + `AWAITING_CONSENT`.
+7. **Politeness interceptor** — `THANKS_KEYWORDS` and not `PRO_MODE` → "you're welcome", no state change.
+8. **Customer status pull** — `STATUS_COMMANDS` and not `PRO_MODE` / `ADMIN_*` → deterministic status reply.
+9. **SOS / human handoff** — `SOS_COMMANDS` and not `PRO_MODE` → set `PAUSED_FOR_HUMAN` (15-min TTL), fire SOS alert, notify the assigned pro.
+10. **AWAITING_PRO_APPROVAL soft hold** — customer parked waiting for pro approval; a non-pro-escaping reply → "still waiting", drop. Runs **before** the paused check (a pro who ordered for themselves can still escape via pro-only keywords).
+11. **PAUSED_FOR_HUMAN** — human takeover active → log the message, refresh the 15-min rolling TTL, drop.
+12. **AWAITING_RESCHEDULE_TIME** — customer was shown the slot menu and is picking → `_handle_reschedule_selection`.
+13. **AWAITING_LOYALTY_CONFIRMATION** — reply to the "want your previous pro?" offer: `1`/`כן` reattaches the past pro, `2`/`לא` opens the search; both → IDLE.
+14. **BOOKED cancel / reschedule interceptor** *(conditional)* — non-`PRO_MODE` customer sends a cancel/reschedule keyword AND has a BOOKED lead → cancel (free the slot, notify pro) or offer reschedule slots. No BOOKED lead → fall through.
+15. **Explicit customer-mode switch** — registered pro types a `CUSTOMER_MODE_COMMANDS` keyword from `PRO_MODE`/`IDLE` → `CUSTOMER_MODE`, clear context.
+16. **Pro safety-bypass** *(↩ falls through)* — registered pro types a `PRO_BUSINESS_KEYWORDS` keyword while not in `PRO_MODE` → snap state to `PRO_MODE` (unless an ambiguous keyword defers to an open customer prompt); then falls into branch 17.
+17. **PRO_MODE** — identified professional → `pro_flow` (`_handle_pro_cmd`).
+18. **Pro onboarding** — state in `ONBOARDING_STATES` → `handle_onboarding_step`.
+19. **AWAITING_ADDRESS** *(conditional)* — re-entry after the finalization gate rejected an incomplete address: cancel keyword bails out; otherwise re-extract + merge until all five address parts are present. No active lead → clear state and fall through.
+20. **Pro registration** — `IDLE` and `REGISTER_COMMANDS` → `start_onboarding`.
+21. **Auto-detect professional** *(conditional)* — `IDLE` first contact from an active/approved pro → `PRO_MODE` + `pro_flow` (unless their own customer lead is open, which restores `CUSTOMER_MODE` and falls through).
+22. **Smart Dispatcher** — no earlier branch matched → classify the new/continuing user as customer or pro and route; emergency status is folded into the lead inline here. (This phase has its own internal short-circuits — skip when a pro is already assigned, short-circuit `PENDING_ADMIN_REVIEW` — that are not top-level dispatch gates.)
 
 ## UserStates
 

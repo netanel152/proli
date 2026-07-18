@@ -45,7 +45,7 @@ All 19 issues from the March 2026 code review have been resolved. The codebase h
 
 ## Test Results
 
-- **389 passed**, 6 skipped (integration tests — require `MONGO_TEST_URI`); authoritative baseline: `docs/TESTING.md`
+- Full unit suite passes; authoritative pass/skip baseline in `docs/TESTING.md` ("Current status" line). Integration tests require `MONGO_TEST_URI`.
 
 ## Pre-Production Deployment Checklist
 

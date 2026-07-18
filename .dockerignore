@@ -24,7 +24,6 @@ backups/
 docker-compose.yml
 docker-compose.override.yml
 README.md
-GEMINI.md
 pytest.ini
 tests/
 

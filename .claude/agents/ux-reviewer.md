@@ -1,8 +1,7 @@
 ---
 name: ux-reviewer
 description: Read-only UX reviewer for the Streamlit admin panel. Checks RTL/Hebrew correctness, click-cost, status clarity, feedback on mutations, and cross-view consistency. No React/Tailwind suggestions.
-model: opus
-effort: 2
+model: sonnet
 color: purple
 tools:
   - Read
