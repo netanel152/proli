@@ -6,6 +6,7 @@ from app.core.database import users_collection, leads_collection, reviews_collec
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
+from app.core.phone import strip_suffix, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.core.redis_client import get_redis_client
 from app.services.matching_service import book_slot_for_lead
@@ -44,7 +45,7 @@ async def handle_pro_text_command(
       - ""    → already handled internally (intent prompt sent), caller sends nothing
       - str   → send verbatim to the pro
     """
-    phone = chat_id.replace("@c.us", "")
+    phone = strip_suffix(chat_id)
     pro = await users_collection.find_one(
         {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
     )
@@ -295,7 +296,7 @@ async def _handle_approve(pro, lead_manager, whatsapp):
 
     pro_name = pro.get("business_name", Defaults.EXPERT_NAME)
     raw_phone = pro.get("phone_number", "")
-    pro_phone = "0" + raw_phone[3:] if raw_phone.startswith("972") else raw_phone
+    pro_phone = to_local_phone(raw_phone)
 
     # Profession label
     from app.core.messages import Messages as M
@@ -557,16 +558,10 @@ async def _handle_details(pro):
 
     lines = [Messages.Pro.DETAILS_HEADER]
     for i, lead in enumerate(leads, 1):
-        raw_phone = lead.get("customer_phone") or lead.get("chat_id", "").replace(
-            "@c.us", ""
-        )
+        raw_phone = lead.get("customer_phone") or strip_suffix(lead.get("chat_id", ""))
         # Local display (0XX) and international for wa.me link (972XX)
-        if raw_phone.startswith("972"):
-            customer_phone = "0" + raw_phone[3:]
-            customer_phone_intl = raw_phone
-        else:
-            customer_phone = raw_phone
-            customer_phone_intl = raw_phone
+        customer_phone = to_local_phone(raw_phone)
+        customer_phone_intl = raw_phone
         city = lead.get("city") or ""
         street = lead.get("street") or ""
         issue = lead.get("issue_type") or "לא ידוע"

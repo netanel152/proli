@@ -3,6 +3,7 @@ from app.core.database import leads_collection, users_collection
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, WorkerConstants
+from app.core.phone import to_chat_id, to_local_phone
 from app.core.config import settings
 from bson import ObjectId
 
@@ -52,7 +53,7 @@ async def send_oncall_alert(message: str, *, assume_authorized: bool = False) ->
             )
             return False
 
-    chat_id = oncall if oncall.endswith("@c.us") else f"{oncall}@c.us"
+    chat_id = to_chat_id(oncall)
     try:
         await whatsapp.send_message(chat_id, message)
         logger.info(f"On-call alert delivered via WhatsApp to {masked}")
@@ -87,11 +88,7 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
             logger.error(f"Could not find pro or pro phone for lead {lead_id}")
             return
 
-        pro_chat_id = (
-            f"{pro['phone_number']}@c.us"
-            if not pro["phone_number"].endswith("@c.us")
-            else pro["phone_number"]
-        )
+        pro_chat_id = to_chat_id(pro["phone_number"])
         message = Messages.Pro.REMINDER
 
         await _send_best_effort(pro_chat_id, message)
@@ -113,8 +110,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
     Admin message is in Hebrew with full customer and lead details.
     """
     try:
-        phone = chat_id.replace("@c.us", "")
-        customer_phone_display = "0" + phone[3:] if phone.startswith("972") else phone
+        customer_phone_display = to_local_phone(chat_id)
 
         # Fetch active lead for context
         active_lead = await leads_collection.find_one(
@@ -160,12 +156,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                 pro_id = ObjectId(pro_id)
             pro = await users_collection.find_one({"_id": pro_id})
             if pro and pro.get("phone_number"):
-                pro_phone = pro["phone_number"]
-                pro_chat_id = (
-                    f"{pro_phone}@c.us"
-                    if not pro_phone.endswith("@c.us")
-                    else pro_phone
-                )
+                pro_chat_id = to_chat_id(pro["phone_number"])
                 pro_msg = Messages.SOS.PRO_ALERT.format(
                     phone=customer_phone_display, last_message=last_message
                 )
@@ -173,10 +164,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                 logger.info(f"SOS alert sent to Pro {pro_id} for user {chat_id}")
 
         # 2. Always alert Admin with full details
-        admin_phone = settings.ADMIN_PHONE
-        admin_chat_id = (
-            f"{admin_phone}@c.us" if not admin_phone.endswith("@c.us") else admin_phone
-        )
+        admin_chat_id = to_chat_id(settings.ADMIN_PHONE)
         admin_msg = Messages.SOS.ADMIN_ALERT.format(
             phone=customer_phone_display,
             last_message=last_message,

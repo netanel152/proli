@@ -2,6 +2,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from app.core.database import leads_collection, users_collection
 from app.core.constants import LeadStatus, UserStates, WorkerConstants, Defaults, Actor
+from app.core.phone import to_chat_id
 from app.services.lead_manager_service import set_lead_status
 from app.core.config import settings
 from app.core.logger import logger
@@ -112,8 +113,7 @@ async def reassign_lead(lead) -> bool:
         # 4. Notify new pro
         pro_phone = new_pro.get("phone_number")
         if pro_phone:
-            if not pro_phone.endswith("@c.us"):
-                pro_phone = f"{pro_phone}@c.us"
+            pro_phone = to_chat_id(pro_phone)
 
             header = (
                 Messages.Pro.EMERGENCY_LEAD_HEADER
@@ -147,9 +147,7 @@ async def reassign_lead(lead) -> bool:
         if current_pro_id:
             old_pro = await users_collection.find_one({"_id": current_pro_id})
             if old_pro and old_pro.get("phone_number"):
-                old_phone = old_pro["phone_number"]
-                if not old_phone.endswith("@c.us"):
-                    old_phone = f"{old_phone}@c.us"
+                old_phone = to_chat_id(old_pro["phone_number"])
                 await whatsapp.send_message(old_phone, Messages.SOS.PRO_LOST_LEAD)
 
         # Clear any stuck customer state (e.g. AWAITING_PRO_APPROVAL)
@@ -329,7 +327,7 @@ async def send_periodic_admin_report():
         full_message = "\n".join(message_lines)
 
         # Send to Admin
-        admin_chat_id = f"{settings.ADMIN_PHONE}@c.us"
+        admin_chat_id = to_chat_id(settings.ADMIN_PHONE)
         await whatsapp.send_message(admin_chat_id, full_message)
         logger.info(f"✅ [SOS Reporter] Sent report to Admin: {settings.ADMIN_PHONE}")
 
@@ -554,9 +552,7 @@ async def check_pro_approval_sla():
                 if claimed.modified_count == 1:
                     pro = await users_collection.find_one({"_id": lead.get("pro_id")})
                     if pro and pro.get("phone_number"):
-                        pro_phone = pro["phone_number"]
-                        if not pro_phone.endswith("@c.us"):
-                            pro_phone = f"{pro_phone}@c.us"
+                        pro_phone = to_chat_id(pro["phone_number"])
                         await whatsapp.send_message(
                             pro_phone,
                             Messages.Pro.APPROVAL_NUDGE.format(minutes=nudge_after),
@@ -693,8 +689,7 @@ async def remind_stale_booked_leads():
 
             pro_name = pro.get("business_name") or pro.get("name") or "איש מקצוע"
             pro_phone = pro["phone_number"]
-            if not pro_phone.endswith("@c.us"):
-                pro_phone = f"{pro_phone}@c.us"
+            pro_phone = to_chat_id(pro_phone)
 
             # Send Message
             message = Messages.Pro.STALE_LEAD_REMINDER.format(

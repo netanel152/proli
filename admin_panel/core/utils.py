@@ -38,7 +38,17 @@ PROFESSION_CONFIG = {
     "plumber": {
         "role": "אינסטלטור מומחה",
         "safety": "סגור את השיבר הראשי מיד!",
-        "keywords": ["מים", "נזילה", "סתימה", "דוד", "כיור", "אסלה", "הצפה", "רטיבות", "ברז"],
+        "keywords": [
+            "מים",
+            "נזילה",
+            "סתימה",
+            "דוד",
+            "כיור",
+            "אסלה",
+            "הצפה",
+            "רטיבות",
+            "ברז",
+        ],
     },
     "electrician": {
         "role": "חשמלאי מוסמך",
@@ -72,6 +82,7 @@ PROFESSION_CONFIG = {
     },
 }
 
+
 def generate_system_prompt(name, profession, areas, prices):
     """מייצר פרומפט ומילות מפתח לפי המקצוע"""
     config = PROFESSION_CONFIG.get(profession, PROFESSION_CONFIG["general"])
@@ -98,14 +109,17 @@ def generate_system_prompt(name, profession, areas, prices):
 """
     return prompt, keywords
 
+
 def create_initial_schedule(pro_id):
     """יוצר יומן לשבוע הקרוב (ימי חול בלבד, 08:00-18:00)"""
-    IL_TZ = pytz.timezone('Asia/Jerusalem')
+    IL_TZ = pytz.timezone("Asia/Jerusalem")
     slots = []
     # Start from tomorrow morning in Israel time, then convert to UTC
     now_il = datetime.now(IL_TZ)
     # Strip tzinfo to get a naive date, then re-localize per slot
-    start_date_naive = (now_il + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    start_date_naive = (now_il + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0, tzinfo=None
+    )
 
     for i in range(7):
         current_day = start_date_naive + timedelta(days=i)
@@ -117,12 +131,14 @@ def create_initial_schedule(pro_id):
         for hour in range(8, 18, 2):
             s_time_il = IL_TZ.localize(current_day.replace(hour=hour))
             s_time_utc = s_time_il.astimezone(pytz.utc)
-            slots.append({
-                "pro_id": pro_id,
-                "start_time": s_time_utc,
-                "end_time": s_time_utc + timedelta(hours=2),
-                "is_taken": False
-            })
+            slots.append(
+                {
+                    "pro_id": pro_id,
+                    "start_time": s_time_utc,
+                    "end_time": s_time_utc + timedelta(hours=2),
+                    "is_taken": False,
+                }
+            )
     if slots:
         slots_collection.insert_many(slots)
 
@@ -134,6 +150,7 @@ def send_completion_check_sync(lead_id: str):
     """
     from app.core.constants import LeadStatus, Defaults
     from app.core.messages import Messages
+    from app.core.phone import to_chat_id
 
     lead = leads_collection.find_one({"_id": ObjectId(lead_id)})
     if not lead:
@@ -141,9 +158,13 @@ def send_completion_check_sync(lead_id: str):
 
     customer_chat_id = lead["chat_id"]
     pro = users_collection.find_one({"_id": lead["pro_id"]})
-    pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME) if pro else Defaults.GENERIC_PRO_NAME
+    pro_name = (
+        pro.get("business_name", Defaults.GENERIC_PRO_NAME)
+        if pro
+        else Defaults.GENERIC_PRO_NAME
+    )
 
-    chat_id = f"{customer_chat_id}" if customer_chat_id.endswith("@c.us") else f"{customer_chat_id}@c.us"
+    chat_id = to_chat_id(customer_chat_id)
 
     instance_id = os.getenv("GREEN_API_INSTANCE_ID")
     api_token = os.getenv("GREEN_API_TOKEN")
