@@ -332,7 +332,6 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | Admin UI | Streamlit | |
 | Media | Cloudinary | CDN-backed |
 | WhatsApp | Green API | |
-| SMS fallback | InforUMobile | Israeli provider |
 | Logging | Loguru | PII-masked (Israeli phone numbers), JSON in production |
 | Infrastructure | Docker Compose / Railway | 6 services: api, worker, admin, mongo, redis, nginx |
 

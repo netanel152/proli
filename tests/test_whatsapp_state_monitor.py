@@ -3,11 +3,11 @@ PRO-20 — Green API instance deauth monitor.
 
 Tests cover four units:
   1. WhatsAppClient.get_state_instance()  — happy path + error swallow (2 tests)
-  2. send_oncall_alert()                  — SMS-first routing, fallback, failure (5 tests)
-  3. check_whatsapp_instance_state()      — every FSM/Redis behavioral branch (10 tests)
-  4. on-call routing                      — ONCALL_PHONE vs ADMIN_PHONE (2 tests)
-
-Total: 19 tests.
+  2. send_oncall_alert()                  — state-guarded WhatsApp-only delivery (PRO-75:
+                                             SMS removed entirely; alert is only sent over
+                                             WhatsApp when the instance is itself authorized)
+  3. check_whatsapp_instance_state()      — every FSM/Redis behavioral branch
+  4. on-call routing                      — ONCALL_PHONE vs ADMIN_PHONE
 
 Time anchors are computed per-test, never at module scope — see _below_threshold_ts
 (PRO-68).
@@ -167,95 +167,86 @@ async def test_get_state_instance_returns_none_on_any_exception():
 
 # ===========================================================================
 # Section 2 — send_oncall_alert()
+#
+# PRO-75: SMS is gone. send_oncall_alert is now state-guarded and WhatsApp-only:
+#   * probes whatsapp.get_state_instance() first
+#   * state != "authorized" → NEVER calls whatsapp.send_message; logs
+#     logger.critical (the Sentry-forwarded out-of-band page) and returns False
+#   * state == "authorized" → sends via whatsapp.send_message, returns True;
+#     an exception during send is caught, logs logger.critical, returns False
 # ===========================================================================
 
 
 @pytest.mark.asyncio
-async def test_send_oncall_alert_sms_configured_and_succeeds_skips_whatsapp(
-    monkeypatch,
+async def test_send_oncall_alert_authorized_sends_via_whatsapp(monkeypatch):
+    """Instance authorized → alert is delivered over WhatsApp; returns True."""
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="authorized")
+    mock_wa.send_message = AsyncMock()
+
+    monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
+
+    result = await notif_module.send_oncall_alert("system alert")
+
+    assert result is True
+    mock_wa.send_message.assert_awaited_once()
+    assert mock_wa.send_message.call_args.args[1] == "system alert"
+
+
+@pytest.mark.parametrize(
+    "state", ["notAuthorized", "yellowCard", "starting", "blocked", None]
+)
+@pytest.mark.asyncio
+async def test_send_oncall_alert_not_authorized_never_sends_whatsapp(
+    monkeypatch, state
 ):
-    """SMS-first: when SMS succeeds WhatsApp is never tried."""
-    mock_sms = MagicMock()
-    mock_sms.is_configured = True
-    mock_sms.send_sms = AsyncMock(return_value=True)
-
+    """Instance not authorized (any non-'authorized' state, including unreachable
+    → None) → NO WhatsApp send is attempted; logger.critical is emitted instead;
+    returns False."""
     mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value=state)
     mock_wa.send_message = AsyncMock()
+    mock_logger = MagicMock()
 
-    monkeypatch.setattr(notif_module, "sms_client", mock_sms)
     monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
-
-    result = await notif_module.send_oncall_alert("system alert")
-
-    assert result is True
-    mock_sms.send_sms.assert_awaited_once()
-    mock_wa.send_message.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_send_oncall_alert_sms_fails_falls_back_to_whatsapp(monkeypatch):
-    """SMS configured but returns False → WhatsApp is the last resort."""
-    mock_sms = MagicMock()
-    mock_sms.is_configured = True
-    mock_sms.send_sms = AsyncMock(return_value=False)
-
-    mock_wa = MagicMock()
-    mock_wa.send_message = AsyncMock()
-
-    monkeypatch.setattr(notif_module, "sms_client", mock_sms)
-    monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
-
-    result = await notif_module.send_oncall_alert("system alert")
-
-    assert result is True
-    mock_wa.send_message.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_send_oncall_alert_sms_not_configured_uses_whatsapp_directly(monkeypatch):
-    """When SMS is not configured, WhatsApp is tried without calling SMS at all."""
-    mock_sms = MagicMock()
-    mock_sms.is_configured = False
-
-    mock_wa = MagicMock()
-    mock_wa.send_message = AsyncMock()
-
-    monkeypatch.setattr(notif_module, "sms_client", mock_sms)
-    monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
-
-    result = await notif_module.send_oncall_alert("system alert")
-
-    assert result is True
-    mock_wa.send_message.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_send_oncall_alert_all_channels_fail_returns_false(monkeypatch):
-    """SMS not configured and WhatsApp raises → returns False without re-raising."""
-    mock_sms = MagicMock()
-    mock_sms.is_configured = False
-
-    mock_wa = MagicMock()
-    mock_wa.send_message = AsyncMock(side_effect=Exception("Green API unreachable"))
-
-    monkeypatch.setattr(notif_module, "sms_client", mock_sms)
-    monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
+    monkeypatch.setattr(notif_module, "logger", mock_logger)
 
     result = await notif_module.send_oncall_alert("system alert")
 
     assert result is False
+    mock_wa.send_message.assert_not_awaited()
+    mock_logger.critical.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_send_oncall_alert_authorized_but_send_raises_returns_false(
+    monkeypatch,
+):
+    """Instance reports authorized but the send itself blows up → caught,
+    logger.critical emitted, returns False (no re-raise, no SMS to fall back to)."""
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="authorized")
+    mock_wa.send_message = AsyncMock(side_effect=Exception("Green API unreachable"))
+    mock_logger = MagicMock()
+
+    monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
+    monkeypatch.setattr(notif_module, "logger", mock_logger)
+
+    result = await notif_module.send_oncall_alert("system alert")
+
+    assert result is False
+    mock_logger.critical.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_send_oncall_alert_appends_cus_suffix_to_bare_phone(monkeypatch):
-    """Phone numbers without @c.us get the suffix appended before sending to WhatsApp."""
-    mock_sms = MagicMock()
-    mock_sms.is_configured = False
-
+    """Phone numbers without @c.us get the suffix appended before sending to
+    WhatsApp — only reachable on the authorized path since that's the only one
+    that calls send_message at all."""
     mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="authorized")
     mock_wa.send_message = AsyncMock()
 
-    monkeypatch.setattr(notif_module, "sms_client", mock_sms)
     monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
 
     await notif_module.send_oncall_alert("test")
@@ -293,7 +284,9 @@ async def test_wa_monitor_authorized_with_prior_outage_sends_recovery_and_clears
 
     await monitor_module.check_whatsapp_instance_state()
 
-    mock_alert.assert_awaited_once_with(Messages.Alerts.WHATSAPP_RECOVERED)
+    mock_alert.assert_awaited_once_with(
+        Messages.Alerts.WHATSAPP_RECOVERED, assume_authorized=True
+    )
     assert _DOWN_SINCE_KEY not in redis._store
     assert _ALERTED_KEY not in redis._store
     assert _LAST_ALERT_KEY not in redis._store
@@ -367,8 +360,10 @@ async def test_wa_monitor_not_authorized_below_threshold_no_page(monkeypatch):
 async def test_wa_monitor_not_authorized_above_threshold_first_page_sets_keys_and_critical(
     monkeypatch,
 ):
-    """(e) downtime > threshold, last_alert absent → pages once, sets alerted + last_alert,
-    emits logger.critical."""
+    """(e) downtime > threshold, last_alert absent → threshold crossed: sets alerted +
+    last_alert, emits logger.critical. PRO-75: does NOT call send_oncall_alert on the
+    down path — paging an outage about WhatsApp over WhatsApp would amplify it, so the
+    down-path page is logger.critical (Sentry) only."""
     redis = _FakeRedis({_DOWN_SINCE_KEY: _above_threshold_ts()})
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value="notAuthorized")
@@ -382,17 +377,16 @@ async def test_wa_monitor_not_authorized_above_threshold_first_page_sets_keys_an
 
     await monitor_module.check_whatsapp_instance_state()
 
-    # Exactly one page sent
-    mock_alert.assert_awaited_once()
-    alert_text: str = mock_alert.call_args[0][0]
-    assert (
-        "notAuthorized" in alert_text
-    ), "Alert text must include the current state value"
-    # Redis side effects
+    # No WhatsApp-borne page on the down path
+    mock_alert.assert_not_awaited()
+    # Redis side effects still happen (threshold crossed, dedup window opened)
     assert redis._store.get(_ALERTED_KEY) == "1"
     assert redis._store.get(_LAST_ALERT_KEY) == "1"
-    # logger.critical must be emitted (forwarded to Sentry in production)
+    # logger.critical must be emitted (forwarded to Sentry in production) and
+    # must include the current state for an actionable page.
     mock_logger.critical.assert_called_once()
+    critical_text = mock_logger.critical.call_args[0][0]
+    assert "notAuthorized" in critical_text
 
 
 @pytest.mark.asyncio
@@ -513,15 +507,15 @@ async def test_send_oncall_alert_routes_to_oncall_phone_when_set(monkeypatch):
     monkeypatch.setattr(notif_module.settings, "ONCALL_PHONE", "972500000001")
     monkeypatch.setattr(notif_module.settings, "ADMIN_PHONE", "972524828796")
 
-    mock_sms = MagicMock()
-    mock_sms.is_configured = True
-    mock_sms.send_sms = AsyncMock(return_value=True)
-    monkeypatch.setattr(notif_module, "sms_client", mock_sms)
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="authorized")
+    mock_wa.send_message = AsyncMock()
+    monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
 
     await notif_module.send_oncall_alert("alert")
 
-    dialed: str = mock_sms.send_sms.call_args[0][0]
-    assert dialed == "972500000001"
+    dialed: str = mock_wa.send_message.call_args[0][0]
+    assert dialed == "972500000001@c.us"
 
 
 @pytest.mark.asyncio
@@ -532,12 +526,12 @@ async def test_send_oncall_alert_falls_back_to_admin_phone_when_oncall_unset(
     monkeypatch.setattr(notif_module.settings, "ONCALL_PHONE", None)
     monkeypatch.setattr(notif_module.settings, "ADMIN_PHONE", "972524828796")
 
-    mock_sms = MagicMock()
-    mock_sms.is_configured = True
-    mock_sms.send_sms = AsyncMock(return_value=True)
-    monkeypatch.setattr(notif_module, "sms_client", mock_sms)
+    mock_wa = MagicMock()
+    mock_wa.get_state_instance = AsyncMock(return_value="authorized")
+    mock_wa.send_message = AsyncMock()
+    monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
 
     await notif_module.send_oncall_alert("alert")
 
-    dialed: str = mock_sms.send_sms.call_args[0][0]
-    assert dialed == "972524828796"
+    dialed: str = mock_wa.send_message.call_args[0][0]
+    assert dialed == "972524828796@c.us"

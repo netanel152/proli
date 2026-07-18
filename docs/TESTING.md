@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 404 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 409 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -64,8 +64,8 @@ pytest -m integration
 | `test_security_service.py` | Rate limiting (Redis fixed-window) |
 | `test_consent_flow.py` | Privacy consent gate |
 | `test_media_handler.py` | Media type detection, image download, audio/video URL handling |
-| `test_notification_service.py` | WhatsApp + SMS notifications |
-| `test_whatsapp_state_monitor.py` | PRO-20 Green API deauth monitor: `get_state_instance`, `send_oncall_alert` SMS-first routing, `check_whatsapp_instance_state` FSM/Redis branches |
+| `test_notification_service.py` | WhatsApp notifications (best-effort, no SMS fallback) |
+| `test_whatsapp_state_monitor.py` | PRO-20 Green API deauth monitor: `get_state_instance`, `send_oncall_alert` state-guarded WhatsApp routing (no SMS), `check_whatsapp_instance_state` FSM/Redis branches |
 | `test_analytics_service.py` | Lead funnel and performance aggregations |
 | `test_audit_service.py` | Admin action logging |
 | `test_scheduling_service.py` | Recurring templates, slot generation |

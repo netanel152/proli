@@ -57,7 +57,6 @@
 | Admin UI | Streamlit |
 | Media | Cloudinary |
 | WhatsApp | Green API |
-| SMS Fallback | InforUMobile |
 | Security | Bcrypt, webhook token verification, session cookies |
 | Infrastructure | Docker Compose / Railway |
 

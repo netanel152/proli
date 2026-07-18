@@ -58,7 +58,6 @@ All 19 issues from the March 2026 code review have been resolved. The codebase h
 
 ### Recommended Before Scaling
 - [ ] Add distributed lock for APScheduler jobs (Redis `SET NX`) — needed if running multiple worker replicas
-- [ ] Configure `SMS_API_KEY` for SMS fallback notifications
 - [ ] Set up monitoring/alerting using `/health` endpoint (includes DB/Redis latency, worker heartbeat)
 - [ ] Configure log aggregation (Railway logs or external service)
 
@@ -78,7 +77,6 @@ All 19 issues from the March 2026 code review have been resolved. The codebase h
 |---|---|---|
 | Analytics | Done | Lead funnel, daily volume, pro performance, response times — admin dashboard |
 | Scheduling | Done | Recurring weekly templates, auto-regeneration, availability-aware matching, no-show tracking |
-| SMS Fallback | Done | WhatsApp-first with SMS fallback via InforUMobile API |
 
 ## Phase 3 Features (March 2026)
 
@@ -89,4 +87,4 @@ All 19 issues from the March 2026 code review have been resolved. The codebase h
 | Payments | Not started | Commission tracking, Stripe integration, PDF invoices |
 
 ## Verdict
-**System is GREEN for production deployment.** All code-level security, performance, and stability issues have been resolved. Phase 1 (backup, consent, error hardening, RBAC, monitoring) and Phase 2 (analytics, scheduling, SMS) features are implemented. Follow the deployment checklist above.
+**System is GREEN for production deployment.** All code-level security, performance, and stability issues have been resolved. Phase 1 (backup, consent, error hardening, RBAC, monitoring) and Phase 2 (analytics, scheduling) features are implemented. Follow the deployment checklist above.
