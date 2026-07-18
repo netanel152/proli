@@ -1209,8 +1209,13 @@ async def _process_incoming_message_inner(
                 await set_lead_status(
                     current_lead_id, LeadStatus.PENDING_ADMIN_REVIEW, Actor.SYSTEM
                 )
-                logger.critical(
-                    f"Lead {current_lead_id} for {chat_id} requires admin review — no pro available"
+                # WARNING, not CRITICAL: no-pro-available is a routine coverage gap
+                # (admin handles it via PENDING_ADMIN_REVIEW), not an infra page. The
+                # worker is Sentry CRITICAL-only, so this keeps no-pro leads out of the
+                # operator's email (PRO-77). chat_id masked per PII convention.
+                logger.warning(
+                    f"Lead {current_lead_id} for ...{chat_id[-8:]} requires admin "
+                    "review — no pro available"
                 )
                 await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
                 await lead_manager.log_message(
