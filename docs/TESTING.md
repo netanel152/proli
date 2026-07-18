@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 409 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 428 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -76,6 +76,8 @@ pytest -m integration
 | `test_edge_cases.py` | Bad inputs: Gemini failure, WhatsApp down, unsupported file types |
 | `test_agent_pack_drift.py` | Anti-drift guard for `.claude/agents/`: `UserStates`/`LeadStatus`/TTL embeds and the flow-tracer dispatch-order section stay in sync with `constants.py` / `workflow_service.py` |
 | `test_pre_bash_guard.py` | Bash pre-tool guard `evaluate()`: blocks `git commit`/`push` on main/master, force-push, `rm -rf` on protected paths, `.env` redirects, mongo `drop()`; allows feature-branch work |
+| `test_whatsapp_client_circuit_breaker.py` | PRO-71 outbound breaker: `send_message`/`send_file_by_url` suppress (no HTTP) when `wa:instance:paused` is set; fail-open when Redis is down |
+| `test_health_whatsapp_status.py` | `/health` WhatsApp state mapping: `authorized`→up, `yellowCard`→degraded, else down; raw `state` surfaced |
 
 ### Health & Regression
 
