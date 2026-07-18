@@ -61,6 +61,11 @@ class WorkerConstants:
     DEFAULT_CURRENCY = "ILS"
     SOS_TIMEOUT_MINUTES = 60
     MAX_REASSIGNMENTS = 3  # Max times a lead can be reassigned before closing
+    # PRO-56 approval-SLA: chase a silent pro fast instead of waiting for the
+    # 60-min Healer. Emergency leads use half these thresholds (// 2 → 5 / 12).
+    APPROVAL_NUDGE_MINUTES = 10  # T+10 → nudge the pro (once per lead)
+    APPROVAL_REASSIGN_OFFER_MINUTES = 25  # T+25 → offer the customer a reassignment
+    APPROVAL_SLA_CHECK_INTERVAL_MINUTES = 5  # how often the SLA job runs
     UNASSIGNED_LEAD_TIMEOUT_HOURS = (
         24  # Auto-reject CONTACTED leads with no pro after this
     )

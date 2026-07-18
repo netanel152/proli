@@ -67,6 +67,15 @@ class Messages:
         AWAITING_APPROVAL_TRANSPARENT = "✅ העברתי את הפנייה שלך ל-{pro_name}. \nזמן המענה הממוצע שלו הוא כ-10 דקות.\nאעדכן אותך כאן ברגע שהוא יאשר את העבודה!"
         YOU_ARE_WELCOME = "בכיף! אני כאן אם תצטרך עוד משהו. 🛠️"
         STILL_WAITING = "הפנייה שלך נמצאת עכשיו אצל איש המקצוע לאישור. נעדכן אותך ברגע שנקבל תשובה! 🙏"
+        # PRO-56 approval-SLA: offered to the customer when the pro stays silent.
+        REASSIGN_OFFER = (
+            "איש המקצוע עדיין לא אישר את הפנייה. 🕐\n"
+            "השב *1* — לחפש לך איש מקצוע אחר\n"
+            "השב *2* — להמתין עוד קצת"
+        )
+        REASSIGN_WAIT_ACK = (
+            "אין בעיה, ממשיכים להמתין לאישור. אעדכן אותך ברגע שיש תשובה! 🙏"
+        )
         BOT_PAUSED_BY_PRO = (
             "איש המקצוע ביקש לדבר איתך ישירות. 📞\n"
             "הבוט מושהה כרגע — איש המקצוע ידבר איתך בהודעות."
@@ -174,6 +183,11 @@ class Messages:
         # PRO-55: the AI-quoted price the customer was promised, shown to the pro
         # before approval. Appended to APPROVAL_REQUEST only when a quote exists.
         APPROVAL_PRICE_LINE = "💰 *הערכת מחיר שניתנה ללקוח:* {quoted_price}₪\n"
+        # PRO-56: nudge a pro who hasn't approved within the SLA window.
+        APPROVAL_NUDGE = (
+            "⏰ ליד ממתין לאישורך כבר {minutes} דק'.\n"
+            "השב *אשר* לאישור או *דחה* לדחייה."
+        )
         PAUSE_ACK = (
             "⏸️ הבוט הושהה. תוכל לדבר עם הלקוח ישירות.\n"
             "הבוט יחזור לפעולה אוטומטית בעוד שעתיים או כשתשלח 'המשך'."
