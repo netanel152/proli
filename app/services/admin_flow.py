@@ -7,6 +7,7 @@ from app.core.constants import LeadStatus, UserStates, WorkerConstants, Actor
 from app.services.lead_manager_service import set_lead_status
 from app.core.config import settings
 from app.core.database import leads_collection, users_collection
+from app.core.phone import to_chat_id, strip_suffix
 
 ADMIN_TTL = 900  # 15-minute wizard session
 
@@ -121,7 +122,7 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
         admin_pro = await users_collection.find_one(
             {
                 "phone_number": {
-                    "$in": [settings.ADMIN_PHONE, f"{settings.ADMIN_PHONE}@c.us"]
+                    "$in": [settings.ADMIN_PHONE, to_chat_id(settings.ADMIN_PHONE)]
                 },
                 "role": "professional",
             }
@@ -231,13 +232,11 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
 
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
 
-    pro_phone = pro.get("phone_number", "")
-    if pro_phone and not pro_phone.endswith("@c.us"):
-        pro_phone = f"{pro_phone}@c.us"
+    pro_phone = to_chat_id(pro.get("phone_number", ""))
 
     if pro_phone and lead:
         try:
-            customer_phone = (lead.get("chat_id") or "").replace("@c.us", "")
+            customer_phone = strip_suffix(lead.get("chat_id") or "")
             extra_info = (
                 f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
             )

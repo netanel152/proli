@@ -22,6 +22,7 @@ from app.core.database import (
 )
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
+from app.core.phone import strip_suffix
 from app.core.logger import logger
 
 
@@ -29,11 +30,13 @@ async def record_consent(chat_id: str, accepted: bool) -> None:
     """Record user's consent decision."""
     await consent_collection.update_one(
         {"chat_id": chat_id},
-        {"$set": {
-            "chat_id": chat_id,
-            "accepted": accepted,
-            "timestamp": datetime.now(timezone.utc),
-        }},
+        {
+            "$set": {
+                "chat_id": chat_id,
+                "accepted": accepted,
+                "timestamp": datetime.now(timezone.utc),
+            }
+        },
         upsert=True,
     )
     logger.info(f"Consent {'accepted' if accepted else 'declined'} for {chat_id}")
@@ -49,11 +52,9 @@ async def has_consent(chat_id: str) -> bool | None:
 
 async def export_user_data(chat_id: str) -> dict:
     """Export all data associated with a chat_id (right-to-access)."""
-    phone = chat_id.replace("@c.us", "")
+    phone = strip_suffix(chat_id)
 
-    user = await users_collection.find_one(
-        {"phone_number": {"$in": [phone, chat_id]}}
-    )
+    user = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}})
     leads = await leads_collection.find({"chat_id": chat_id}).to_list(length=500)
     messages = await messages_collection.find({"chat_id": chat_id}).to_list(length=5000)
     reviews = await reviews_collection.find({"chat_id": chat_id}).to_list(length=100)
@@ -84,13 +85,21 @@ async def export_user_data(chat_id: str) -> dict:
 
 async def delete_user_data(chat_id: str) -> dict:
     """Delete all data associated with a chat_id (right-to-delete)."""
-    phone = chat_id.replace("@c.us", "")
+    phone = strip_suffix(chat_id)
 
     results = {}
-    results["messages"] = (await messages_collection.delete_many({"chat_id": chat_id})).deleted_count
-    results["leads"] = (await leads_collection.delete_many({"chat_id": chat_id})).deleted_count
-    results["reviews"] = (await reviews_collection.delete_many({"chat_id": chat_id})).deleted_count
-    results["consent"] = (await consent_collection.delete_many({"chat_id": chat_id})).deleted_count
+    results["messages"] = (
+        await messages_collection.delete_many({"chat_id": chat_id})
+    ).deleted_count
+    results["leads"] = (
+        await leads_collection.delete_many({"chat_id": chat_id})
+    ).deleted_count
+    results["reviews"] = (
+        await reviews_collection.delete_many({"chat_id": chat_id})
+    ).deleted_count
+    results["consent"] = (
+        await consent_collection.delete_many({"chat_id": chat_id})
+    ).deleted_count
 
     # Clear Redis state and context
     await StateManager.clear_state(chat_id)
