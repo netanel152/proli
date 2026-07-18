@@ -1,6 +1,6 @@
 # /full-sync-docs
 
-Perform a **code-first, full-codebase documentation audit**. Unlike `/sync-docs` (which only patches what the latest diff broke), this skill reads the *live* source code, extracts ground truth, then cross-checks every section of every `.md` file in the project. It finds stale content that accumulated over many commits — not just content broken by the latest one.
+Perform a **code-first, full-codebase documentation audit**. Unlike the **docs-syncer** subagent's incremental mode (which only patches what the latest diff broke), this reads the *live* source code, extracts ground truth, then cross-checks every section of every `.md` file in the project. It finds stale content that accumulated over many commits — not just content broken by the latest one. The **docs-syncer** agent's full-audit mode delegates here, so this file is the single authoritative checklist.
 
 ---
 
@@ -66,14 +66,6 @@ Read each file below in full. Check every listed claim against Phase 1 ground tr
 | Feature list (Hebrew section) | Mirrors English section |
 | Test count | Matches Phase 1.6 |
 | Command examples | Reflect actual keyword lists from Phase 1.5 |
-
-### `GEMINI.md`
-| Section | What to check |
-|---------|---------------|
-| Lead Status flow | Matches Phase 1.1 (order and all values) |
-| UserStates list | Any listed states exist in Phase 1.1 (may be abbreviated — wrong names are the issue) |
-| SOS Healer description | Must say it checks lead *status* fields (`new`, `contacted`, `pending_admin_review`), not FSM state `AWAITING_PRO_APPROVAL` |
-| Mongo `$near` vs `$geoNear` | The matching service uses `$geoNear` aggregation, not `$near` |
 
 ### `docs/ARCHITECTURE.md`
 | Section | What to check |
@@ -164,7 +156,7 @@ Only the embedded constants are in scope — leave all other prose and the front
 For every stale claim found in Phase 2:
 1. Use `Edit` to apply the minimal fix — change only the stale fragment. Do not rewrite surrounding prose.
 2. If a whole table row is missing, insert it. If a row describes a removed feature, delete it.
-3. Never create a new `.md` file. Never edit files under `venv/` or `.pytest_cache/`, or `GEMINI.md`'s skills sections. The **only** editable files under `.claude/` are the embedded-constants facts in `.claude/agents/flow-tracer.md` and `.claude/agents/code-reviewer.md` (the `UserStates` list, the `LeadStatus` lifecycle, and flow-tracer's four TTL values) — fix those to match `app/core/constants.py` when `tests/test_agent_pack_drift.py` flags drift. Leave every other `.claude/` file, and all other prose in those two agent files, untouched.
+3. Never create a new `.md` file. Never edit files under `venv/` or `.pytest_cache/`. The **only** editable files under `.claude/` are the embedded-constants facts in `.claude/agents/flow-tracer.md` and `.claude/agents/code-reviewer.md` (the `UserStates` list, the `LeadStatus` lifecycle, and flow-tracer's four TTL values) — fix those to match `app/core/constants.py` when `tests/test_agent_pack_drift.py` flags drift. Leave every other `.claude/` file, and all other prose in those two agent files, untouched.
 4. Do not commit.
 
 ---
@@ -188,7 +180,6 @@ Print a structured summary:
 ### Changes Made
 - `CLAUDE.md` — <what changed and why> | (no changes needed)
 - `README.md` — <what changed and why> | (no changes needed)
-- `GEMINI.md` — <what changed and why> | (no changes needed)
 - `docs/ARCHITECTURE.md` — <what changed and why> | (no changes needed)
 - `docs/TESTING.md` — <what changed and why> | (no changes needed)
 - `docs/OPERATIONS_GUIDE.md` — <what changed and why> | (no changes needed)
