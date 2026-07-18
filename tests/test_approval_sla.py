@@ -45,6 +45,16 @@ def mock_state_awaiting_approval(monkeypatch):
     return mock_get_state
 
 
+@pytest.fixture(autouse=True)
+def _force_business_hours(monkeypatch):
+    """PRO-73 gates the customer offer to business hours. Pin it True so these SLA
+    tests are deterministic regardless of wall-clock time; the outside-hours path
+    has its own dedicated test."""
+    monkeypatch.setattr(
+        "app.services.monitor_service.within_business_hours", lambda *a, **k: True
+    )
+
+
 async def _seed_lead(mock_db, minutes_ago, is_emergency=False, pro_id="pro_123"):
     """Insert an assigned NEW lead whose pro was notified `minutes_ago` ago."""
     await mock_db.users.insert_one(
@@ -134,6 +144,34 @@ async def test_reassign_offer_fires_at_t_plus_25_non_emergency(
     updated = await mock_db.leads.find_one({"_id": lead_id})
     assert updated["reassign_offered"] is True
     assert updated["approval_nudged"] is False
+
+
+@pytest.mark.asyncio
+async def test_offer_skipped_outside_business_hours(
+    mock_db, monkeypatch, mock_whatsapp, mock_state_awaiting_approval
+):
+    """PRO-73: outside business hours the customer offer is NOT sent —
+    reassign_offered stays False so it fires on the next in-hours tick."""
+    monkeypatch.setattr(
+        "app.services.monitor_service.within_business_hours", lambda *a, **k: False
+    )
+    monkeypatch.setattr("app.services.monitor_service.leads_collection", mock_db.leads)
+    monkeypatch.setattr("app.services.monitor_service.users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    await mock_db.users.delete_many({})
+
+    lead_id = await _seed_lead(mock_db, minutes_ago=26)
+    # Pre-mark as nudged so the (ungated) nudge branch is a no-op, isolating the offer gate.
+    await mock_db.leads.update_one(
+        {"_id": lead_id}, {"$set": {"approval_nudged": True}}
+    )
+
+    await check_pro_approval_sla()
+
+    for call in mock_whatsapp.send_message.call_args_list:
+        assert Messages.Customer.REASSIGN_OFFER not in call.args
+    updated = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated["reassign_offered"] is False
 
 
 @pytest.mark.asyncio

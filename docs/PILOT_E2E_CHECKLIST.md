@@ -79,7 +79,7 @@ enough to dispatch). Copy reads as urgent, not the normal slow intake.
 
 ### 3. Pro silent — SLA nudge + reassignment offer  ·  regresses PRO-56
 **Steps:** create a fresh lead (C) that routes to P; **do not approve on P**. Wait.
-**Expected:** at ~10 min (`APPROVAL_NUDGE_MINUTES`) P receives an approval nudge; at ~25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`) C receives a reassignment offer (half the thresholds for emergency leads). The **SOS Healer** still reassigns a stale `new`/`contacted` lead after 60 min (`SOS_TIMEOUT_MINUTES`) as a backstop if this scenario is somehow missed.
+**Expected:** at ~10 min (`APPROVAL_NUDGE_MINUTES`) P receives an approval nudge; at ~25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`), during business hours (08:00–21:00 IL), C receives a reassignment offer (half the thresholds for emergency leads). The **SOS Healer** still reassigns a stale `new`/`contacted` lead after 60 min (`SOS_TIMEOUT_MINUTES`) as a backstop if this scenario is somehow missed — note both the reassignment offer and the SOS Healer are business-hours-gated, and the SOS Healer's `sos_healer_active` toggle defaults OFF (PRO-73), so confirm it's enabled before running this test.
 - [ ] Pass  ·  [ ] File: ______
 
 ### 4. Customer cancels a BOOKED lead  ·  regresses PRO-32 / PRO-43

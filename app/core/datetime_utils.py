@@ -19,6 +19,20 @@ from app.core.logger import logger
 _IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 
+# PRO-73: customer-facing "cold" re-engagement jobs (SOS healer, lead janitor,
+# SLA deflection, the PRO-56 reassignment offer) must never message a customer
+# outside daytime hours — a 3am ping is both a WhatsApp spam signal and bad UX.
+BUSINESS_HOURS_START = 8
+BUSINESS_HOURS_END = 21  # exclusive (last contact hour is 20:xx)
+
+
+def within_business_hours(now: Optional[datetime] = None) -> bool:
+    """True if the current Israel-local time is within customer-contact hours
+    (08:00–21:00). Gates cold customer-facing scheduler jobs (PRO-73)."""
+    now_il = (now or datetime.now(timezone.utc)).astimezone(_IL_TZ)
+    return BUSINESS_HOURS_START <= now_il.hour < BUSINESS_HOURS_END
+
+
 def parse_iso_to_utc(value: Optional[str]) -> Optional[datetime]:
     """Parse an ISO 8601 string into a timezone-aware UTC datetime.
 
