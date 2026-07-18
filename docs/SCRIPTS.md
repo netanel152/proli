@@ -114,8 +114,8 @@ python scripts/finops_report.py
 Automated E2E scenarios (TC1–TC12) over HTTP. Covers consent flow, pro rejection, SOS logic, media handling, and idempotency. Requires the backend to be running locally.
 
 ```bash
-python scripts/simulate_test.py          # Interactive (step-by-step)
-python scripts/simulate_test.py --auto   # Fully automated
+python tests/simulate_test.py          # Interactive (step-by-step)
+python tests/simulate_test.py --auto   # Fully automated
 ```
 
 ### `reset_test.py`

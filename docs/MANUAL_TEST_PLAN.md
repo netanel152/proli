@@ -18,6 +18,34 @@
 | 972524828796 | Pro | נתנאל - אינסטלציה (plumber, Tel Aviv) |
 | 972523651414 | Customer | Adi - test customer |
 
+> ⚠️ **These are REAL WhatsApp numbers, not virtual test doubles.** The
+> automated scripts (`tests/simulate_test.py`, `tests/smoke_test_railway.py`)
+> only simulate the *inbound* webhook — every simulated message makes the
+> worker send a **genuine outbound Green API message** to the numbers above.
+
+### QA number & instance policy (PRO-72)
+
+Sending real test bursts from a cold/production Green API number is the #1
+WhatsApp yellowCard trigger. To keep manual and scripted testing safe:
+
+- **Use a dedicated QA SIM/instance** for all test runs — never the production
+  instance that serves live customers.
+- The scripts detect production by comparing `--instance-id` against the live
+  `GREEN_API_INSTANCE_ID` env var and **abort (exit 3)** if they match. Override
+  only with a deliberate `--i-know-this-is-production` flag.
+- If `GREEN_API_INSTANCE_ID` is unset the guard **fails safe** and treats the
+  target as production (aborts), so always point the scripts at a QA instance.
+- Keep the recipient numbers (`972523651414`, `972524828796`) on SIMs you
+  control and have warmed; they receive real messages on every run.
+
+> **Guard scope / limitation:** the check compares the `--instance-id` you pass
+> against the local `GREEN_API_INSTANCE_ID`. It protects the common case — an
+> operator whose environment points at production runs the script without
+> thinking — and always fails closed when it cannot verify. It does **not**
+> read the *remote* worker's config, so pointing `--base-url` at a production
+> deployment while passing an unrelated `--instance-id` can still send. Rule:
+> point these scripts only at a deployment whose worker uses a QA instance.
+
 ---
 
 ## Test Cases
