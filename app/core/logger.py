@@ -18,9 +18,28 @@ def mask_pii(message: str) -> str:
     return _PHONE_PATTERN.sub(r"\1****\3", message)
 
 
+# PRO-80: secret values that must never appear in logs, redacted wherever they
+# occur — a URL query string (uvicorn access log: `/webhook?token=<WEBHOOK_TOKEN>`),
+# a URL path (the Green API token in `/waInstance<id>/sendMessage/<token>`), or an
+# exception string. Built once at import from settings; empty/unset secrets are
+# skipped so nothing over-redacts (e.g. WEBHOOK_TOKEN is optional).
+_SECRET_VALUES = [v for v in (settings.GREEN_API_TOKEN, settings.WEBHOOK_TOKEN) if v]
+
+
+def redact_secrets(message: str) -> str:
+    """Replace any known secret value with a placeholder. Complements PRO-79
+    (which suppressed httpx INFO request logs at the source): this is
+    defense-in-depth for any *other* path that echoes a secret — the uvicorn
+    access log line, an httpx exception string reaching logger.error, etc."""
+    for secret in _SECRET_VALUES:
+        if secret in message:
+            message = message.replace(secret, "***REDACTED***")
+    return message
+
+
 def _pii_filter(record):
-    """Loguru sink filter: always mask PII before writing."""
-    record["message"] = mask_pii(record["message"])
+    """Loguru sink filter: always mask PII and redact secrets before writing."""
+    record["message"] = redact_secrets(mask_pii(record["message"]))
     return True
 
 

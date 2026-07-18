@@ -41,6 +41,7 @@ Proli uses **Loguru** with PII masking applied to all sinks.
 - **Console:** Human-readable colored output in development; JSON in production.
 - **File:** `logs/proli.log` — rotating at 10 MB, retained 10 days, gzip-compressed.
 - **PII masking:** Israeli phone numbers are masked in all environments: `972521234567` → `97252****567`.
+- **Secret redaction (PRO-80):** known secret values (`GREEN_API_TOKEN`, `WEBHOOK_TOKEN`) are replaced with `***REDACTED***` wherever they appear in a log line — a URL query string (e.g. the uvicorn access line `POST /webhook?token=…`), a URL path (the Green API token in a `/waInstance<id>/…/<token>` exception string), etc. Complements PRO-79, which suppresses `httpx`/`httpcore` INFO request logs at the source.
 - **Token Accounting (FinOps):** AI token usage is tracked per `pro_id` and stored in the `total_tokens_used` field of the `users` collection. This is handled by a fire-and-forget background task.
 
 Log patterns to watch:
