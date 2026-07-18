@@ -136,7 +136,7 @@ Unit tests use `mongomock_motor` (in-memory MongoDB) and mock `whatsapp` and `ai
 
 ### Configuration
 
-All config is in `app/core/config.py` via `pydantic-settings`. Required env vars: `GREEN_API_INSTANCE_ID`, `GREEN_API_TOKEN`, `GEMINI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Optional: `MONGO_URI` (defaults to localhost), `REDIS_URL`, `MONGO_TEST_URI` (for integration tests), `ADMIN_PASSWORD`, `ADMIN_PHONE` (defaults to hardcoded), `ONCALL_PHONE` (on-call number for infra alerts; defaults to `ADMIN_PHONE`), `WEBHOOK_TOKEN` (enables webhook auth).
+All config is in `app/core/config.py` via `pydantic-settings`. Required env vars: `GREEN_API_INSTANCE_ID`, `GREEN_API_TOKEN`, `GEMINI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Optional: `MONGO_URI` (defaults to localhost), `REDIS_URL`, `MONGO_TEST_URI` (for integration tests), `ADMIN_PASSWORD`, `ADMIN_PHONE` (defaults to hardcoded), `ONCALL_PHONE` (on-call number for infra alerts; defaults to `ADMIN_PHONE`), `WEBHOOK_TOKEN` (enables webhook auth), `SENTRY_DSN` (enables CRITICAL-only operator paging; unset = no-op), `WHATSAPP_DRY_RUN` (default `false`; set `true` in local `.env` so `WhatsAppClient` logs outbound sends instead of calling Green API — dev/simulation never cold-initiates a real message from the pilot number).
 
 ## Session Guidelines
 
