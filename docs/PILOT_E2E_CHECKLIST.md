@@ -35,22 +35,40 @@ register `הרשמה` · reset `התחלה` · rating `1`–`5` · admin wizard 
 
 ---
 
+## Dependency status (verified against code on this branch)
+
+Some scenarios reference features from tickets that are **not yet in the code**. They are
+kept here because this checklist is the launch gate and those tickets must land first — but a
+box that depends on an unshipped ticket **will fail today**, and that is expected until the
+ticket merges. Re-verify this table before each run.
+
+| Referenced | In code now? | Effect on checklist |
+|---|---|---|
+| **PRO-44** ([DEAL:] strip) | ✅ yes | Scenario 1 no-leak check is a valid regression |
+| **PRO-32 / PRO-43** (cancel frees slot) | ✅ yes | Scenario 4 is a valid regression |
+| **PRO-60** (`is_verified` not auto-true) | ✅ holds — defaults false in admin, absent in onboarding | Scenario 10 valid |
+| **PRO-55** (quoted price to pro) | ❌ **not built** — `APPROVAL_REQUEST` has no price; `quoted_price` unused | Scenario 1's price sub-check **fails until PRO-55 ships** |
+| **PRO-56** (10-min nudge / 25-min offer) | ❌ **not built** — no approval-nudge job exists | Scenario 3 **fails until PRO-56 ships** |
+| **PRO-48** (ADMIN_PHONE not hard-coded) | ⚠️ config check | Verify the admin phone is set via env, not the default |
+
+---
+
 ## Scenarios
 
 For each: run the steps on the real devices, compare to **Expected**, tick Pass or File.
 "File" = open a Linear ticket with the observed behavior and link it here.
 
-### 1. Happy path — full customer journey  ·  regresses PRO-55, PRO-44
+### 1. Happy path — full customer journey  ·  regresses PRO-44 (PRO-55 pending)
 **Steps (C):** send a first message → accept consent (`כן`) → describe the issue **with a photo**
 (e.g. "נזילה מתחת לכיור" + image) → provide full address when asked (street, number, city,
-floor, apartment) → provide a time → receive the AI estimate → **(P)** approve the lead →
+floor, apartment) → provide a time → receive the AI estimate → **(P)** approve with `1`/`אשר` →
 **(C)** confirm the booking → after the job, complete + rate `5`.
 **Expected:**
-- Bot asks for exactly the missing address parts; only proceeds when all five are present.
-- Pro's approval request **shows the AI-quoted price** (PRO-55).
-- **No `[DEAL:]` / marker text ever appears in a customer-facing message** (PRO-44).
+- Bot asks for exactly the missing address parts; only proceeds when all five (street, number, city, floor, apartment) are present.
+- **No `[DEAL:]` / marker text ever appears in a customer-facing message** (PRO-44 — in code).
+- Pro's approval request shows customer name, phone, full address, floor/apartment, issue, and time. It does **not** currently show a price — the AI estimate goes to the *customer*, not the pro. ⚠️ **PRO-55 (price to pro) is not built**; tick the price sub-box only once it ships.
 - Booking confirmed to C; slot marked taken; completion + rating recorded.
-- [ ] Pass  · [ ] File: ______
+- [ ] Pass (core journey)  ·  [ ] Pass (price-to-pro — needs PRO-55)  ·  [ ] File: ______
 
 ### 2. Emergency lane  ·  emergency keywords
 **Steps (C):** from a fresh chat, send **"יש לי הצפה!!"**.
@@ -59,11 +77,11 @@ notification carries the emergency header; the address gate is relaxed for emerg
 enough to dispatch). Copy reads as urgent, not the normal slow intake.
 - [ ] Pass  · [ ] File: ______
 
-### 3. Pro silent — SLA nudge + reassignment offer  ·  regresses PRO-56
+### 3. Pro silent — SLA nudge + reassignment offer  ·  ⚠️ requires PRO-56 (not built)
 **Steps:** create a fresh lead (C) that routes to P; **do not approve on P**. Wait.
-**Expected:** at **~10 min** P receives an approval **nudge**; at **~25 min** C receives a
-**reassignment offer**. Timings per PRO-56.
-- [ ] Pass  · [ ] File: ______
+**Expected (target, PRO-56):** at ~10 min P receives an approval nudge; at ~25 min C receives a reassignment offer.
+**Current code (until PRO-56 ships):** there is **no 10-min approval nudge and no 25-min customer offer**. What exists instead: the **SOS Healer** reassigns a stale `new`/`contacted` lead after **60 min** (`SOS_TIMEOUT_MINUTES`), and a customer parked in `AWAITING_PRO_APPROVAL` holds on a bounded TTL. So this scenario **fails today by design** — it's a launch-gate reminder that PRO-56 must land before pilot.
+- [ ] Pass (needs PRO-56)  ·  [ ] File: ______
 
 ### 4. Customer cancels a BOOKED lead  ·  regresses PRO-32 / PRO-43
 **Steps (C):** with a **BOOKED** lead, send **`בטל`**.
@@ -91,11 +109,15 @@ any) receives an SOS alert; further C messages within the window are held for a 
 auto-answered. After ~15 min the pause auto-expires.
 - [ ] Pass  · [ ] File: ______
 
-### 8. Unmatchable city → admin review  ·  regresses PRO-48
+### 8. Unmatchable city → admin review
 **Steps (C):** run intake for a city with **no covering pro** (e.g. **אילת**).
-**Expected:** no pro found within the max radius → lead → `PENDING_ADMIN_REVIEW`; an admin alert
-is delivered **to the correct phone** (`ADMIN_PHONE`/`ONCALL_PHONE`, not a hard-coded default —
-PRO-48). The lead appears in the admin panel's pending-review view.
+**Expected (current code):** no pro found within the max radius → lead → `PENDING_ADMIN_REVIEW`;
+the **customer** receives the "pending review" message; the admin is paged via
+**`logger.critical` → Sentry email** (not a WhatsApp to `ADMIN_PHONE`). The lead appears in the
+admin panel's pending-review view and via the `ניהול` wizard.
+- Verify the **Sentry email** arrives (reuses the PRO-18 / PRO-75 paging path).
+- ⚠️ **Note:** this `logger.critical` fires on *every* unmatchable lead — expect one email each. If that's too noisy for a routine no-pro case, downgrade the log level (separate ticket).
+- `ADMIN_PHONE`/`ONCALL_PHONE` not-hard-coded (PRO-48) is verified via the **SOS/handoff** path (scenario 7), which *does* WhatsApp the admin.
 - [ ] Pass  · [ ] File: ______
 
 ### 9. Voice-note intake
@@ -122,7 +144,7 @@ reflects real current lead states (no stale columns). Mutations show success fee
 
 ## Exit criteria
 
-- [ ] **All 11 scenarios Pass** on a single clean run (production config).
+- [ ] **All 11 scenarios Pass** on a single clean run (production config) — note this requires **PRO-55 and PRO-56 to have shipped first** (scenario 1's price sub-check and scenario 3 depend on them; see the dependency table). The checklist cannot reach 100% until then.
 - [ ] Every failure encountered has a linked Linear ticket, fixed and re-verified.
 - [ ] The run is signed off below.
 
