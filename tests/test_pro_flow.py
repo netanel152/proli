@@ -90,6 +90,107 @@ async def test_approve_with_pending_lead(pro_setup, mock_wa, mock_lm, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_approve_with_quoted_price_shows_price_to_customer(
+    mock_db, mock_wa, mock_lm, monkeypatch
+):
+    """
+    PRO-55: when the lead carries an AI-quoted price (set during the estimate
+    turn / deal close), approving it must surface that exact price to the
+    customer in the PRO_FOUND message.
+    """
+    pro_id = ObjectId()
+    pro_phone = "972500000010"
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "phone_number": pro_phone,
+            "role": "professional",
+            "business_name": "דני חשמל",
+            "is_active": True,
+            "social_proof": {"rating": 0, "review_count": 0},
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_id,
+            "status": LeadStatus.NEW,
+            "chat_id": "972501110010@c.us",
+            "issue_type": "קצר בחשמל",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "quoted_price": "400-600",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    import app.services.pro_flow
+
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=ObjectId())
+    )
+
+    result = await handle_pro_text_command(f"{pro_phone}@c.us", "אשר", mock_wa, mock_lm)
+
+    assert Messages.Pro.APPROVE_SUCCESS in result
+    mock_wa.send_message.assert_called_once()
+    customer_msg = mock_wa.send_message.call_args.args[1]
+    assert "400-600" in customer_msg
+    assert "הערכת המחיר" in customer_msg
+
+
+@pytest.mark.asyncio
+async def test_approve_without_quoted_price_omits_price_for_customer(
+    mock_db, mock_wa, mock_lm, monkeypatch
+):
+    """No quoted_price on the lead -> PRO_FOUND message has no price line."""
+    pro_id = ObjectId()
+    pro_phone = "972500000011"
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "phone_number": pro_phone,
+            "role": "professional",
+            "business_name": "דני חשמל",
+            "is_active": True,
+            "social_proof": {"rating": 0, "review_count": 0},
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_id,
+            "status": LeadStatus.NEW,
+            "chat_id": "972501110011@c.us",
+            "issue_type": "קצר בחשמל",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    import app.services.pro_flow
+
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=ObjectId())
+    )
+
+    result = await handle_pro_text_command(f"{pro_phone}@c.us", "אשר", mock_wa, mock_lm)
+
+    assert Messages.Pro.APPROVE_SUCCESS in result
+    mock_wa.send_message.assert_called_once()
+    customer_msg = mock_wa.send_message.call_args.args[1]
+    assert "הערכת המחיר" not in customer_msg
+    assert "₪" not in customer_msg
+
+
+@pytest.mark.asyncio
 async def test_approve_no_pending(mock_db, mock_wa, mock_lm):
     """Pro with no NEW leads -> NO_PENDING_APPROVE."""
     pro_id = ObjectId()
