@@ -90,7 +90,11 @@ async def determine_best_pro(
                 )
 
             if not matching_pros:
-                logger.critical(
+                # WARNING, not CRITICAL: a coverage gap is a routine business event
+                # handled via the admin PENDING_ADMIN_REVIEW view — not an infra page.
+                # The worker forwards CRITICAL-only to Sentry, so keeping this below
+                # CRITICAL keeps no-pro leads out of the operator's email (PRO-77).
+                logger.warning(
                     f"No professional found within {WorkerConstants.GEO_RADIUS_STEPS[-1] // 1000}km "
                     f"for '{location}'. Lead requires admin review."
                 )
