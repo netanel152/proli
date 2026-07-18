@@ -373,7 +373,9 @@ async def check_whatsapp_instance_state():
                 logger.info(
                     "✅ [WA Monitor] Green API instance recovered (authorized)."
                 )
-                await send_oncall_alert(Messages.Alerts.WHATSAPP_RECOVERED)
+                await send_oncall_alert(
+                    Messages.Alerts.WHATSAPP_RECOVERED, assume_authorized=True
+                )
             return
 
         # Non-authorized (or unreachable → state is None).
@@ -407,16 +409,16 @@ async def check_whatsapp_instance_state():
             return  # already paged within the realert window
 
         await redis.set(ALERTED_KEY, "1", ex=86400)
-        # logger.critical → forwarded to Sentry as an issue (worker is CRITICAL-only).
+        # logger.critical → forwarded to Sentry as an issue (worker is CRITICAL-only),
+        # which is the out-of-band operator page. We deliberately do NOT try to
+        # send an on-call alert over WhatsApp here: WhatsApp is the down channel,
+        # so paging over it would only amplify the outage (PRO-75). The structured
+        # context below (state, downtime, instance) makes the Sentry email actionable.
         logger.critical(
             f"🚨 [WA Monitor] Green API instance NON-AUTHORIZED for "
-            f"~{downtime_minutes:.0f}m (state={state}) — no messages are being "
-            "processed. Paging on-call."
-        )
-        await send_oncall_alert(
-            Messages.Alerts.WHATSAPP_DOWN.format(
-                state=state or "unreachable", minutes=int(downtime_minutes)
-            )
+            f"~{downtime_minutes:.0f}m (state={state or 'unreachable'}, "
+            f"instance=***{str(settings.GREEN_API_INSTANCE_ID)[-4:]}) — outbound "
+            "messages are being silently dropped/filtered. Paging on-call via Sentry email."
         )
     except Exception as e:
         logger.error(f"[WA Monitor] Error during instance-state check: {e}")

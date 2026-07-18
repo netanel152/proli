@@ -93,7 +93,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 | `state_manager_service.py` | Redis-backed FSM per `chat_id` (`UserStates` enum); supports custom TTL per state |
 | `context_manager_service.py` | Stores last 20 messages per `chat_id` in Redis |
 | `lead_manager_service.py` | CRUD for leads in MongoDB |
-| `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts; on-call paging via `send_oncall_alert` (SMS-first) |
+| `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts; on-call paging via `send_oncall_alert` (WhatsApp when the instance is authorized, else `logger.critical` → Sentry/email page) |
 | `monitor_service.py` | Stale job detection, reassignment, stale lead reminders (nudger), escalation to PENDING_ADMIN_REVIEW, and Green API deauth detection (`check_whatsapp_instance_state`) |
 | `whatsapp_client_service.py` | Green API HTTP client — text-only messages (interactive buttons not supported by Green API) |
 | `cloudinary_client_service.py` | Media upload/retrieval |

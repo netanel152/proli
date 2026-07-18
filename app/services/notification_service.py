@@ -1,5 +1,4 @@
 from app.services.whatsapp_client_service import WhatsAppClient
-from app.services.sms_service import sms_client
 from app.core.database import leads_collection, users_collection
 from app.core.logger import logger
 from app.core.messages import Messages
@@ -10,39 +9,48 @@ from bson import ObjectId
 whatsapp = WhatsAppClient()
 
 
-async def _send_with_sms_fallback(chat_id: str, message: str) -> bool:
-    """Send via WhatsApp, fall back to SMS if it fails."""
+async def _send_best_effort(chat_id: str, message: str) -> bool:
+    """Send a WhatsApp message, swallowing failures so one bad send doesn't
+    abort a batch (e.g. SOS to pro then admin). Returns True on success."""
     try:
         await whatsapp.send_message(chat_id, message)
         return True
     except Exception as e:
-        logger.warning(
-            f"WhatsApp send failed for {chat_id}: {e}, trying SMS fallback..."
-        )
-        if sms_client.is_configured:
-            return await sms_client.send_sms(chat_id, message)
-        logger.error(f"SMS not configured, message to {chat_id} lost.")
+        logger.error(f"WhatsApp send failed for {chat_id}: {e}; message not delivered.")
         return False
 
 
-async def send_oncall_alert(message: str) -> bool:
-    """Deliver a high-urgency infra alert to the on-call operator.
+async def send_oncall_alert(message: str, *, assume_authorized: bool = False) -> bool:
+    """Best-effort WhatsApp delivery of an operator alert — but only when the
+    WhatsApp instance is actually authorized.
 
-    Used for events where WhatsApp itself may be the failing component (e.g.
-    Green API deauth), so this is *SMS-first*: WhatsApp is only attempted as a
-    last resort. Routes to ONCALL_PHONE when set, else ADMIN_PHONE. Returns True
-    if any channel accepted the message. Sentry CRITICAL (logged by the caller)
-    remains the guaranteed paging channel regardless of this return value."""
+    WhatsApp is frequently the *failing* component for these alerts (Green API
+    deauth / yellowCard). Sending an alert about WhatsApp over WhatsApp amplifies
+    the outage instead of reporting it (PRO-75), so if the instance is not
+    authorized we never send: we emit ``logger.critical`` — forwarded to Sentry
+    → email, the guaranteed out-of-band page — and return. When authorized this
+    is a courtesy channel (e.g. the recovery notice); Sentry stays the guaranteed
+    page regardless of the return value. Routes to ONCALL_PHONE when set, else
+    ADMIN_PHONE.
+
+    ``assume_authorized`` lets a caller that has *just* confirmed the instance is
+    authorized (the monitor's recovery path) skip the state probe — avoiding a
+    redundant call that could transiently misfire and drop the recovery notice
+    while falsely re-paging that WhatsApp is down. The instance id is masked; do
+    not log the raw ``message`` here (callers must keep it PII-free anyway)."""
     oncall = settings.ONCALL_PHONE or settings.ADMIN_PHONE
     # Mask to last 4 digits, matching the project-wide PII logging convention.
     masked = "***" + oncall[-4:]
 
-    # WhatsApp is the likely-down channel for these alerts — try SMS first.
-    if sms_client.is_configured:
-        if await sms_client.send_sms(oncall, message):
-            logger.info(f"On-call alert delivered via SMS to {masked}")
-            return True
-        logger.warning("On-call SMS failed — attempting WhatsApp as last resort.")
+    if not assume_authorized:
+        state = await whatsapp.get_state_instance()
+        if state != "authorized":
+            logger.critical(
+                f"WhatsApp instance not authorized (state={state or 'unreachable'}, "
+                f"instance=***{str(settings.GREEN_API_INSTANCE_ID)[-4:]}) — on-call "
+                f"alert to {masked} NOT sent over WhatsApp; paging via Sentry email."
+            )
+            return False
 
     chat_id = oncall if oncall.endswith("@c.us") else f"{oncall}@c.us"
     try:
@@ -50,7 +58,9 @@ async def send_oncall_alert(message: str) -> bool:
         logger.info(f"On-call alert delivered via WhatsApp to {masked}")
         return True
     except Exception as e:
-        logger.error(f"On-call alert failed on all channels for {masked}: {e}")
+        logger.critical(
+            f"On-call WhatsApp alert to {masked} failed: {e}. Relying on Sentry email."
+        )
         return False
 
 
@@ -84,7 +94,7 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
         )
         message = Messages.Pro.REMINDER
 
-        await _send_with_sms_fallback(pro_chat_id, message)
+        await _send_best_effort(pro_chat_id, message)
 
         # Increment counter atomically
         await leads_collection.update_one(
@@ -159,7 +169,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                 pro_msg = Messages.SOS.PRO_ALERT.format(
                     phone=customer_phone_display, last_message=last_message
                 )
-                await _send_with_sms_fallback(pro_chat_id, pro_msg)
+                await _send_best_effort(pro_chat_id, pro_msg)
                 logger.info(f"SOS alert sent to Pro {pro_id} for user {chat_id}")
 
         # 2. Always alert Admin with full details
@@ -172,7 +182,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
             last_message=last_message,
             lead_details=lead_details,
         )
-        await _send_with_sms_fallback(admin_chat_id, admin_msg)
+        await _send_best_effort(admin_chat_id, admin_msg)
         logger.info(f"SOS alert sent to Admin for user {chat_id}")
 
     except Exception as e:

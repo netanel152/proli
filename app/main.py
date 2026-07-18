@@ -13,7 +13,6 @@ from app.core.redis_client import close_redis_client, get_redis_client
 from app.core.http_client import close_http_client as _close_shared_http_client
 from app.core.database import client as mongo_client
 from app.core.logger import logger
-from app.services.sms_service import sms_client
 from scripts.create_indexes import create_all_indexes
 
 
@@ -54,7 +53,9 @@ def _init_sentry() -> None:
         attach_stacktrace=True,
     )
     sentry_sdk.set_tag("service", "proli-api")
-    logger.info(f"Sentry initialized (environment={settings.ENVIRONMENT}, CRITICAL-only).")
+    logger.info(
+        f"Sentry initialized (environment={settings.ENVIRONMENT}, CRITICAL-only)."
+    )
 
 
 _init_sentry()
@@ -62,6 +63,7 @@ _init_sentry()
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """Attach a unique X-Request-ID to every request for log correlation."""
+
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = request_id
@@ -105,7 +107,6 @@ async def lifespan(app: FastAPI):
     # ---- Shutdown ----
     await close_redis_client()
     await _close_shared_http_client()
-    await sms_client.close()
     logger.info("API shut down cleanly.")
 
 
@@ -127,5 +128,6 @@ app.include_router(health.router)
 
 if __name__ == "__main__":
     import os, uvicorn
+
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("app.main:app", host="0.0.0.0", port=port)
