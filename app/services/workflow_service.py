@@ -57,6 +57,24 @@ _IL_TZ = pytz.timezone("Asia/Jerusalem")
 # deal-detection signal. It must never reach the customer.
 DEAL_MARKER_RE = re.compile(r"\[DEAL:.*?\]", re.DOTALL)
 
+# PRO-55: a price quote is a plain number or number-range. The value is
+# AI-extracted from a conversation that contains customer-controlled text and is
+# rendered verbatim into the pro's trust-critical approval message, so it must be
+# validated to a price shape — never let free text (prompt injection) land there.
+_QUOTED_PRICE_RE = re.compile(r"^\d{1,6}(\s*[-–]\s*\d{1,6})?$")
+
+
+def _clean_quoted_price(value) -> "str | None":
+    """Sanitize + validate an AI-extracted price quote. Returns a normalized
+    'NNN' or 'NNN-NNN' string, or None if the value is missing or is not a plain
+    price shape (defends the pro approval message against injected text)."""
+    if not value:
+        return None
+    cleaned = str(value).replace("₪", "").strip()
+    if not _QUOTED_PRICE_RE.match(cleaned):
+        return None
+    return re.sub(r"\s*[-–]\s*", "-", cleaned)
+
 
 def _strip_deal_marker(text: str) -> str:
     """Strip the internal [DEAL:...] marker from customer-facing text.
@@ -1300,6 +1318,17 @@ async def _process_incoming_message_inner(
     await whatsapp.send_message(chat_id, cleaned_reply)
     await lead_manager.log_message(chat_id, "model", cleaned_reply)
 
+    # PRO-55: persist the AI's quoted price stickily the moment it's given (STEP 3),
+    # so it reaches the pro approval request even though the estimate turn precedes
+    # the deal close. Strip the ₪ symbol we re-add at display time.
+    _qp_clean = _clean_quoted_price(
+        getattr(final_response.extracted_data, "quoted_price", None)
+    )
+    if _qp_clean and current_lead_id:
+        await leads_collection.update_one(
+            {"_id": current_lead_id}, {"$set": {"quoted_price": _qp_clean}}
+        )
+
     if is_deal and best_pro:
         try:
             await _finalize_deal(
@@ -1400,6 +1429,13 @@ async def _finalize_deal(
         active_lead_doc.get("is_emergency", False) if active_lead_doc else False
     )
 
+    # PRO-55: the AI-quoted price shown to the pro at approval. Prefer this turn's
+    # (validated) value, else the sticky value persisted when the estimate was
+    # first given (already validated at persist time).
+    quoted_price = _clean_quoted_price(ed.quoted_price) or (
+        active_lead_doc.get("quoted_price") if active_lead_doc else None
+    )
+
     ok, reason = is_address_complete(ed)
 
     # Task 3: Bypass for emergency
@@ -1467,6 +1503,8 @@ async def _finalize_deal(
     }
     if d_name:
         lead_update["customer_name"] = d_name
+    if quoted_price:
+        lead_update["quoted_price"] = quoted_price
 
     if current_lead_id:
         # CONTACTED -> NEW once the routing engine has matched a pro. Goes
@@ -1496,6 +1534,14 @@ async def _finalize_deal(
             apartment=final_response.extracted_data.apartment,
             media_url=media_url,
         )
+        # create_lead_from_dict has no quoted_price param — persist it directly so
+        # the customer PRO_FOUND and analytics get it, matching the current_lead
+        # branch's lead_update (PRO-55).
+        if lead and quoted_price:
+            await leads_collection.update_one(
+                {"_id": lead["_id"]}, {"$set": {"quoted_price": quoted_price}}
+            )
+            lead["quoted_price"] = quoted_price
 
     if lead:
         # 1. Set customer state to AWAITING_PRO_APPROVAL with a bounded TTL so
@@ -1534,6 +1580,11 @@ async def _finalize_deal(
                 if past_pro_id_str and str(best_pro["_id"]) == past_pro_id_str:
                     loyalty_header = Messages.Pro.LOYALTY_LEAD_HEADER + "\n\n"
 
+            price_line = (
+                Messages.Pro.APPROVAL_PRICE_LINE.format(quoted_price=quoted_price)
+                if quoted_price
+                else ""
+            )
             approval_msg = (
                 emergency_header
                 + loyalty_header
@@ -1544,6 +1595,7 @@ async def _finalize_deal(
                     extra_info=extra_info,
                     issue_type=lead["issue_type"],
                     appointment_time=lead["appointment_time"],
+                    price_line=price_line,
                 )
             )
 

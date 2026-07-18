@@ -301,15 +301,13 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         label = type_labels.get(pro["profession_type"], pro["profession_type"])
         profession_line = f"🔧 *מקצוע:* {label}\n"
 
-    # Price list
+    # PRO-55: show the customer the exact price the AI quoted them (persisted on the
+    # lead) — the single source of truth shared with the pro's approval request,
+    # not the pro's generic price list.
     price_line = ""
-    raw_price = pro.get("price_list", "")
-    if raw_price:
-        if isinstance(raw_price, dict):
-            price_str = "\n".join(f"  • {k}: {v}₪" for k, v in raw_price.items())
-        else:
-            price_str = str(raw_price)
-        price_line = f"\n💰 *מחירון:*\n{price_str}\n"
+    quoted_price = lead.get("quoted_price")
+    if quoted_price:
+        price_line = f"\n💰 *הערכת המחיר שקיבלת:* {quoted_price}₪\n"
 
     # Rating
     rating_line = ""

@@ -566,6 +566,247 @@ async def test_no_pro_found_dispatcher_response_only(wf_mocks, monkeypatch):
     )
 
 
+# --- PRO-55: AI-Quoted Price Shown to the Pro ---
+
+
+@pytest.mark.asyncio
+async def test_deal_with_quoted_price_shown_to_pro(wf_mocks, monkeypatch, mock_db):
+    """
+    Deal closes with a full address AND a quoted_price on the pro-persona turn ->
+    the approval message sent to the pro contains the price line, and the lead
+    persists quoted_price.
+    """
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501110001@c.us"
+
+    pro_id = ObjectId()
+    pro_doc = {
+        "_id": pro_id,
+        "business_name": "Test Pro",
+        "phone_number": "972500000001",
+        "service_areas": ["Tel Aviv"],
+        "is_active": True,
+    }
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "issue_type": "נזילה",
+            "full_address": "תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+
+    dispatcher_resp = AIResponse(
+        reply_to_user="רגע, מוצא לך בעל מקצוע",
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="נזילה", full_address=None, appointment_time=None
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+    pro_resp = AIResponse(
+        reply_to_user="[DEAL: 10:00 | הרצל 10, תל אביב | נזילה]",
+        extracted_data=ExtractedData(
+            city="תל אביב",
+            issue="נזילה",
+            street="הרצל",
+            street_number="10",
+            floor="2",
+            apartment="4",
+            appointment_time="10:00",
+            quoted_price="400-600",
+        ),
+        transcription=None,
+        is_deal=True,
+    )
+    mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
+
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "determine_best_pro",
+        AsyncMock(return_value=pro_doc),
+    )
+
+    await process_incoming_message(chat_id, "בסביבות כמה זה יעלה? אפשר לקבוע ל-10?")
+
+    approval_calls = [
+        c
+        for c in mock_wa.send_message.call_args_list
+        if c.args[0] == "972500000001@c.us"
+        and Messages.Pro.APPROVAL_PRICE_LINE.split("{")[0] in c.args[1]
+    ]
+    assert len(approval_calls) == 1
+    approval_msg = approval_calls[0].args[1]
+    assert "400-600" in approval_msg
+    assert "הערכת מחיר" in approval_msg
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["quoted_price"] == "400-600"
+
+
+@pytest.mark.asyncio
+async def test_deal_without_quoted_price_omits_price_line(
+    wf_mocks, monkeypatch, mock_db
+):
+    """
+    Deal closes with a full address but NO quoted_price anywhere (this turn or
+    sticky) -> the approval message sent to the pro has no price line, no stray
+    '₪', and no broken empty line.
+    """
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501110002@c.us"
+
+    pro_id = ObjectId()
+    pro_doc = {
+        "_id": pro_id,
+        "business_name": "Test Pro",
+        "phone_number": "972500000002",
+        "service_areas": ["Tel Aviv"],
+        "is_active": True,
+    }
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "issue_type": "נזילה",
+            "full_address": "תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+
+    dispatcher_resp = AIResponse(
+        reply_to_user="רגע, מוצא לך בעל מקצוע",
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="נזילה", full_address=None, appointment_time=None
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+    pro_resp = AIResponse(
+        reply_to_user="[DEAL: 10:00 | הרצל 10, תל אביב | נזילה]",
+        extracted_data=ExtractedData(
+            city="תל אביב",
+            issue="נזילה",
+            street="הרצל",
+            street_number="10",
+            floor="2",
+            apartment="4",
+            appointment_time="10:00",
+            quoted_price=None,
+        ),
+        transcription=None,
+        is_deal=True,
+    )
+    mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
+
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "determine_best_pro",
+        AsyncMock(return_value=pro_doc),
+    )
+
+    await process_incoming_message(chat_id, "אפשר לקבוע ל-10?")
+
+    approval_calls = [
+        c
+        for c in mock_wa.send_message.call_args_list
+        if c.args[0] == "972500000002@c.us" and "פרטי עבודה חדשה לאישורך" in c.args[1]
+    ]
+    assert len(approval_calls) == 1
+    approval_msg = approval_calls[0].args[1]
+    assert "הערכת מחיר" not in approval_msg
+    assert "₪" not in approval_msg
+    # No leftover blank-line artifact from an empty {price_line} slot
+    assert "\n\n\n" not in approval_msg
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert "quoted_price" not in updated_lead
+
+
+@pytest.mark.asyncio
+async def test_estimate_turn_persists_quoted_price_sticky_without_deal(
+    wf_mocks, monkeypatch, mock_db
+):
+    """
+    PRO-55 sticky persist: the AI gives a price estimate (quoted_price set) on a
+    turn where the deal is NOT yet closed (is_deal=False, incomplete address) ->
+    the lead still persists quoted_price so it survives to the later deal-close
+    turn.
+    """
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501110003@c.us"
+
+    pro_id = ObjectId()
+    pro_doc = {
+        "_id": pro_id,
+        "business_name": "Test Pro",
+        "phone_number": "972500000003",
+        "service_areas": ["Tel Aviv"],
+        "is_active": True,
+    }
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "issue_type": "נזילה",
+            "full_address": "תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+
+    dispatcher_resp = AIResponse(
+        reply_to_user="רגע, מוצא לך בעל מקצוע",
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="נזילה", full_address=None, appointment_time=None
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+    # STEP 3 estimate turn: pro persona quotes a price but has no address yet ->
+    # not a deal.
+    estimate_resp = AIResponse(
+        reply_to_user="זה יעלה בסביבות 400-600 שח, איפה אתה גר?",
+        extracted_data=ExtractedData(
+            city="תל אביב",
+            issue="נזילה",
+            appointment_time=None,
+            quoted_price="400-600",
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+    mock_ai.analyze_conversation.side_effect = [dispatcher_resp, estimate_resp]
+
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "determine_best_pro",
+        AsyncMock(return_value=pro_doc),
+    )
+
+    await process_incoming_message(chat_id, "בסביבות כמה זה יעלה?")
+
+    # Not a deal -> no approval request should have gone to the pro
+    approval_calls = [
+        c
+        for c in mock_wa.send_message.call_args_list
+        if c.args[0] == "972500000003@c.us" and "פרטי עבודה חדשה לאישורך" in c.args[1]
+    ]
+    assert len(approval_calls) == 0
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["quoted_price"] == "400-600"
+
+
 # --- Soft Hold & Pause State Tests ---
 
 
@@ -1242,3 +1483,26 @@ async def test_dispatcher_path_with_best_pro_strips_deal_marker_and_finalizes(
     updated_lead = await mock_db.leads.find_one({"_id": lead_id})
     assert updated_lead["status"] == LeadStatus.NEW
     assert updated_lead["pro_id"] == pro_id
+
+
+# --- PRO-55: quoted-price sanitizer/validator (injection guard) ---
+
+
+def test_clean_quoted_price_accepts_price_shapes_and_rejects_free_text():
+    """`_clean_quoted_price` normalizes real price shapes and rejects anything
+    else, so AI/customer-influenced free text can never reach the pro's approval
+    message verbatim (PRO-55 trust guard)."""
+    from app.services.workflow_service import _clean_quoted_price
+
+    # Accepted → normalized
+    assert _clean_quoted_price("400-600") == "400-600"
+    assert _clean_quoted_price("500") == "500"
+    assert _clean_quoted_price("400 - 600") == "400-600"
+    assert _clean_quoted_price("400-600₪") == "400-600"
+
+    # Rejected → None
+    assert _clean_quoted_price(None) is None
+    assert _clean_quoted_price("") is None
+    assert _clean_quoted_price("צור קשר 050-1234567") is None  # injected free text
+    assert _clean_quoted_price("about 500 shekels") is None
+    assert _clean_quoted_price("0501234567") is None  # phone, not a price
