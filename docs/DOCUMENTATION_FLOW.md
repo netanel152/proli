@@ -18,7 +18,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 | `completed` | Pro or customer confirms work done | `customer_flow.py` |
 | `rejected` | Pro rejects via text ("דחה"/"2") | `_handle_reject` in `pro_flow.py` |
 | `cancelled` | Customer cancels | `pro_flow.py` |
-| `closed` | Max reassignments reached | `monitor_service.py` |
+| `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h | `admin_flow.py` / `monitor_service.py` |
 | `pending_admin_review` | No replacement pro found at any radius | `monitor_service.py` / `workflow_service.py` |
 
 Each transition is appended to the lead's `status_history` array (`{status, at, by}`) via `set_lead_status()`, the single writer for lead status in `lead_manager_service.py`.
@@ -111,15 +111,16 @@ The Dispatcher AI extracts and stores `customer_name` from the conversation. The
 
 Runs every 10 minutes via APScheduler. PRO-73: gated to business hours (08:00–21:00 IL) and the `sos_healer_active` toggle (default OFF).
 
-Queries leads with status `new`, `contacted`, or `pending_admin_review` older than `WorkerConstants.SOS_TIMEOUT_MINUTES` (60 min).
+Queries leads with status `new` or `contacted` older than `WorkerConstants.SOS_TIMEOUT_MINUTES` (60 min). `pending_admin_review` is excluded — it is a terminal state for the Healer, already handed to a human.
 
 For each stale lead:
 
 ```
-notify customer (CUSTOMER_REASSIGNING)
+reassignment_count >= MAX_REASSIGNMENTS (3)?
+    │      → status = PENDING_ADMIN_REVIEW, alert admin, notify customer
+    │        (a human takes over; the lead is not closed — PRO-63)
     │
-    ├─ reassignment_count >= MAX_REASSIGNMENTS (3)?
-    │      → status = CLOSED, notify customer, clear context
+notify customer (CUSTOMER_REASSIGNING)
     │
     ├─ determine_best_pro() returns a pro?
     │      → update lead (new pro_id, reset created_at, increment reassignment_count)
@@ -161,7 +162,7 @@ Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "
 - AI calls receive the last **5 turns** (10 messages) after trimming — centralized in `ai_engine_service.analyze_conversation`
 - Context is cleared (`ContextManager.clear_context`) when:
   - Lead is completed or rejected
-  - Max reassignments reached (lead closed)
+  - Max reassignments reached (lead escalated to `PENDING_ADMIN_REVIEW`)
   - Lead escalated to `PENDING_ADMIN_REVIEW` (healer path)
   - Customer resets with "התחלה" / "reset"
 

@@ -278,9 +278,9 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | `booked` | Pro approved, appointment slot locked |
 | `completed` | Work done, awaiting customer rating |
 | `rejected` | Pro declined |
-| `closed` | Archived after max reassignments |
+| `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h |
 | `cancelled` | Customer cancelled |
-| `pending_admin_review` | No pro found after all radius/fallback attempts |
+| `pending_admin_review` | No pro found after all radius/fallback attempts, or max reassignments exhausted (a human takes over, PRO-63) |
 
 Every transition is recorded as a `{status, at, by}` entry in the lead's `status_history` array, written by the single `set_lead_status()` writer in `lead_manager_service.py`.
 

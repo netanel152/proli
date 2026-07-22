@@ -18,7 +18,7 @@ from bson import ObjectId
 import app.services.admin_flow as admin_flow
 import app.services.matching_service as matching_service
 from app.core.config import settings
-from app.core.constants import LeadStatus, UserStates
+from app.core.constants import LeadStatus, UserStates, WorkerConstants
 
 
 @pytest.fixture
@@ -211,6 +211,62 @@ async def test_action_self_assign_assigns_lead_to_admin_pro(
     assert updated["pro_id"] == admin_pro_id
     mock_state.clear_state.assert_awaited()
     assert "הועבר" in _sent_text(mock_whatsapp)
+
+
+@pytest.mark.asyncio
+async def test_self_assign_resets_reassignment_lifecycle_after_escalation(
+    patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
+):
+    """PRO-63 Fix 2 — a human taking ownership of a lead escalated for
+    exhausted reassignments must reset the lifecycle (reassignment_count,
+    approval_nudged, reassign_offered, pro_notified_at, escalation_reason) or
+    the very next Healer sweep re-escalates it straight off the admin and
+    re-pages, forever."""
+    db = patch_admin_collections
+    monkeypatch.setattr(settings, "ADMIN_PHONE", "972524828796")
+
+    admin_pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": admin_pro_id,
+            "phone_number": "972524828796",
+            "role": "professional",
+            "business_name": "מנהל המערכת",
+        }
+    )
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+            "reassignment_count": WorkerConstants.MAX_REASSIGNMENTS,
+            "escalation_reason": "max_reassignments_exhausted",
+            "approval_nudged": True,
+            "reassign_offered": True,
+        }
+    )
+    mock_state.get_metadata.return_value = {"selected_lead_id": str(lead_id)}
+
+    await admin_flow.handle_admin_message(
+        "admin@c.us",
+        "1",
+        UserStates.ADMIN_SELECTING_ACTION,
+        mock_state,
+        None,
+        mock_whatsapp,
+        None,
+    )
+
+    updated = await db.leads.find_one({"_id": lead_id})
+    assert updated["status"] == LeadStatus.NEW
+    assert updated["reassignment_count"] == 0
+    assert "escalation_reason" not in updated
+    assert updated["approval_nudged"] is False
+    assert updated["reassign_offered"] is False
+    assert updated["pro_notified_at"] is not None
 
 
 @pytest.mark.asyncio

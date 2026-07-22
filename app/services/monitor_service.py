@@ -2,7 +2,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from app.core.database import leads_collection, users_collection
 from app.core.constants import LeadStatus, UserStates, WorkerConstants, Defaults, Actor
-from app.core.phone import to_chat_id
+from app.core.phone import to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.core.config import settings
 from app.core.logger import logger
@@ -19,14 +19,47 @@ from bson import ObjectId
 whatsapp = WhatsAppClient()
 
 
+async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
+    """Page the admin the moment a lead exhausts its reassignments (PRO-63).
+
+    The customer copy commits to a callback within the hour, but the only other
+    admin notification for ``PENDING_ADMIN_REVIEW`` leads is the 4-hourly batched
+    Reporter — too slow to honour that promise. This fires immediately; the
+    Reporter stays the safety net if this send is suppressed or fails.
+
+    Best-effort by design: an alert failure must never abort the escalation, so
+    every exception is swallowed after logging. The customer phone is included
+    because the admin needs it to actually call them — that is the point of the
+    escalation — but it is never written to the log line.
+    """
+    try:
+        admin_chat_id = to_chat_id(settings.ADMIN_PHONE)
+        message = Messages.SOS.ADMIN_MAX_REASSIGNMENTS.format(
+            phone=to_local_phone(lead.get("chat_id")),
+            issue=lead.get("issue_type") or "לא ידוע",
+            # `or` (not a dict default) covers a null full_address, not just a
+            # missing key — same guard as send_sos_alert.
+            address=lead.get("full_address") or "לא ידוע",
+            attempts=attempts,
+        )
+        await whatsapp.send_message(admin_chat_id, message)
+        logger.info(f"📣 [Reassign] Admin alerted for escalated lead {lead.get('_id')}")
+    except Exception as e:
+        logger.error(
+            f"Failed to alert admin about escalated lead {lead.get('_id')}: {e}. "
+            "Falling back to the periodic stuck-lead report."
+        )
+
+
 async def reassign_lead(lead) -> bool:
     """Reassign one lead to the next-best pro, excluding its current pro.
 
-    Notifies the customer, the new pro, and the old pro; honors
-    ``MAX_REASSIGNMENTS`` (closes the lead) and escalates to
-    ``PENDING_ADMIN_REVIEW`` when no replacement exists. Resets the approval-SLA
-    clock (``pro_notified_at`` + flags) for the new pro so PRO-56 re-arms.
-    Returns True iff a new pro was assigned.
+    Notifies the customer, the new pro, and the old pro; escalates to
+    ``PENDING_ADMIN_REVIEW`` both when ``MAX_REASSIGNMENTS`` is exhausted
+    (PRO-63 — a human takes over rather than the lead being closed) and when no
+    replacement exists. Resets the approval-SLA clock (``pro_notified_at`` +
+    flags) for the new pro so PRO-56 re-arms. Returns True iff a new pro was
+    assigned.
 
     Shared by the SOS Healer (60-min stale sweep) and the PRO-56 approval-SLA
     reassignment offer (customer chose "find someone else").
@@ -34,6 +67,71 @@ async def reassign_lead(lead) -> bool:
     lead_id = lead["_id"]
     chat_id = lead["chat_id"]
     current_pro_id = lead.get("pro_id")
+    reassignment_count = lead.get("reassignment_count", 0)
+
+    # Hard stop, checked FIRST. PRO-63 — hand the lead to a human instead of
+    # closing it. This customer has been failed MAX_REASSIGNMENTS times;
+    # auto-CLOSED made our worst experience "the bot gave up", with no path back.
+    # PENDING_ADMIN_REVIEW keeps the lead alive and actionable (admin `ניהול`
+    # wizard, admin panel, the pro `מצא` search). CLOSED stays reserved for an
+    # explicit human give-up and the janitor's never-assigned sweep.
+    #
+    # This runs before CUSTOMER_REASSIGNING and before the geo query on purpose:
+    # telling an exhausted customer "finding you another pro" and then
+    # immediately "I couldn't find one" is the exact whiplash this ticket exists
+    # to remove, and the matching round would be discarded anyway.
+    if reassignment_count >= WorkerConstants.MAX_REASSIGNMENTS:
+        # Idempotency guard. A lead already sitting in PENDING_ADMIN_REVIEW for
+        # this reason must not be re-escalated: `reassignment_count` is still at
+        # the max after a human re-assigns, so without this a re-entry would
+        # yank the lead back off the pro, re-promise the customer a callback,
+        # and page the admin again on every pass.
+        if lead.get("escalation_reason") == "max_reassignments_exhausted":
+            logger.info(
+                f"⏭️ [Reassign] Lead {lead_id} already escalated for exhausted "
+                "reassignments — not re-escalating."
+            )
+            return False
+
+        # Race-safe: two callers can reach this concurrently (the Healer sweep
+        # and the PRO-56 "1" reply land in different processes). Guarding on the
+        # status we read means the loser gets None and skips the customer message
+        # and the admin page instead of duplicating both.
+        escalated = await set_lead_status(
+            lead_id,
+            LeadStatus.PENDING_ADMIN_REVIEW,
+            Actor.SYSTEM,
+            extra_set={"escalation_reason": "max_reassignments_exhausted"},
+            expected_status=lead.get("status"),
+        )
+        if not escalated:
+            logger.info(
+                f"⏭️ [Reassign] Lead {lead_id} escalated by a concurrent caller — "
+                "skipping duplicate notifications."
+            )
+            return False
+
+        try:
+            await whatsapp.send_message(chat_id, Messages.SOS.MAX_REASSIGNMENTS_REACHED)
+        except Exception as e:
+            logger.error(
+                f"Failed to notify customer ...{chat_id[-8:]} of escalation: {e}"
+            )
+        # The customer message promises a callback within the hour; the batched
+        # Reporter only runs every 4h, so page the admin now. Best-effort — a
+        # failed alert must not abort the escalation (the lead is already in
+        # PENDING_ADMIN_REVIEW, and the Reporter remains the safety net).
+        await _alert_admin_lead_escalated(lead, reassignment_count)
+        # Release the customer's FSM state (not just context) — this branch is
+        # reachable from the PRO-56 "1" reply, so a customer whose lead just
+        # escalated must not stay parked in AWAITING_PRO_APPROVAL.
+        await StateManager.clear_state(chat_id)
+        await ContextManager.clear_context(chat_id)
+        logger.warning(
+            f"🚨 [Reassign] Lead {lead_id} escalated to PENDING_ADMIN_REVIEW after "
+            f"{reassignment_count} reassignments."
+        )
+        return False
 
     # Skip leads without a real, usable location — geo matching would always fail
     # and escalate to PENDING_ADMIN_REVIEW, burning a CUSTOMER_REASSIGNING notice
@@ -66,30 +164,6 @@ async def reassign_lead(lead) -> bool:
         location=raw_location,
         excluded_pro_ids=excluded_ids,
     )
-
-    reassignment_count = lead.get("reassignment_count", 0)
-
-    # Hard stop: if max reassignments reached, close the lead
-    if reassignment_count >= WorkerConstants.MAX_REASSIGNMENTS:
-        await set_lead_status(
-            lead_id,
-            LeadStatus.CLOSED,
-            Actor.SYSTEM,
-            extra_set={"closed_reason": "max_reassignments"},
-        )
-        try:
-            await whatsapp.send_message(chat_id, Messages.SOS.MAX_REASSIGNMENTS_REACHED)
-        except Exception as e:
-            logger.error(f"Failed to notify customer ...{chat_id[-8:]} of closure: {e}")
-        # Release the customer's FSM state (not just context) — this branch is now
-        # reachable from the PRO-56 "1" reply, so a customer whose lead just closed
-        # must not stay parked in AWAITING_PRO_APPROVAL.
-        await StateManager.clear_state(chat_id)
-        await ContextManager.clear_context(chat_id)
-        logger.warning(
-            f"🚫 [Reassign] Lead {lead_id} closed after {reassignment_count} reassignments."
-        )
-        return False
 
     if new_pro:
         new_pro_id = new_pro["_id"]
