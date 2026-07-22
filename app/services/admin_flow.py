@@ -220,14 +220,31 @@ async def _handle_pro_selection(chat_id, text, state_manager, whatsapp):
 
 async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
     """Update the lead in Mongo, notify the pro, clear admin wizard state."""
+    # A human taking ownership is a fresh start for the lead (PRO-63). Without
+    # resetting the counter, a lead escalated for exhausted reassignments comes
+    # back with `reassignment_count` still at MAX_REASSIGNMENTS, so the next
+    # Healer sweep re-escalates it straight off the pro we just assigned and
+    # re-pages the admin. `created_at` is reset too because the Healer keys
+    # staleness off it — an hours-old `created_at` would make this freshly
+    # assigned lead look stale on the very next 10-min tick and get reassigned
+    # away before the new pro's 60-min intent window even opens. Clearing
+    # `escalation_reason` lets the lead escalate again if this assignment also
+    # fails; the PRO-56 flag/timestamp resets are hygiene for the new pro.
+    now = datetime.now(timezone.utc)
     await set_lead_status(
         lead_id,
         LeadStatus.NEW,
         Actor.ADMIN,
         extra_set={
             "pro_id": pro["_id"],
-            "assigned_by_admin_at": datetime.now(timezone.utc),
+            "assigned_by_admin_at": now,
+            "created_at": now,
+            "pro_notified_at": now,
+            "reassignment_count": 0,
+            "approval_nudged": False,
+            "reassign_offered": False,
         },
+        extra_unset={"escalation_reason": ""},
     )
 
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})

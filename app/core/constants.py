@@ -64,7 +64,16 @@ class WorkerConstants:
     SLOT_SEARCH_WINDOW_HOURS = 2
     DEFAULT_CURRENCY = "ILS"
     SOS_TIMEOUT_MINUTES = 60
-    MAX_REASSIGNMENTS = 3  # Max times a lead can be reassigned before closing
+    # Max reassignment attempts before the lead is escalated to
+    # PENDING_ADMIN_REVIEW for a human to take over (PRO-63 — it is not closed).
+    MAX_REASSIGNMENTS = 3
+    # PRO-63: how long a PENDING_ADMIN_REVIEW lead keeps short-circuiting the
+    # customer's chat. The short-circuit exists to stop a waiting customer
+    # spawning duplicate leads, but it has no natural end — if no admin ever
+    # acts, the customer can never open a new request. After this window their
+    # next message starts a fresh request; the stale lead stays in
+    # PENDING_ADMIN_REVIEW for the admin (it is never auto-closed).
+    PENDING_REVIEW_SHORTCIRCUIT_HOURS = 24
     # PRO-56 approval-SLA: chase a silent pro fast instead of waiting for the
     # 60-min Healer. Emergency leads use half these thresholds (// 2 → 5 / 12).
     APPROVAL_NUDGE_MINUTES = 10  # T+10 → nudge the pro (once per lead)
