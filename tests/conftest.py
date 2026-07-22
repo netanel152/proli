@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import os
 import sys
 import certifi
+import fakeredis.aioredis
 from app.core.config import settings
 
 # Ensure app is in path
@@ -20,6 +21,41 @@ sys.modules["google.genai.types"] = MagicMock()
 @pytest.fixture(scope="module")
 def mock_db():
     return AsyncMongoMockClient().proli_db
+
+
+@pytest.fixture(autouse=True)
+def fake_redis(request, monkeypatch):
+    """PRO-78: back every Redis touch with an in-memory fakeredis, one FRESH
+    instance per test — mirroring how mongomock gives each test a clean Mongo.
+
+    Every Redis-using service (StateManager, ContextManager, SecurityService,
+    the chat/scheduler locks) funnels through `get_redis_client()`, which returns
+    the module-level `_redis_client` singleton without connecting when it is
+    already set. Pre-seeding that singleton with a fresh FakeRedis means each test
+    reads/writes an isolated in-memory store, so no real-Redis state can bleed
+    across tests or runs. That bleed (daily-AI-cap counters crossing
+    DAILY_AI_CALL_CAP, leftover sliding-window / lock keys) is what made the suite
+    non-deterministic and needed manual `redis-cli` flushes between runs.
+
+    `decode_responses=True` matches the production client so services get `str`
+    back, not `bytes`. Integration tests are skipped — they keep real Redis, same
+    as they keep a real Mongo.
+
+    Scope note: this isolates the `_redis_client` singleton only. The separate
+    `_arq_pool` singleton (used solely by the webhook enqueue path) is NOT seeded
+    here — unit tests that hit enqueue must patch `get_arq_pool` themselves (as
+    tests/test_integration_webhook.py already does), or they would attempt a real
+    `create_pool`.
+    """
+    if request.node.get_closest_marker("integration"):
+        return
+    import app.core.redis_client as redis_client_module
+
+    # A fresh instance per test; no explicit close needed (in-memory, GC'd after
+    # the test, and monkeypatch reverts the singleton on teardown).
+    fake = fakeredis.aioredis.FakeRedis(decode_responses=True)
+    monkeypatch.setattr(redis_client_module, "_redis_client", fake)
+    return fake
 
 
 @pytest.fixture(autouse=True)
