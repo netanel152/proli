@@ -86,16 +86,26 @@ downtime is manual (§4).
 > - **Rebooting the instance** — restarts Green API's session; the flag persists.
 > - **Re-scanning the QR** — re-links the device (fixes `notAuthorized`, irrelevant to a flag).
 >
-> The **only** things that lift a `yellowCard`:
-> 1. **Silence + time** — stop ALL outbound (the PRO-71 breaker + `WHATSAPP_DRY_RUN=true` do
->    this) and wait. WhatsApp auto-lifts, typically a few hours, up to ~24–48h.
-> 2. **Rebuild trust with real, low-volume human use** — on the phone holding the number, use
->    WhatsApp normally (a few genuine 1:1 messages, reply to inbound), low volume, never cold.
+> Creating a **new Green API instance** does not help either, as long as it is linked to the
+> same number — an instance is just an API session pointed at the number, so the flag follows
+> it. Repeated session teardown/re-registration is itself a spam signal, so extra churn on an
+> already-flagged number is actively harmful, not neutral.
 >
-> **Do not send test messages to "check if it's back"** — every send while flagged pushes
-> yellow → red (`blocked`, a permanent ban). Poll `getStateInstance` / `/health` instead; the
-> watchdog already does this every 2 min. If it hasn't cleared after ~48h of silence, or flips
-> to `blocked`, treat the number as burned and rotate to a fresh, warmed number (§3b).
+> **Silence alone does not lift a `yellowCard`.** Going quiet is *necessary* — it stops the
+> score dropping further — but it is not *sufficient*. The flag is a trust score on the phone
+> number, and a score recovers from **positive signal**, not from the absence of negative
+> signal. A number that has only ever emitted automated outbound and is now completely silent
+> generates no positive signal and can sit `yellowCard` indefinitely.
+>
+> What actually lifts it is **rebuilding reputation with genuine human use** — see §3d. Budget
+> **days, not hours**: roughly 5–7 days of real usage, and longer if the number has no history
+> of human conversation.
+>
+> **Do not send test messages to "check if it's back"** — every automated send while flagged
+> pushes yellow → red (`blocked`, a permanent ban). Poll `getStateInstance` / `/health`
+> instead; the watchdog already does this every 2 min. If it flips to `blocked`, or ~2 weeks of
+> genuine rehabilitation (§3d) produce no change, treat the number as burned and rotate to a
+> fresh, warmed number (§3b).
 
 ### 3a. Re-link / re-authorize the existing instance (most common)
 1. Open the Green API console → your instance → **QR / Authorization**.
@@ -128,6 +138,49 @@ redis-cli del wa:instance:paused
 ```
 Do **not** delete `wa:instance:paused:manual` unless you intended to (that's the manual switch, §6).
 
+### 3d. Rehabilitate a `yellowCard`ed number (the actual fix)
+
+Reputation is rebuilt by making the number look like a **person's phone**, not a bot endpoint.
+The API stays completely out of it for the whole window.
+
+**Step 1 — guarantee zero automated sends.**
+The PRO-71 breaker already halts outbound while the state is non-`authorized`, but it is set by
+the worker's *scheduled* monitor job and the key carries a 360s TTL. Between worker boot and the
+first monitor tick the key is absent and outbound is **fail-open** — a webhook landing in that
+window sends a real message from a flagged number. Close the gap explicitly:
+
+```bash
+railway variables --set "WHATSAPP_DRY_RUN=true" --service worker --environment Production
+railway variables --set "WHATSAPP_DRY_RUN=true" --service api    --environment Production
+```
+
+The dry-run guard runs **before** the breaker check in every send method, so it has no timing
+window at all. Nothing is lost by enabling it: a `yellowCard`ed instance silently filters
+outbound anyway. **Remove it before the real E2E run** — otherwise the bot is mute and you will
+debug a working system for an hour.
+
+**Step 2 — use the number as a human, on a real handset.**
+Put the SIM in a phone and use the **normal WhatsApp mobile app** (not Green API, not a linked
+device driven by code):
+- Have 5–10 real people **save the number as a contact** and message it first. Inbound-first
+  traffic from contacts who have you saved is the strongest positive signal.
+- Reply like a person: irregular timing, varied wording, no templates, no bulk-identical text.
+- No links, no attachments, no forwards for the first few days.
+- Keep volume low and conversational — a handful of real threads beats any volume of outbound.
+
+**Step 3 — wait, and poll passively.**
+Re-probe `getStateInstance` **at most once or twice a day**. Do not send to test. The state flips
+to `authorized` on its own when the score recovers.
+
+**Step 4 — ramp back slowly.**
+After it reports `authorized`, remove `WHATSAPP_DRY_RUN` and resume at low volume (single-digit
+automated sends the first day, growing over a week). A number with `yellowCard` history re-flags
+faster than a clean one, so treat the first week back as fragile.
+
+> If the pilot cannot wait out this window, run §3b (fresh warmed number) **in parallel** rather
+> than instead — warming a replacement takes about the same week, so starting it costs nothing
+> and removes the single point of failure either way.
+
 ---
 
 ## 4. Customer communication during downtime
@@ -147,7 +200,10 @@ WhatsApp flags numbers for **unsolicited / spammy** behavior. To keep the number
 
 - **Never cold-initiate.** Only message users who messaged first. Test scripts are guarded
   against cold-initiating to real numbers (PRO-72) — keep that guard on.
-- **Warm up new numbers gradually** — don't blast a fresh number with high volume on day one.
+- **Warm up new numbers before they ever touch Green API** — a brand-new number wired straight
+  into the API is the classic way to earn a `yellowCard` in week one. Use it as a human phone
+  first (same technique as §3d step 2, ~a week), *then* link the instance and ramp automated
+  volume up over several days. Warming is not "go slower on day one"; it happens before day one.
 - Avoid identical bulk messages, high send rates, and messaging numbers that repeatedly report/block.
 - Keep opt-in / consent flow intact (the consent gate exists for this reason).
 - Watch `whatsapp.status` on `/health` and the Sentry pages — `degraded` (yellowCard) is an
