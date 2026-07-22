@@ -1077,6 +1077,50 @@ async def test_search_finds_stuck_lead_and_assigns(pro_setup, mock_wa):
     assert f"rate_limit:pro_search:{chat_id}" in store
 
 
+@pytest.mark.asyncio
+async def test_search_resets_reassignment_lifecycle_after_escalation(
+    pro_setup, mock_wa
+):
+    """PRO-63 Fix 2 — a pro claiming a stuck lead via 'מצא' must reset the
+    reassignment lifecycle (count/flags/escalation_reason), or the lead
+    immediately re-escalates off them on the next Healer sweep."""
+    pro_doc, db = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    redis, store = _make_mock_redis()
+
+    await db.leads.delete_many({"status": LeadStatus.PENDING_ADMIN_REVIEW})
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "issue_type": "נזילה",
+            "city": "תל אביב",
+            "created_at": datetime.now(timezone.utc) - timedelta(minutes=90),
+            "reassignment_count": WorkerConstants.MAX_REASSIGNMENTS,
+            "escalation_reason": "max_reassignments_exhausted",
+            "approval_nudged": True,
+            "reassign_offered": True,
+        }
+    )
+
+    with patch(
+        "app.services.pro_flow.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
+        await _handle_search(pro_doc, chat_id, mock_wa)
+
+    lead = await db.leads.find_one({"_id": lead_id})
+    assert lead["status"] == LeadStatus.NEW
+    assert lead["pro_id"] == pro_doc["_id"]
+    assert lead["reassignment_count"] == 0
+    assert "escalation_reason" not in lead
+    assert lead["approval_nudged"] is False
+    assert lead["reassign_offered"] is False
+    assert lead["pro_notified_at"] is not None
+
+
 # --- Help command does not clear context ---
 
 

@@ -808,14 +808,27 @@ async def _handle_search(pro, chat_id: str, whatsapp):
     if not stuck:
         return Messages.Pro.NO_STUCK_LEADS
 
+    # Same fresh-start reset as the admin assignment path (PRO-63): a pro
+    # claiming a stuck lead must clear the exhausted-reassignment state, or the
+    # next Healer sweep re-escalates the lead off them and re-pages the admin.
+    # `created_at` is reset for the same reason as there — the Healer measures
+    # staleness from it, so leaving it stale would let the sweep yank the lead
+    # back off the pro who just claimed it.
+    now = datetime.now(timezone.utc)
     await set_lead_status(
         stuck["_id"],
         LeadStatus.NEW,
         Actor.PRO,
         extra_set={
             "pro_id": pro["_id"],
-            "assigned_by_admin_at": datetime.now(timezone.utc),
+            "assigned_by_admin_at": now,
+            "created_at": now,
+            "pro_notified_at": now,
+            "reassignment_count": 0,
+            "approval_nudged": False,
+            "reassign_offered": False,
         },
+        extra_unset={"escalation_reason": ""},
     )
 
     wait_minutes = 0

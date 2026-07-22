@@ -87,13 +87,13 @@ Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active
 
 ### How it works
 
-The **SOS Healer** (every 10 min; PRO-73: business hours + `sos_healer_active` toggle, default OFF) finds leads in `new`, `contacted`, or `pending_admin_review` status older than 60 minutes:
+The **SOS Healer** (every 10 min; PRO-73: business hours + `sos_healer_active` toggle, default OFF) finds leads in `new` or `contacted` status older than 60 minutes (`pending_admin_review` is excluded — it's already a terminal state for the Healer):
 
-1. Notifies customer of the delay
-2. Searches for a replacement pro (excluding the current one)
-3. If found → reassigns the lead, notifies both pros, clears customer state
-4. If not found → sets lead to `PENDING_ADMIN_REVIEW`, sends customer a `PENDING_REVIEW` message, clears context
-5. If max reassignments (3) reached → closes the lead, notifies customer
+1. If max reassignments (3) already reached → escalates the lead to `PENDING_ADMIN_REVIEW`, alerts the admin immediately, and notifies the customer a human will call back within the hour (PRO-63 — a human takes over, the lead is never closed by this)
+2. Notifies customer of the delay
+3. Searches for a replacement pro (excluding the current one)
+4. If found → reassigns the lead, notifies both pros, clears customer state
+5. If not found → sets lead to `PENDING_ADMIN_REVIEW`, sends customer a `PENDING_REVIEW` message, clears context
 
 The **Stale Lead Nudger** (every 4 h) finds leads in `BOOKED` status older than 24 hours:
 1. Sends a reminder to the professional to close the job if finished.
