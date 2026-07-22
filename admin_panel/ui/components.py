@@ -3,17 +3,56 @@ import html
 
 # Status color mapping for Kanban and pills
 STATUS_COLORS = {
-    "new": {"bg": "#EFF6FF", "text": "#1D4ED8", "border": "#BFDBFE", "icon": "fiber_new"},
-    "contacted": {"bg": "#FFF7ED", "text": "#C2410C", "border": "#FED7AA", "icon": "call"},
-    "booked": {"bg": "#F0FDF4", "text": "#15803D", "border": "#BBF7D0", "icon": "event_available"},
-    "completed": {"bg": "#ECFDF5", "text": "#047857", "border": "#A7F3D0", "icon": "check_circle"},
-    "rejected": {"bg": "#FEF2F2", "text": "#B91C1C", "border": "#FECACA", "icon": "cancel"},
+    # Amber "needs a human" — deliberately distinct from contacted's orange and
+    # rejected's red so the human-intervention queue reads as attention, not error.
+    "pending_admin_review": {
+        "bg": "#FFFBEB",
+        "text": "#B45309",
+        "border": "#F59E0B",
+        "icon": "support_agent",
+    },
+    "new": {
+        "bg": "#EFF6FF",
+        "text": "#1D4ED8",
+        "border": "#BFDBFE",
+        "icon": "fiber_new",
+    },
+    "contacted": {
+        "bg": "#FFF7ED",
+        "text": "#C2410C",
+        "border": "#FED7AA",
+        "icon": "call",
+    },
+    "booked": {
+        "bg": "#F0FDF4",
+        "text": "#15803D",
+        "border": "#BBF7D0",
+        "icon": "event_available",
+    },
+    "completed": {
+        "bg": "#ECFDF5",
+        "text": "#047857",
+        "border": "#A7F3D0",
+        "icon": "check_circle",
+    },
+    "rejected": {
+        "bg": "#FEF2F2",
+        "text": "#B91C1C",
+        "border": "#FECACA",
+        "icon": "cancel",
+    },
     "closed": {"bg": "#F5F3FF", "text": "#6D28D9", "border": "#DDD6FE", "icon": "lock"},
-    "cancelled": {"bg": "#FDF2F8", "text": "#BE185D", "border": "#FBCFE8", "icon": "block"},
+    "cancelled": {
+        "bg": "#FDF2F8",
+        "text": "#BE185D",
+        "border": "#FBCFE8",
+        "icon": "block",
+    },
 }
 
 # Dark mode status colors
 STATUS_COLORS_DARK = {
+    "pending_admin_review": {"bg": "#422006", "text": "#FCD34D", "border": "#B45309"},
     "new": {"bg": "#1E3A5F", "text": "#93C5FD", "border": "#2563EB"},
     "contacted": {"bg": "#451A03", "text": "#FDBA74", "border": "#C2410C"},
     "booked": {"bg": "#052E16", "text": "#86EFAC", "border": "#15803D"},
@@ -28,14 +67,17 @@ def load_css(lang_code, T):
     direction = T["dir"]
     align = T["align"]
     opp_align = "left" if align == "right" else "right"
-    border_side = 'left' if direction == 'rtl' else 'right'
-    opp_border = 'right' if direction == 'rtl' else 'left'
+    border_side = "left" if direction == "rtl" else "right"
+    opp_border = "right" if direction == "rtl" else "left"
 
     # Import Google Fonts and Material Symbols
-    st.markdown("""
+    st.markdown(
+        """
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Heebo:wght@300;400;500;600;700;800&display=swap">
         <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@24,400,1,0" />
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
     # Generate status pill CSS
     status_pill_css = ""
@@ -56,7 +98,8 @@ def load_css(lang_code, T):
         }}
         """
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <style>
         :root {{
             /* --- Light Mode Design Tokens --- */
@@ -898,11 +941,13 @@ def load_css(lang_code, T):
         }}
 
     </style>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_chat_bubble(text, role, timestamp, T):
-    is_user = role == 'user'
+    is_user = role == "user"
     cls = "user-msg" if is_user else "bot-msg"
     name = T["role_user"] if is_user else T["role_bot"]
 

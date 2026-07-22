@@ -27,6 +27,12 @@ from app.core.lead_history import status_history_entry
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 KANBAN_STATUSES = [
+    # First in reading order — the human-intervention queue (PRO-46). These leads
+    # (e.g. exhausted reassignments, PRO-63) need an operator to act, so they lead
+    # the board instead of being invisible off the end of it. In the RTL layout
+    # this renders as the right-most (leading) column; the flex container below
+    # sets `dir` explicitly so that mapping doesn't depend on inherited direction.
+    "pending_admin_review",
     "new",
     "contacted",
     "booked",
@@ -116,18 +122,23 @@ def view_leads_dashboard(T):
     total_count = leads_collection.count_documents({})
     new_count = leads_collection.count_documents({"status": "new"})
     booked_count = leads_collection.count_documents({"status": "booked"})
+    # PRO-46: mirrors /health/leads `pending_review_count` — the human-intervention queue.
+    pending_review_count = leads_collection.count_documents(
+        {"status": LeadStatus.PENDING_ADMIN_REVIEW}
+    )
     active_pros = users_collection.count_documents({"is_active": True})
 
     # ==========================================
     # TAB 1: KANBAN BOARD
     # ==========================================
     with tab_kanban:
-        # Metrics
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(T["metric_total"], total_count)
-        c2.metric(T["metric_new"], new_count)
-        c3.metric(T.get("metric_booked", "Booked"), booked_count)
-        c4.metric(T["metric_pros"], active_pros)
+        # Metrics — the pending-review tile gets extra width for its longer label.
+        c1, c2, c3, c4, c5 = st.columns([1, 1.4, 1, 1, 1])
+        c1.metric(T.get("metric_total", "Total"), total_count)
+        c2.metric(T.get("metric_pending_review", "Needs Review"), pending_review_count)
+        c3.metric(T.get("metric_new", "New"), new_count)
+        c4.metric(T.get("metric_booked", "Booked"), booked_count)
+        c5.metric(T.get("metric_pros", "Staff"), active_pros)
 
         st.markdown("")
 
@@ -147,8 +158,11 @@ def view_leads_dashboard(T):
                     status, grouped.get(status, []), T
                 )
 
+            # dir is set explicitly (not left to inherited direction) so the
+            # column reading order — pending_admin_review first/leading — is
+            # stable in RTL regardless of any ancestor's direction (PRO-46).
             st.markdown(
-                f"""<div style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px;">
+                f"""<div dir="{T['dir']}" style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px; direction: {T['dir']};">
 {all_columns_html}
 </div>""",
                 unsafe_allow_html=True,
@@ -166,12 +180,13 @@ def view_leads_dashboard(T):
     # TAB 2: TABLE VIEW
     # ==========================================
     with tab_table:
-        # Metrics
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(T["metric_total"], total_count)
-        c2.metric(T["metric_new"], new_count)
-        c3.metric(T.get("metric_booked", "Booked"), booked_count)
-        c4.metric(T["metric_pros"], active_pros)
+        # Metrics — the pending-review tile gets extra width for its longer label.
+        c1, c2, c3, c4, c5 = st.columns([1, 1.4, 1, 1, 1])
+        c1.metric(T.get("metric_total", "Total"), total_count)
+        c2.metric(T.get("metric_pending_review", "Needs Review"), pending_review_count)
+        c3.metric(T.get("metric_new", "New"), new_count)
+        c4.metric(T.get("metric_booked", "Booked"), booked_count)
+        c5.metric(T.get("metric_pros", "Staff"), active_pros)
 
         st.markdown("")
 
