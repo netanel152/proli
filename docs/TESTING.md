@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 508 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 512 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -11,7 +11,8 @@ The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode
 ## 1. Running Tests
 
 ```bash
-# All unit tests
+# Canonical way to run the suite (from the project virtualenv) — PRO-50
+# Unit tests need neither a real MongoDB nor a real Redis.
 pytest
 
 # Verbose (show each test name)
@@ -84,6 +85,7 @@ pytest -m integration
 | `test_health_whatsapp_status.py` | `/health` WhatsApp state mapping: `authorized`→up, `yellowCard`→degraded, else down; raw `state` surfaced |
 | `test_phone.py` | PRO-49 phone helpers: `to_chat_id` / `strip_suffix` / `to_local_phone` across `972…`, `+972…`, leading `0`, already-suffixed, and falsy input (idempotent, None-safe) |
 | `test_logger_redaction.py` | PRO-80 log scrubbing: `mask_pii` phone masking + `redact_secrets` (GREEN_API_TOKEN / WEBHOOK_TOKEN redacted in query string & URL path, None-safe) applied by the `_pii_filter` sink |
+| `test_redis_isolation.py` | PRO-78 guard for the autouse `fake_redis` fixture: `get_redis_client()` returns a `fakeredis` instance, each test gets a fresh empty store (no cross-test bleed), and `StateManager` round-trips through the fake |
 
 ### Health & Regression
 
@@ -112,7 +114,7 @@ pytest -m integration
 - **AI Engine:** `ai.analyze_conversation` returns a predefined `AIResponse` (city=Tel Aviv, issue=Leak, is_deal=False)
 - **Consent:** `has_consent` patched to return `True` by default
 - **ContextManager:** mocked globally (clears Redis dependency)
-- **Redis:** not mocked — `StateManager` / `ContextManager` fail gracefully with logged errors
+- **Redis:** backed by an in-memory `fakeredis` — a fresh instance per test via the autouse `fake_redis` fixture (PRO-78), so no real Redis is required and no state bleeds across tests. Integration tests keep real Redis, same as they keep a real Mongo.
 
 ### Per-test overrides (common patterns)
 

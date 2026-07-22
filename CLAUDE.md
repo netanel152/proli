@@ -56,6 +56,8 @@ pytest -v
 
 Expected baseline lives in `docs/TESTING.md` ("Current status" line) — the single source of truth for the pass/skip count. Integration tests are skipped without `MONGO_TEST_URI`.
 
+Canonical run is `pytest` inside the project virtualenv (PRO-50, pinned `pydantic`/`pydantic-core`/`pydantic-settings` for deterministic resolution). Unit tests need neither a real MongoDB (in-memory `mongomock`) nor a real Redis (in-memory `fakeredis`, PRO-78) — no external services required.
+
 ### Linting / Formatting
 
 ```bash
