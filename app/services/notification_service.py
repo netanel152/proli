@@ -140,12 +140,15 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
             status_he = STATUS_HE.get(
                 active_lead.get("status", ""), active_lead.get("status", "")
             )
+            # Bold the field labels so this block matches the bold labels in the
+            # ADMIN_ALERT header above it (📞 *טלפון:*, 💬 *הודעה:*) — one message
+            # shouldn't mix bold and plain labels.
             lead_details = (
                 f"📋 *פרטי הפנייה:*\n"
-                f"🛠️ בעיה: {issue}\n"
-                f"📍 כתובת: {address}\n"
-                f"⏰ זמן: {apt_time}\n"
-                f"📊 סטטוס: {status_he}"
+                f"🛠️ *בעיה:* {issue}\n"
+                f"📍 *כתובת:* {address}\n"
+                f"⏰ *זמן:* {apt_time}\n"
+                f"📊 *סטטוס:* {status_he}"
             )
         else:
             lead_details = "📋 אין פנייה פעילה במערכת"
