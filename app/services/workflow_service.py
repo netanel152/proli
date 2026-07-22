@@ -898,8 +898,23 @@ async def _process_incoming_message_inner(
     # lead for the same issue (observed on 2026-04-18 with lead
     # 69e375cb9a04cba45197e625 spawning 69e376679a04cba45197e63e 2 min later).
     # Log the message for admin visibility, send a throttled ack, and stop.
+    #
+    # PRO-63: bounded by age. The short-circuit has no natural exit — a lead sits
+    # in PENDING_ADMIN_REVIEW until a human moves it, so an unworked escalation
+    # would silently brick this customer's chat forever, which is a worse dead
+    # end than the auto-CLOSED behaviour PRO-63 replaced. After
+    # PENDING_REVIEW_SHORTCIRCUIT_HOURS their next message starts a fresh
+    # request. Leads with no `updated_at` fall outside the window and therefore
+    # do not short-circuit — failing toward "customer can talk to us".
+    shortcircuit_cutoff = datetime.now(timezone.utc) - timedelta(
+        hours=WorkerConstants.PENDING_REVIEW_SHORTCIRCUIT_HOURS
+    )
     pending_admin_lead = await leads_collection.find_one(
-        {"chat_id": chat_id, "status": LeadStatus.PENDING_ADMIN_REVIEW},
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "updated_at": {"$gte": shortcircuit_cutoff},
+        },
         sort=[("created_at", -1)],
     )
     if pending_admin_lead:

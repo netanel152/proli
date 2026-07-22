@@ -999,6 +999,9 @@ async def test_pending_admin_review_does_not_create_duplicate_lead(wf_mocks, moc
             "issue_type": "Leak",
             "full_address": "Unknown Address",
             "created_at": datetime.now(timezone.utc),
+            # PRO-63: short-circuit is now bounded by recency — this lead is
+            # freshly escalated, well inside PENDING_REVIEW_SHORTCIRCUIT_HOURS.
+            "updated_at": datetime.now(timezone.utc),
         }
     )
 
@@ -1036,6 +1039,8 @@ async def test_pending_admin_review_ack_throttled(wf_mocks, mock_db):
             "full_address": "Tel Aviv",
             "created_at": datetime.now(timezone.utc) - timedelta(hours=2),
             "last_pending_ack_at": datetime.now(timezone.utc) - timedelta(minutes=5),
+            # PRO-63: still well inside the recency window (2h old, not 24h+).
+            "updated_at": datetime.now(timezone.utc) - timedelta(hours=2),
         }
     )
 
@@ -1050,6 +1055,77 @@ async def test_pending_admin_review_ack_throttled(wf_mocks, mock_db):
         ), "Ack was re-sent within the 30-minute throttle window"
     # Message is still logged
     mock_lm.log_message.assert_any_call(chat_id, "user", "היי, יש עדכון?")
+
+
+@pytest.mark.asyncio
+async def test_pending_admin_review_stale_lead_does_not_shortcircuit(wf_mocks, mock_db):
+    """PRO-63 — the short-circuit has no natural exit, so it is bounded by
+    ``PENDING_REVIEW_SHORTCIRCUIT_HOURS``. A PENDING_ADMIN_REVIEW lead whose
+    ``updated_at`` is older than the window must NOT block the dispatcher —
+    the customer's message proceeds normally. The stale lead itself is never
+    auto-closed; it stays PENDING_ADMIN_REVIEW for a human to find."""
+    from datetime import datetime, timedelta, timezone
+
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+
+    chat_id = "972501234567@c.us"
+    await mock_db.leads.delete_many({})
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(
+        hours=WorkerConstants.PENDING_REVIEW_SHORTCIRCUIT_HOURS + 1
+    )
+    result = await mock_db.leads.insert_one(
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "issue_type": "Leak",
+            "full_address": "Tel Aviv",
+            "created_at": stale_cutoff,
+            "updated_at": stale_cutoff,
+        }
+    )
+
+    await process_incoming_message(chat_id, "שלום, יש לי עוד בעיה")
+
+    # Dispatcher proceeds — the stale short-circuit no longer blocks it.
+    mock_ai.analyze_conversation.assert_awaited()
+    # No throttled ack — this is not the short-circuit path.
+    for call in mock_wa.send_message.call_args_list:
+        assert call.args[1] != Messages.Customer.STILL_PENDING_REVIEW
+    # The stale lead is never auto-closed — it is left PENDING_ADMIN_REVIEW
+    # for a human to act on.
+    stale_lead = await mock_db.leads.find_one({"_id": result.inserted_id})
+    assert stale_lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_pending_admin_review_missing_updated_at_does_not_shortcircuit(
+    wf_mocks, mock_db
+):
+    """A PENDING_ADMIN_REVIEW lead with no ``updated_at`` field at all fails
+    toward letting the customer talk — it must not match the recency-bounded
+    short-circuit query."""
+    from datetime import datetime, timezone
+
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+
+    chat_id = "972501234567@c.us"
+    await mock_db.leads.delete_many({})
+    await mock_db.leads.insert_one(
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "issue_type": "Leak",
+            "full_address": "Tel Aviv",
+            "created_at": datetime.now(timezone.utc),
+            # No `updated_at` field at all.
+        }
+    )
+
+    await process_incoming_message(chat_id, "שלום, יש לי עוד בעיה")
+
+    mock_ai.analyze_conversation.assert_awaited()
+    for call in mock_wa.send_message.call_args_list:
+        assert call.args[1] != Messages.Customer.STILL_PENDING_REVIEW
 
 
 # --- Emergency Logic Tests ---

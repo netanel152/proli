@@ -348,9 +348,27 @@ class Messages:
             "מצטערים 😔 לא הצלחנו למצוא איש מקצוע זמין לבקשתך כרגע.\n"
             "אנא נסה שוב מאוחר יותר או פנה אלינו ישירות לקבלת עזרה."
         )
+        # PRO-63: sent when a lead exhausts MAX_REASSIGNMENTS. This is the worst
+        # moment a customer can have with Proli — they have been failed three
+        # times — so the copy hands them to a human instead of dismissing them.
+        # Deliberately: no apology-spiral, no "try again later" dead end, and a
+        # concrete commitment ("תוך שעה") that the immediate admin alert in
+        # reassign_lead actually backs. Hedged with "בשעות הפעילות" so the promise
+        # stays honest for a lead that escalates at 02:00.
         MAX_REASSIGNMENTS_REACHED = (
-            "מצטערים מאוד 😔 ניסינו למצוא לך מספר אנשי מקצוע ולא הצלחנו.\n"
-            "הפנייה שלך הועברה לצוות שלנו ונחזור אליך בהקדם."
+            "לא הצלחתי למצוא זמינות מיידית, מעביר אותך לנציג — "
+            "נחזור אליך תוך שעה בשעות הפעילות."
+        )
+        # PRO-63: operator alert fired the moment a lead is escalated, so the
+        # 1-hour promise above is not left to the 4-hourly batched Reporter.
+        ADMIN_MAX_REASSIGNMENTS = (
+            "🚨 *ליד הועבר לטיפול ידני — Proli*\n\n"
+            "📞 *טלפון:* {phone}\n"
+            "🛠️ *בעיה:* {issue}\n"
+            "📍 *כתובת:* {address}\n"
+            "🔁 *ניסיונות שיבוץ:* {attempts}\n\n"
+            "הלקוח קיבל הבטחה לחזרה *תוך שעה*.\n"
+            "💡 לשיבוץ איש מקצוע, השב את המילה: ניהול"
         )
         PRO_LOST_LEAD = "העבודה הועברה לאיש מקצוע אחר עקב חוסר מענה."
         ADMIN_REPORT_HEADER = '🚨 *דו"ח לידים תקועים (Proli)*'

@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 486 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 501 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -41,9 +41,9 @@ pytest -m integration
 
 | File | What it covers |
 |------|---------------|
-| `test_workflow_orchestrator.py` | Central routing: reset commands, pro auto-detect, AWAITING_ADDRESS, AWAITING_PRO_APPROVAL, PAUSED_FOR_HUMAN, SOS→TTL, deal finalization, no-pro fallback |
+| `test_workflow_orchestrator.py` | Central routing: reset commands, pro auto-detect, AWAITING_ADDRESS, AWAITING_PRO_APPROVAL, PAUSED_FOR_HUMAN, SOS→TTL, deal finalization, no-pro fallback, PRO-63 `PENDING_REVIEW_SHORTCIRCUIT_HOURS` recency-bounded short-circuit |
 | `test_smart_dispatcher_logic.py` | Dispatcher AI: missing info → clarify, city+issue → handoff to pro, audio transcription flow |
-| `test_pro_flow.py` | Pro commands: approve, reject, finish (multi-job selection), pause bot, resume, dashboard fallback, vacation mode |
+| `test_pro_flow.py` | Pro commands: approve, reject, finish (multi-job selection), pause bot, resume, dashboard fallback, vacation mode, PRO-63 `מצא` reassignment-lifecycle reset after escalation |
 | `test_customer_flow.py` | Post-job: completion checks, rating prompts, review collection |
 | `test_sos_logic.py` | SOS alerts: admin notification, pro notification, BOT_PAUSED_BY_CUSTOMER message |
 | `test_dual_role_routing.py` | Pro-as-customer routing: `לקוח` mode switch, sticky CUSTOMER_MODE while their own lead is open, context-aware keyword bypass, soft-hold escape |
@@ -56,6 +56,7 @@ pytest -m integration
 | `test_geocoding_service.py` | Static dict lookup, Redis cache hits/misses, Google Maps API calls with bounding-box validation, fallback chain |   
 | `test_stale_nudger.py` | Periodic reminders for booked leads > 24h old |
 | `test_approval_sla.py` | PRO-56 approval SLA: T+10 pro nudge, T+25 customer reassignment offer, emergency-halved thresholds, idempotency, business-hours gate, and the customer 1/2 reply handling |
+| `test_reassign_escalation.py` | PRO-63 `reassign_lead`: exhausted `MAX_REASSIGNMENTS` escalates to `PENDING_ADMIN_REVIEW` (never `CLOSED`), immediate admin alert (and best-effort survival if it fails), customer notification, state/context clear, idempotency guard, race-safe `expected_status` write, and that exhaustion is checked before matching/reassigning |
 | `test_scheduler_gating.py` | PRO-73 gating primitives: `within_business_hours` (Israel 08–21) and the `_customer_cold_job_allowed` toggle+hours gate (default OFF) for cold customer-facing jobs |
 ### Infrastructure
 
