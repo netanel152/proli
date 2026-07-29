@@ -5,7 +5,6 @@ from app.core.logger import logger
 from app.core.messages import Messages
 from pydantic import BaseModel, Field
 from typing import Optional
-import traceback
 import json
 import os
 import tempfile
@@ -62,9 +61,16 @@ class AIResponse(BaseModel):
     transcription: Optional[str] = Field(
         description="Full text transcription if the user sent an audio message."
     )
-    extracted_data: ExtractedData = Field(
-        description="Structured data extracted from the conversation."
-    )
+    # NOTE: this field must NOT carry a `Field(description=...)`. On pydantic
+    # 2.6.x (the version requirements.txt pins), attaching any sibling metadata
+    # to a nested-model field makes model_json_schema() emit
+    # `{"allOf": [{"$ref": ...}], "description": ...}` instead of a bare `$ref`.
+    # google-genai's process_schema() understands `$ref` and `anyOf` but not
+    # `allOf`, so it reaches an inner sub-schema with no "type" key and blows up
+    # with `'NoneType' object has no attribute 'upper'` — before any HTTP call,
+    # which means *every* model in the fallback hierarchy fails identically.
+    # The per-field descriptions inside ExtractedData carry the semantics.
+    extracted_data: ExtractedData
     is_deal: bool = Field(
         description="Set to True ONLY if the user has provided specific Time AND Address and agreed to book. Otherwise False."
     )
@@ -255,13 +261,23 @@ class AIEngine:
 
             except Exception as e:
                 logger.warning(
-                    f"Model {model_name} failed: {e}. Trying next fallback..."
+                    f"Model {model_name} failed: {type(e).__name__}: {e}. "
+                    "Trying next fallback..."
                 )
                 last_error = e
                 continue
 
-        # If all models failed
-        logger.error(f"All AI models failed. Last error: {traceback.format_exc()}")
+        # If all models failed. `traceback.format_exc()` is useless here — we are
+        # outside the `except` block, so it renders as "NoneType: None". Attach the
+        # captured exception instead so the real stack reaches the logs/Sentry.
+        if last_error is not None:
+            logger.opt(exception=last_error).error(
+                f"All AI models failed. Last error: {type(last_error).__name__}: {last_error}"
+            )
+        else:
+            logger.error(
+                "All AI models failed (every model returned unparseable JSON)."
+            )
         if require_json:
             return AIResponse(
                 reply_to_user=Messages.Errors.AI_OVERLOAD,
