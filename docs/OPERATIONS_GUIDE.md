@@ -57,6 +57,7 @@ Log patterns to watch:
 | `worker:heartbeat` | Worker liveness key (120 s expiry) |
 | `[WA Monitor]` | Green API instance state watchdog (deauth / yellowCard) |
 | `⛔ Outbound halted` | Circuit breaker suppressing sends — instance not authorized |
+| `Geocoding unavailable — circuit opened` | `logger.critical` → Sentry page; Google Geocoding is failing transiently (missing key, quota, network) and the `geo:unavailable` breaker is open (PRO-19) |
 
 ### Incident runbooks
 
@@ -316,5 +317,7 @@ python scripts/generate_admin_hash.py
 | `AWS_SECRET_ACCESS_KEY` | — | AWS credentials for S3 |
 | `AWS_REGION` | `eu-west-1` | AWS region |
 | `GOOGLE_MAPS_API_KEY` | — | Google Geocoding API key; falls back to static city dict if unset |
+| `GEOCODING_NEGATIVE_TTL_SECONDS` | `86400` | How long a **definitive** geocoding miss is cached (Google answered `ZERO_RESULTS`, or the match fell outside Israel) |
+| `GEOCODING_TRANSIENT_TTL_SECONDS` | `60` | How long a **transient** geocoding failure is cached (missing key, `REQUEST_DENIED`, `OVER_QUERY_LIMIT`, network error). Deliberately short: these say nothing about the city, so inheriting the 24 h TTL would keep every name attempted during an outage unresolvable for a day after the fix (PRO-19) |
 | `SENTRY_DSN` | — | Sentry error reporting DSN (worker process only); disabled if unset |
 | `SENTRY_TRACES_SAMPLE_RATE` | `0.0` | Sentry performance tracing sample rate (0.0 = off) |

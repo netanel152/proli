@@ -315,7 +315,8 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | `worker:heartbeat` | Worker liveness | 120 s |
 | `lock:chat:{chat_id}` | Per-chat FSM lock (machine-gun deferral) | 30 s |
 | `lock:job:{job_name}` | APScheduler distributed lock | 5 min |
-| `geocode:{name}` | Resolved coordinates cache (Google Maps) | 7 days |
+| `geo:city:{normalized_name}` | Resolved coordinates cache (Google Geocoding) | ∞ (positive) / 24 h (definitive miss) / 60 s (transient failure) |
+| `geo:unavailable` | Geocoding circuit breaker — set after a transient Google failure; while present, lookups skip Google instead of each paying the 5 s timeout. Opening it logs `CRITICAL` (→ Sentry page) | `GEOCODING_TRANSIENT_TTL_SECONDS` (60 s) |
 
 ---
 
