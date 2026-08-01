@@ -1,7 +1,7 @@
 ---
 name: test-runner
 description: Runs pytest and reports only failures. Baseline lives in docs/TESTING.md — lower is a regression. Never modifies code.
-model: haiku
+model: sonnet
 color: green
 tools:
   - Bash

@@ -50,8 +50,36 @@ CLOUDINARY_API_SECRET=...
 ADMIN_PASSWORD_HASH=...  # Generate with: python scripts/generate_admin_hash.py
 ADMIN_PHONE=972501234567  # Admin WhatsApp number for SOS alerts
 WEBHOOK_TOKEN=...  # Random string for webhook auth
-ENVIRONMENT=production
+ENVIRONMENT=production   # per-environment — see below
 ```
+
+### `ENVIRONMENT` per Railway environment (PRO-34)
+
+`ENVIRONMENT` accepts exactly `development | staging | production`; anything else raises at startup. It is **not** a shared project variable — set it per Railway environment so the label always matches reality:
+
+| Railway environment | Environment ID | `ENVIRONMENT` |
+|---|---|---|
+| Staging | `93e8ad7e-3582-4ab7-8f71-1775bf0bbddc` | `staging` |
+| Production | `a8c1fc4c-9434-48c4-9461-afce87651d21` | `production` |
+
+Set it on all 3 services (`api`, `worker`, `admin`) in each environment:
+
+```bash
+railway variables --set "ENVIRONMENT=staging"    --service api    --environment Staging
+railway variables --set "ENVIRONMENT=staging"    --service worker --environment Staging
+railway variables --set "ENVIRONMENT=staging"    --service admin  --environment Staging
+railway variables --set "ENVIRONMENT=production" --service api    --environment Production
+railway variables --set "ENVIRONMENT=production" --service worker --environment Production
+railway variables --set "ENVIRONMENT=production" --service admin  --environment Production
+```
+
+What the value actually changes:
+
+- **`staging` and `production` are both prod-like** — structured JSON logs, PII masking on stdout, `diagnose=False` on the file sink, and the admin panel refuses to start without `MONGO_URI` (no silent `localhost` fallback).
+- **Sentry** tags every event with the value, so staging errors land in a separate Sentry environment from production.
+- **`production` alone blocks `scripts/seed_db.py`**, which begins with a destructive `clear_db()`. Staging (`proli_staging_db`) remains a valid seed target.
+
+> **A rejected `ENVIRONMENT` surfaces as a boot crash, not a Sentry issue.** The value is validated while `app.core.config` is imported — before logging and `sentry_sdk.init()` run — so a typo (`ENVIRONMENT=prod`) or an explicitly empty value produces a pydantic `ValidationError` on stderr and a Railway restart loop. Watch the deploy log, not Sentry, when a service fails to come up after an env change.
 
 ## Step 5: Configure Green API Webhook
 
