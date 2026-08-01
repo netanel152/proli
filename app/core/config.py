@@ -2,6 +2,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator, model_validator
 import os
 
+from app.core.constants import (
+    DEVELOPMENT_ENV,
+    PRODUCTION_ENV,
+    PROD_LIKE_ENVIRONMENTS,
+    VALID_ENVIRONMENTS,
+    normalize_environment,
+)
+
 
 class Settings(BaseSettings):
     GREEN_API_INSTANCE_ID: str
@@ -69,7 +77,57 @@ class Settings(BaseSettings):
     # number to route paging away from the day-to-day admin channel.
     ONCALL_PHONE: str | None = None
     WEBHOOK_TOKEN: str | None = None
-    ENVIRONMENT: str = "development"  # "production" or "development"
+    # PRO-34: exactly one of "development" | "staging" | "production".
+    # Anything else fails fast at startup (see validate_environment) rather than
+    # silently falling through to the non-prod branch everywhere.
+    ENVIRONMENT: str = DEVELOPMENT_ENV
+
+    @field_validator("ENVIRONMENT", mode="before")
+    @classmethod
+    def validate_environment(cls, v: str | None) -> str:
+        """Normalize and reject unknown or empty environments.
+
+        A typo like ``ENVIRONMENT=prod`` must never quietly degrade a deploy to
+        dev behaviour — unstructured logs, no PII filter, no MONGO_URI guard,
+        and a destructive seed that is no longer refused.
+
+        An *unset* ENVIRONMENT never reaches this validator: pydantic defaults
+        to ``validate_default=False``, so the field default is used as-is. An
+        empty value here therefore means the operator explicitly set it to ""
+        — a misconfiguration, not an omission — so it is rejected too. The
+        blank-value idiom is real in this repo (``docker-compose.prod.yml``
+        uses ``- MONGO_URI=`` to mean "inherit"), and Railway allows empty
+        variables.
+        """
+        if v is None or not str(v).strip():
+            raise ValueError(
+                "ENVIRONMENT is set but empty. Either unset it (defaults to "
+                f"{DEVELOPMENT_ENV}) or set one of: "
+                f"{', '.join(VALID_ENVIRONMENTS)}"
+            )
+        normalized = normalize_environment(v)
+        if normalized not in VALID_ENVIRONMENTS:
+            raise ValueError(
+                f"ENVIRONMENT must be one of {', '.join(VALID_ENVIRONMENTS)} "
+                f"(got {v!r})"
+            )
+        return normalized
+
+    @property
+    def is_prod_like(self) -> bool:
+        """True for ``staging`` and ``production``.
+
+        The single check every call-site should use for "behave like a real
+        deployment": structured JSON logs, PII filter, no localhost DB
+        fallback. Use ``is_production`` only where staging and production must
+        genuinely differ (e.g. the destructive-seed guard).
+        """
+        return self.ENVIRONMENT in PROD_LIKE_ENVIRONMENTS
+
+    @property
+    def is_production(self) -> bool:
+        return self.ENVIRONMENT == PRODUCTION_ENV
+
     # PRO-79: when True, WhatsAppClient logs outbound sends instead of calling
     # Green API. Set WHATSAPP_DRY_RUN=true in local .env so dev / simulation never
     # cold-initiates a real message from the pilot number. Default False keeps

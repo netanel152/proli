@@ -307,7 +307,7 @@ python scripts/generate_admin_hash.py
 | `ADMIN_PASSWORD` | — | Plain-text password (hashed on startup) |
 | `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts |
 | `WEBHOOK_TOKEN` | — | Enables `?token=<value>` webhook auth |
-| `ENVIRONMENT` | `development` | `production` enables JSON logs + PII masking on stdout |
+| `ENVIRONMENT` | `development` | One of `development` \| `staging` \| `production` — any other value raises at startup. `staging` and `production` are both "prod-like": JSON logs + PII masking on stdout, `diagnose=False`, and `MONGO_URI` required by the admin panel. `production` additionally blocks `scripts/seed_db.py` |
 | `LOG_LEVEL` | `INFO` | Loguru log level |
 | `MAX_CHAT_HISTORY` | `20` | Max messages stored per chat in Redis |
 | `AI_MODELS` | Flash Lite 3.1, Flash 3.5, Flash 2.5, Flash 1.5 | Gemini model fallback chain |

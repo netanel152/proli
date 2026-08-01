@@ -1,5 +1,40 @@
 from enum import Enum
 
+# PRO-34: the deployment environments the project recognizes. `staging` is a
+# first-class value — it behaves like production for anything observability- or
+# safety-related (structured logs, PII filter, MONGO_URI required), while still
+# being a legitimate target for destructive tooling like scripts/seed_db.py.
+#
+# Defined here rather than in app/core/config.py on purpose: constants.py has no
+# dependencies, so admin_panel/ and scripts/ can import these without
+# instantiating Settings() (which requires the full set of required env vars).
+DEVELOPMENT_ENV = "development"
+STAGING_ENV = "staging"
+PRODUCTION_ENV = "production"
+
+VALID_ENVIRONMENTS = (DEVELOPMENT_ENV, STAGING_ENV, PRODUCTION_ENV)
+# Environments that must behave production-like: JSON logs, PII masking,
+# no local-DB fallback.
+PROD_LIKE_ENVIRONMENTS = (STAGING_ENV, PRODUCTION_ENV)
+
+
+def normalize_environment(value: str | None) -> str:
+    """Lower-case and strip an ENVIRONMENT value. Empty/unset → ``development``.
+
+    Does not validate — callers that need rejection of unknown values use the
+    ENVIRONMENT validator in app/core/config.py. This keeps the raw-``os.getenv``
+    call-sites (admin panel) reading the same normalized value the app does.
+    """
+    if value is None:
+        return DEVELOPMENT_ENV
+    return str(value).strip().lower() or DEVELOPMENT_ENV
+
+
+def is_prod_like_env(value: str | None) -> bool:
+    """True for ``staging`` and ``production``. Pure counterpart to
+    ``settings.is_prod_like`` for code that cannot import Settings."""
+    return normalize_environment(value) in PROD_LIKE_ENVIRONMENTS
+
 
 class LeadStatus(str, Enum):
     NEW = "new"
