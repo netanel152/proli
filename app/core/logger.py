@@ -99,11 +99,13 @@ def setup_logging():
     """
     logger.remove()
 
-    # Determine format based on environment
-    is_production = settings.ENVIRONMENT.lower() == "production"
+    # Determine format based on environment. PRO-34: staging is prod-like —
+    # it gets the same structured JSON + PII filter + diagnose=False as
+    # production, so staging logs are a faithful rehearsal of prod logs.
+    is_prod_like = settings.is_prod_like
 
-    if is_production:
-        # Structured JSON logging for production
+    if is_prod_like:
+        # Structured JSON logging for staging/production
         logger.add(
             sys.stdout,
             format="{message}",
@@ -131,7 +133,7 @@ def setup_logging():
         compression="zip",
         enqueue=True,
         backtrace=True,
-        diagnose=not is_production,
+        diagnose=not is_prod_like,
     )
 
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)

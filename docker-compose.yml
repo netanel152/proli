@@ -14,7 +14,9 @@ services:
       - MONGO_URI=mongodb://mongo:27017/proli_db
       - REDIS_HOST=redis
       - REDIS_URL=redis://redis:6379/0
-      - ENVIRONMENT=production
+      # PRO-34: the base compose file is the documented LOCAL dev stack.
+      # The production overlay (docker-compose.prod.yml) sets production.
+      - ENVIRONMENT=development
     depends_on:
       mongo:
         condition: service_healthy
@@ -39,7 +41,9 @@ services:
       - MONGO_URI=mongodb://mongo:27017/proli_db
       - REDIS_HOST=redis
       - REDIS_URL=redis://redis:6379/0
-      - ENVIRONMENT=production
+      # PRO-34: the base compose file is the documented LOCAL dev stack.
+      # The production overlay (docker-compose.prod.yml) sets production.
+      - ENVIRONMENT=development
     depends_on:
       mongo:
         condition: service_healthy
@@ -66,7 +70,9 @@ services:
       - MONGO_URI=mongodb://mongo:27017/proli_db
       - REDIS_HOST=redis
       - REDIS_URL=redis://redis:6379/0
-      - ENVIRONMENT=production
+      # PRO-34: the base compose file is the documented LOCAL dev stack.
+      # The production overlay (docker-compose.prod.yml) sets production.
+      - ENVIRONMENT=development
     depends_on:
       mongo:
         condition: service_healthy

@@ -12,7 +12,7 @@ python scripts/<script_name>.py
 
 ### `seed_db.py`
 
-Populates MongoDB with sample professionals (plumbers, electricians) and test leads. Clears existing collections first.
+Populates MongoDB with sample professionals (plumbers, electricians) and test leads. Clears existing collections first. Refuses to run when `ENVIRONMENT=production` (PRO-34) — only `development` and `staging` are permitted targets.
 
 ```bash
 python scripts/seed_db.py

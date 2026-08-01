@@ -46,6 +46,9 @@ def _init_sentry() -> None:
 
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
+        # PRO-34: validated + normalized to development|staging|production, so
+        # staging reports into its own Sentry environment rather than
+        # fragmenting across casing/typo variants of the same label.
         environment=settings.ENVIRONMENT,
         integrations=[logging_integration],
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
