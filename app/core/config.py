@@ -156,7 +156,24 @@ class Settings(BaseSettings):
     # TTL for negative geocoding results (failures). Cached for 24h to avoid
     # immediate retries of unresolvable names, while still allowing for
     # a quota reset or a corrected spelling.
-    GEOCODING_NEGATIVE_TTL_SECONDS: int = 86400  # 24 hours
+    # Applies only to *definitive* misses — Google answered and the name is
+    # unresolvable (ZERO_RESULTS / outside Israel).
+    # Lower-bounded: ttl=0 would take the `ex=0` branch in _cache_set, which
+    # redis rejects and the helper swallows at debug — caching silently off,
+    # every lookup re-paying the 5s call, with nothing in the logs.
+    GEOCODING_NEGATIVE_TTL_SECONDS: int = Field(default=86400, ge=1)  # 24 hours
+    # PRO-19: TTL for *transient* geocoding failures — missing API key,
+    # REQUEST_DENIED, OVER_QUERY_LIMIT, network error. These say nothing
+    # about the city, so they must not inherit the 24h TTL: a lapsed billing
+    # account would otherwise keep every name attempted during the outage
+    # unresolvable for a full day after the fix. Short, but non-zero: it also
+    # sets how long the geocoding circuit breaker stays open, which is what
+    # actually keeps a sustained Google outage off the dispatcher's hot path
+    # (one 5s probe per window process-wide, not one per distinct name).
+    # Upper-bounded because this value does double duty: raising it to "reduce
+    # retry churn" also extends how long geocoding stays globally disabled
+    # after a single blip.
+    GEOCODING_TRANSIENT_TTL_SECONDS: int = Field(default=60, ge=1, le=600)
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
