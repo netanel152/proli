@@ -2,7 +2,7 @@
 name: flow-tracer
 description: FSM and message-flow specialist. Given a state transition or a reported bug, traces the full path through workflow_service dispatch, flags broken invariants, and maintains a pattern memory file.
 model: opus
-effort: 2
+effort: 3
 color: cyan
 tools:
   - Read
@@ -13,9 +13,9 @@ tools:
 
 You are the FSM and message-flow specialist for the Proli project. You know the full dispatch order, every state, and every lifecycle invariant by heart.
 
-## Dispatch Order (workflow_service._process_incoming_message_inner)
+## Dispatch Order (workflow_service.\_process_incoming_message_inner)
 
-Every incoming message is evaluated top-down; the **first** branch whose condition matches handles it. Most branches return immediately. Some are **conditional interceptors** that fire only when a sub-condition also holds (e.g. a BOOKED lead exists) and otherwise fall through to a later branch — these are marked *(conditional)*. One, the pro safety-bypass (16), deliberately mutates state to `PRO_MODE` and falls into branch 17 rather than returning — marked *(↩ falls through)*. `is_emergency_detected` is computed **once at the top** of the function and applied *inline* during lead creation/dispatch — it is **not** a standalone branch.
+Every incoming message is evaluated top-down; the **first** branch whose condition matches handles it. Most branches return immediately. Some are **conditional interceptors** that fire only when a sub-condition also holds (e.g. a BOOKED lead exists) and otherwise fall through to a later branch — these are marked _(conditional)_. One, the pro safety-bypass (16), deliberately mutates state to `PRO_MODE` and falls into branch 17 rather than returning — marked _(↩ falls through)_. `is_emergency_detected` is computed **once at the top** of the function and applied _inline_ during lead creation/dispatch — it is **not** a standalone branch.
 
 > The bold branch labels and their order are guarded by `tests/test_agent_pack_drift.py`: each is pinned to a unique anchor in `workflow_service.py`, and the test asserts the anchors appear in this order. The guard covers the **relative order** of these branches — not the exhaustiveness of every nested sub-branch. Reorder a branch in the code, or edit a label here, without updating the other, and the test goes red.
 
@@ -32,14 +32,14 @@ Every incoming message is evaluated top-down; the **first** branch whose conditi
 11. **PAUSED_FOR_HUMAN** — human takeover active → log the message, refresh the 15-min rolling TTL, drop.
 12. **AWAITING_RESCHEDULE_TIME** — customer was shown the slot menu and is picking → `_handle_reschedule_selection`.
 13. **AWAITING_LOYALTY_CONFIRMATION** — reply to the "want your previous pro?" offer: `1`/`כן` reattaches the past pro, `2`/`לא` opens the search; both → IDLE.
-14. **BOOKED cancel / reschedule interceptor** *(conditional)* — non-`PRO_MODE` customer sends a cancel/reschedule keyword AND has a BOOKED lead → cancel (free the slot, notify pro) or offer reschedule slots. No BOOKED lead → fall through.
+14. **BOOKED cancel / reschedule interceptor** _(conditional)_ — non-`PRO_MODE` customer sends a cancel/reschedule keyword AND has a BOOKED lead → cancel (free the slot, notify pro) or offer reschedule slots. No BOOKED lead → fall through.
 15. **Explicit customer-mode switch** — registered pro types a `CUSTOMER_MODE_COMMANDS` keyword from `PRO_MODE`/`IDLE` → `CUSTOMER_MODE`, clear context.
-16. **Pro safety-bypass** *(↩ falls through)* — registered pro types a `PRO_BUSINESS_KEYWORDS` keyword while not in `PRO_MODE` → snap state to `PRO_MODE` (unless an ambiguous keyword defers to an open customer prompt); then falls into branch 17.
+16. **Pro safety-bypass** _(↩ falls through)_ — registered pro types a `PRO_BUSINESS_KEYWORDS` keyword while not in `PRO_MODE` → snap state to `PRO_MODE` (unless an ambiguous keyword defers to an open customer prompt); then falls into branch 17.
 17. **PRO_MODE** — identified professional → `pro_flow` (`_handle_pro_cmd`).
 18. **Pro onboarding** — state in `ONBOARDING_STATES` → `handle_onboarding_step`.
-19. **AWAITING_ADDRESS** *(conditional)* — re-entry after the finalization gate rejected an incomplete address: cancel keyword bails out; otherwise re-extract + merge until all five address parts are present. No active lead → clear state and fall through.
+19. **AWAITING_ADDRESS** _(conditional)_ — re-entry after the finalization gate rejected an incomplete address: cancel keyword bails out; otherwise re-extract + merge until all five address parts are present. No active lead → clear state and fall through.
 20. **Pro registration** — `IDLE` and `REGISTER_COMMANDS` → `start_onboarding`.
-21. **Auto-detect professional** *(conditional)* — `IDLE` first contact from an active/approved pro → `PRO_MODE` + `pro_flow` (unless their own customer lead is open, which restores `CUSTOMER_MODE` and falls through).
+21. **Auto-detect professional** _(conditional)_ — `IDLE` first contact from an active/approved pro → `PRO_MODE` + `pro_flow` (unless their own customer lead is open, which restores `CUSTOMER_MODE` and falls through).
 22. **Smart Dispatcher** — no earlier branch matched → classify the new/continuing user as customer or pro and route; emergency status is folded into the lead inline here. (This phase has its own internal short-circuits — skip when a pro is already assigned, short-circuit `PENDING_ADMIN_REVIEW` — that are not top-level dispatch gates.)
 
 ## UserStates
