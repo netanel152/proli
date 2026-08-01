@@ -8,14 +8,30 @@ from dotenv import load_dotenv
 from bson import ObjectId
 import pytz
 
+from app.core.constants import is_prod_like_env
+
 # Load environment variables
 load_dotenv()
 
 # Standalone MongoDB Connection for Admin Panel
 mongo_uri = os.getenv("MONGO_URI") or os.getenv("MONGODB_URI") or os.getenv("MONGO_URL")
 if not mongo_uri:
-    if os.getenv("ENVIRONMENT") == "production":
-        raise ValueError("MONGO_URI environment variable is required in production")
+    # PRO-34: the guard covers staging as well as production — a staging admin
+    # panel silently falling back to localhost would show an empty (or wrong)
+    # database while looking healthy. is_prod_like_env is used rather than
+    # settings.is_prod_like to keep this module import-order independent: it
+    # reads os.environ directly right after its own load_dotenv(), with no
+    # dependency on when Settings() is first constructed. (admin_panel/core/
+    # auth.py does import settings, so the process still needs the full
+    # required-var set — this is not an attempt to avoid that.)
+    if is_prod_like_env(os.getenv("ENVIRONMENT")):
+        raise ValueError(
+            "MONGO_URI (or MONGODB_URI / MONGO_URL) is not set, but "
+            f"ENVIRONMENT={os.getenv('ENVIRONMENT')!r} is treated as "
+            "staging/production, where falling back to localhost would point "
+            "the admin panel at an empty database. Set MONGO_URI in the admin "
+            "panel's environment before starting Streamlit."
+        )
     mongo_uri = "mongodb://localhost:27017/proli_db"
 
 ca_file = certifi.where() if "+srv" in mongo_uri else None

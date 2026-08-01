@@ -39,12 +39,15 @@ def _init_sentry() -> None:
 
     # LoggingIntegration: breadcrumbs at INFO, but only CRITICAL creates issues.
     logging_integration = LoggingIntegration(
-        level=logging.INFO,          # breadcrumb threshold
+        level=logging.INFO,  # breadcrumb threshold
         event_level=logging.CRITICAL,  # issue-creation threshold
     )
 
     sentry_sdk.init(
         dsn=settings.SENTRY_DSN,
+        # PRO-34: validated + normalized to development|staging|production, so
+        # staging reports into its own Sentry environment rather than
+        # fragmenting across casing/typo variants of the same label.
         environment=settings.ENVIRONMENT,
         integrations=[logging_integration],
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
@@ -53,7 +56,9 @@ def _init_sentry() -> None:
         attach_stacktrace=True,
     )
     sentry_sdk.set_tag("service", "proli-worker")
-    logger.info(f"Sentry initialized (environment={settings.ENVIRONMENT}, CRITICAL-only).")
+    logger.info(
+        f"Sentry initialized (environment={settings.ENVIRONMENT}, CRITICAL-only)."
+    )
 
 
 def main():
