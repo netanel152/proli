@@ -105,9 +105,6 @@ python scripts/simulate_approval_sla.py 972501234567 nudge   # → nudge the pro
 python scripts/simulate_approval_sla.py 972501234567 offer   # → customer reassignment offer (~T+25, in-hours)
 ```
 
-### `simulate_test.py`
-...
-
 ---
 
 ## Analytics & Reports
@@ -118,13 +115,6 @@ Generates a summary of total Google Gemini tokens used per professional, sorted 
 
 ```bash
 python scripts/finops_report.py
-```
-
-Automated E2E scenarios (TC1–TC12) over HTTP. Covers consent flow, pro rejection, SOS logic, media handling, and idempotency. Requires the backend to be running locally.
-
-```bash
-python tests/simulate_test.py          # Interactive (step-by-step)
-python tests/simulate_test.py --auto   # Fully automated
 ```
 
 ### `reset_test.py`

@@ -148,7 +148,10 @@ async def test_get_state_instance_returns_state_value_from_json():
     mock_http = AsyncMock()
     mock_http.get = AsyncMock(return_value=mock_resp)
 
-    with patch.object(wa, "_get_client", new=AsyncMock(return_value=mock_http)):
+    # _get_probe_client, not _get_client: PRO-83 gave the read-only state probe its
+    # own always-real client so WHATSAPP_DRY_RUN cannot feed the monitor a
+    # fabricated "authorized" (see whatsapp_client_service._probe_client).
+    with patch.object(wa, "_get_probe_client", new=AsyncMock(return_value=mock_http)):
         result = await wa.get_state_instance()
 
     assert result == "authorized"
@@ -160,7 +163,9 @@ async def test_get_state_instance_returns_none_on_any_exception():
     wa = WhatsAppClient()
 
     with patch.object(
-        wa, "_get_client", new=AsyncMock(side_effect=Exception("connection reset"))
+        wa,
+        "_get_probe_client",
+        new=AsyncMock(side_effect=Exception("connection reset")),
     ):
         result = await wa.get_state_instance()
 
