@@ -1,13 +1,21 @@
-"""Preflight safety guard for the manual QA scripts that send REAL WhatsApp.
+"""Preflight safety guard for any QA script that can send REAL WhatsApp.
 
-`smoke_test_railway.py` and `simulate_test.py` simulate only the *inbound* leg —
-every simulated webhook makes the worker send a genuine outbound Green API message
-to the target numbers. Run against the production instance with a cold number,
-that is the #1 WhatsApp yellowCard trigger (PRO-72).
+A script that simulates only the *inbound* leg still makes the worker send a
+genuine outbound Green API message to the target number. Pointed at the production
+instance with a cold recipient, that is the #1 WhatsApp yellowCard trigger
+(PRO-72).
 
-This module refuses to let either script run against the production Green API
-instance unless the operator explicitly opts in, and forces confirmation before
-destructive DB operations. It touches no app code and imports nothing from `app`.
+The two scripts this was written for — `smoke_test_railway.py` and
+`simulate_test.py` — were **deleted** in PRO-83 and replaced by the offline
+harness in `tests/e2e/`, which proves the same logic with zero real sends.
+The guard is kept because the policy outlives those scripts: any future live-fire
+automation (gated on the separate staging Green API instance, PRO-29) must call
+`preflight_or_abort` before its first send. Manual transport verification lives in
+`docs/PILOT_E2E_CHECKLIST.md` (PRO-64).
+
+It refuses to let a caller run against the production Green API instance unless
+the operator explicitly opts in, and forces confirmation before destructive DB
+operations. It touches no app code and imports nothing from `app`.
 """
 
 import os
