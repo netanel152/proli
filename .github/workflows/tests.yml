@@ -1,0 +1,52 @@
+name: tests
+
+# PRO-83: the offline E2E harness has to run on every PR to be worth anything.
+# Until this workflow existed the repo had no automated pytest run at all — only
+# the Railway start/stop workflows.
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    env:
+      # Settings() requires these at import. They are deliberately fake: the suite
+      # never reaches a real service (mongomock for Mongo, fakeredis for Redis,
+      # recorded fixtures for Gemini, and tests/e2e's transport guard makes any
+      # real HTTP call fail the run).
+      GREEN_API_INSTANCE_ID: "1111111111"
+      GREEN_API_TOKEN: "ci-not-a-real-token"
+      GEMINI_API_KEY: "ci-not-a-real-key"
+      CLOUDINARY_CLOUD_NAME: "ci"
+      CLOUDINARY_API_KEY: "ci"
+      CLOUDINARY_API_SECRET: "ci"
+      # Set for anything that reads settings at import time. Note it is NOT what
+      # keeps the unit suite from sending: tests/conftest.py deliberately forces
+      # WHATSAPP_DRY_RUN back to False so the client tests exercise the real gate.
+      # Those tests never reach a socket because they stub `_send_request`.
+      WHATSAPP_DRY_RUN: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the Dockerfile's base image, so CI resolves the same wheels
+          # production does (the pins in requirements.txt are version-sensitive).
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # No lint step yet: `black --check .` currently reformats 55 pre-existing
+      # files and the repo has no flake8 config, so enforcing either here would
+      # fail on day one for reasons unrelated to the change under review. Adding
+      # them is a separate cleanup; `black .` / `flake8 .` stay local commands
+      # (see CLAUDE.md).
+      - name: Run tests
+        run: pytest -q

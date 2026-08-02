@@ -154,10 +154,15 @@ railway variables --set "WHATSAPP_DRY_RUN=true" --service worker --environment P
 railway variables --set "WHATSAPP_DRY_RUN=true" --service api    --environment Production
 ```
 
-The dry-run guard runs **before** the breaker check in every send method, so it has no timing
-window at all. Nothing is lost by enabling it: a `yellowCard`ed instance silently filters
-outbound anyway. **Remove it before the real E2E run** — otherwise the bot is mute and you will
-debug a working system for an hour.
+The dry-run substitution lives one layer lower now, in the httpx transport itself (PRO-83):
+every send still runs the real breaker check and builds the real payload, then the transport
+absorbs the request instead of dialing Green API. It still has no timing window — the
+substitution keys off the `WHATSAPP_DRY_RUN` setting directly, not off the Redis breaker key
+that has the boot-time gap. `getStateInstance` (what the deauth watchdog polls) always uses a
+separate, always-real client, so the watchdog keeps seeing the true instance state — and can
+detect recovery — throughout the dry-run window. Nothing is lost by enabling it: a `yellowCard`ed
+instance silently filters outbound anyway. **Remove it before the real E2E run** — otherwise the
+bot is mute and you will debug a working system for an hour.
 
 **Step 2 — use the number as a human, on a real handset.**
 Put the SIM in a phone and use the **normal WhatsApp mobile app** (not Green API, not a linked

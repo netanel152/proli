@@ -128,11 +128,17 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.ENVIRONMENT == PRODUCTION_ENV
 
-    # PRO-79: when True, WhatsAppClient logs outbound sends instead of calling
-    # Green API. Set WHATSAPP_DRY_RUN=true in local .env so dev / simulation never
-    # cold-initiates a real message from the pilot number. Default False keeps
-    # staging & production sending for real (never coupled to ENVIRONMENT — a
-    # misconfigured env silently disabling prod sends would be worse than this).
+    # PRO-79: when True, WhatsAppClient absorbs outbound sends at the transport
+    # layer instead of calling Green API. Set WHATSAPP_DRY_RUN=true in local .env
+    # so dev / simulation never cold-initiates a real message from the pilot
+    # number. Default False keeps staging & production sending for real (never
+    # coupled to ENVIRONMENT — a misconfigured env silently disabling prod sends
+    # would be worse than this).
+    #
+    # PRO-83: the divergence is exactly one point — the httpx transport. Payload
+    # construction, the PRO-71 circuit breaker and the retry policy all still run,
+    # so a dry run exercises the real send path and the offline E2E harness can
+    # assert on the exact bytes a recipient would have received.
     WHATSAPP_DRY_RUN: bool = False
     LOG_LEVEL: str = "INFO"
 

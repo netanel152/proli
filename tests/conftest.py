@@ -1,21 +1,30 @@
-import pytest
-import pytest_asyncio
-from mongomock_motor import AsyncMongoMockClient
-from motor.motor_asyncio import AsyncIOMotorClient
-from unittest.mock import AsyncMock, MagicMock
 import os
 import sys
-import certifi
-import fakeredis.aioredis
-from app.core.config import settings
 
-# Ensure app is in path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Put the project root on sys.path BEFORE importing anything from `app` or
+# `tests`. `tests/` has no __init__.py, so pytest's prepend import mode inserts
+# `tests/` — not the repo root — for this conftest, and the root is only on the
+# path by accident of how the suite is invoked: `python -m pytest` adds the cwd,
+# a bare `pytest` does not. This import used to sit above the path fix, so CI
+# (which runs `pytest -q`) died with ModuleNotFoundError: No module named 'app'.
+# insert(0), not append: it must win over anything already on the path.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Mock google.genai to avoid ImportErrors if package is missing/conflicted
-sys.modules["google.genai"] = MagicMock()
-# Also mock google.genai.types
-sys.modules["google.genai.types"] = MagicMock()
+import pytest  # noqa: E402
+import pytest_asyncio  # noqa: E402
+from mongomock_motor import AsyncMongoMockClient  # noqa: E402
+from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
+from unittest.mock import AsyncMock, MagicMock  # noqa: E402
+import certifi  # noqa: E402,F401
+import fakeredis.aioredis  # noqa: E402,F401
+from app.core.config import settings  # noqa: E402
+
+# Mock google.genai to avoid ImportErrors if package is missing/conflicted.
+# Skipped when re-recording the E2E harness fixtures (PRO-83), which needs the
+# real SDK to reach Gemini — see tests/e2e/ai_replay.py.
+if not os.getenv("PROLI_E2E_RECORD"):
+    sys.modules["google.genai"] = MagicMock()
+    sys.modules["google.genai.types"] = MagicMock()
 
 
 @pytest.fixture(scope="module")
