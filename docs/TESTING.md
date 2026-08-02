@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 578 passed, 6 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set).
+**Current status: 767 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -192,8 +192,85 @@ async def test_something(mock_db, monkeypatch):
 
 | Tool | Command | Purpose |
 |------|---------|---------|
-| Webhook simulator | `python scripts/simulate_webhook.py` | Interactive — craft any message and POST to local backend |
-| Automated scenarios | `python tests/simulate_test.py` | Runs TC1–TC12: consent, rejection, SOS, media, idempotency |
+| Offline E2E harness | `pytest tests/e2e` | Automated full-flow coverage, zero real sends — see §6 |
+| Webhook simulator | `python tests/simulate_webhook.py` | Interactive — craft any message and POST to local backend |
 | Environment reset | `python scripts/reset_test.py` | Clear test leads, Redis state/context/webhook keys |
 | DB seeding | `python scripts/seed_db.py` | Populate with sample professionals |
 | Manual test plan | `docs/MANUAL_TEST_PLAN.md` | Step-by-step via real WhatsApp |
+
+> **Deleted in PRO-83:** `tests/simulate_test.py` and `tests/smoke_test_railway.py`.
+> Both claimed their target customer number was "virtual". It was a real handset —
+> only the *inbound* leg was simulated, so every simulated webhook produced a
+> genuine outbound Green API send (PRO-72, the yellowCard). `tests/e2e` now proves
+> the same logic offline; manual transport verification lives exclusively in
+> `docs/PILOT_E2E_CHECKLIST.md` (PRO-64), and live-fire automation is gated on a
+> separate staging Green API instance (PRO-29).
+
+---
+
+## 6. Offline E2E Harness (`tests/e2e`, PRO-83)
+
+Drives the **real** orchestrator with synthetic Green API webhooks and asserts on
+the fully rendered Hebrew each participant would have received, the resulting
+Mongo state, and the Redis FSM state. Runs in ~7 seconds on every PR.
+
+### Real-send fidelity
+
+The harness does **not** mock `WhatsAppClient`. It runs the production client and
+swaps only the httpx transport beneath it, so the payload dict, the URL, the PRO-71
+circuit-breaker check and the tenacity retry policy are all the real code path.
+PRO-83 moved the `WHATSAPP_DRY_RUN` divergence down to that transport for exactly
+this reason — before, dry-run returned from `send_message` before the payload was
+built and before the breaker was consulted.
+
+### Zero real sends — three independent layers
+
+1. `settings.WHATSAPP_DRY_RUN` is forced on, so even a freshly built client gets the
+   production dry-run transport.
+2. Every `WhatsAppClient` singleton points at the recording transport.
+3. `httpx`'s real transports are patched to **raise** for the whole package. A
+   request either reaches the recorder or fails the run.
+
+Test numbers are `9720…`, which cannot be a real Israeli MSISDN (the digit after
+`972` is never `0`). `test_e2e_safety.py` scans the whole harness tree for the two
+numbers implicated in PRO-72.
+
+### What is deliberately not real
+
+| Substituted | Why | Where |
+|---|---|---|
+| Gemini | CI must be free, offline and byte-identical between runs | recorded fixtures in `ai_replay.py`; re-record with `PROLI_E2E_RECORD=1` |
+| Media upload/analysis | same, plus no live API key in CI | fixtures in `world.py`; real media is verified by hand in `docs/PILOT_E2E_CHECKLIST.md` |
+| Google geocoding | paid external API | `fake_resolve_city_to_coords`, which resolves the same static cities production does so routing still takes the `$geoNear` path |
+| `$geoNear` | mongomock does not implement it | `geo_shim.py` emulates only that operator, so the real 10→20→30 km stepping and load balancing still execute |
+
+### Time
+
+No new dependency and no wall-clock sleeps. Tests backdate the stored timestamps
+the scheduled jobs read (`pro_notified_at`, `paused_at`, `created_at`) against an
+anchor computed **inside** the fixture, satisfying PRO-68.
+
+### The state × input matrix
+
+`test_e2e_state_matrix.py` drives every `UserStates` value against eight realistic
+input classes (expected keyword, free text, off-topic, wrong media type, emoji-only,
+silence, interruption keyword, race). The table in that module's docstring is
+**generated from the executable matrix** and pinned by a guard test, so a cell
+cannot go silently missing — adding a state fails the suite until the regenerated
+table is pasted back. Regenerate with:
+
+```bash
+python -m tests.e2e.test_e2e_state_matrix
+```
+
+### Defects it found
+
+Four `xfail(strict=True)` tests document behaviour the system should have and does
+not. Strict mode turns each into a hard failure the moment it is fixed.
+
+| Test | Defect |
+|---|---|
+| `test_pro_rejection_reassigns_to_the_next_pro` | A pro rejection is a silent dead end: the lead goes `REJECTED`, the customer's state is cleared, and nothing notifies them or re-routes — no scheduler job queries `REJECTED`. |
+| `test_pro_can_select_which_job_to_finish` | `PRO_SELECTING_JOB_TO_FINISH` is unreachable through the orchestrator — the `PRO_BUSINESS_KEYWORDS` bypass overwrites the state to `PRO_MODE` before `pro_flow` reads it, so "1" runs approve instead of picking job 1. |
+| `test_pro_final_price_is_recorded` | `PRO_AWAITING_FINAL_PRICE` is absent from the dispatch, so PRO-33's `final_price` / `commission_amount` can never be captured in production. |
+| `test_text_fallback_routing_still_honours_exclusions` | `determine_best_pro`'s reverse-match fallback drops `excluded_pro_ids` and the `pending_approval` guard. |

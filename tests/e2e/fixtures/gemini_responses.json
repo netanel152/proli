@@ -1,0 +1,42 @@
+{
+  "intents": {
+    "יש לי נזילה מתחת לכיור": true,
+    "מתי מגיע הטכנאי שלי": false
+  },
+  "responses": {
+    "dispatcher|text|יש לי נזילה מתחת לכיור בתל אביב": {
+      "extracted_data": {
+        "apartment": null,
+        "appointment_datetime": null,
+        "appointment_time": null,
+        "city": "תל אביב",
+        "customer_name": null,
+        "floor": null,
+        "issue": "נזילה מתחת לכיור",
+        "quoted_price": null,
+        "street": null,
+        "street_number": null
+      },
+      "is_deal": false,
+      "reply_to_user": "הבנתי, נזילה מתחת לכיור בתל אביב. כמה זמן זה כבר ככה?",
+      "transcription": null
+    },
+    "pro|text|סבבה מתאים לי": {
+      "extracted_data": {
+        "apartment": "12",
+        "appointment_datetime": null,
+        "appointment_time": "מחר ב-10:00",
+        "city": "תל אביב",
+        "customer_name": "דנה",
+        "floor": "3",
+        "issue": "נזילה מתחת לכיור",
+        "quoted_price": "450",
+        "street": "דיזנגוף",
+        "street_number": "50"
+      },
+      "is_deal": true,
+      "reply_to_user": "מעולה דנה, קבענו למחר ב-10:00 בדיזנגוף 50. 👍",
+      "transcription": null
+    }
+  }
+}
