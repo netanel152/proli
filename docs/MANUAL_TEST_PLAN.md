@@ -210,6 +210,72 @@ Can simulate by temporarily clearing pro record.
 
 ---
 
+## Routing Coverage Matrix — TC-19..TC-28 (PRO-84)
+
+These ten cases exercise **every branch** of `matching_service.determine_best_pro`.
+They require the staging coverage-matrix seed:
+
+```bash
+python scripts/seed_coverage_matrix.py
+```
+
+Staging only — the script refuses to run against any other environment, database or
+Green API instance, and it refuses to run at all while any *untagged* professional
+is present (`seed_db.py`'s pro sits on the Tel Aviv coordinate at 4.9 with slots
+and would silently win TC-20). Purge those first, or use a database dedicated to
+the matrix.
+
+All 27 seeded professionals use the reserved `972000000100`–`972000000199` block.
+`972` followed by `0` is not a valid Israeli MSISDN — the digit after the country
+code is the national number with the trunk `0` stripped — so no number in the block
+can reach a subscriber. Remove them with `--purge` (deletes only
+`seed_batch: "coverage_v1"`).
+
+**Send each message from the customer test phone and read the pro's name off the
+`🎉 נמצא לך איש מקצוע` reply, or off the lead's `pro_id` in Mongo.**
+
+| TC | Scenario | Send as location | Expected professional | What it proves |
+|----|----------|------------------|----------------------|----------------|
+| **TC-19** | S01 · rating sort | `תל אביב` | `[S01] אינסטלציה תל אביב 01` (4.8) | Rating sort inside a dense cluster — **and** that the +10 availability bonus outweighs rating, since `[FILL] חשמל חולון 01` is rated 5.0, is 7.8 km away, and must still lose because it has no slots |
+| **TC-20** | S02 · load balancing | `תל אביב`, after `--scenario load-balance` | `[S01] מנעולן תל אביב 04` (4.5) | The three best are at `MAX_PRO_LOAD` and are skipped |
+| **TC-21** | S03 · everyone overloaded | `מודיעין`, after `--scenario overload-shfela` | *none* → `PENDING_ADMIN_REVIEW` | Routing stops at the first radius that returns documents; it does **not** widen again once the load filter empties the list |
+| **TC-22** | S04 · expand to 20 km | `מודיעין` | `[S04] אינסטלציה לוד 01` (4.8) | Nothing within 10 km → `GEO_RADIUS_STEPS[1]` answers |
+| **TC-23** | S05 · expand to 30 km | `נתניה` | `[S01] אינסטלציה תל אביב 01` | Steps 1 and 2 empty → `GEO_RADIUS_STEPS[2]` catches the TA cluster |
+| **TC-24** | S06 · coverage gap | `חדרה` | *none* → `PENDING_ADMIN_REVIEW` | Nobody inside 30 km. Check the log says **warning**, not critical (PRO-77) |
+| **TC-25** | S07 · geocoding | `ראש העין` | `[S07] אינסטלציה פתח תקווה 01` | The city is absent from `ISRAEL_CITIES_COORDS`, so Google + the Redis cache must answer. Reproduces the 2026-04-18 post-mortem. **Needs a working `GOOGLE_MAPS_API_KEY` (PRO-19)** |
+| **TC-26** | S08 · text fallback | `מתחם בדיקות פרולי` | `[S08] אינסטלציה ניידת 01` | An unresolvable locality drops routing into the `service_areas` regex |
+| **TC-27** | S09 · reverse match | `רחוב הבדים 4, מרחב דן בדיקות` | `[S09] צבע אזורי 01` | The full string matches no regex, so only step 3's `area in location` can find anyone |
+| **TC-28** | S10 · ineligible filter | `תל אביב` | **never** a `[S10]` pro | All four are rated 5.0 and sit in TA — a broken `base_filter` puts them first |
+
+### Notes
+
+* **Run TC-19 before TC-20/TC-21.** The two `--scenario` flags inject artificial load
+  and deliberately change who wins; the default seed is the clean state every other
+  case expects. Re-run the script without flags to reset (`--purge` then re-seed).
+* **Petah Tikva is a boundary trap.** It sits ~10.01 km from Tel Aviv, exactly on
+  `GEO_RADIUS_STEPS[0]`, so whether it is inside the first radius depends on
+  floating-point detail. No case above depends on the answer — PT is only ever
+  reached from Rosh HaAyin (6.6 km, comfortably inside).
+* **The Sharon is empty on purpose.** No professional in Herzliya, Ra'anana, Kfar
+  Saba, Hod HaSharon, Netanya or Hadera; Modiin is empty too. That single decision
+  is what makes TC-22, TC-23 and TC-24 possible. Adding a pro there silently
+  destroys three cases.
+* **Only S01 and S04 professionals have calendar slots.** `determine_best_pro` adds
+  a +10 availability bonus, which outweighs the entire 3.0–5.0 rating range — so
+  availability, not rating, is the dominant signal. `[FILL] חשמל חולון 01` is
+  deliberately the highest-rated pro in the Tel Aviv ring (5.0) with no slots, so
+  TC-19 only produces its documented answer if that bonus is working.
+* **Routing does not filter on profession.** `determine_best_pro` takes
+  `issue_type` but never uses it in `base_filter` — the seven types are seeded for
+  realistic prompts and admin-panel variety, not because any case above tests
+  profession matching.
+
+All ten are also asserted automatically in `tests/test_seed_coverage_matrix.py`,
+which runs the real routing engine against the same matrix — so a routing
+regression fails CI rather than waiting to be found by hand here.
+
+---
+
 ## Quick DB Verification Commands
 
 ```javascript
