@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 767 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
+**Current status: 833 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -59,6 +59,7 @@ pytest -m integration
 | `test_approval_sla.py` | PRO-56 approval SLA: T+10 pro nudge, T+25 customer reassignment offer, emergency-halved thresholds, idempotency, business-hours gate, and the customer 1/2 reply handling |
 | `test_reassign_escalation.py` | PRO-63 `reassign_lead`: exhausted `MAX_REASSIGNMENTS` escalates to `PENDING_ADMIN_REVIEW` (never `CLOSED`), immediate admin alert (and best-effort survival if it fails), customer notification, state/context clear, idempotency guard, race-safe `expected_status` write, and that exhaustion is checked before matching/reassigning |
 | `test_scheduler_gating.py` | PRO-73 gating primitives: `within_business_hours` (Israel 08–21) and the `_customer_cold_job_allowed` toggle+hours gate (default OFF) for cold customer-facing jobs |
+| `test_seed_coverage_matrix.py` | PRO-84 staging coverage matrix: the 27-professional seed's shape, reserved phone block, determinism and `--purge` scoping — plus the **real `determine_best_pro` run against the seeded matrix**, asserting each of the ten routing scenarios' winner by name (rating sort, load balancing, 10→20→30 km expansion, coverage gap, geocoding, text fallback, reverse match, ineligibility filter) |
 ### Infrastructure
 
 | File | What it covers |
