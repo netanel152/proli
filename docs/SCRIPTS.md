@@ -18,6 +18,23 @@ Populates MongoDB with sample professionals (plumbers, electricians) and test le
 python scripts/seed_db.py
 ```
 
+### `seed_coverage_matrix.py`
+
+Staging-only. Seeds 27 deterministic professionals positioned around `WorkerConstants.GEO_RADIUS_STEPS` so `matching_service.determine_best_pro` (radius expansion, load balancing, rating sort, text fallback, coverage gaps) can be exercised with a known-correct answer per scenario (PRO-84, `docs/MANUAL_TEST_PLAN.md` TC-19..TC-28). Every document is tagged `seed_batch: "coverage_v1"`.
+
+Refuses to write anything unless `ENVIRONMENT=staging`, the target database is `proli_staging_db`, `GREEN_API_INSTANCE_ID` is not the production instance, and no untagged (foreign) professional already exists in the database. All seeded phone numbers fall in `972000000100`-`972000000199` — structurally unreachable, since a valid Israeli MSISDN never has `0` immediately after `972`.
+
+Not safe to run alongside `scripts/seed_db.py` in either direction: `seed_db.py`'s `clear_db()` wipes the matrix, and its own seeded pro outranks the intended TC-20 winner.
+
+```bash
+python scripts/seed_coverage_matrix.py                       # seed the base 27 pros (no artificial load)
+python scripts/seed_coverage_matrix.py --scenario load-balance     # + overload the top 3 S01 pros (TC-20)
+python scripts/seed_coverage_matrix.py --scenario overload-shfela  # + overload every S04 pro (TC-21)
+python scripts/seed_coverage_matrix.py --purge                # remove only this batch (seed_batch=coverage_v1)
+```
+
+`--scenario` is repeatable and off by default.
+
 ### `migrate_unknown_address.py`
 
 One-time migration. Finds all leads with `full_address = "Unknown Address"` (a legacy sentinel value) and clears the field so the geocoding service can resolve it properly on the next interaction.
