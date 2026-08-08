@@ -83,7 +83,7 @@ async def test_a_real_http_attempt_fails_the_run(forbid_real_network):
     """
     async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport()) as client:
         with pytest.raises(AssertionError, match="REAL outbound HTTP request"):
-            await client.get("https://api.green-api.com/health")
+            await client.get("https://graph.example.com/health")
 
     assert forbid_real_network, "the guard should have recorded the escape attempt"
     forbid_real_network.clear()

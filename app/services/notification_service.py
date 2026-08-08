@@ -1,4 +1,4 @@
-from app.services.whatsapp_client_service import WhatsAppClient
+from app.providers.whatsapp import get_whatsapp
 from app.core.database import leads_collection, users_collection
 from app.core.logger import logger
 from app.core.messages import Messages
@@ -7,7 +7,7 @@ from app.core.phone import to_chat_id, to_local_phone
 from app.core.config import settings
 from bson import ObjectId
 
-whatsapp = WhatsAppClient()
+whatsapp = get_whatsapp()
 
 
 async def _send_best_effort(chat_id: str, message: str) -> bool:
@@ -43,13 +43,25 @@ async def send_oncall_alert(message: str, *, assume_authorized: bool = False) ->
     # Mask to last 4 digits, matching the project-wide PII logging convention.
     masked = "***" + oncall[-4:]
 
+    # PRO-86: a non-transmitting provider reports "authorized" (it can never be
+    # deauthorized), which would send this page into the dry-run sink and return
+    # True — losing the alert exactly when the runbook has dry-run switched on.
+    # Sentry is the guaranteed channel, so go straight to it.
+    if not whatsapp.provider.transmits:
+        logger.critical(
+            f"WhatsApp provider {whatsapp.provider.name!r} cannot transmit — "
+            f"on-call alert to {masked} NOT sent over WhatsApp; paging via "
+            "Sentry email."
+        )
+        return False
+
     if not assume_authorized:
         state = await whatsapp.get_state_instance()
         if state != "authorized":
             logger.critical(
-                f"WhatsApp instance not authorized (state={state or 'unreachable'}, "
-                f"instance=***{str(settings.GREEN_API_INSTANCE_ID)[-4:]}) — on-call "
-                f"alert to {masked} NOT sent over WhatsApp; paging via Sentry email."
+                f"WhatsApp account not authorized (state={state or 'unreachable'}, "
+                f"provider={whatsapp.provider.name}) — on-call alert to {masked} "
+                "NOT sent over WhatsApp; paging via Sentry email."
             )
             return False
 

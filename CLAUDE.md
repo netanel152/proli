@@ -2,9 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## CRITICAL: Green API limitation
+## CRITICAL: text-only menus, and the single outbound egress
 
-Do **not** use interactive buttons (`send_interactive_buttons`) — Green API does not support them and the helper was removed in April 2026. All WhatsApp menus must be text-based (numeric or keyword replies). Example: instead of Approve/Reject buttons, send `"Reply '1' to approve, '2' to reject."`
+**Every WhatsApp menu must stay text-based** (numeric or keyword replies). Example: instead of Approve/Reject buttons, send `"Reply '1' to approve, '2' to reject."`
+
+The original reason was a Green API limitation. Green API is gone (PRO-85 — instance deleted, tariff cancelled), and the rule now rests on a different footing: `WhatsAppProvider.send_interactive` exists on the ABC because Meta Cloud API supports interactive messages, but **nothing in any flow may call it** until PRO-88 (template catalog) and PRO-89 (CloudAPIProvider) land. The Green-shaped `send_interactive_buttons` helper was removed in April 2026 and stays removed.
+
+**All outbound traffic goes through `app/providers/whatsapp/` (PRO-86).** Never build a provider directly, never call an HTTP client at a vendor endpoint — both bypass the circuit breaker and the operator kill switch, which is precisely what caused the yellowCard incident. Synchronous callers (the Streamlit admin panel) use `app.providers.whatsapp.sync.send_text_sync`.
+
+A CI step fails the build on any reference to the old vendor's domain (`green` + `-api.com`, either spelling) anywhere in the repo — see the "Guard" step in `.github/workflows/tests.yml`. Write it split like that if you ever need to mention it in prose, or the guard will trip on your own sentence.
 
 ## Commands
 

@@ -475,48 +475,23 @@ def render_pending_approvals(T):
 
 
 def _notify_pro_approved(phone_number: str):
+    # PRO-86: was a raw httpx.post straight at Green API, bypassing the circuit
+    # breaker and kill switch entirely. Now goes through the one egress.
     if not phone_number:
         return
-    try:
-        import httpx
-        from app.core.config import settings
-        from app.core.phone import to_chat_id
+    from app.core.messages import Messages
+    from app.core.phone import to_chat_id
+    from app.providers.whatsapp.sync import send_text_sync
 
-        chat_id = to_chat_id(phone_number)
-        from app.core.messages import Messages
-
-        url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}/sendMessage/{settings.GREEN_API_TOKEN}"
-        httpx.post(
-            url,
-            json={
-                "chatId": chat_id,
-                "message": Messages.Onboarding.APPROVED_NOTIFICATION,
-            },
-            timeout=10,
-        )
-    except Exception:
-        pass
+    send_text_sync(to_chat_id(phone_number), Messages.Onboarding.APPROVED_NOTIFICATION)
 
 
 def _notify_pro_rejected(phone_number: str):
+    # PRO-86: see _notify_pro_approved — same bypass, same fix.
     if not phone_number:
         return
-    try:
-        import httpx
-        from app.core.config import settings
-        from app.core.phone import to_chat_id
+    from app.core.messages import Messages
+    from app.core.phone import to_chat_id
+    from app.providers.whatsapp.sync import send_text_sync
 
-        chat_id = to_chat_id(phone_number)
-        from app.core.messages import Messages
-
-        url = f"https://api.green-api.com/waInstance{settings.GREEN_API_INSTANCE_ID}/sendMessage/{settings.GREEN_API_TOKEN}"
-        httpx.post(
-            url,
-            json={
-                "chatId": chat_id,
-                "message": Messages.Onboarding.REJECTED_NOTIFICATION,
-            },
-            timeout=10,
-        )
-    except Exception:
-        pass
+    send_text_sync(to_chat_id(phone_number), Messages.Onboarding.REJECTED_NOTIFICATION)

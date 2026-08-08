@@ -105,6 +105,7 @@ from app.core.database import (  # noqa: E402
     slots_collection,
     users_collection,
 )
+from app.providers.whatsapp import build_provider  # noqa: E402
 
 # --- Batch identity -------------------------------------------------------
 # Every document this script writes carries this tag. `--purge` filters on it and
@@ -114,12 +115,12 @@ SEED_BATCH = "coverage_v1"
 
 # --- Safety ---------------------------------------------------------------
 STAGING_DB_NAME = "proli_staging_db"
-# A deny-list, and therefore only a backstop: rotate the production instance and
-# this stops catching anything. The load-bearing guards are the two allow-lists
-# above it (ENVIRONMENT must equal staging, DB must equal proli_staging_db).
-# A proper allow-list needs a staging instance id to compare against, which
-# arrives with PRO-29.
-PRODUCTION_INSTANCE_ID = "7105567180"
+# The third guard used to be a deny-list on the production Green API instance id
+# — a backstop that stopped catching anything the moment the instance rotated.
+# PRO-86 replaced it with a direct capability check (`provider.transmits`), which
+# is an allow-list in the only terms that matter: a transport that cannot reach a
+# handset cannot spam the 27 seeded professionals. PRO-29, which was going to
+# supply a staging instance id to compare against, is cancelled.
 # 972 followed by 0 is not a valid Israeli MSISDN — see the module docstring.
 RESERVED_PREFIX = "9720"
 PHONE_BLOCK_START = 972000000100
@@ -477,12 +478,17 @@ def assert_seed_allowed() -> None:
             f"expected {STAGING_DB_NAME!r}.\n"
             "   ENVIRONMENT says staging but MONGO_URI points somewhere else."
         )
-    if str(settings.GREEN_API_INSTANCE_ID).strip() == PRODUCTION_INSTANCE_ID:
+    # PRO-86: this used to compare GREEN_API_INSTANCE_ID against the production
+    # instance id. Green API is gone, and the replacement asks the question that
+    # actually matters rather than a proxy for it — can the configured transport
+    # reach a real handset at all?
+    provider = build_provider()
+    if provider.transmits:
         raise SystemExit(
-            f"❌ Refusing to seed: GREEN_API_INSTANCE_ID is the production "
-            f"instance ({PRODUCTION_INSTANCE_ID}).\n"
-            "   Seeded pros receive real job offers — point this at the staging "
-            "instance first (PRO-29)."
+            f"❌ Refusing to seed: WHATSAPP_PROVIDER={provider.name!r} can send "
+            "real messages.\n"
+            "   The 27 seeded professionals become live message recipients. Set "
+            "WHATSAPP_DRY_RUN=true (or WHATSAPP_PROVIDER=dryrun) before seeding."
         )
 
 

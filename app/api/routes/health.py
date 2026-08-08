@@ -7,7 +7,7 @@ from app.core.constants import LeadStatus, WorkerConstants
 from app.core.database import check_db_connection, leads_collection
 from app.core.logger import logger
 from app.core.redis_client import get_redis_client
-from app.services.whatsapp_client_service import WhatsAppClient
+from app.providers.whatsapp import get_whatsapp
 import time
 
 router = APIRouter(prefix="/health", tags=["Health"])
@@ -20,7 +20,7 @@ async def health_check(response: Response):
     """
     Checks the health of all external dependencies with latency measurements.
     """
-    whatsapp = WhatsAppClient()
+    whatsapp = get_whatsapp()
 
     # MongoDB Check
     mongo_up = False
@@ -62,12 +62,17 @@ async def health_check(response: Response):
     whatsapp_status = "down"
     whatsapp_state = None
     try:
-        client = await whatsapp._get_client()
-        url = f"{whatsapp.api_url}/getStateInstance/{whatsapp.api_token}"
-        resp = await client.get(url)
-        resp.raise_for_status()
-        whatsapp_state = resp.json().get("stateInstance")
-        if whatsapp_state == "authorized":
+        # PRO-86: was a hand-rolled Green API call that reached into the client's
+        # private httpx handle and rebuilt the URL from its token — a second
+        # egress in everything but name. The facade owns the probe now.
+        whatsapp_state = await whatsapp.get_state_instance()
+        if not whatsapp.provider.transmits:
+            # A non-transmitting provider always reports "authorized" — it cannot
+            # be deauthorized. Reporting that as "up" would make a production
+            # deployment that forgot WHATSAPP_PROVIDER a silent black hole with a
+            # green dashboard, so surface it as degraded instead.
+            whatsapp_status = "degraded"
+        elif whatsapp_state == "authorized":
             whatsapp_status = "up"
         elif whatsapp_state == "yellowCard":
             # Instance alive but WhatsApp is silently filtering outbound — degraded.
@@ -97,6 +102,10 @@ async def health_check(response: Response):
         "whatsapp": {
             "status": whatsapp_status,
             "state": whatsapp_state,
+            # PRO-86: which transport is actually wired up. Without this, a
+            # dry-run deployment and a live one are indistinguishable on /health.
+            "provider": whatsapp.provider.name,
+            "transmits": whatsapp.provider.transmits,
         },
     }
 

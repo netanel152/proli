@@ -2,7 +2,6 @@ import streamlit as st
 from pymongo import MongoClient, uri_parser
 import os
 import certifi
-import httpx
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from bson import ObjectId
@@ -162,11 +161,19 @@ def create_initial_schedule(pro_id):
 def send_completion_check_sync(lead_id: str):
     """
     Sync version of send_customer_completion_check for use in Streamlit.
-    Uses sync PyMongo + sync httpx. Sends a text-only message (no buttons).
+    Uses sync PyMongo; the send goes through the outbound facade (PRO-86), which
+    previously was a raw httpx.post straight at Green API and therefore skipped
+    the circuit breaker and the kill switch.
+
+    Returns True when the facade accepted the message. A suppressed send (breaker
+    engaged) also returns True-ish semantics from the caller's point of view — it
+    was handled, not lost — so callers must not treat the result as delivery
+    confirmation.
     """
-    from app.core.constants import LeadStatus, Defaults
+    from app.core.constants import Defaults
     from app.core.messages import Messages
     from app.core.phone import to_chat_id
+    from app.providers.whatsapp.sync import send_text_sync
 
     lead = leads_collection.find_one({"_id": ObjectId(lead_id)})
     if not lead:
@@ -180,15 +187,5 @@ def send_completion_check_sync(lead_id: str):
         else Defaults.GENERIC_PRO_NAME
     )
 
-    chat_id = to_chat_id(customer_chat_id)
-
-    instance_id = os.getenv("GREEN_API_INSTANCE_ID")
-    api_token = os.getenv("GREEN_API_TOKEN")
-    base_url = f"https://api.green-api.com/waInstance{instance_id}"
-
     message_text = Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name)
-    payload = {"chatId": chat_id, "message": message_text}
-    url = f"{base_url}/sendMessage/{api_token}"
-    resp = httpx.post(url, json=payload, timeout=30.0)
-    resp.raise_for_status()
-    return resp.json()
+    return send_text_sync(to_chat_id(customer_chat_id), message_text)

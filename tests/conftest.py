@@ -76,12 +76,17 @@ def patch_dependencies(request, monkeypatch, mock_db):
     if request.node.get_closest_marker("integration"):
         return
 
-    # Tests must be deterministic regardless of the developer's local .env. A local
-    # WHATSAPP_DRY_RUN=true (needed for safe /simulate — see PRO-79) otherwise makes
-    # every WhatsApp-client test short-circuit at the dry-run guard before the
-    # _send_request/pause-check they assert on. Force the production default here;
-    # the dry-run-specific tests opt back in with their own monkeypatch.
-    monkeypatch.setattr(settings, "WHATSAPP_DRY_RUN", False)
+    # PRO-86: the suite runs against the DryRunProvider — a transport that cannot
+    # reach a handset — rather than a real client with a mocked socket underneath.
+    # Forced True regardless of the developer's local .env so a run can never
+    # select something that transmits.
+    #
+    # This inverts the pre-PRO-86 line, which forced it *False* so the old
+    # WhatsAppClient tests would fall through the dry-run guard to the pause check
+    # they asserted on. The breaker is no longer reached via this flag: it lives on
+    # the facade and is gated on `provider.transmits`, so tests that exercise it
+    # build a facade over a transmitting fake (see tests/test_whatsapp_facade.py).
+    monkeypatch.setattr(settings, "WHATSAPP_DRY_RUN", True)
 
     # Patch Database Collections
     users = mock_db.users

@@ -21,8 +21,8 @@ VALID_PAYLOAD = {
 @pytest.fixture
 def mock_background_tasks():
     # Patch settings to match test payload and disable token auth
-    with patch("app.core.config.settings.GREEN_API_INSTANCE_ID", "7107387490"), \
-         patch("app.core.config.settings.WEBHOOK_TOKEN", None):
+    # PRO-86: the sender instance-id check went with the Green provider.
+    with patch("app.core.config.settings.WEBHOOK_TOKEN", None):
         # Mock ARQ pool
         with patch("app.api.routes.webhook.get_arq_pool") as mock_get_pool:
             mock_pool = AsyncMock()
@@ -81,8 +81,8 @@ def test_webhook_missing_fields(mock_background_tasks):
 
 def test_webhook_token_query_param_required_when_configured():
     """When WEBHOOK_TOKEN is set, requests must carry ?token= parameter."""
-    with patch("app.core.config.settings.GREEN_API_INSTANCE_ID", "7107387490"), \
-         patch("app.core.config.settings.WEBHOOK_TOKEN", "secret-token"):
+    # PRO-86: the sender instance-id check went with the Green provider.
+    with patch("app.core.config.settings.WEBHOOK_TOKEN", "secret-token"):
         with patch("app.api.routes.webhook.get_arq_pool") as mock_get_pool, \
              patch("app.api.routes.webhook.get_redis_client") as mock_get_redis:
             mock_get_pool.return_value = AsyncMock()

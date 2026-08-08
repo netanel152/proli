@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.core.logger import logger
 from app.core.redis_client import get_redis_client
 from app.core.datetime_utils import within_business_hours
-from app.services.whatsapp_client_service import WhatsAppClient
+from app.providers.whatsapp import get_whatsapp, record_account_state
 from app.services import matching_service
 from app.services.notification_service import send_oncall_alert
 from app.core.messages import Messages
@@ -16,7 +16,7 @@ from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
 from bson import ObjectId
 
-whatsapp = WhatsAppClient()
+whatsapp = get_whatsapp()
 
 
 async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
@@ -429,8 +429,26 @@ async def check_whatsapp_instance_state():
     Fail-open: any Redis error degrades to a single log line and returns —
     a monitoring job must never take down the worker.
     """
+    # PRO-86: a provider that cannot transmit has no account to watch, and its
+    # synthetic "authorized" must never reach the breaker, the deauth clock or the
+    # recovery notice. Skipping outright is the honest behaviour: under
+    # WHATSAPP_DRY_RUN there is genuinely nothing to page about, and pretending
+    # otherwise would clear a real incident's pause key and fire a false recovery.
+    if not whatsapp.provider.transmits:
+        logger.debug(
+            f"[WA Monitor] provider {whatsapp.provider.name!r} cannot transmit — "
+            "skipping tick."
+        )
+        return
+
     state = await whatsapp.get_state_instance()
     is_authorized = state == "authorized"
+
+    # PRO-82/PRO-86: publish the *positive* confirmation the outbound facade
+    # fails closed without. Written before any of the paging bookkeeping below
+    # so a Redis hiccup in the alerting path can never leave the breaker relying
+    # on a probe that did succeed.
+    await record_account_state(state, transmits=whatsapp.provider.transmits)
 
     try:
         redis = await get_redis_client()
@@ -441,7 +459,10 @@ async def check_whatsapp_instance_state():
     DOWN_SINCE_KEY = "wa:instance:down_since"
     ALERTED_KEY = "wa:instance:alerted"
     LAST_ALERT_KEY = "wa:instance:last_alert"
-    PAUSED_KEY = "wa:instance:paused"  # PRO-71 outbound circuit breaker
+    # PRO-71 outbound circuit breaker. Imported from the facade rather than
+    # re-declared, so the two halves of the breaker — the writer here and the
+    # reader in app/providers/whatsapp/facade.py — cannot drift apart.
+    PAUSED_KEY = _PAUSE_KEY
 
     try:
         if is_authorized:
@@ -516,9 +537,9 @@ async def check_whatsapp_instance_state():
         else:
             impact = "no messages are being processed"
         logger.critical(
-            f"🚨 [WA Monitor] Green API instance NON-AUTHORIZED for "
+            f"🚨 [WA Monitor] WhatsApp account NON-AUTHORIZED for "
             f"~{downtime_minutes:.0f}m (state={state or 'unreachable'}, "
-            f"instance=***{str(settings.GREEN_API_INSTANCE_ID)[-4:]}) — {impact}. "
+            f"provider={whatsapp.provider.name}) — {impact}. "
             "Outbound is halted (circuit breaker). Paging on-call via Sentry email."
         )
     except Exception as e:
