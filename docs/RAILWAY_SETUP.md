@@ -41,15 +41,14 @@ Set these as **shared variables** (project-level) so all 3 services inherit them
 ```
 MONGO_URI=mongodb+srv://...
 REDIS_URL=redis://...  (auto-set if using Railway Redis plugin)
-GREEN_API_INSTANCE_ID=...
-GREEN_API_TOKEN=...
 GEMINI_API_KEY=...
 CLOUDINARY_CLOUD_NAME=...
 CLOUDINARY_API_KEY=...
 CLOUDINARY_API_SECRET=...
 ADMIN_PASSWORD_HASH=...  # Generate with: python scripts/generate_admin_hash.py
 ADMIN_PHONE=972501234567  # Admin WhatsApp number for SOS alerts
-WEBHOOK_TOKEN=...  # Random string for webhook auth
+WEBHOOK_TOKEN=...  # Random string for webhook auth — required (boot fails without it) once ENVIRONMENT is staging/production (PRO-86)
+WHATSAPP_PROVIDER=dryrun  # dryrun (default) | cloud — cloud is a stub until PRO-89 implements it
 ENVIRONMENT=production   # per-environment — see below
 ```
 
@@ -81,9 +80,12 @@ What the value actually changes:
 
 > **A rejected `ENVIRONMENT` surfaces as a boot crash, not a Sentry issue.** The value is validated while `app.core.config` is imported — before logging and `sentry_sdk.init()` run — so a typo (`ENVIRONMENT=prod`) or an explicitly empty value produces a pydantic `ValidationError` on stderr and a Railway restart loop. Watch the deploy log, not Sentry, when a service fails to come up after an env change.
 
-## Step 5: Configure Green API Webhook
+## Step 5: Configure the WhatsApp webhook
 
-Set your Green API webhook URL to the **API service** public domain, including the webhook token:
+Green API is gone (PRO-85 — instance deleted, tariff cancelled) and inbound is not yet
+provider-abstracted — that lands with PRO-89's Cloud API wiring. Until then there is no
+live vendor to point at `/webhook`; when a provider's console asks for a webhook URL, set
+it to the **API service** public domain, including the webhook token:
 ```
 https://api-production-XXXX.up.railway.app/webhook?token=YOUR_WEBHOOK_TOKEN
 ```
