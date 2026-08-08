@@ -48,6 +48,8 @@ Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live
 
 **10. Close the loop in Linear.** Post a comment on $1 summarizing what was implemented and link the PR. Move the issue to "In Review" (not Done — a human merges the PR). 
 
+**Evidence gate:** If the issue carries `launch-readiness` or `ops-verification`, it may NOT be moved past "In Review" — by anyone, including Linear↔GitHub automation on PR merge — without evidence attached to the issue: an execution log, screenshot, or checklist with boxes actually ticked. A merged PR that only *adds a document or script* is not evidence that it was *executed*. If the deliverable is "run X", the Done criterion is the run, not the artifact.
+
 ## Final output
 
 End with a compact status block:
