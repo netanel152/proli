@@ -64,7 +64,7 @@ Proli בנויה כפלטפורמה מולטי-מודאלית ומבוזרת. מ
 | Worker | `python -m app.worker` | - |
 | Admin | `streamlit run admin_panel/main.py --server.port 8501 --server.address 0.0.0.0` | 8501 |
 
-כל השלושה משתפים את אותם env vars (MongoDB Atlas, Redis, Green API).
+כל השלושה משתפים את אותם env vars (MongoDB Atlas, Redis, WhatsApp provider).
 
 ## 6. התאמות בקוד (Advanced)
 

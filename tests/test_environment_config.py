@@ -37,12 +37,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 
 _REQUIRED_SETTINGS_FIELDS = dict(
-    GREEN_API_INSTANCE_ID="test-instance",
-    GREEN_API_TOKEN="test-token",
     GEMINI_API_KEY="test-gemini-key",
     CLOUDINARY_CLOUD_NAME="test-cloud",
     CLOUDINARY_API_KEY="test-cloud-key",
     CLOUDINARY_API_SECRET="test-cloud-secret",
+    # PRO-86: required whenever ENVIRONMENT is prod-like, because it is the only
+    # thing authenticating /webhook once the sender instance-id check is gone.
+    # Stubbed here so the environment tests keep testing ENVIRONMENT.
+    WEBHOOK_TOKEN="test-webhook-token",
 )
 
 
@@ -313,3 +315,29 @@ def test_admin_panel_utils_uses_the_prod_like_helper():
     src = (REPO_ROOT / "admin_panel" / "core" / "utils.py").read_text(encoding="utf-8")
     assert 'is_prod_like_env(os.getenv("ENVIRONMENT"))' in src
     assert '== "production"' not in src
+
+
+# ---------------------------------------------------------------------------
+# PRO-86: WEBHOOK_TOKEN is mandatory once ENVIRONMENT is prod-like
+#
+# The sender instance-id check on /webhook died with the Green provider, so an
+# unset token means the route has no authentication at all.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("env", [STAGING_ENV, PRODUCTION_ENV])
+def test_prod_like_requires_a_webhook_token(env):
+    with pytest.raises(ValidationError, match="WEBHOOK_TOKEN is required"):
+        make_settings(ENVIRONMENT=env, WEBHOOK_TOKEN=None)
+
+
+def test_development_does_not_require_a_webhook_token():
+    """A local checkout must still run without ceremony."""
+    s = make_settings(ENVIRONMENT=DEVELOPMENT_ENV, WEBHOOK_TOKEN=None)
+    assert s.WEBHOOK_TOKEN is None
+
+
+@pytest.mark.parametrize("env", [STAGING_ENV, PRODUCTION_ENV])
+def test_prod_like_accepts_a_present_webhook_token(env):
+    s = make_settings(ENVIRONMENT=env, WEBHOOK_TOKEN="a-real-token")
+    assert s.WEBHOOK_TOKEN == "a-real-token"

@@ -41,7 +41,7 @@ Proli uses **Loguru** with PII masking applied to all sinks.
 - **Console:** Human-readable colored output in development; JSON in production.
 - **File:** `logs/proli.log` — rotating at 10 MB, retained 10 days, gzip-compressed.
 - **PII masking:** Israeli phone numbers are masked in all environments: `972521234567` → `97252****567`.
-- **Secret redaction (PRO-80):** known secret values (`GREEN_API_TOKEN`, `WEBHOOK_TOKEN`) are replaced with `***REDACTED***` wherever they appear in a log line — a URL query string (e.g. the uvicorn access line `POST /webhook?token=…`), a URL path (the Green API token in a `/waInstance<id>/…/<token>` exception string), etc. Complements PRO-79, which suppresses `httpx`/`httpcore` INFO request logs at the source.
+- **Secret redaction (PRO-80):** known secret values (`WEBHOOK_TOKEN`) are replaced with `***REDACTED***` wherever they appear in a log line — a URL query string (e.g. the uvicorn access line `POST /webhook?token=…`), a URL path, an exception string, etc. Complements PRO-79, which suppresses `httpx`/`httpcore` INFO request logs at the source. PRO-86 removed `GREEN_API_TOKEN` from the redaction list along with the provider itself; PRO-89 must add the Cloud API credential when it lands.
 - **Token Accounting (FinOps):** AI token usage is tracked per `pro_id` and stored in the `total_tokens_used` field of the `users` collection. This is handled by a fire-and-forget background task.
 
 Log patterns to watch:
@@ -55,13 +55,13 @@ Log patterns to watch:
 | `[SOS Healer]` | Auto-recovery running |
 | `[Janitor]` | Cleaning up unassigned stale leads |
 | `worker:heartbeat` | Worker liveness key (120 s expiry) |
-| `[WA Monitor]` | Green API instance state watchdog (deauth / yellowCard) |
+| `[WA Monitor]` | WhatsApp provider account state watchdog (deauth); skips its tick entirely for a non-transmitting provider (dry-run) |
 | `⛔ Outbound halted` | Circuit breaker suppressing sends — instance not authorized |
 | `Geocoding unavailable — circuit opened` | `logger.critical` → Sentry page; Google Geocoding is failing transiently (missing key, quota, network) and the `geo:unavailable` breaker is open (PRO-19) |
 
 ### Incident runbooks
 
-- **WhatsApp instance banned / disconnected** → [`RUNBOOK_WHATSAPP_OUTAGE.md`](RUNBOOK_WHATSAPP_OUTAGE.md) — detection, the automatic circuit breaker, recovery (re-link / rotate), the manual kill switch, and prevention.
+- **WhatsApp outbound outage** → [`RUNBOOK_WHATSAPP_OUTAGE.md`](RUNBOOK_WHATSAPP_OUTAGE.md) — detection, the automatic fail-closed circuit breaker, the manual kill switch, and prevention.
 
 ---
 
@@ -266,7 +266,7 @@ The routing engine found no matching pro.
 
 ### Webhook
 
-If `WEBHOOK_TOKEN` is set, configure the full URL in Green API: `https://your-domain/webhook?token=<value>`. Requests without a valid token receive `403 Forbidden`.
+Configure the full URL, including the token, at your WhatsApp provider: `https://your-domain/webhook?token=<value>`. Requests without a valid token receive `403 Forbidden`. `WEBHOOK_TOKEN` is **required** (the app refuses to boot without it) whenever `ENVIRONMENT` is `staging`/`production` — PRO-86 removed the sender instance-id check that used to be the other half of webhook authentication, so an unset token would otherwise mean no authentication at all.
 
 ### Admin authentication
 
@@ -289,8 +289,6 @@ python scripts/generate_admin_hash.py
 
 | Variable | Description |
 |----------|------------|
-| `GREEN_API_INSTANCE_ID` | WhatsApp Business API instance ID |
-| `GREEN_API_TOKEN` | Green API authentication token |
 | `GEMINI_API_KEY` | Google Gemini API key |
 | `CLOUDINARY_CLOUD_NAME` | Cloudinary account name |
 | `CLOUDINARY_API_KEY` | Cloudinary API key |
@@ -307,7 +305,8 @@ python scripts/generate_admin_hash.py
 | `REDIS_URL` | — | Full Redis DSN (overrides HOST/PORT) |
 | `ADMIN_PASSWORD` | — | Plain-text password (hashed on startup) |
 | `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts |
-| `WEBHOOK_TOKEN` | — | Enables `?token=<value>` webhook auth |
+| `WEBHOOK_TOKEN` | — | Enables `?token=<value>` webhook auth. **Required** (boot fails without it) when `ENVIRONMENT` is `staging`/`production` — PRO-86 removed the other half of webhook authentication (the sender instance-id check) |
+| `WHATSAPP_PROVIDER` | `dryrun` | Outbound transport: `dryrun` (logs, never transmits) or `cloud` (Meta Cloud API — stub, raises `NotImplementedError` until PRO-89). An unrecognised value falls back to `dryrun` |
 | `ENVIRONMENT` | `development` | One of `development` \| `staging` \| `production` — any other value raises at startup. `staging` and `production` are both "prod-like": JSON logs + PII masking on stdout, `diagnose=False`, and `MONGO_URI` required by the admin panel. `production` additionally blocks `scripts/seed_db.py` |
 | `LOG_LEVEL` | `INFO` | Loguru log level |
 | `MAX_CHAT_HISTORY` | `20` | Max messages stored per chat in Redis |

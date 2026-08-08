@@ -25,11 +25,23 @@ _BAR = "=" * 62
 
 
 def is_production_instance(target_instance_id) -> bool:
-    """Return True if the target Green API instance must be treated as production.
+    """Return True if the target instance must be treated as production.
 
     Production is defined as "equals the live GREEN_API_INSTANCE_ID from the
     environment". If that env var is unset we cannot prove the target is a safe
     QA instance, so we fail safe and treat it as production.
+
+    ⚠️ PRO-86 left this deliberately un-rewired, and it is now vestigial. The
+    config key is gone from ``Settings``; this function reads ``os.environ``
+    directly, so it still resolves while the dead variable lingers in Railway and
+    local ``.env``, and degrades to "always production" (i.e. always abort) once
+    those are cleaned up. That degradation is the safe direction, which is why it
+    was left rather than rushed.
+
+    Re-key it to ``build_provider().transmits`` — the question that actually
+    matters, and what ``scripts/seed_coverage_matrix.py`` now asks — when PRO-89
+    gives live-fire automation something real to guard. PRO-29, which was going
+    to supply a separate QA instance id, is cancelled.
     """
     live = (os.getenv("GREEN_API_INSTANCE_ID") or "").strip()
     if not live:

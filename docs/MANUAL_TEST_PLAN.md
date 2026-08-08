@@ -1,5 +1,13 @@
 # Proli - Manual WhatsApp Test Plan
 
+> ⚠️ **PRO-86 update:** Green API is gone entirely (PRO-85 — instance deleted, tariff
+> cancelled) and outbound now goes through the provider facade (`app/providers/whatsapp/`).
+> Until PRO-89 ships a working `CloudAPIProvider`, there is **no live transmitting provider**
+> — `WHATSAPP_PROVIDER` defaults to `dryrun` (never transmits) and `cloud` is a stub that
+> raises `NotImplementedError`. The real-send steps in this plan are **not currently
+> executable**; the "Green API" references below describe the pre-PRO-86 setup and are kept
+> as a template for whichever real provider PRO-89 wires up.
+
 ## Setup Requirements
 
 | Component | Status Check |
@@ -38,10 +46,13 @@ WhatsApp yellowCard trigger. To keep manual testing safe:
 
 > **No automatic guard here:** the `--instance-id` production check described
 > in earlier versions of this doc belonged to the deleted scripts above. The
-> guard itself (`tests/qa_safety.py`) is kept for any future live-fire
-> automation (gated on a separate staging Green API instance, PRO-29), but
-> nothing currently invokes it. This manual plan has no equivalent check —
-> confirm by hand that you're pointed at the QA instance before starting.
+> guard itself (`tests/qa_safety.py`) is now vestigial — it still reads the
+> long-gone `GREEN_API_INSTANCE_ID` env var and degrades safely to "always
+> production" once that variable is cleaned up (PRO-86). PRO-29, which was
+> going to supply a separate staging instance to gate future live-fire
+> automation on, is cancelled; that automation is blocked on PRO-89 instead.
+> This manual plan has no equivalent check — confirm by hand that you're
+> pointed at a QA/non-production number before starting.
 
 ---
 
@@ -219,11 +230,11 @@ They require the staging coverage-matrix seed:
 python scripts/seed_coverage_matrix.py
 ```
 
-Staging only — the script refuses to run against any other environment, database or
-Green API instance, and it refuses to run at all while any *untagged* professional
-is present (`seed_db.py`'s pro sits on the Tel Aviv coordinate at 4.9 with slots
-and would silently win TC-20). Purge those first, or use a database dedicated to
-the matrix.
+Staging only — the script refuses to run against any other environment or database, or
+if the configured WhatsApp provider can transmit (PRO-86), and it refuses to run at all
+while any *untagged* professional is present (`seed_db.py`'s pro sits on the Tel Aviv
+coordinate at 4.9 with slots and would silently win TC-20). Purge those first, or use a
+database dedicated to the matrix.
 
 All 27 seeded professionals use the reserved `972000000100`–`972000000199` block.
 `972` followed by `0` is not a valid Israeli MSISDN — the digit after the country

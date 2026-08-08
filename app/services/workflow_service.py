@@ -1,5 +1,5 @@
 import asyncio
-from app.services.whatsapp_client_service import WhatsAppClient
+from app.providers.whatsapp import get_whatsapp
 from app.services.ai_engine_service import AIEngine, AIResponse
 from app.services.lead_manager_service import (
     LeadManager,
@@ -48,7 +48,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 # Initialize services
-whatsapp = WhatsAppClient()
+whatsapp = get_whatsapp()
 ai = AIEngine()
 lead_manager = LeadManager()
 

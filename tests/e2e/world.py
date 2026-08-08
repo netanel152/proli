@@ -274,7 +274,10 @@ class World:
         return {
             "typeWebhook": "incomingMessageReceived",
             "idMessage": id_message,
-            "instanceData": {"idInstance": int(settings.GREEN_API_INSTANCE_ID)},
+            # PRO-86: /webhook no longer compares this against a configured
+            # instance id — the check went with the Green provider. Kept as a
+            # constant so the recorded fixtures keep their exact shape.
+            "instanceData": {"idInstance": 1111111111},
             "senderData": {"chatId": sender, "senderName": "E2E"},
             "messageData": message_data,
         }

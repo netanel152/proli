@@ -9,7 +9,7 @@ Production: Your Railway or custom domain with HTTPS.
 ### 1. Health Check
 **GET** `/health`
 
-Checks the health of all external dependencies (MongoDB, Redis, WhatsApp/Green API).
+Checks the health of all external dependencies (MongoDB, Redis, the WhatsApp provider).
 
 **Response (200 OK):**
 ```json
@@ -19,13 +19,13 @@ Checks the health of all external dependencies (MongoDB, Redis, WhatsApp/Green A
     "mongodb": {"status": "up", "latency_ms": 4.2},
     "redis": {"status": "up", "latency_ms": 1.1},
     "worker": {"status": "up", "last_heartbeat": "1715000000.0"},
-    "whatsapp": {"status": "up", "state": "authorized"}
+    "whatsapp": {"status": "up", "state": "authorized", "provider": "cloud", "transmits": true}
   },
   "uptime_seconds": 3600
 }
 ```
 
-`whatsapp.status` is `up` (authorized), `degraded` (yellowCard — instance alive but WhatsApp is silently filtering outbound), or `down` (notAuthorized/blocked/unreachable). `whatsapp.state` is the raw Green API `stateInstance` value.
+`whatsapp.status` is `up` (provider reports `authorized`), `degraded` (either the configured provider cannot transmit at all — e.g. `dryrun` — or a transmitting provider reports `yellowCard`), or `down` (not authorized/blocked/unreachable). `whatsapp.state` is the raw value returned by the provider's `get_state()` (PRO-86; was the raw Green API `stateInstance` value). `whatsapp.provider` is the configured provider's name and `whatsapp.transmits` is whether it can reach a real handset.
 
 **Response (503 Service Unavailable):**
 ```json
@@ -65,12 +65,12 @@ Returns 503 if the database is unavailable. Use this endpoint with a synthetic m
 ### 2. WhatsApp Webhook
 **POST** `/webhook`
 
-The main entry point for receiving messages from Green API.
+The main entry point for receiving inbound WhatsApp messages. Inbound wiring is not yet provider-abstracted (PRO-89) — the payload shape below is still the Green API webhook envelope, unchanged by the PRO-86 provider-facade migration, which only touched outbound.
 
 **Headers:**
 - `Content-Type: application/json`
 
-**Request Body (Green API Standard):**
+**Request Body:**
 ```json
 {
   "typeWebhook": "incomingMessageReceived",
@@ -104,14 +104,13 @@ The main entry point for receiving messages from Green API.
 | `videoMessage` | `fileMessageData.downloadUrl` | Video message |
 
 **Security:**
-- **Webhook Token:** If `WEBHOOK_TOKEN` env var is set, requests must include `?token=<value>` in the query string. Requests with missing or invalid tokens receive `403 Forbidden`. Configure the full URL (with token) in the Green API dashboard.
+- **Webhook Token:** the *only* authentication on this route (PRO-86 removed the sender instance-id check that used to be the other half). If `WEBHOOK_TOKEN` env var is set, requests must include `?token=<value>` in the query string. Requests with missing or invalid tokens receive `403 Forbidden`. Configure the full URL (with token) at your WhatsApp provider. `WEBHOOK_TOKEN` is **required** whenever `ENVIRONMENT` is `staging`/`production` — the app refuses to boot without it.
 - `idMessage` is used for idempotency (Redis `SET NX`, 24h TTL). Duplicate messages are ignored.
-- `instanceData.idInstance` must match the configured `GREEN_API_INSTANCE_ID`.
 - Rate limiting: 10 requests per 60 seconds per `chatId`.
 - Group messages (`@g.us`) are silently ignored.
 
 **Responses:**
-All responses return `200 OK` to prevent Green API from retrying:
+All responses return `200 OK` to prevent the sender from retrying:
 
 | Status | Meaning |
 |---|---|
@@ -119,7 +118,6 @@ All responses return `200 OK` to prevent Green API from retrying:
 | `ignored_group` | Group message, ignored |
 | `ignored_no_data` | Missing sender or message data |
 | `ignored_type` | Unsupported webhook type |
-| `ignored_wrong_instance` | Instance ID mismatch (security) |
 | `ignored_rate_limit` | Rate limit exceeded |
 | `forbidden` | Invalid or missing webhook token (403) |
 | `error` | Internal processing error |
