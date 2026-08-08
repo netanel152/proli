@@ -43,6 +43,7 @@ jobs:
                --exclude-dir=.github \
                --exclude-dir=venv \
                --exclude-dir=__pycache__ \
+               --exclude-dir=logs \
                . ; then
             echo ""
             echo "::error::Green API reference found. Proli left Green API in PRO-85;"

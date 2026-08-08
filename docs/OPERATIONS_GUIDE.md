@@ -61,7 +61,7 @@ Log patterns to watch:
 
 ### Incident runbooks
 
-- **WhatsApp instance banned / disconnected** → [`RUNBOOK_WHATSAPP_OUTAGE.md`](RUNBOOK_WHATSAPP_OUTAGE.md) — detection, the automatic circuit breaker, recovery (re-link / rotate), the manual kill switch, and prevention.
+- **WhatsApp outbound outage** → [`RUNBOOK_WHATSAPP_OUTAGE.md`](RUNBOOK_WHATSAPP_OUTAGE.md) — detection, the automatic fail-closed circuit breaker, the manual kill switch, and prevention.
 
 ---
 

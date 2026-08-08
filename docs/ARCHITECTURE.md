@@ -8,7 +8,7 @@ Proli connects WhatsApp customers with service professionals through a three-pro
 Customer (WhatsApp)
        │
        ▼
-  Green API ──► POST /webhook
+  WhatsApp provider ──► POST /webhook
                      │
               FastAPI Backend      ← validates, deduplicates, enqueues
                      │
@@ -32,10 +32,10 @@ Customer (WhatsApp)
 
 **Role:** Stateless HTTP ingestion layer.
 
-- Validates incoming Green API webhook (token, instance ID, idempotency via Redis `SET NX`, rate limiting 10 req/60 s per `chat_id`)
+- Validates incoming webhook (token — the only auth mechanism since PRO-86 removed the sender instance-id check, required whenever `ENVIRONMENT` is staging/production; idempotency via Redis `SET NX`; rate limiting 10 req/60 s per `chat_id`)
 - Extracts text/media from payload (text, extended text, numeric/keyword replies, location, image, audio, video)
 - Enqueues `process_message_task` to Redis via ARQ
-- Returns `200 OK` immediately (prevents Green API webhook timeout)
+- Returns `200 OK` immediately (prevents webhook retries)
 - Health endpoint (`GET /health`) checks MongoDB, Redis, WhatsApp, and worker heartbeat
 
 **Scaling:** Horizontally scalable behind any load balancer — no shared in-process state.
@@ -60,7 +60,7 @@ Customer (WhatsApp)
 | Lead Janitor | Every 6 h | Auto-reject `CONTACTED` leads with no assigned pro after 24 h. PRO-73: gated to business hours (08:00–21:00 IL) + `lead_janitor_active` toggle (default OFF) |
 | Slot Regeneration | Sunday 01:00 IL | Regenerate appointment slots from recurring weekly templates |
 | Daily Backup | 02:00 IL (daily) | Create gzipped `mongodump`; upload to S3 if `BACKUP_S3_BUCKET` is configured |
-| WhatsApp Deauth Watchdog | Every 2 min | Poll Green API `getStateInstance`; page on-call via `send_oncall_alert` if non-authorized > 5 min |
+| WhatsApp Deauth Watchdog | Every 2 min | Poll the configured WhatsApp provider's account state (skipped for a non-transmitting provider, e.g. dry-run); page on-call via `send_oncall_alert` if non-authorized > 5 min |
 
 **Startup/shutdown:** Verifies DB + Redis connectivity, starts APScheduler, updates `worker:heartbeat` key in Redis every 60 s (120 s expiry).
 
@@ -333,7 +333,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | Cache/State | Redis | Context, FSM, rate limit, idempotency |
 | Admin UI | Streamlit | |
 | Media | Cloudinary | CDN-backed |
-| WhatsApp | Green API | |
+| WhatsApp | Provider facade (`app/providers/whatsapp/`) | dry-run by default; Meta Cloud API pending PRO-89 |
 | Logging | Loguru | PII-masked (Israeli phone numbers), JSON in production |
 | Infrastructure | Docker Compose / Railway | 6 services: api, worker, admin, mongo, redis, nginx |
 

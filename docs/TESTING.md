@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 833 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
+**Current status: 852 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -70,7 +70,7 @@ pytest -m integration
 | `test_consent_flow.py` | Privacy consent gate |
 | `test_media_handler.py` | Media type detection, image download, audio/video URL handling |
 | `test_notification_service.py` | WhatsApp notifications (best-effort, no SMS fallback) |
-| `test_whatsapp_state_monitor.py` | PRO-20 Green API deauth monitor: `get_state_instance`, `send_oncall_alert` state-guarded WhatsApp routing (no SMS), `check_whatsapp_instance_state` FSM/Redis branches |
+| `test_whatsapp_state_monitor.py` | PRO-20 WhatsApp deauth monitor: `get_state_instance` (incl. a `NotImplementedError` provider reading as `None`, not crashing), `send_oncall_alert` state-guarded WhatsApp routing (no SMS), `check_whatsapp_instance_state` FSM/Redis branches |
 | `test_analytics_service.py` | Lead funnel and performance aggregations |
 | `test_audit_service.py` | Admin action logging |
 | `test_scheduling_service.py` | Recurring templates, slot generation |
@@ -82,10 +82,10 @@ pytest -m integration
 | `test_edge_cases.py` | Bad inputs: Gemini failure, WhatsApp down, unsupported file types |
 | `test_agent_pack_drift.py` | Anti-drift guard for `.claude/agents/`: `UserStates`/`LeadStatus`/TTL embeds and the flow-tracer dispatch-order section stay in sync with `constants.py` / `workflow_service.py` |
 | `test_pre_bash_guard.py` | Bash pre-tool guard `evaluate()`: blocks `git commit`/`push` on main/master, force-push, `rm -rf` on protected paths, `.env` redirects, mongo `drop()`; allows feature-branch work |
-| `test_whatsapp_client_circuit_breaker.py` | PRO-71 outbound breaker: `send_message`/`send_file_by_url` suppress (no HTTP) when `wa:instance:paused` is set; fail-open when Redis is down |
-| `test_health_whatsapp_status.py` | `/health` WhatsApp state mapping: `authorized`→up, `yellowCard`→degraded, else down; raw `state` surfaced |
+| `test_whatsapp_facade.py` | PRO-86 single outbound egress + PRO-82 fail-closed breaker: every outbound method gated, the boot-window regression (absent `wa:instance:state` blocks sending), auto/manual pause keys, Redis-error fail-open, `record_account_state` TTL/write rules, provider selection (`WHATSAPP_DRY_RUN` override, `dryrun`/`cloud`, unknown-name fallback), `DryRunProvider`/`CloudAPIProvider` behavior, and the admin panel's `send_text_sync` bridge |
+| `test_health_whatsapp_status.py` | `/health` WhatsApp state mapping: `authorized`→up, `yellowCard`→degraded, else down; a non-transmitting provider→degraded; raw `state`, `provider`, `transmits` surfaced |
 | `test_phone.py` | PRO-49 phone helpers: `to_chat_id` / `strip_suffix` / `to_local_phone` across `972…`, `+972…`, leading `0`, already-suffixed, and falsy input (idempotent, None-safe) |
-| `test_logger_redaction.py` | PRO-80 log scrubbing: `mask_pii` phone masking + `redact_secrets` (GREEN_API_TOKEN / WEBHOOK_TOKEN redacted in query string & URL path, None-safe) applied by the `_pii_filter` sink |
+| `test_logger_redaction.py` | PRO-80 log scrubbing: `mask_pii` phone masking + `redact_secrets` (provider token / WEBHOOK_TOKEN redacted in query string & URL path, None-safe) applied by the `_pii_filter` sink |
 | `test_redis_isolation.py` | PRO-78 guard for the autouse `fake_redis` fixture: `get_redis_client()` returns a `fakeredis` instance, each test gets a fresh empty store (no cross-test bleed), and `StateManager` round-trips through the fake |
 
 ### Health & Regression
@@ -204,31 +204,37 @@ async def test_something(mock_db, monkeypatch):
 > only the *inbound* leg was simulated, so every simulated webhook produced a
 > genuine outbound Green API send (PRO-72, the yellowCard). `tests/e2e` now proves
 > the same logic offline; manual transport verification lives exclusively in
-> `docs/PILOT_E2E_CHECKLIST.md` (PRO-64), and live-fire automation is gated on a
-> separate staging Green API instance (PRO-29).
+> `docs/PILOT_E2E_CHECKLIST.md` (PRO-64). Green API itself is gone (PRO-85), and the
+> PRO-29 plan for a separate staging instance to gate live-fire automation on is
+> cancelled — live-fire automation is blocked until PRO-89 ships a real transmitting
+> provider (see `scripts/seed_coverage_matrix.py`, which now guards on
+> `provider.transmits` rather than an instance id).
 
 ---
 
 ## 6. Offline E2E Harness (`tests/e2e`, PRO-83)
 
-Drives the **real** orchestrator with synthetic Green API webhooks and asserts on
-the fully rendered Hebrew each participant would have received, the resulting
+Drives the **real** orchestrator with synthetic inbound WhatsApp webhooks and asserts
+on the fully rendered Hebrew each participant would have received, the resulting
 Mongo state, and the Redis FSM state. Runs in ~7 seconds on every PR.
 
 ### Real-send fidelity
 
-The harness does **not** mock `WhatsAppClient`. It runs the production client and
-swaps only the httpx transport beneath it, so the payload dict, the URL, the PRO-71
-circuit-breaker check and the tenacity retry policy are all the real code path.
-PRO-83 moved the `WHATSAPP_DRY_RUN` divergence down to that transport for exactly
-this reason — before, dry-run returned from `send_message` before the payload was
-built and before the breaker was consulted.
+The harness does **not** mock the outbound egress. It runs the real `WhatsAppFacade`
+and swaps only the *provider* underneath it for a `RecordingProvider` (PRO-86,
+re-based from the pre-PRO-86 httpx `MockTransport` under a real `WhatsAppClient`), so
+the rendered message body, the recipient, and the PRO-71/82 circuit-breaker check are
+all the real code path — only the last step (handing bytes to a socket) is
+substituted. `tests/e2e/conftest.py` seeds the `wa:instance:state` confirmation the
+fail-closed breaker (PRO-82) requires, so a world starts out representing a healthy
+account; individual tests take it away again to exercise the breaker.
 
 ### Zero real sends — three independent layers
 
-1. `settings.WHATSAPP_DRY_RUN` is forced on, so even a freshly built client gets the
-   production dry-run transport.
-2. Every `WhatsAppClient` singleton points at the recording transport.
+1. `settings.WHATSAPP_DRY_RUN` is forced on, so even a freshly built facade defaults
+   to the `DryRunProvider`.
+2. Every module-level `whatsapp` singleton is rebound to a `WhatsAppFacade` wrapping
+   the `RecordingProvider`.
 3. `httpx`'s real transports are patched to **raise** for the whole package. A
    request either reaches the recorder or fails the run.
 
