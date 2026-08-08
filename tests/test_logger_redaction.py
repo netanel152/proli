@@ -22,12 +22,14 @@ def test_redact_secrets_replaces_webhook_token_in_query(monkeypatch):
     assert "***REDACTED***" in out
 
 
-def test_redact_secrets_green_api_token_in_url_path(monkeypatch):
-    # Value-based redaction also covers the Green API token sitting in a URL *path*
-    # (e.g. an httpx exception string that reaches logger.error) — a query-only fix would miss it.
+def test_redact_secrets_provider_token_in_url_path(monkeypatch):
+    # Value-based redaction also covers a provider token sitting in a URL *path*
+    # (e.g. an httpx exception string that reaches logger.error) — a query-only fix
+    # would miss it. PRO-86: the sample URL is provider-neutral now; PRO-89 must add
+    # its Cloud API credential to _SECRET_VALUES for this to keep protecting anything.
     monkeypatch.setattr(logmod, "_SECRET_VALUES", ["gtok789"])
     out = redact_secrets(
-        "Failed to send: https://api.green-api.com/waInstance123/sendMessage/gtok789"
+        "Failed to send: https://graph.example.com/v20.0/1234/messages/gtok789"
     )
     assert "gtok789" not in out
     assert "***REDACTED***" in out

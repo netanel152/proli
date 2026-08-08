@@ -2,9 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## CRITICAL: Green API limitation
+## CRITICAL: text-only menus, and the single outbound egress
 
-Do **not** use interactive buttons (`send_interactive_buttons`) — Green API does not support them and the helper was removed in April 2026. All WhatsApp menus must be text-based (numeric or keyword replies). Example: instead of Approve/Reject buttons, send `"Reply '1' to approve, '2' to reject."`
+**Every WhatsApp menu must stay text-based** (numeric or keyword replies). Example: instead of Approve/Reject buttons, send `"Reply '1' to approve, '2' to reject."`
+
+The original reason was a Green API limitation. Green API is gone (PRO-85 — instance deleted, tariff cancelled), and the rule now rests on a different footing: `WhatsAppProvider.send_interactive` exists on the ABC because Meta Cloud API supports interactive messages, but **nothing in any flow may call it** until PRO-88 (template catalog) and PRO-89 (CloudAPIProvider) land. The Green-shaped `send_interactive_buttons` helper was removed in April 2026 and stays removed.
+
+**All outbound traffic goes through `app/providers/whatsapp/` (PRO-86).** Never build a provider directly, never call an HTTP client at a vendor endpoint — both bypass the circuit breaker and the operator kill switch, which is precisely what caused the yellowCard incident. Synchronous callers (the Streamlit admin panel) use `app.providers.whatsapp.sync.send_text_sync`.
+
+A CI step fails the build on any reference to the old vendor's domain (`green` + `-api.com`, either spelling) anywhere in the repo — see the "Guard" step in `.github/workflows/tests.yml`. Write it split like that if you ever need to mention it in prose, or the guard will trip on your own sentence.
 
 ## Commands
 
@@ -71,7 +77,7 @@ Proli is an AI-powered WhatsApp CRM for Israeli service professionals (plumbers,
 
 ### Process 1: FastAPI Backend (`app/`)
 
-Entry point for Green API webhooks. Its only job is to validate the incoming payload, enqueue a task to Redis via ARQ, and immediately return `200 OK`. All heavy lifting is deferred to the Worker. Routes: `POST /webhook`, `GET /health`, and `GET /health/leads`.
+Entry point for inbound WhatsApp webhooks. Its only job is to validate the incoming payload, enqueue a task to Redis via ARQ, and immediately return `200 OK`. All heavy lifting is deferred to the Worker. Routes: `POST /webhook`, `GET /health`, and `GET /health/leads`.
 
 ### Process 2: ARQ Worker (`app/worker.py` + `app/core/arq_worker.py`)
 
@@ -96,8 +102,8 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 | `context_manager_service.py` | Stores last 20 messages per `chat_id` in Redis |
 | `lead_manager_service.py` | CRUD for leads in MongoDB |
 | `notification_service.py` | Sends WhatsApp notifications to pros; SOS alerts; on-call paging via `send_oncall_alert` (WhatsApp when the instance is authorized, else `logger.critical` → Sentry/email page) |
-| `monitor_service.py` | Stale job detection, reassignment (shared `reassign_lead` helper — escalates to PENDING_ADMIN_REVIEW, with an immediate admin alert, once `MAX_REASSIGNMENTS` is exhausted; PRO-63, never closes the lead), stale lead reminders (nudger), pro-approval SLA monitor (`check_pro_approval_sla` — nudges a silent pro, then offers the customer reassignment, gated to business hours per PRO-73), escalation to PENDING_ADMIN_REVIEW, and Green API deauth detection (`check_whatsapp_instance_state`) |
-| `whatsapp_client_service.py` | Green API HTTP client — text-only messages (interactive buttons not supported by Green API); outbound circuit breaker suppresses sends (no HTTP call) while `wa:instance:paused` (auto) or `wa:instance:paused:manual` (operator kill switch) is set in Redis, fail-open on Redis error |
+| `monitor_service.py` | Stale job detection, reassignment (shared `reassign_lead` helper — escalates to PENDING_ADMIN_REVIEW, with an immediate admin alert, once `MAX_REASSIGNMENTS` is exhausted; PRO-63, never closes the lead), stale lead reminders (nudger), pro-approval SLA monitor (`check_pro_approval_sla` — nudges a silent pro, then offers the customer reassignment, gated to business hours per PRO-73), escalation to PENDING_ADMIN_REVIEW, and WhatsApp account deauth detection (`check_whatsapp_instance_state`; skipped for non-transmitting providers) |
+| `app/providers/whatsapp/` | Single outbound egress (PRO-86, not under `app/services/`) — `WhatsAppFacade` owns the PRO-71 circuit breaker (fail-closed per PRO-82 on an absent `wa:instance:state` confirmation) and the `wa:instance:paused`/`wa:instance:paused:manual` kill switch, fail-open on Redis error; provider selection via `WHATSAPP_PROVIDER` (`dryrun` default — logs, never transmits; `cloud` — Meta Cloud API stub, raises until PRO-89); text-only sends (interactive buttons defined on the ABC for Cloud API but unused pending PRO-88/89); `app.providers.whatsapp.sync.send_text_sync` bridges the synchronous admin panel |
 | `cloudinary_client_service.py` | Media upload/retrieval |
 | `security_service.py` | Rate limiting via Redis — coarse fixed-window webhook DDoS shield (`check_rate_limit`), per-customer inbound sliding window (`check_sliding_window`), and daily per-chat AI/multimodal cost cap (`check_and_increment_daily_ai_cap`, Israel-time reset). Pros/admins exempt; all checks fail-open |
 
@@ -124,10 +130,11 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 - `WorkerConstants.INBOUND_RATE_LIMIT_MAX = 20` / `INBOUND_RATE_LIMIT_WINDOW_SECONDS = 60`: per-customer inbound sliding-window limit (pros/admins exempt)
 - `WorkerConstants.DAILY_AI_CALL_CAP = 40`: per-chat daily ceiling on Gemini/multimodal calls (resets at Israel-time midnight)
 - `WorkerConstants.RATE_LIMIT_ABUSE_TRIP_THRESHOLD = 3`: repeated trips within a window escalate from `logger.warning` to `logger.error` (Sentry)
-- `WorkerConstants.WA_STATE_CHECK_INTERVAL_MINUTES = 2`: how often the worker polls Green API `getStateInstance`
+- `WorkerConstants.WA_STATE_CHECK_INTERVAL_MINUTES = 2`: how often the worker polls the WhatsApp provider's account state (`get_state`)
 - `WorkerConstants.WA_STATE_ALERT_THRESHOLD_MINUTES = 5`: page on-call only after the instance has been non-authorized > this many minutes
 - `WorkerConstants.WA_STATE_REALERT_MINUTES = 60`: re-page interval while the instance stays deauthorized
 - `WorkerConstants.WA_STATE_PAUSE_TTL_SECONDS = 360`: TTL on the `wa:instance:paused` outbound-halt key; auto-releases if the monitor dies
+- `WorkerConstants.WA_STATE_CONFIRM_TTL_SECONDS = 360`: TTL on `wa:instance:state`, the positive confirmation a probe found the account authorized; the outbound facade fails **closed** (blocks sending) once this key is absent (PRO-82/PRO-86)
 - `WorkerConstants.PENDING_REVIEW_SHORTCIRCUIT_HOURS = 24`: how long a PENDING_ADMIN_REVIEW lead short-circuits the customer's chat before their next message proceeds to the normal dispatcher (PRO-63)
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
@@ -141,7 +148,7 @@ Unit tests use `mongomock_motor` (in-memory MongoDB) and mock `whatsapp` and `ai
 
 ### Configuration
 
-All config is in `app/core/config.py` via `pydantic-settings`. Required env vars: `GREEN_API_INSTANCE_ID`, `GREEN_API_TOKEN`, `GEMINI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Optional: `ENVIRONMENT` (`development` | `staging` | `production`, defaults to `development`; any other value — including empty — fails validation at startup, PRO-34), `MONGO_URI` (defaults to localhost), `REDIS_URL`, `MONGO_TEST_URI` (for integration tests), `ADMIN_PASSWORD`, `ADMIN_PHONE` (defaults to hardcoded), `ONCALL_PHONE` (on-call number for infra alerts; defaults to `ADMIN_PHONE`), `WEBHOOK_TOKEN` (enables webhook auth), `SENTRY_DSN` (enables CRITICAL-only operator paging; unset = no-op), `WHATSAPP_DRY_RUN` (default `false`; set `true` in local `.env` so `WhatsAppClient` logs outbound sends instead of calling Green API — dev/simulation never cold-initiates a real message from the pilot number).
+All config is in `app/core/config.py` via `pydantic-settings`. Required env vars: `GEMINI_API_KEY`, `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Optional: `ENVIRONMENT` (`development` | `staging` | `production`, defaults to `development`; any other value — including empty — fails validation at startup, PRO-34), `MONGO_URI` (defaults to localhost), `REDIS_URL`, `MONGO_TEST_URI` (for integration tests), `ADMIN_PASSWORD`, `ADMIN_PHONE` (defaults to hardcoded), `ONCALL_PHONE` (on-call number for infra alerts; defaults to `ADMIN_PHONE`), `WEBHOOK_TOKEN` (enables `?token=` webhook auth; **required**, not optional, whenever `ENVIRONMENT` is `staging`/`production` — PRO-86 removed the sender instance-id check that used to be the other half of webhook auth, so an unset token now means no authentication at all, and `Settings` refuses to boot without it in a prod-like environment), `SENTRY_DSN` (enables CRITICAL-only operator paging; unset = no-op), `WHATSAPP_PROVIDER` (`dryrun` default | `cloud`; which transport the outbound facade uses — `cloud` is a `CloudAPIProvider` stub that raises `NotImplementedError` until PRO-89), `WHATSAPP_DRY_RUN` (default `false`; set `true` in local `.env` to force the `DryRunProvider` regardless of `WHATSAPP_PROVIDER`, so dev/simulation never cold-initiates a real message from the pilot number — this is also the operator's emergency mute, see `docs/RUNBOOK_WHATSAPP_OUTAGE.md`).
 
 ## Session Guidelines
 

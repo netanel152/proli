@@ -138,7 +138,7 @@ async def world(
     from app.api.routes import webhook as webhook_route
     from app.services.context_manager_service import ContextManager
     from app.services.data_management_service import has_consent
-    from app.services.whatsapp_client_service import WhatsAppClient
+    from app.providers.whatsapp.facade import WhatsAppFacade
 
     # --- 1. Dry-run on, and no real number can become a recipient -------------
     monkeypatch.setattr(settings, "WHATSAPP_DRY_RUN", True)
@@ -146,13 +146,18 @@ async def world(
     monkeypatch.setattr(settings, "ONCALL_PHONE", R.ONCALL)
     monkeypatch.setattr(settings, "WEBHOOK_TOKEN", None)
 
-    # --- 2. One real WhatsAppClient, recording at the transport ---------------
-    client = WhatsAppClient()
-    client._client = httpx.AsyncClient(transport=recorder.transport())
-    client._client_dry_run = True
-    # The state probe deliberately bypasses dry-run in production, so point it at
-    # the recorder too or it would try to reach Green API for real.
-    client._probe_client = httpx.AsyncClient(transport=recorder.transport())
+    # --- 2. One real facade, recording at the provider ------------------------
+    # PRO-86: the swap moved up a layer. It used to be an httpx MockTransport under
+    # a real Green client; it is now a recording *provider* under the real facade,
+    # so the breaker and kill-switch code above it is still the production path.
+    client = WhatsAppFacade(recorder.provider())
+    # The recording provider is marked `transmits` so the breaker genuinely
+    # applies to it — otherwise the harness's breaker assertions would pass
+    # vacuously. That makes PRO-82's fail-closed default bite here too: seed the
+    # positive state confirmation the deauth monitor would have written, so a
+    # world starts out representing a healthy account. Tests that want the
+    # breaker engaged set the pause keys (or delete this one) themselves.
+    await fake_redis.set("wa:instance:state", "authorized")
     # Rebind by discovery rather than a fixed list: app.core.arq_worker does
     # `from app.services.workflow_service import ... whatsapp`, taking its own
     # copy, and its error path would otherwise send through the *production*

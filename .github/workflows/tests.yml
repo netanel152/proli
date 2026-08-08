@@ -16,8 +16,7 @@ jobs:
       # never reaches a real service (mongomock for Mongo, fakeredis for Redis,
       # recorded fixtures for Gemini, and tests/e2e's transport guard makes any
       # real HTTP call fail the run).
-      GREEN_API_INSTANCE_ID: "1111111111"
-      GREEN_API_TOKEN: "ci-not-a-real-token"
+      # PRO-86: GREEN_API_* are gone — Settings no longer declares them.
       GEMINI_API_KEY: "ci-not-a-real-key"
       CLOUDINARY_CLOUD_NAME: "ci"
       CLOUDINARY_API_KEY: "ci"
@@ -30,6 +29,28 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      # PRO-86: Green API is gone (PRO-85 — instance deleted, tariff cancelled).
+      # The provider facade is only a single egress if nothing can reach a vendor
+      # endpoint directly, so any reintroduction of a Green API URL — in app code,
+      # a script, a test fixture or a doc — fails the build rather than quietly
+      # recreating the bypass class that caused the yellowCard incident.
+      # Matches both spellings: `green-api.com` (the real host) and `greenapi.com`.
+      - name: Guard — no Green API references
+        run: |
+          if grep -rInE 'greenapi\.com|green-api\.com' \
+               --exclude-dir=.git \
+               --exclude-dir=.github \
+               --exclude-dir=venv \
+               --exclude-dir=__pycache__ \
+               --exclude-dir=logs \
+               . ; then
+            echo ""
+            echo "::error::Green API reference found. Proli left Green API in PRO-85;"
+            echo "::error::all WhatsApp traffic goes through app/providers/whatsapp/."
+            exit 1
+          fi
+          echo "OK — no Green API references."
 
       - uses: actions/setup-python@v5
         with:

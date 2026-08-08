@@ -21,17 +21,25 @@ from fastapi.testclient import TestClient
 
 import app.api.routes.health as health_route
 from app.main import app
-from app.services.whatsapp_client_service import WhatsAppClient
+from app.providers.whatsapp.facade import WhatsAppFacade
 
 
-def _mock_http_client(state):
-    """Return an AsyncMock http client whose .get() yields {"stateInstance": state}."""
-    resp = MagicMock()
-    resp.raise_for_status.return_value = None
-    resp.json.return_value = {"stateInstance": state}
-    http = AsyncMock()
-    http.get = AsyncMock(return_value=resp)
-    return http
+def _facade(state=None, error=None):
+    """A facade over a stub provider with a controlled get_state().
+
+    PRO-86: /health used to be steered by patching the Green client's httpx
+    transport. State now comes from the provider, so the stub sits there — one
+    layer higher and independent of any transport.
+    """
+    provider = MagicMock()
+    provider.name = "stub"
+    # Transmitting: these tests exercise the state branches, and a
+    # non-transmitting provider short-circuits to "degraded" before reaching them.
+    provider.transmits = True
+    provider.get_state = (
+        AsyncMock(side_effect=error) if error else AsyncMock(return_value=state)
+    )
+    return WhatsAppFacade(provider)
 
 
 @pytest.fixture(autouse=True)
@@ -49,11 +57,7 @@ def _mock_mongo_and_redis(monkeypatch):
 
 
 def test_health_whatsapp_authorized_is_up(monkeypatch):
-    monkeypatch.setattr(
-        WhatsAppClient,
-        "_get_client",
-        AsyncMock(return_value=_mock_http_client("authorized")),
-    )
+    monkeypatch.setattr(health_route, "get_whatsapp", lambda: _facade("authorized"))
 
     resp = TestClient(app).get("/health")
 
@@ -63,11 +67,7 @@ def test_health_whatsapp_authorized_is_up(monkeypatch):
 
 
 def test_health_whatsapp_yellowcard_is_degraded(monkeypatch):
-    monkeypatch.setattr(
-        WhatsAppClient,
-        "_get_client",
-        AsyncMock(return_value=_mock_http_client("yellowCard")),
-    )
+    monkeypatch.setattr(health_route, "get_whatsapp", lambda: _facade("yellowCard"))
 
     resp = TestClient(app).get("/health")
 
@@ -77,11 +77,7 @@ def test_health_whatsapp_yellowcard_is_degraded(monkeypatch):
 
 
 def test_health_whatsapp_not_authorized_is_down(monkeypatch):
-    monkeypatch.setattr(
-        WhatsAppClient,
-        "_get_client",
-        AsyncMock(return_value=_mock_http_client("notAuthorized")),
-    )
+    monkeypatch.setattr(health_route, "get_whatsapp", lambda: _facade("notAuthorized"))
 
     resp = TestClient(app).get("/health")
 
@@ -93,11 +89,7 @@ def test_health_whatsapp_not_authorized_is_down(monkeypatch):
 def test_health_whatsapp_blocked_state_is_down(monkeypatch):
     """'blocked' is truthy but must not be reported as 'up' — the whole
     point of comparing against 'authorized' rather than truthiness."""
-    monkeypatch.setattr(
-        WhatsAppClient,
-        "_get_client",
-        AsyncMock(return_value=_mock_http_client("blocked")),
-    )
+    monkeypatch.setattr(health_route, "get_whatsapp", lambda: _facade("blocked"))
 
     resp = TestClient(app).get("/health")
 
@@ -110,9 +102,9 @@ def test_health_whatsapp_probe_error_is_down_with_null_state(monkeypatch):
     """A network/HTTP failure while probing getStateInstance must not crash
     the health endpoint — WhatsApp is reported down with no state."""
     monkeypatch.setattr(
-        WhatsAppClient,
-        "_get_client",
-        AsyncMock(side_effect=Exception("connection reset")),
+        health_route,
+        "get_whatsapp",
+        lambda: _facade(error=Exception("connection reset")),
     )
 
     resp = TestClient(app).get("/health")
@@ -120,3 +112,29 @@ def test_health_whatsapp_probe_error_is_down_with_null_state(monkeypatch):
     body = resp.json()
     assert body["checks"]["whatsapp"]["status"] == "down"
     assert body["checks"]["whatsapp"]["state"] is None
+
+
+def test_health_reports_degraded_for_a_non_transmitting_provider(monkeypatch):
+    """PRO-86: DryRunProvider always reports "authorized" — it cannot be
+    deauthorized. Passing that through as "up" would make a production deploy
+    that forgot WHATSAPP_PROVIDER a silent black hole with a green dashboard."""
+    provider = MagicMock()
+    provider.name = "dryrun"
+    provider.transmits = False
+    provider.get_state = AsyncMock(return_value="authorized")
+    monkeypatch.setattr(health_route, "get_whatsapp", lambda: WhatsAppFacade(provider))
+
+    body = TestClient(app).get("/health").json()
+
+    assert body["checks"]["whatsapp"]["status"] == "degraded"
+    assert body["checks"]["whatsapp"]["provider"] == "dryrun"
+    assert body["checks"]["whatsapp"]["transmits"] is False
+
+
+def test_health_exposes_the_provider_name(monkeypatch):
+    monkeypatch.setattr(health_route, "get_whatsapp", lambda: _facade("authorized"))
+
+    body = TestClient(app).get("/health").json()
+
+    assert body["checks"]["whatsapp"]["provider"] == "stub"
+    assert body["checks"]["whatsapp"]["transmits"] is True

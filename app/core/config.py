@@ -4,16 +4,16 @@ import os
 
 from app.core.constants import (
     DEVELOPMENT_ENV,
+    DRYRUN_PROVIDER,
     PRODUCTION_ENV,
     PROD_LIKE_ENVIRONMENTS,
     VALID_ENVIRONMENTS,
+    VALID_WHATSAPP_PROVIDERS,
     normalize_environment,
 )
 
 
 class Settings(BaseSettings):
-    GREEN_API_INSTANCE_ID: str
-    GREEN_API_TOKEN: str
     GEMINI_API_KEY: str
     MONGO_URI: str = Field(default="mongodb://localhost:27017/proli_db")
 
@@ -128,17 +128,46 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         return self.ENVIRONMENT == PRODUCTION_ENV
 
-    # PRO-79: when True, WhatsAppClient absorbs outbound sends at the transport
-    # layer instead of calling Green API. Set WHATSAPP_DRY_RUN=true in local .env
-    # so dev / simulation never cold-initiates a real message from the pilot
-    # number. Default False keeps staging & production sending for real (never
-    # coupled to ENVIRONMENT — a misconfigured env silently disabling prod sends
-    # would be worse than this).
+    # PRO-86: which transport the outbound facade uses.
+    #   dryrun — logs, never transmits (the offline test suite + E2E harness)
+    #   cloud  — Meta Cloud API; stub until PRO-89 implements it
+    # An unrecognised value falls back to dryrun rather than to anything that
+    # transmits, and says so at ERROR.
+    WHATSAPP_PROVIDER: str = DRYRUN_PROVIDER
+
+    @field_validator("WHATSAPP_PROVIDER", mode="before")
+    @classmethod
+    def validate_whatsapp_provider(cls, v: str | None) -> str:
+        """Reject an unknown transport at boot rather than at the first send.
+
+        ``build_provider()`` also falls back to dry-run on an unknown name, but
+        that fallback surfaces as one ERROR line inside a worker — i.e. a service
+        that looks healthy and silently sends nothing. Failing here puts the typo
+        in the deploy log instead.
+        """
+        if v is None or not str(v).strip():
+            return DRYRUN_PROVIDER
+        normalized = str(v).strip().lower()
+        if normalized not in VALID_WHATSAPP_PROVIDERS:
+            raise ValueError(
+                f"WHATSAPP_PROVIDER must be one of "
+                f"{', '.join(VALID_WHATSAPP_PROVIDERS)} (got {v!r})"
+            )
+        return normalized
+
+    # PRO-79: when True, force the DryRunProvider regardless of
+    # WHATSAPP_PROVIDER, so dev / simulation never cold-initiates a real message.
+    # This is the operator's emergency mute — the WhatsApp outage runbook has it
+    # switched on during an incident — so it deliberately overrides provider
+    # selection rather than sitting alongside it. Default False so a
+    # misconfigured env can never silently disable production sends (never
+    # coupled to ENVIRONMENT for the same reason).
     #
-    # PRO-83: the divergence is exactly one point — the httpx transport. Payload
-    # construction, the PRO-71 circuit breaker and the retry policy all still run,
-    # so a dry run exercises the real send path and the offline E2E harness can
-    # assert on the exact bytes a recipient would have received.
+    # PRO-86 moved the divergence up a layer: it used to be an httpx transport
+    # swap underneath a real Green client, and is now provider *selection*. The
+    # facade above it — circuit breaker, kill switch, payload construction — is
+    # the same code either way, so the offline E2E harness (PRO-83) still
+    # asserts on the exact bytes a recipient would have received.
     WHATSAPP_DRY_RUN: bool = False
     LOG_LEVEL: str = "INFO"
 
@@ -180,6 +209,28 @@ class Settings(BaseSettings):
     # retry churn" also extends how long geocoding stays globally disabled
     # after a single blip.
     GEOCODING_TRANSIENT_TTL_SECONDS: int = Field(default=60, ge=1, le=600)
+
+    @model_validator(mode="after")
+    def require_webhook_auth_in_prod_like(self):
+        """PRO-86: ``/webhook`` has exactly one authentication mechanism left.
+
+        The route used to also reject payloads whose ``instanceData.idInstance``
+        did not match ``GREEN_API_INSTANCE_ID``. That check died with the Green
+        provider, so an unset ``WEBHOOK_TOKEN`` now means *no* authentication at
+        all: any caller could POST a crafted payload and make the worker enqueue
+        AI work and send WhatsApp messages to an arbitrary chat id.
+
+        Refused at boot rather than left to discover in production. Development
+        is exempt so a local checkout still runs without ceremony; PRO-89 should
+        add the Meta ``X-Hub-Signature-256`` HMAC on top of this.
+        """
+        if self.is_prod_like and not self.WEBHOOK_TOKEN:
+            raise ValueError(
+                "WEBHOOK_TOKEN is required when ENVIRONMENT is staging or "
+                "production: it is the only thing authenticating POST /webhook "
+                "since PRO-86 removed the sender instance-id check."
+            )
+        return self
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

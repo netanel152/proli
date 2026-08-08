@@ -25,7 +25,6 @@ from app.core.constants import ISRAEL_CITIES_COORDS, LeadStatus, WorkerConstants
 from scripts.seed_coverage_matrix import (
     PHONE_BLOCK_END,
     PHONE_BLOCK_START,
-    PRODUCTION_INSTANCE_ID,
     REVIEW_COUNT,
     S08_AREA,
     S09_AREA,
@@ -458,26 +457,37 @@ async def test_the_slot_bonus_beats_a_higher_rating(seeded):
 
 
 @pytest.mark.parametrize(
-    "environment,db_name,instance_id",
+    "environment,db_name,transmits",
     [
-        ("production", STAGING_DB_NAME, "9999999999"),
-        ("development", STAGING_DB_NAME, "9999999999"),
-        ("staging", "proli_db", "9999999999"),
-        ("staging", STAGING_DB_NAME, PRODUCTION_INSTANCE_ID),
+        ("production", STAGING_DB_NAME, False),
+        ("development", STAGING_DB_NAME, False),
+        ("staging", "proli_db", False),
+        # PRO-86: the third guard used to compare GREEN_API_INSTANCE_ID against
+        # the production instance. It now asks whether the configured transport
+        # can reach a handset at all.
+        ("staging", STAGING_DB_NAME, True),
     ],
 )
-def test_seed_is_refused_outside_staging(
-    monkeypatch, environment, db_name, instance_id
-):
+def test_seed_is_refused_outside_staging(monkeypatch, environment, db_name, transmits):
     """Each guard fires on its own, before any write."""
     import scripts.seed_coverage_matrix as seed_module
 
     monkeypatch.setattr(seed_module.settings, "ENVIRONMENT", environment)
     monkeypatch.setattr(seed_module, "DB_NAME", db_name)
-    monkeypatch.setattr(seed_module.settings, "GREEN_API_INSTANCE_ID", instance_id)
+    monkeypatch.setattr(
+        seed_module, "build_provider", lambda: _StubProvider(transmits=transmits)
+    )
 
     with pytest.raises(SystemExit):
         seed_module.assert_seed_allowed()
+
+
+class _StubProvider:
+    """Minimal stand-in — assert_seed_allowed only reads `transmits`/`name`."""
+
+    def __init__(self, transmits: bool):
+        self.transmits = transmits
+        self.name = "cloud" if transmits else "dryrun"
 
 
 def test_seed_is_allowed_on_a_clean_staging_target(monkeypatch):
@@ -485,9 +495,27 @@ def test_seed_is_allowed_on_a_clean_staging_target(monkeypatch):
 
     monkeypatch.setattr(seed_module.settings, "ENVIRONMENT", "staging")
     monkeypatch.setattr(seed_module, "DB_NAME", STAGING_DB_NAME)
-    monkeypatch.setattr(seed_module.settings, "GREEN_API_INSTANCE_ID", "9999999999")
+    monkeypatch.setattr(
+        seed_module, "build_provider", lambda: _StubProvider(transmits=False)
+    )
 
     seed_module.assert_seed_allowed()  # must not raise
+
+
+def test_a_transmitting_provider_alone_blocks_the_seed(monkeypatch):
+    """PRO-86 regression: staging env + staging DB is not sufficient. If the
+    configured transport can reach real handsets, 27 seeded professionals would
+    become live recipients."""
+    import scripts.seed_coverage_matrix as seed_module
+
+    monkeypatch.setattr(seed_module.settings, "ENVIRONMENT", "staging")
+    monkeypatch.setattr(seed_module, "DB_NAME", STAGING_DB_NAME)
+    monkeypatch.setattr(
+        seed_module, "build_provider", lambda: _StubProvider(transmits=True)
+    )
+
+    with pytest.raises(SystemExit, match="can send"):
+        seed_module.assert_seed_allowed()
 
 
 def test_the_phone_guard_rejects_a_number_outside_the_block():
@@ -522,15 +550,21 @@ def test_every_phone_is_structurally_unreachable():
 
 def test_the_seed_script_cannot_send_anything():
     """Zero outbound messages during a seed, enforced structurally rather than by
-    reading the code: the module imports nothing that can reach Green API."""
+    reading the code: the module reaches no send path at all.
+
+    PRO-86 note — the script does now import ``build_provider``, which is a
+    *capability check* (``provider.transmits``) and not an egress. The forbidden
+    list below is therefore the send surface, not the provider package: acquiring
+    the facade (``get_whatsapp``) or calling any send method stays banned."""
     import scripts.seed_coverage_matrix as seed_module
 
     source = Path(seed_module.__file__).read_text(encoding="utf-8")
     for forbidden in (
-        "whatsapp_client_service",
         "notification_service",
-        "WhatsAppClient",
+        "get_whatsapp",
         "send_message",
+        "send_text",
+        "send_file",
     ):
         assert forbidden not in source, f"the seed script references {forbidden}"
 
@@ -574,7 +608,8 @@ async def test_purge_only_removes_this_batch(mock_db, monkeypatch):
 
 class _FakeIndexCollection:
     """Minimal stand-in for `users_collection` exposing only `index_information`,
-    shaped like Motor's real return value: {index_name: {"key": [(field, kind), ...]}}."""
+    shaped like Motor's real return value: {index_name: {"key": [(field, kind), ...]}}.
+    """
 
     def __init__(self, index_info: dict):
         self._index_info = index_info
@@ -608,7 +643,9 @@ async def test_assert_geo_index_raises_when_no_index_exists(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_assert_geo_index_raises_when_location_has_the_wrong_index_kind(monkeypatch):
+async def test_assert_geo_index_raises_when_location_has_the_wrong_index_kind(
+    monkeypatch,
+):
     """A plain ascending index on `location` (e.g. a typo in create_indexes.py)
     must not be mistaken for the 2dsphere index `$geoNear` actually requires."""
     import scripts.seed_coverage_matrix as seed_module
@@ -624,7 +661,9 @@ async def test_assert_geo_index_raises_when_location_has_the_wrong_index_kind(mo
 
 
 @pytest.mark.asyncio
-async def test_assert_geo_index_raises_when_2dsphere_is_on_a_different_field(monkeypatch):
+async def test_assert_geo_index_raises_when_2dsphere_is_on_a_different_field(
+    monkeypatch,
+):
     """A 2dsphere index on some other field does not satisfy a `location`
     geo query — the check must key on the field name, not merely the index kind."""
     import scripts.seed_coverage_matrix as seed_module
@@ -711,9 +750,7 @@ async def test_inject_load_balance_targets_exactly_the_top_three_s01_pros(
     loaded_pro_ids = {d["pro_id"] for d in docs}
 
     s01 = [p for p in pros if p["seed_scenario"] == "S01"]
-    top_three = sorted(s01, key=lambda p: p["social_proof"]["rating"], reverse=True)[
-        :3
-    ]
+    top_three = sorted(s01, key=lambda p: p["social_proof"]["rating"], reverse=True)[:3]
     expected_ids = {p["phone_number"] for p in top_three}
 
     assert loaded_pro_ids == expected_ids
@@ -725,7 +762,9 @@ async def test_inject_load_balance_targets_exactly_the_top_three_s01_pros(
         p["phone_number"]
         for p in sorted(s01, key=lambda p: p["social_proof"]["rating"])[:2]
     }
-    assert not (loaded_pro_ids & lowest_two), "the two worst-rated S01 pros must stay untouched"
+    assert not (
+        loaded_pro_ids & lowest_two
+    ), "the two worst-rated S01 pros must stay untouched"
 
 
 @pytest.mark.asyncio
@@ -875,7 +914,9 @@ async def test_main_purge_short_circuits_before_any_seeding_step(monkeypatch):
 
     monkeypatch.setattr(seed_module.settings, "ENVIRONMENT", "staging")
     monkeypatch.setattr(seed_module, "DB_NAME", STAGING_DB_NAME)
-    monkeypatch.setattr(seed_module.settings, "GREEN_API_INSTANCE_ID", "9999999999")
+    monkeypatch.setattr(
+        seed_module, "build_provider", lambda: _StubProvider(transmits=False)
+    )
 
     purge_mock = AsyncMock()
     assert_geo_index_mock = AsyncMock()
@@ -917,7 +958,9 @@ async def test_main_scenario_flag_is_repeatable_and_dispatched_in_order(monkeypa
 
     monkeypatch.setattr(seed_module.settings, "ENVIRONMENT", "staging")
     monkeypatch.setattr(seed_module, "DB_NAME", STAGING_DB_NAME)
-    monkeypatch.setattr(seed_module.settings, "GREEN_API_INSTANCE_ID", "9999999999")
+    monkeypatch.setattr(
+        seed_module, "build_provider", lambda: _StubProvider(transmits=False)
+    )
 
     monkeypatch.setattr(seed_module, "assert_geo_index", AsyncMock())
     # Also stubbed: it counts untagged professionals, which would otherwise reach

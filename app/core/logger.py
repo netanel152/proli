@@ -20,10 +20,14 @@ def mask_pii(message: str) -> str:
 
 # PRO-80: secret values that must never appear in logs, redacted wherever they
 # occur — a URL query string (uvicorn access log: `/webhook?token=<WEBHOOK_TOKEN>`),
-# a URL path (the Green API token in `/waInstance<id>/sendMessage/<token>`), or an
-# exception string. Built once at import from settings; empty/unset secrets are
-# skipped so nothing over-redacts (e.g. WEBHOOK_TOKEN is optional).
-_SECRET_VALUES = [v for v in (settings.GREEN_API_TOKEN, settings.WEBHOOK_TOKEN) if v]
+# a URL path, or an exception string. Built once at import from settings;
+# empty/unset secrets are skipped so nothing over-redacts (e.g. WEBHOOK_TOKEN is
+# optional).
+#
+# PRO-86 removed GREEN_API_TOKEN from this list along with the provider itself.
+# When PRO-89 adds a Cloud API credential it must be appended here — a provider
+# token reaching a log line is the exact leak class PRO-80 exists to stop.
+_SECRET_VALUES = [v for v in (settings.WEBHOOK_TOKEN,) if v]
 
 
 def redact_secrets(message: str) -> str:
