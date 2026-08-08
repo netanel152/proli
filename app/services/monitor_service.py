@@ -9,6 +9,7 @@ from app.core.logger import logger
 from app.core.redis_client import get_redis_client
 from app.core.datetime_utils import within_business_hours
 from app.providers.whatsapp import get_whatsapp, record_account_state
+from app.providers.whatsapp.facade import _PAUSE_KEY
 from app.services import matching_service
 from app.services.notification_service import send_oncall_alert
 from app.core.messages import Messages
