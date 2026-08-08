@@ -13,6 +13,14 @@ STAGING_ENV = "staging"
 PRODUCTION_ENV = "production"
 
 VALID_ENVIRONMENTS = (DEVELOPMENT_ENV, STAGING_ENV, PRODUCTION_ENV)
+
+# PRO-86: the WhatsApp transports the provider facade can select. Declared here
+# rather than in app/providers/whatsapp/ because app/core/config.py validates the
+# value at boot and the providers package imports config — putting the names in
+# the provider package would close that loop.
+DRYRUN_PROVIDER = "dryrun"
+CLOUD_PROVIDER = "cloud"
+VALID_WHATSAPP_PROVIDERS = (DRYRUN_PROVIDER, CLOUD_PROVIDER)
 # Environments that must behave production-like: JSON logs, PII masking,
 # no local-DB fallback.
 PROD_LIKE_ENVIRONMENTS = (STAGING_ENV, PRODUCTION_ENV)
@@ -158,6 +166,13 @@ class WorkerConstants:
     # non-authorized; if the monitor stops running the breaker auto-releases after
     # this window so a dead monitor never halts outbound forever (fail-open).
     WA_STATE_PAUSE_TTL_SECONDS = 360  # 6 min (3× the 2-min poll interval)
+    # PRO-82/PRO-86: TTL on `wa:instance:state`, the *positive* confirmation that
+    # the account was probed and found authorized. The outbound facade fails
+    # CLOSED when this key is absent, so the value is the maximum time a send may
+    # ride on a past probe. Same 6-minute window as the pause key, but the
+    # polarity is inverted: an expired pause key releases the breaker, an expired
+    # confirmation key engages it.
+    WA_STATE_CONFIRM_TTL_SECONDS = 360  # 6 min (3× the 2-min poll interval)
     # ADMIN_PHONE moved to config.py / env var
 
 

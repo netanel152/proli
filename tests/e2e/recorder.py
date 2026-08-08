@@ -1,11 +1,17 @@
-"""Outbound capture at the transport layer (PRO-83).
+"""Outbound capture at the provider layer (PRO-83, re-based by PRO-86).
 
-The harness does not mock ``WhatsAppClient``. It runs the real client and swaps
-only the httpx transport underneath it, so every record here was produced by the
-production code path: the same payload dict, the same URL, after the same PRO-71
-circuit-breaker check and inside the same tenacity retry policy. The single
-difference from a live send is that the bytes are handed to this recorder instead
-of a socket.
+The harness does not mock the egress. It runs the real
+:class:`~app.providers.whatsapp.facade.WhatsAppFacade` and swaps only the
+*provider* underneath it, so every record here was produced by the production
+code path: the same rendered body, the same recipient, after the same PRO-71/82
+circuit-breaker check. The single difference from a live send is that the
+message is handed to this recorder instead of a socket.
+
+Before PRO-86 the swap happened one layer lower (an ``httpx.MockTransport``
+under the Green client). The endpoint names below are kept verbatim —
+``sendMessage``, ``sendFileByUrl``, ``sendChatStateTyping``,
+``getStateInstance`` — so every existing assertion and transcript in the harness
+reads the same.
 
 That is what lets a test assert on the *fully rendered Hebrew a human would have
 received* — emoji, line breaks, interpolated name/address/price — rather than on a
@@ -18,7 +24,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+from app.providers.whatsapp.base import NormalizedMessage, WhatsAppProvider
 
 # Endpoints that carry content a person actually reads. `sendChatStateTyping`
 # (the "typing…" indicator) and `getStateInstance` (the deauth probe) are real
@@ -29,7 +35,7 @@ MESSAGE_ENDPOINTS = ("sendMessage", "sendFileByUrl")
 
 @dataclass(frozen=True)
 class Send:
-    """One intercepted Green API call, in the order it was made."""
+    """One intercepted outbound call, in the order it was made."""
 
     index: int
     endpoint: str
@@ -49,19 +55,13 @@ class Send:
         return f"Send(#{self.index} {self.endpoint} → {self.chat_id}: {self.body!r})"
 
 
-def _endpoint_of(request: httpx.Request) -> str:
-    """Green API URLs are ``/waInstance<id>/<endpoint>/<token>``."""
-    parts = [p for p in request.url.path.split("/") if p]
-    return parts[-2] if len(parts) >= 2 else request.url.path
-
-
 class OutboundRecorder:
-    """httpx ``MockTransport`` handler that captures every Green API request.
+    """Captures every outbound call the facade authorises.
 
     Also the harness's proof of the zero-real-sends acceptance criterion: it counts
-    every request that reached it, and ``tests/e2e/conftest.py`` separately makes
-    the *real* httpx transports raise, so a request either lands here or fails the
-    run. There is no third outcome.
+    every send that reached it, and ``tests/e2e/conftest.py`` separately makes the
+    real httpx transports raise, so a send either lands here or fails the run.
+    There is no third outcome.
     """
 
     def __init__(self) -> None:
@@ -70,39 +70,21 @@ class OutboundRecorder:
         # deauth monitor and the PRO-71 breaker off a realistic probe result.
         self.instance_state = "authorized"
 
-    # -- transport ----------------------------------------------------------
-    def handler(self, request: httpx.Request) -> httpx.Response:
-        endpoint = _endpoint_of(request)
-
-        if endpoint == "getStateInstance":
-            self.all.append(Send(len(self.all), endpoint, "", "", {}))
-            return httpx.Response(200, json={"stateInstance": self.instance_state})
-
-        try:
-            payload: dict[str, Any] = json.loads(request.content or b"{}")
-        except ValueError:  # pragma: no cover - Green API is always JSON
-            payload = {}
-
-        # For a file send the "body" a recipient reads is the caption; the URL is
-        # kept in the payload for tests that care which file went out.
-        if endpoint == "sendFileByUrl":
-            body = payload.get("caption", "") or payload.get("urlFile", "")
-        else:
-            body = payload.get("message", "")
-
+    # -- capture ------------------------------------------------------------
+    def _append(self, endpoint: str, chat_id: str, body: str, payload: dict) -> dict:
         self.all.append(
             Send(
                 index=len(self.all),
                 endpoint=endpoint,
-                chat_id=payload.get("chatId", ""),
+                chat_id=chat_id,
                 body=body,
                 payload=payload,
             )
         )
-        return httpx.Response(200, json={"idMessage": f"rec-{len(self.all)}"})
+        return {"idMessage": f"rec-{len(self.all)}"}
 
-    def transport(self) -> httpx.MockTransport:
-        return httpx.MockTransport(self.handler)
+    def provider(self) -> "RecordingProvider":
+        return RecordingProvider(self)
 
     # -- queries ------------------------------------------------------------
     @property
@@ -203,3 +185,55 @@ class OutboundRecorder:
                     f"{head}: {line}" if i == 0 else f"{' ' * len(head)}  {line}"
                 )
         return "\n".join(lines)
+
+
+class RecordingProvider(WhatsAppProvider):
+    """The transport the harness runs the real facade against.
+
+    ``transmits`` is True on purpose. The harness asserts on breaker behaviour
+    (``test_engaged_circuit_breaker_blocks_every_outbound``), which only means
+    anything for a provider the facade actually gates — so ``tests/e2e/conftest``
+    seeds the ``wa:instance:state`` confirmation to represent a healthy account
+    and individual tests take it away again.
+    """
+
+    name = "recording"
+    transmits = True
+
+    def __init__(self, recorder: OutboundRecorder):
+        self._rec = recorder
+
+    async def send_text(self, chat_id: str, text: str):
+        return self._rec._append(
+            "sendMessage", chat_id, text, {"chatId": chat_id, "message": text}
+        )
+
+    async def send_file(
+        self, chat_id: str, url: str, caption: str = "", file_name: str = "media.jpg"
+    ):
+        payload = {
+            "chatId": chat_id,
+            "urlFile": url,
+            "fileName": file_name,
+            "caption": caption,
+        }
+        # For a file send the "body" a recipient reads is the caption.
+        return self._rec._append("sendFileByUrl", chat_id, caption or url, payload)
+
+    async def send_template(self, chat_id: str, template_name: str, params=None):
+        payload = {"chatId": chat_id, "template": template_name, "params": params or {}}
+        return self._rec._append("sendTemplate", chat_id, template_name, payload)
+
+    async def send_interactive(self, chat_id: str, body: str, options: list[str]):
+        payload = {"chatId": chat_id, "message": body, "options": list(options)}
+        return self._rec._append("sendInteractive", chat_id, body, payload)
+
+    async def send_typing(self, chat_id: str) -> None:
+        self._rec._append("sendChatStateTyping", chat_id, "", {"chatId": chat_id})
+
+    async def get_state(self) -> str | None:
+        self._rec._append("getStateInstance", "", "", {})
+        return self._rec.instance_state
+
+    def parse_webhook(self, payload) -> NormalizedMessage | None:
+        return None

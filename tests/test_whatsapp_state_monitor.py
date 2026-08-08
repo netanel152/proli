@@ -25,7 +25,7 @@ import app.services.monitor_service as monitor_module
 import app.services.notification_service as notif_module
 from app.core.constants import WorkerConstants
 from app.core.messages import Messages
-from app.services.whatsapp_client_service import WhatsAppClient
+from app.providers.whatsapp.facade import WhatsAppFacade
 
 
 # ---------------------------------------------------------------------------
@@ -132,44 +132,45 @@ def _below_threshold_ts() -> str:
 
 
 # ===========================================================================
-# Section 1 — WhatsAppClient.get_state_instance()
+# Section 1 — WhatsAppFacade.get_state_instance()
+#
+# PRO-86: state used to come from a Green HTTP probe with its own always-real
+# client. It now comes from the provider, and the facade's job is narrowed to
+# "never let a probe failure propagate" — the monitor polls this on a timer and
+# an exception here would take the scheduler job down with it.
 # ===========================================================================
 
 
+def _facade_with_state(**kwargs) -> WhatsAppFacade:
+    provider = MagicMock()
+    provider.name = "stub"
+    provider.transmits = False
+    provider.get_state = AsyncMock(**kwargs)
+    return WhatsAppFacade(provider)
+
+
 @pytest.mark.asyncio
-async def test_get_state_instance_returns_state_value_from_json():
-    """Happy path: JSON body has stateInstance → value returned verbatim."""
-    wa = WhatsAppClient()
-
-    mock_resp = MagicMock()
-    mock_resp.raise_for_status.return_value = None
-    mock_resp.json.return_value = {"stateInstance": "authorized"}
-
-    mock_http = AsyncMock()
-    mock_http.get = AsyncMock(return_value=mock_resp)
-
-    # _get_probe_client, not _get_client: PRO-83 gave the read-only state probe its
-    # own always-real client so WHATSAPP_DRY_RUN cannot feed the monitor a
-    # fabricated "authorized" (see whatsapp_client_service._probe_client).
-    with patch.object(wa, "_get_probe_client", new=AsyncMock(return_value=mock_http)):
-        result = await wa.get_state_instance()
-
-    assert result == "authorized"
+async def test_get_state_instance_returns_state_value_from_provider():
+    """Happy path: the provider's value is returned verbatim."""
+    assert await _facade_with_state(return_value="authorized").get_state_instance() == (
+        "authorized"
+    )
 
 
 @pytest.mark.asyncio
 async def test_get_state_instance_returns_none_on_any_exception():
     """Network / HTTP errors are swallowed; None is returned (best-effort probe)."""
-    wa = WhatsAppClient()
+    facade = _facade_with_state(side_effect=Exception("connection reset"))
+    assert await facade.get_state_instance() is None
 
-    with patch.object(
-        wa,
-        "_get_probe_client",
-        new=AsyncMock(side_effect=Exception("connection reset")),
-    ):
-        result = await wa.get_state_instance()
 
-    assert result is None
+@pytest.mark.asyncio
+async def test_get_state_instance_returns_none_for_an_unimplemented_provider():
+    """PRO-86: CloudAPIProvider is a stub until PRO-89. A provider that cannot
+    report state must read as 'not known-good' rather than crash the watchdog —
+    and None is exactly what makes the facade's breaker fail closed."""
+    facade = _facade_with_state(side_effect=NotImplementedError("PRO-89"))
+    assert await facade.get_state_instance() is None
 
 
 # ===========================================================================

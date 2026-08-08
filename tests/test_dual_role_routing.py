@@ -111,13 +111,18 @@ async def test_customer_mode_command_from_pro_mode_switches(wf_mocks, mock_db):
         chat_id, Messages.Pro.SWITCHED_TO_CUSTOMER
     )
     mock_ai.analyze_conversation.assert_not_called()
-    # Green API has no interactive buttons. Asserting send_interactive_buttons was
-    # not called on mock_wa would pass vacuously (a bare MagicMock auto-creates the
-    # attribute), so assert against the real client instead — the helper was removed
-    # in April 2026 and must stay gone.
-    from app.services.whatsapp_client_service import WhatsAppClient
+    # Asserting send_interactive_buttons was not called on mock_wa would pass
+    # vacuously (a bare MagicMock auto-creates the attribute), so assert against
+    # the real egress instead. The helper was removed in April 2026 and must stay
+    # gone.
+    #
+    # PRO-86 note: the facade does now expose a `send_interactive`, because Meta
+    # Cloud API supports it and the ABC has to cover the transport. The old
+    # Green-shaped helper stays deleted, and nothing in the flows may call the new
+    # one until PRO-88 (template catalog) and PRO-89 land — see CLAUDE.md.
+    from app.providers.whatsapp.facade import WhatsAppFacade
 
-    assert not hasattr(WhatsAppClient, "send_interactive_buttons")
+    assert not hasattr(WhatsAppFacade, "send_interactive_buttons")
 
 
 @pytest.mark.asyncio

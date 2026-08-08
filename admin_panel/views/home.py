@@ -447,9 +447,22 @@ def _render_selected_lead_actions(
                 T.get("check_customer_btn", "Customer Check"), key=f"check_{k}"
             ):
                 try:
-                    send_completion_check_sync(lid)
-                    log_audit("send_completion_check", {"lead_id": lid})
-                    st.success(T.get("check_sent", "Check sent!"))
+                    # PRO-86: False means the facade suppressed the send (circuit
+                    # breaker or operator kill switch). Before the facade existed
+                    # this path raised on an HTTP error; a suppressed send is not
+                    # an error, but it is also not a delivery, so it must not show
+                    # a success toast.
+                    sent = send_completion_check_sync(lid)
+                    log_audit("send_completion_check", {"lead_id": lid, "sent": sent})
+                    if sent:
+                        st.success(T.get("check_sent", "Check sent!"))
+                    else:
+                        st.warning(
+                            T.get(
+                                "check_not_sent",
+                                "Outbound is halted — the check was not sent.",
+                            )
+                        )
                 except Exception as e:
                     st.error(f"Failed: {e}")
 

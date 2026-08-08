@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime, timedelta, timezone
 from bson import ObjectId
-from app.services import matching_service, whatsapp_client_service
+from app.services import matching_service
 
 # --- Task 1: Test Booking Logic ---
 
