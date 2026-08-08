@@ -501,3 +501,51 @@ def test_no_flow_calls_send_interactive():
         f"send_interactive called outside the provider package: {offenders}. "
         "WhatsApp menus stay text-based until PRO-88/PRO-89 — see CLAUDE.md."
     )
+
+
+def _captured_warnings(fn) -> str:
+    """Run ``fn`` and return everything it logged at WARNING or above.
+
+    caplog does not see these: the project logs through loguru, which does not
+    propagate into stdlib logging. Attach a real sink instead.
+    """
+    from app.core.logger import logger as app_logger
+
+    lines: list[str] = []
+    sink_id = app_logger.add(lambda m: lines.append(str(m)), level="WARNING")
+    try:
+        fn()
+    finally:
+        app_logger.remove(sink_id)
+    return "".join(lines)
+
+
+def test_dry_run_override_of_a_real_provider_is_logged_loudly(monkeypatch):
+    """WHATSAPP_PROVIDER and WHATSAPP_DRY_RUN overlap. A silent override is how a
+    muted service becomes an hour of 'why isn't it sending', so the override has
+    to name the setting that must change."""
+    monkeypatch.setattr(settings, "WHATSAPP_DRY_RUN", True)
+    monkeypatch.setattr(settings, "WHATSAPP_PROVIDER", "cloud")
+
+    captured = {}
+    text = _captured_warnings(
+        lambda: captured.update(provider=provider_pkg.build_provider())
+    )
+
+    assert isinstance(captured["provider"], DryRunProvider)
+    assert "WHATSAPP_DRY_RUN" in text
+    assert "cloud" in text
+
+
+def test_dry_run_with_a_dry_run_provider_logs_no_override_warning(monkeypatch):
+    """No conflict, no noise — the common local-dev case must stay quiet."""
+    monkeypatch.setattr(settings, "WHATSAPP_DRY_RUN", True)
+    monkeypatch.setattr(settings, "WHATSAPP_PROVIDER", "dryrun")
+
+    captured = {}
+    text = _captured_warnings(
+        lambda: captured.update(provider=provider_pkg.build_provider())
+    )
+
+    assert isinstance(captured["provider"], DryRunProvider)
+    assert "overrides" not in text

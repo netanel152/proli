@@ -56,7 +56,7 @@
 | Cache / State | Redis |
 | Admin UI | Streamlit |
 | Media | Cloudinary |
-| WhatsApp | Green API |
+| WhatsApp | Provider facade (`app/providers/whatsapp/`, PRO-86) — dry-run by default; Meta Cloud API pending PRO-89 |
 | Security | Bcrypt, webhook token verification, session cookies |
 | Infrastructure | Docker Compose / Railway |
 
@@ -78,8 +78,6 @@ pip install -r requirements.txt
 
 ```env
 # Required
-GREEN_API_INSTANCE_ID=...
-GREEN_API_TOKEN=...
 GEMINI_API_KEY=...
 CLOUDINARY_CLOUD_NAME=...
 CLOUDINARY_API_KEY=...
@@ -91,7 +89,8 @@ MONGO_TEST_URI=mongodb+srv://...     # required only for integration tests
 ADMIN_PASSWORD=...                   # generate hash: python scripts/generate_admin_hash.py
 ADMIN_PHONE=972501234567             # WhatsApp number for SOS alerts
 ONCALL_PHONE=972501234567            # on-call number for infra alerts (defaults to ADMIN_PHONE)
-WEBHOOK_TOKEN=...                    # enables ?token=<value> webhook auth
+WEBHOOK_TOKEN=...                    # enables ?token=<value> webhook auth — required if ENVIRONMENT is staging/production
+WHATSAPP_PROVIDER=dryrun             # dryrun (default) | cloud — cloud is a stub until PRO-89
 ENVIRONMENT=development              # development | staging | production (anything else fails at startup)
 ```
 

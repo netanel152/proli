@@ -28,10 +28,20 @@ def build_provider() -> WhatsAppProvider:
     to set it during an incident), so it must not be possible to have it set and
     still transmit.
     """
+    configured = (settings.WHATSAPP_PROVIDER or DryRunProvider.name).strip().lower()
+
     if settings.WHATSAPP_DRY_RUN:
+        if configured != DryRunProvider.name:
+            # The two settings overlap, and a silent override is how a muted
+            # service turns into an hour of "why isn't it sending". Say it out
+            # loud, at WARNING, naming the setting that has to change.
+            logger.warning(
+                f"WHATSAPP_DRY_RUN=true overrides WHATSAPP_PROVIDER={configured!r} "
+                "— nothing will be transmitted. Unset WHATSAPP_DRY_RUN to send."
+            )
         return DryRunProvider()
 
-    name = (settings.WHATSAPP_PROVIDER or DryRunProvider.name).strip().lower()
+    name = configured
     provider_cls = _PROVIDERS.get(name)
     if provider_cls is None:
         # Unknown value must not silently fall back to something that transmits.
