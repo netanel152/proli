@@ -17,7 +17,7 @@ async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=N
     """
     # Webhook Token Verification
     if settings.WEBHOOK_TOKEN:
-        if token != settings.WEBHOOK_TOKEN:
+        if token != settings.WEBHOOK_TOKEN.get_secret_value():
             logger.warning(
                 "Security Alert: Webhook request with invalid or missing token"
             )

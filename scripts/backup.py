@@ -37,7 +37,12 @@ def run_mongodump() -> Path | None:
     archive_name = f"proli_{timestamp}_{weekday}.gz"
     archive_path = BACKUP_DIR / archive_name
 
-    mongo_uri = settings.MONGO_URI
+    # PRO-94: unwrapped at the point of use and handed straight to the
+    # subprocess. Note it still lands in the child's argv, which is readable by
+    # other processes on the same host — acceptable on a single-tenant Railway
+    # container, tracked as a follow-up on PRO-94, and the reason this value is
+    # never *also* put in a log line.
+    mongo_uri = settings.MONGO_URI.get_secret_value()
     cmd = [
         "mongodump",
         f"--uri={mongo_uri}",
@@ -48,9 +53,7 @@ def run_mongodump() -> Path | None:
     logger.info(f"Starting MongoDB backup -> {archive_path}")
 
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             logger.error(f"mongodump failed: {result.stderr}")
             return None
@@ -132,15 +135,21 @@ def cleanup_old_backups():
         backup.unlink()
         logger.info(f"Deleted old backup: {backup.name}")
 
-    logger.info(f"Retention cleanup: kept {len(kept)}, total files checked: {len(all_backups)}")
+    logger.info(
+        f"Retention cleanup: kept {len(kept)}, total files checked: {len(all_backups)}"
+    )
 
 
 def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Proli Database Backup")
-    parser.add_argument("--upload-s3", action="store_true", help="Upload to S3 after backup")
-    parser.add_argument("--cleanup", action="store_true", help="Run retention cleanup only")
+    parser.add_argument(
+        "--upload-s3", action="store_true", help="Upload to S3 after backup"
+    )
+    parser.add_argument(
+        "--cleanup", action="store_true", help="Run retention cleanup only"
+    )
     args = parser.parse_args()
 
     if args.cleanup:
