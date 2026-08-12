@@ -109,6 +109,25 @@ class World:
         self.admin = R.chat(R.ADMIN)
         self.pros: dict[str, dict] = {}
         self._enqueued: list[tuple] = []
+        # PRO-88: operator pages (logger.critical → Sentry), captured by the
+        # conftest. Not WhatsApp sends, so they never reach the recorder.
+        self.pages: list[str] = []
+
+    def assert_paged(self, *fragments: str) -> str:
+        """Assert some operator page contains every fragment.
+
+        The counterpart to ``recorder.assert_text_to`` for alerts that left
+        the WhatsApp channel in PRO-88. Keeping a dedicated assertion (rather
+        than reading a log) means a test states *the operator was told*, which
+        is the behaviour that matters and survives a change of paging channel.
+        """
+        for page in self.pages:
+            if all(f in page for f in fragments):
+                return page
+        raise AssertionError(
+            f"no operator page contained all of {list(fragments)}\n"
+            f"--- pages ---\n" + ("\n".join(self.pages) or "(none)")
+        )
 
     # =====================================================================
     # Seeding

@@ -25,6 +25,23 @@ def notif_mocks(monkeypatch, mock_db):
     return mock_wa, mock_db
 
 
+@pytest.fixture
+def pages(monkeypatch):
+    """Capture operator pages (PRO-88).
+
+    The admin leg of send_sos_alert no longer goes over WhatsApp — the admin
+    never messages the bot, so their Cloud API service window is permanently
+    closed. It pages via logger.critical → Sentry instead. Patching the
+    function rather than reading a loguru sink keeps these tests asserting the
+    *decision to page* rather than log formatting.
+    """
+    recorded = []
+    monkeypatch.setattr(
+        app.services.notification_service, "page_operator", recorded.append
+    )
+    return recorded
+
+
 # --- send_pro_reminder ---
 
 
@@ -132,7 +149,7 @@ async def test_pro_reminder_below_cap_sends_and_increments(notif_mocks):
 
 
 @pytest.mark.asyncio
-async def test_sos_alert_with_pro_and_lead(notif_mocks):
+async def test_sos_alert_with_pro_and_lead(notif_mocks, pages):
     mock_wa, db = notif_mocks
     pro_id = ObjectId()
     await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
@@ -149,53 +166,70 @@ async def test_sos_alert_with_pro_and_lead(notif_mocks):
 
     await send_sos_alert("972501111111@c.us", "אני צריך עזרה", pro_id)
 
-    # Both pro and admin should be alerted
-    assert mock_wa.send_message.call_count == 2
-
+    # PRO-88: the pro gets WhatsApp (they are a real recipient); the admin is
+    # paged via Sentry instead, so exactly ONE outbound message goes out.
+    assert mock_wa.send_message.call_count == 1
     calls = {c.args[0]: c.args[1] for c in mock_wa.send_message.call_args_list}
-
-    # Pro alert
     assert "972500000000@c.us" in calls
     assert "הלקוח שלך צריך עזרה" in calls["972500000000@c.us"]
 
-    # Admin alert
     admin_chat = f"{settings.ADMIN_PHONE}@c.us"
-    assert admin_chat in calls
-    assert "קריאת SOS" in calls[admin_chat]
-    assert "נזילה" in calls[admin_chat]
+    assert admin_chat not in calls, "admin must no longer receive WhatsApp"
+
+    # The page carries enough to find the lead, and nothing more.
+    assert len(pages) == 1
+    assert "נזילה" in pages[0]
+    assert "SOS" in pages[0]
 
 
 @pytest.mark.asyncio
-async def test_sos_alert_no_pro(notif_mocks):
+async def test_sos_alert_no_pro(notif_mocks, pages):
+    """With no pro assigned, an SOS produces ZERO outbound messages (PRO-88).
+
+    Worth stating explicitly: this used to be the one path that always sent
+    something. The signal is not lost — it pages the operator — but nothing
+    leaves over WhatsApp, so no template is needed for it.
+    """
     mock_wa, _ = notif_mocks
 
     await send_sos_alert("972501111111@c.us", "help!", None)
 
-    # Only admin alert
-    assert mock_wa.send_message.call_count == 1
-    admin_chat = f"{settings.ADMIN_PHONE}@c.us"
-    assert mock_wa.send_message.call_args.args[0] == admin_chat
+    assert mock_wa.send_message.call_count == 0
+    assert len(pages) == 1
 
 
 @pytest.mark.asyncio
-async def test_sos_alert_no_active_lead(notif_mocks):
-    mock_wa, _ = notif_mocks
-
+async def test_sos_alert_no_active_lead(notif_mocks, pages):
     await send_sos_alert("972506666666@c.us", "שלום", None)
 
-    msg = mock_wa.send_message.call_args.args[1]
-    assert "אין פנייה פעילה" in msg
+    assert len(pages) == 1
+    assert "none active" in pages[0]
 
 
 @pytest.mark.asyncio
-async def test_sos_phone_formatting(notif_mocks):
-    """Phone number 972501111111@c.us should display as 0501111111."""
-    mock_wa, _ = notif_mocks
+async def test_sos_page_masks_the_customer_phone(notif_mocks, pages):
+    """The page reaches Sentry, which retains events — so it carries the last
+    4 digits only. The operator opens the lead in the admin panel for the rest.
 
+    Replaces the old assertion that the full local number (0501111111) appeared
+    in the admin's WhatsApp message; that was correct then and is a PII leak now.
+    """
     await send_sos_alert("972501111111@c.us", "test", None)
 
-    msg = mock_wa.send_message.call_args.args[1]
-    assert "0501111111" in msg
+    assert len(pages) == 1
+    assert "***1111" in pages[0]
+    assert "0501111111" not in pages[0]
+    assert "972501111111" not in pages[0]
+
+
+@pytest.mark.asyncio
+async def test_sos_page_omits_the_customer_message(notif_mocks, pages):
+    """Free-form text from a distressed person can contain anything, and this
+    now lands in a retained Sentry event rather than a chat the operator reads
+    once."""
+    await send_sos_alert("972501111111@c.us", "my ID is 123456789", None)
+
+    assert "123456789" not in pages[0]
 
 
 # --- best-effort delivery (PRO-75: no SMS fallback anymore) ---
@@ -223,24 +257,25 @@ async def test_pro_reminder_whatsapp_failure_swallowed_no_sms(notif_mocks):
 
 
 @pytest.mark.asyncio
-async def test_sos_alert_pro_whatsapp_failure_does_not_block_admin_alert(notif_mocks):
-    """If the pro's WhatsApp send fails, the admin must still be alerted
-    (best-effort per-recipient, no SMS fallback)."""
+async def test_sos_alert_pro_whatsapp_failure_does_not_block_admin_page(
+    notif_mocks, pages
+):
+    """A failed pro send must not swallow the operator page.
+
+    Stronger than before PRO-88: the page no longer shares a transport with
+    the pro alert, so a total WhatsApp outage still reaches the operator.
+    """
     mock_wa, db = notif_mocks
     pro_id = ObjectId()
     await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
 
     async def send_side_effect(chat_id, message):
-        if chat_id == "972500000000@c.us":
-            raise Exception("WhatsApp down for pro")
-        return None
+        raise Exception("WhatsApp down entirely")
 
     mock_wa.send_message.side_effect = send_side_effect
 
     await send_sos_alert("972501111111@c.us", "help!", pro_id)
 
-    # Both attempted: pro (failed) + admin (succeeded)
-    assert mock_wa.send_message.call_count == 2
-    admin_chat = f"{settings.ADMIN_PHONE}@c.us"
-    calls = [c.args[0] for c in mock_wa.send_message.call_args_list]
-    assert admin_chat in calls
+    assert mock_wa.send_message.call_count == 1  # attempted the pro, failed
+    assert len(pages) == 1  # operator paged regardless
+    assert "pro_notified=True" in pages[0]

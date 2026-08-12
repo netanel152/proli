@@ -237,9 +237,11 @@ async def test_exhausted_reassignments_escalate_to_admin_never_closed(world):
     assert updated["status"] != LeadStatus.CLOSED
     assert updated["escalation_reason"] == "max_reassignments_exhausted"
     world.recorder.assert_text_to(world.customer, "מעביר אותך לנציג", "תוך שעה")
-    world.recorder.assert_text_to(
-        world.admin, "ליד הועבר לטיפול ידני", "נזילה במטבח", "ניסיונות שיבוץ"
+    # PRO-88: the admin is paged out of band, never over WhatsApp.
+    world.recorder.assert_silent(
+        world.admin, "operator alerts moved to Sentry — no template needed"
     )
+    world.assert_paged("PENDING_ADMIN_REVIEW", "נזילה במטבח")
     await world.assert_state(UserStates.IDLE)
 
 
@@ -338,7 +340,11 @@ async def test_sos_pauses_the_bot_and_deflects_after_the_idle_window(world):
     assert await world.state_ttl() <= WorkerConstants.PAUSE_TTL_SECONDS
     assert (await world.lead_by_id(lead["_id"]))["is_paused"] is True
     world.recorder.assert_text_to(world.customer, "מעביר אותך לנציג אנושי")
-    world.recorder.assert_text_to(world.admin, "קריאת SOS מלקוח")
+    # PRO-88: SOS still reaches the operator, just not over WhatsApp.
+    world.recorder.assert_silent(
+        world.admin, "operator alerts moved to Sentry — no template needed"
+    )
+    world.assert_paged("SOS from customer")
     world.recorder.assert_text_to(
         world.pro_chat(R.PRO_PRIMARY), "הלקוח מבקש מענה אנושי"
     )

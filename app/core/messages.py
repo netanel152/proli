@@ -367,8 +367,20 @@ class Messages:
             "לא הצלחתי למצוא זמינות מיידית, מעביר אותך לנציג — "
             "נחזור אליך תוך שעה בשעות הפעילות."
         )
-        # PRO-63: operator alert fired the moment a lead is escalated, so the
-        # 1-hour promise above is not left to the 4-hourly batched Reporter.
+        # ---------------------------------------------------------------
+        # RETIRED by PRO-88 — no longer sent, kept only as a record.
+        #
+        # ADMIN_MAX_REASSIGNMENTS, ADMIN_REPORT_* and ADMIN_ALERT below were
+        # the operator's WhatsApp alerts. The admin never messages the bot, so
+        # under Meta Cloud API their 24-hour service window is permanently
+        # closed and each would have needed its own approved template plus
+        # per-message fees, forever. They now page via
+        # notification_service.page_operator() → Sentry → email, the channel
+        # PRO-75 already made the guaranteed one.
+        #
+        # Nothing formats these strings. Do not reintroduce a caller — see
+        # docs/WHATSAPP_TEMPLATE_CATALOG.md before adding any operator alert.
+        # ---------------------------------------------------------------
         ADMIN_MAX_REASSIGNMENTS = (
             "🚨 *ליד הועבר לטיפול ידני — Proli*\n\n"
             "📞 *טלפון:* {phone}\n"
