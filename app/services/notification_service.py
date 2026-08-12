@@ -21,6 +21,31 @@ async def _send_best_effort(chat_id: str, message: str) -> bool:
         return False
 
 
+def page_operator(summary: str) -> None:
+    """Page the operator without WhatsApp — ``logger.critical`` → Sentry → email.
+
+    PRO-88: the admin never sends the bot an inbound message, so under Meta
+    Cloud API their 24-hour service window is *permanently* closed. Every
+    operator-facing WhatsApp alert would therefore need its own approved
+    template plus per-message fees, forever, to deliver something PRO-75
+    already routes through Sentry as the guaranteed page. Three alerts
+    (SOS admin leg, stuck-lead report, escalation notice) were deleted rather
+    than templatized.
+
+    Distinct from ``send_oncall_alert``: that one is for *infrastructure*
+    alerts and still tries WhatsApp as a courtesy when the account is
+    authorized. This is for *business* alerts and never transmits.
+
+    **Callers must keep PII out of ``summary``.** Sentry retains events, and
+    the loguru PII filter runs in the sink — it is not guaranteed to have
+    applied on whatever path an event takes to Sentry. Mask phone numbers at
+    the call site (last 4 digits, matching the project convention) and pass
+    identifiers the operator can look up in the admin panel rather than the
+    customer record itself.
+    """
+    logger.critical(summary)
+
+
 async def send_oncall_alert(message: str, *, assume_authorized: bool = False) -> bool:
     """Best-effort WhatsApp delivery of an operator alert — but only when the
     WhatsApp instance is actually authorized.
@@ -225,35 +250,10 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
             sort=[("created_at", -1)],
         )
 
-        if active_lead:
-            STATUS_HE = {
-                "new": "ממתין לאישור",
-                "contacted": "בתהליך",
-                "booked": "מאושר",
-                "completed": "הושלם",
-                "rejected": "נדחה",
-                "cancelled": "בוטל",
-                "pending_admin_review": "ממתין לבדיקת מנהל",
-            }
-            issue = active_lead.get("issue_type", "לא ידוע")
-            # `or` covers nullable full_address (None value, not just missing key)
-            address = active_lead.get("full_address") or "לא ידוע"
-            apt_time = active_lead.get("appointment_time", "לא נקבע")
-            status_he = STATUS_HE.get(
-                active_lead.get("status", ""), active_lead.get("status", "")
-            )
-            # Bold the field labels so this block matches the bold labels in the
-            # ADMIN_ALERT header above it (📞 *טלפון:*, 💬 *הודעה:*) — one message
-            # shouldn't mix bold and plain labels.
-            lead_details = (
-                f"📋 *פרטי הפנייה:*\n"
-                f"🛠️ *בעיה:* {issue}\n"
-                f"📍 *כתובת:* {address}\n"
-                f"⏰ *זמן:* {apt_time}\n"
-                f"📊 *סטטוס:* {status_he}"
-            )
-        else:
-            lead_details = "📋 אין פנייה פעילה במערכת"
+        # PRO-88 removed the Hebrew lead-details block that used to be built
+        # here. It existed solely to format the admin's WhatsApp message; the
+        # operator now gets a page and opens the lead in the admin panel, which
+        # renders those fields properly and does not retain them in Sentry.
 
         # 1. Alert the Pro (if assigned)
         if pro_id:
@@ -268,15 +268,17 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                 await _send_best_effort(pro_chat_id, pro_msg)
                 logger.info(f"SOS alert sent to Pro {pro_id} for user {chat_id}")
 
-        # 2. Always alert Admin with full details
-        admin_chat_id = to_chat_id(settings.ADMIN_PHONE)
-        admin_msg = Messages.SOS.ADMIN_ALERT.format(
-            phone=customer_phone_display,
-            last_message=last_message,
-            lead_details=lead_details,
+        # 2. Always page the Admin — via Sentry, not WhatsApp (PRO-88).
+        # The customer's message is deliberately NOT included: it is free-form
+        # text from a distressed person and can contain anything. The operator
+        # opens the lead in the admin panel, which is also where the full
+        # phone number lives.
+        page_operator(
+            f"SOS from customer ***{customer_phone_display[-4:]} — "
+            f"issue={(active_lead or {}).get('issue_type') or 'unknown'}, "
+            f"lead={(active_lead or {}).get('_id') or 'none active'}, "
+            f"pro_notified={bool(pro_id)}. Open the lead in the admin panel."
         )
-        await _send_best_effort(admin_chat_id, admin_msg)
-        logger.info(f"SOS alert sent to Admin for user {chat_id}")
 
     except Exception as e:
         logger.error(f"Error in send_sos_alert for user {chat_id}: {e}")

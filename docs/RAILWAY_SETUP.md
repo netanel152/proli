@@ -93,6 +93,30 @@ Two deliberate exemptions, both meaning "the platform has no opinion":
 
 > Running `pytest` inside `railway run` would otherwise fail every test that builds a `Settings`. `tests/conftest.py` clears both Railway variables for the whole suite — the unit tests are offline by design and must not read the platform they happen to be launched from.
 
+### `MONGO_URI` per Railway environment (PRO-97)
+
+Each environment points at its **own database**, and this is load-bearing, not tidiness:
+
+| Railway environment | database | contents |
+|---|---|---|
+| Staging | `proli_staging_db` | empty and seedable — the target of `scripts/seed_db.py` and `scripts/seed_coverage_matrix.py` |
+| Production | `proli_db` | live data |
+
+Between 2026-06-27 and 2026-08-13 **all six services shared `proli_staging_db`**, production included. That is dangerous in a specific way: `seed_coverage_matrix.py`'s guard is `DB_NAME == "proli_staging_db"`, which *passed* — it checks what the database is called, not who is reading it. Running the coverage seed would have injected 27 fake professionals into the dataset production served, and `seed_db.py`'s destructive `clear_db()` was reachable at the same time because production also reported `ENVIRONMENT=staging` (PRO-96).
+
+**The invariant to preserve: the database production reads must never be the one seed scripts accept as a target.** When changing `MONGO_URI`, change the *database path only* and set it per service — copying one URI across environments is exactly how the two got merged, and it hides the merge from anyone reading a variable list.
+
+Local `.env` should point at **`proli_staging_db`**, never `proli_db`. It is empty after the split, so seed it:
+
+```bash
+python scripts/seed_db.py            # 3 pros, works with ENVIRONMENT=development
+# For the 27-pro coverage matrix, set ENVIRONMENT=staging in .env first —
+# assert_seed_allowed() requires exactly "staging". The PRO-96 platform
+# cross-check does not interfere locally: RAILWAY_ENVIRONMENT_NAME is absent
+# outside Railway, so the check exempts you.
+python scripts/seed_coverage_matrix.py
+```
+
 ## Step 5: Configure the WhatsApp webhook
 
 Green API is gone (PRO-85 — instance deleted, tariff cancelled) and inbound is not yet
