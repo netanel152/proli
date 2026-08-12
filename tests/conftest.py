@@ -27,6 +27,22 @@ if not os.getenv("PROLI_E2E_RECORD"):
     sys.modules["google.genai.types"] = MagicMock()
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_railway_env(monkeypatch):
+    """PRO-96: `Settings` refuses to boot when ENVIRONMENT contradicts
+    RAILWAY_ENVIRONMENT_NAME.
+
+    Several project scripts are run under `railway run`, so a developer will
+    eventually run pytest that way too. Without this, every test that
+    constructs a `Settings` would fail against the ambient platform variable —
+    for a reason that has nothing to do with the test. The unit suite is
+    offline by design; it should not read the platform it happens to be
+    launched from either.
+    """
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT", raising=False)
+
+
 @pytest.fixture(scope="module")
 def mock_db():
     return AsyncMongoMockClient().proli_db

@@ -80,6 +80,19 @@ What the value actually changes:
 
 > **A rejected `ENVIRONMENT` surfaces as a boot crash, not a Sentry issue.** The value is validated while `app.core.config` is imported — before logging and `sentry_sdk.init()` run — so a typo (`ENVIRONMENT=prod`) or an explicitly empty value produces a pydantic `ValidationError` on stderr and a Railway restart loop. Watch the deploy log, not Sentry, when a service fails to come up after an env change.
 
+#### The value is cross-checked against Railway itself (PRO-96)
+
+A *legal but wrong* value used to pass silently, and it happened twice in both directions: staging services claiming `production` (PRO-92) and production `api`+`worker` claiming `staging` (PRO-96). The second one left `seed_db.py`'s destructive guard — which allow-lists `(development, staging)` — disarmed against the production database, and both were found only by a manual sweep.
+
+`Settings` now refuses to boot when `ENVIRONMENT` disagrees with `RAILWAY_ENVIRONMENT_NAME`, which Railway injects itself and an operator cannot mistype. Setting `ENVIRONMENT=staging` on a service in the Production environment is now a startup failure with the fix command in the error text, not a running service that lies about itself.
+
+Two deliberate exemptions, both meaning "the platform has no opinion":
+
+- **The variable is absent** — local checkouts, `docker-compose`, and CI. There `ENVIRONMENT` is the only source of truth, so there is nothing to contradict.
+- **A preview environment** (`pr-42`, a personal branch environment) — its name has no counterpart in the three-value vocabulary, so it maps to whatever `ENVIRONMENT` you set. Failing these closed would block previews and buy no safety.
+
+> Running `pytest` inside `railway run` would otherwise fail every test that builds a `Settings`. `tests/conftest.py` clears both Railway variables for the whole suite — the unit tests are offline by design and must not read the platform they happen to be launched from.
+
 ## Step 5: Configure the WhatsApp webhook
 
 Green API is gone (PRO-85 — instance deleted, tariff cancelled) and inbound is not yet
