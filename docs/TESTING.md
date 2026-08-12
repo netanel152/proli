@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 852 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
+**Current status: 863 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -70,6 +70,7 @@ pytest -m integration
 | `test_consent_flow.py` | Privacy consent gate |
 | `test_media_handler.py` | Media type detection, image download, audio/video URL handling |
 | `test_notification_service.py` | WhatsApp notifications (best-effort, no SMS fallback) |
+| `test_notification_offer.py` | Shared lead-offer builder: `build_new_lead_message`/`format_lead_extra_info`/`format_media_links` (pure, Hebrew fallbacks) and `notify_pro_new_lead` (offer + navigation link, fail-open) as used by `monitor_service`'s reassignment path and `admin_flow`'s assignment path |
 | `test_whatsapp_state_monitor.py` | PRO-20 WhatsApp deauth monitor: `get_state_instance` (incl. a `NotImplementedError` provider reading as `None`, not crashing), `send_oncall_alert` state-guarded WhatsApp routing (no SMS), `check_whatsapp_instance_state` FSM/Redis branches |
 | `test_analytics_service.py` | Lead funnel and performance aggregations |
 | `test_audit_service.py` | Admin action logging |

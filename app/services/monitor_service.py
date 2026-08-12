@@ -11,7 +11,7 @@ from app.core.datetime_utils import within_business_hours
 from app.providers.whatsapp import get_whatsapp, record_account_state
 from app.providers.whatsapp.facade import _PAUSE_KEY
 from app.services import matching_service
-from app.services.notification_service import send_oncall_alert
+from app.services.notification_service import send_oncall_alert, notify_pro_new_lead
 from app.core.messages import Messages
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
@@ -186,37 +186,7 @@ async def reassign_lead(lead) -> bool:
         )
 
         # 4. Notify new pro
-        pro_phone = new_pro.get("phone_number")
-        if pro_phone:
-            pro_phone = to_chat_id(pro_phone)
-
-            header = (
-                Messages.Pro.EMERGENCY_LEAD_HEADER
-                if lead.get("is_emergency")
-                else Messages.Pro.NEW_LEAD_HEADER
-            )
-            msg_to_pro = header + "\n\n"
-            msg_to_pro += Messages.Pro.NEW_LEAD_DETAILS.format(
-                customer_name=lead.get("customer_name") or "לקוח",
-                full_address=lead.get("full_address") or "Unknown",
-                extra_info=f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}",
-                issue_type=lead.get("issue_type", "Unknown"),
-                appointment_time=lead.get("appointment_time", "Pending"),
-            )
-            msg_to_pro += Messages.Pro.NEW_LEAD_FOOTER
-
-            all_media = lead.get("media_urls", [])
-            if all_media:
-                for i, m_url in enumerate(all_media):
-                    caption = msg_to_pro if i == 0 else ""
-                    await whatsapp.send_file_by_url(pro_phone, m_url, caption=caption)
-            else:
-                await whatsapp.send_message(pro_phone, msg_to_pro)
-
-            if lead.get("full_address"):
-                await whatsapp.send_location_link(
-                    pro_phone, lead["full_address"], Messages.Pro.NAVIGATE_TO
-                )
+        await notify_pro_new_lead(lead, new_pro, whatsapp)
 
         # 5. Notify old pro
         if current_pro_id:

@@ -7,7 +7,8 @@ from app.core.constants import LeadStatus, UserStates, WorkerConstants, Actor
 from app.services.lead_manager_service import set_lead_status
 from app.core.config import settings
 from app.core.database import leads_collection, users_collection
-from app.core.phone import to_chat_id, strip_suffix
+from app.core.phone import to_chat_id
+from app.services.notification_service import notify_pro_new_lead
 
 ADMIN_TTL = 900  # 15-minute wizard session
 
@@ -249,36 +250,8 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
 
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
 
-    pro_phone = to_chat_id(pro.get("phone_number", ""))
-
-    if pro_phone and lead:
-        try:
-            customer_phone = strip_suffix(lead.get("chat_id") or "")
-            extra_info = (
-                f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
-            )
-            header = (
-                Messages.Pro.EMERGENCY_LEAD_HEADER
-                if lead.get("is_emergency")
-                else Messages.Pro.NEW_LEAD_HEADER
-            )
-            msg = (
-                header
-                + "\n\n"
-                + Messages.Pro.NEW_LEAD_DETAILS.format(
-                    customer_name=lead.get("customer_name") or "לקוח",
-                    full_address=lead.get("full_address") or "לא ידוע",
-                    extra_info=extra_info,
-                    issue_type=lead.get("issue_type") or "לא ידוע",
-                    appointment_time=lead.get("appointment_time") or "בהקדם",
-                )
-                + Messages.Pro.NEW_LEAD_FOOTER
-            )
-            await whatsapp.send_message(pro_phone, msg)
-        except Exception as e:
-            logger.error(
-                f"[admin_flow] Failed to notify pro {pro_phone} for lead {lead_id}: {e}"
-            )
+    if lead:
+        await notify_pro_new_lead(lead, pro, whatsapp)
 
     await state_manager.clear_state(chat_id)
     pro_name = pro.get("business_name") or "איש המקצוע"
