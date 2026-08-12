@@ -1,14 +1,18 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+from pydantic import SecretStr
 import json
 from app.services.ai_engine_service import AIEngine, AIResponse, ExtractedData
+
 
 @pytest.fixture
 def ai_engine():
     # Patch settings to avoid needing real API key
     with patch("app.services.ai_engine_service.settings") as mock_settings:
-        mock_settings.GEMINI_API_KEY = "fake_key"
-        mock_settings.AI_MODELS = ["gemini-2.5-flash-lite"] # Mock a single model for testing
+        mock_settings.GEMINI_API_KEY = SecretStr("fake_key")  # PRO-94
+        mock_settings.AI_MODELS = [
+            "gemini-2.5-flash-lite"
+        ]  # Mock a single model for testing
         # Patch genai.Client to prevent real network calls during init
         with patch("google.genai.Client"):
             engine = AIEngine()
@@ -17,6 +21,7 @@ def ai_engine():
             engine.client.aio = MagicMock()
             engine.client.aio.models = MagicMock()
             yield engine
+
 
 @pytest.mark.asyncio
 async def test_malformed_json_raw_text(ai_engine):
@@ -28,9 +33,9 @@ async def test_malformed_json_raw_text(ai_engine):
     mock_response = MagicMock()
     # Simulate SDK returning None for parsed (failed to parse natively)
     # Depending on SDK, 'parsed' attribute might not exist or be None
-    mock_response.parsed = None 
+    mock_response.parsed = None
     mock_response.text = "I cannot answer this request."
-    
+
     # Setup async generation
     ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
 
@@ -38,9 +43,9 @@ async def test_malformed_json_raw_text(ai_engine):
 
     assert isinstance(result, AIResponse)
     assert result.reply_to_user == "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."
-    
-    
+
     assert result.extracted_data.city is None
+
 
 @pytest.mark.asyncio
 async def test_valid_json_parsing(ai_engine):
@@ -55,23 +60,24 @@ async def test_valid_json_parsing(ai_engine):
             "city": "Haifa",
             "issue": "Broken door",
             "full_address": None,
-            "appointment_time": None
+            "appointment_time": None,
         },
-        "is_deal": False
+        "is_deal": False,
     }
-    
+
     mock_response = MagicMock()
     mock_response.parsed = None
     mock_response.text = json.dumps(valid_json)
-    
+
     ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-    
+
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
-    
+
     assert isinstance(result, AIResponse)
     assert result.reply_to_user == "Shalom"
     assert result.extracted_data.city == "Haifa"
     assert result.extracted_data.issue == "Broken door"
+
 
 @pytest.mark.asyncio
 async def test_sdk_native_parsing(ai_engine):
@@ -81,19 +87,22 @@ async def test_sdk_native_parsing(ai_engine):
     """
     expected_response = AIResponse(
         reply_to_user="Native Parse",
-        extracted_data=ExtractedData(city="Eilat", issue=None, full_address=None, appointment_time=None),
+        extracted_data=ExtractedData(
+            city="Eilat", issue=None, full_address=None, appointment_time=None
+        ),
         transcription=None,
-        is_deal=False
+        is_deal=False,
     )
     mock_response = MagicMock()
     mock_response.parsed = expected_response
-    
+
     ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
-    
+
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
-    
+
     assert result == expected_response
     assert result.reply_to_user == "Native Parse"
+
 
 @pytest.mark.asyncio
 async def test_sdk_failure_exception(ai_engine):
@@ -101,7 +110,9 @@ async def test_sdk_failure_exception(ai_engine):
     Scenario: SDK raises an exception (e.g. Timeout, API Error).
     Expected: Return "System Overload" fallback response.
     """
-    ai_engine.client.aio.models.generate_content = AsyncMock(side_effect=Exception("API Timeout"))
+    ai_engine.client.aio.models.generate_content = AsyncMock(
+        side_effect=Exception("API Timeout")
+    )
 
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
 
@@ -111,6 +122,7 @@ async def test_sdk_failure_exception(ai_engine):
 
 
 # --- detect_service_intent tests ---
+
 
 @pytest.mark.asyncio
 async def test_detect_service_intent_true(ai_engine):
@@ -137,7 +149,9 @@ async def test_detect_service_intent_false(ai_engine):
 @pytest.mark.asyncio
 async def test_detect_service_intent_error_returns_false(ai_engine):
     """Any exception from Gemini -> method returns False (never raises)."""
-    ai_engine.client.aio.models.generate_content = AsyncMock(side_effect=Exception("Network error"))
+    ai_engine.client.aio.models.generate_content = AsyncMock(
+        side_effect=Exception("Network error")
+    )
 
     result = await ai_engine.detect_service_intent("יש לי בעיה עם הברז")
     assert result is False

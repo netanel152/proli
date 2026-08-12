@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 import os
 
 from app.core.constants import (
@@ -12,52 +12,90 @@ from app.core.constants import (
     normalize_environment,
 )
 
+DEFAULT_MONGO_URI = "mongodb://localhost:27017/proli_db"
+
+
+def _unwrap(v):
+    """Accept either a raw value or an already-wrapped SecretStr in a
+    ``mode="before"`` validator.
+
+    Env vars and ``.env`` always arrive as ``str``, but a caller constructing
+    ``Settings(MONGO_URI=SecretStr(...))`` directly — tests do — would otherwise
+    have the validator compare a SecretStr against a plain string and silently
+    take the wrong branch.
+    """
+    return v.get_secret_value() if isinstance(v, SecretStr) else v
+
 
 class Settings(BaseSettings):
-    GEMINI_API_KEY: str
-    MONGO_URI: str = Field(default="mongodb://localhost:27017/proli_db")
+    """Application configuration.
+
+    PRO-94: every credential-bearing field is typed ``SecretStr``. This is not
+    cosmetic — pydantic's default ``__repr__`` prints *all* field values, so
+    before this change any traceback that touched the Settings object (a
+    pytest ``AttributeError``, a Sentry exception context, a Railway deploy
+    log) dumped the entire secret set in plaintext. It happened for real on
+    2026-08-09 and burned a token that had been rotated an hour earlier.
+
+    ``SecretStr`` masks on ``repr()``, ``str()`` and f-string interpolation, so
+    the leak is structurally impossible rather than merely unlikely. The cost
+    is that every consumer must call ``.get_secret_value()`` at the point of
+    use — deliberately at the point of use only, never into a local that then
+    flows through a log line. ``app/core/logger.py``'s redaction filter is kept
+    as a second layer for values that escape by some other route (PRO-80).
+
+    Any new credential — ``*_TOKEN``, ``*_KEY``, ``*_SECRET``, a DSN or a URI
+    with embedded auth — must be typed ``SecretStr`` here; the logger's
+    redaction list picks it up automatically.
+    """
+
+    GEMINI_API_KEY: SecretStr
+    MONGO_URI: SecretStr = Field(default=SecretStr(DEFAULT_MONGO_URI))
 
     @field_validator("MONGO_URI", mode="before")
     @classmethod
-    def assemble_mongo_uri(cls, v: str | None) -> str:
-        if v and v != "mongodb://localhost:27017/proli_db":
-            return v
+    def assemble_mongo_uri(cls, v) -> str:
+        raw = _unwrap(v)
+        if raw and raw != DEFAULT_MONGO_URI:
+            return raw
         # Try common cloud provider env vars
-        return (
-            os.getenv("MONGODB_URI")
-            or os.getenv("MONGO_URL")
-            or "mongodb://localhost:27017/proli_db"
-        )
+        return os.getenv("MONGODB_URI") or os.getenv("MONGO_URL") or DEFAULT_MONGO_URI
 
-    MONGO_TEST_URI: str | None = None
+    # Carries the same Atlas credentials as MONGO_URI — same leak class.
+    MONGO_TEST_URI: SecretStr | None = None
     MONGO_MAX_POOL_SIZE: int = 100
     MONGO_MIN_POOL_SIZE: int = 10
     MONGO_MAX_IDLE_TIME_MS: int = 30000
-    ADMIN_PASSWORD: str | None = None
+    ADMIN_PASSWORD: SecretStr | None = None
 
     @field_validator("ADMIN_PASSWORD", mode="before")
     @classmethod
-    def validate_admin_password(cls, v: str | None) -> str | None:
-        if v is not None and len(v) < 8:
+    def validate_admin_password(cls, v):
+        raw = _unwrap(v)
+        if raw is not None and len(raw) < 8:
             raise ValueError("ADMIN_PASSWORD must be at least 8 characters long")
-        return v
+        return raw
 
     # Redis
     REDIS_HOST: str = "redis"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
-    REDIS_URL: str | None = Field(default=None)
+    # A managed Redis DSN embeds its password (redis://:pw@host) — secret.
+    REDIS_URL: SecretStr | None = Field(default=None)
 
     @field_validator("REDIS_URL", mode="before")
     @classmethod
-    def assemble_redis_url(cls, v: str | None) -> str | None:
-        if v:
-            return v
+    def assemble_redis_url(cls, v) -> str | None:
+        raw = _unwrap(v)
+        if raw:
+            return raw
         return os.getenv("REDIS_URL") or os.getenv("REDIS_TLS_URL")
 
+    # The cloud *name* is public (it appears in every delivery URL); the key
+    # and secret are not.
     CLOUDINARY_CLOUD_NAME: str
-    CLOUDINARY_API_KEY: str
-    CLOUDINARY_API_SECRET: str
+    CLOUDINARY_API_KEY: SecretStr
+    CLOUDINARY_API_SECRET: SecretStr
     AI_MODELS: list[str] = [
         "gemini-3.1-flash-lite",
         "gemini-3.5-flash",
@@ -76,7 +114,7 @@ class Settings(BaseSettings):
     # When unset, falls back to ADMIN_PHONE. Set to a separate operator's
     # number to route paging away from the day-to-day admin channel.
     ONCALL_PHONE: str | None = None
-    WEBHOOK_TOKEN: str | None = None
+    WEBHOOK_TOKEN: SecretStr | None = None
     # PRO-34: exactly one of "development" | "staging" | "production".
     # Anything else fails fast at startup (see validate_environment) rather than
     # silently falling through to the non-prod branch everywhere.
@@ -179,7 +217,9 @@ class Settings(BaseSettings):
     # When unset, Sentry is disabled (no-op). When set, only CRITICAL-level
     # log events are forwarded as issues; regular INFO/WARNING/ERROR stays in
     # stdout/loguru. See SENTRY_SETUP.md for alert rule recommendations.
-    SENTRY_DSN: str | None = None
+    # A DSN embeds the project's ingest key — anyone holding it can forge
+    # events into the project, so it is a credential, not a URL.
+    SENTRY_DSN: SecretStr | None = None
     SENTRY_TRACES_SAMPLE_RATE: float = 0.0  # no perf tracing by default
 
     # Geocoding (Google Maps) — resolves Israeli city/address names to
@@ -187,7 +227,7 @@ class Settings(BaseSettings):
     # geocoding falls back to the static ISRAEL_CITIES_COORDS dict only.
     # Enabling this is what closes the gap for cities not in the static
     # dict (e.g. ראש העין, תל-מונד, טמרה) without shipping a new release.
-    GOOGLE_MAPS_API_KEY: str | None = None
+    GOOGLE_MAPS_API_KEY: SecretStr | None = None
     # TTL for negative geocoding results (failures). Cached for 24h to avoid
     # immediate retries of unresolvable names, while still allowing for
     # a quota reset or a corrected spelling.
@@ -231,6 +271,33 @@ class Settings(BaseSettings):
                 "since PRO-86 removed the sender instance-id check."
             )
         return self
+
+    def iter_secret_values(self, *, min_length: int = 8) -> list[str]:
+        """Every configured secret, unwrapped — for the log redaction filter only.
+
+        Enumerates the ``SecretStr`` fields rather than naming them, so a
+        credential added in a future ticket (PRO-89's ``META_ACCESS_TOKEN``) is
+        covered the moment it is typed correctly, with no second list to keep
+        in sync. Unset and empty values are skipped so nothing over-redacts.
+
+        ``min_length`` guards the pathological case: a short secret (an operator
+        setting ``ADMIN_PASSWORD=password123`` — or shorter) would otherwise
+        turn every incidental occurrence of that substring in an unrelated log
+        line into ``***REDACTED***``, which corrupts logs without protecting
+        anything a value that guessable was ever going to protect.
+
+        This is the only sanctioned bulk unwrap. Everywhere else, call
+        ``.get_secret_value()`` on the one field you need, at the point of use.
+        """
+        values = []
+        for field_name in type(self).model_fields:
+            value = getattr(self, field_name, None)
+            if not isinstance(value, SecretStr):
+                continue
+            raw = value.get_secret_value()
+            if raw and len(raw) >= min_length:
+                values.append(raw)
+        return values
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 863 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
+**Current status: 888 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
 
@@ -87,6 +87,7 @@ pytest -m integration
 | `test_health_whatsapp_status.py` | `/health` WhatsApp state mapping: `authorized`→up, `yellowCard`→degraded, else down; a non-transmitting provider→degraded; raw `state`, `provider`, `transmits` surfaced |
 | `test_phone.py` | PRO-49 phone helpers: `to_chat_id` / `strip_suffix` / `to_local_phone` across `972…`, `+972…`, leading `0`, already-suffixed, and falsy input (idempotent, None-safe) |
 | `test_logger_redaction.py` | PRO-80 log scrubbing: `mask_pii` phone masking + `redact_secrets` (provider token / WEBHOOK_TOKEN redacted in query string & URL path, None-safe) applied by the `_pii_filter` sink |
+| `test_settings_secret_masking.py` | PRO-94 secret masking: every credential field is a `SecretStr`, the incident regression (`repr`/`str`/f-string/`model_dump`/an `AttributeError` traceback leak nothing), `MONGO_URI`'s default is wrapped, `iter_secret_values` skips unset and too-short values, the naming-convention guard for credentials that do not exist yet (PRO-89's `META_*`), and source scans proving no secret reaches an f-string, a log call or a module-level name |
 | `test_redis_isolation.py` | PRO-78 guard for the autouse `fake_redis` fixture: `get_redis_client()` returns a `fakeredis` instance, each test gets a fresh empty store (no cross-test bleed), and `StateManager` round-trips through the fake |
 
 ### Health & Regression

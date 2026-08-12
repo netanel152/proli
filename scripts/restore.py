@@ -60,13 +60,34 @@ def download_from_s3(s3_key: str) -> Path | None:
         return None
 
 
+def _describe_target() -> str:
+    """Host + database of MONGO_URI, with credentials stripped.
+
+    This line exists so the operator can see *which* database is about to be
+    dropped, so printing the SecretStr mask alone would defeat the purpose —
+    but the raw URI carries the Atlas password and this prompt is routinely
+    pasted into a chat or a ticket when a restore goes wrong (PRO-94). Host and
+    database name are what the decision actually turns on.
+    """
+    from pymongo import uri_parser
+
+    try:
+        parsed = uri_parser.parse_uri(settings.MONGO_URI.get_secret_value())
+        hosts = ", ".join(f"{h}:{p}" if p else str(h) for h, p in parsed["nodelist"])
+        return f"{hosts} / db={parsed.get('database') or 'proli_db'}"
+    except Exception:
+        # Never fall back to printing the URI — an unparseable URI is exactly
+        # when someone would be tempted to dump it.
+        return "<unparseable MONGO_URI>"
+
+
 def run_mongorestore(archive_path: Path, drop: bool = True) -> bool:
     """Run mongorestore from a gzip archive."""
     if not archive_path.exists():
         logger.error(f"Archive not found: {archive_path}")
         return False
 
-    mongo_uri = settings.MONGO_URI
+    mongo_uri = settings.MONGO_URI.get_secret_value()  # PRO-94: SecretStr
     cmd = [
         "mongorestore",
         f"--uri={mongo_uri}",
@@ -100,9 +121,17 @@ def main():
 
     parser = argparse.ArgumentParser(description="Proli Database Restore")
     parser.add_argument("archive", nargs="?", help="Path to backup archive")
-    parser.add_argument("--latest", action="store_true", help="Restore most recent local backup")
-    parser.add_argument("--from-s3", metavar="KEY", help="S3 key to download and restore")
-    parser.add_argument("--no-drop", action="store_true", help="Don't drop existing collections before restore")
+    parser.add_argument(
+        "--latest", action="store_true", help="Restore most recent local backup"
+    )
+    parser.add_argument(
+        "--from-s3", metavar="KEY", help="S3 key to download and restore"
+    )
+    parser.add_argument(
+        "--no-drop",
+        action="store_true",
+        help="Don't drop existing collections before restore",
+    )
     args = parser.parse_args()
 
     archive_path = None
@@ -126,7 +155,7 @@ def main():
 
     # Safety confirmation
     print(f"\nAbout to restore from: {archive_path.name}")
-    print(f"Target: {settings.MONGO_URI}")
+    print(f"Target: {_describe_target()}")
     if not args.no_drop:
         print("WARNING: This will DROP all existing collections first.")
     response = input("\nProceed? (yes/no): ").strip().lower()
