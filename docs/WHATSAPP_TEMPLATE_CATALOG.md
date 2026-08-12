@@ -54,16 +54,25 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 | **C2** | Completion check | `admin_panel/core/utils.py:191` | **Operator clicks a button** | Arbitrary timing by construction. |
 | **C3** | Reassignment notices (`CUSTOMER_REASSIGNING`, `MAX_REASSIGNMENTS_REACHED`, `PENDING_REVIEW`) | `monitor_service.py:116, 157, 213` | `SOS_TIMEOUT_MINUTES=60` path → in-window; `STALE_BOOKED_LEAD_HOURS=24` path → **on the boundary** | Same code, two triggers, two different answers. Must be treated as template-required. |
 
-### Operator-facing
+### Operator-facing — ✅ **resolved, no templates needed**
 
-| # | Send | Call site | Recommendation |
+| # | Send | Call site | Status |
 |---|---|---|---|
-| **O1** | SOS admin alert | `notification_service.send_sos_alert` | **Do not templatize — remove.** |
-| **O2** | Periodic admin report | `monitor_service.py:376` | **Do not templatize — remove.** |
-| **O3** | Lead-escalation admin alert | `monitor_service.py:46` | **Do not templatize — remove.** |
-| **O4** | On-call page | `notification_service.send_oncall_alert` | Already Sentry-first (PRO-75); WhatsApp is a courtesy leg. |
+| **O1** | SOS admin alert | `notification_service.send_sos_alert` | ✅ **Removed** — pages via `page_operator` |
+| **O2** | Periodic admin report | `monitor_service.send_periodic_admin_report` | ✅ **Removed** — pages via `page_operator` |
+| **O3** | Lead-escalation admin alert | `monitor_service._alert_admin_lead_escalated` | ✅ **Removed** — pages via `page_operator` |
+| **O4** | On-call page | `notification_service.send_oncall_alert` | Already Sentry-first (PRO-75); WhatsApp is a courtesy leg, kept |
 
-The admin never sends the bot an inbound message, so **every operator-facing send has a permanently closed window** — each one would need its own approved template to keep working. PRO-75 already made Sentry → email the guaranteed operator page precisely because alerting about WhatsApp over WhatsApp amplifies an outage. Templating these buys nothing and costs four approvals plus per-message fees. **Recommendation: route O1–O3 to the existing Sentry/log path and delete the WhatsApp leg.** This is the single largest reduction available in this catalog.
+The admin never sends the bot an inbound message, so **every operator-facing send had a permanently closed window** — each would have needed its own approved template to keep working. PRO-75 had already made Sentry → email the guaranteed operator page precisely because alerting about WhatsApp over WhatsApp amplifies an outage.
+
+O1–O3 now route through `notification_service.page_operator()` — a single `logger.critical` → Sentry → email. **Four templates removed from this catalog at zero cost to the operator's signal.**
+
+Two properties worth keeping in mind when reading those call sites:
+
+- **Every page masks the customer phone to its last 4 digits** and carries a lead id rather than the customer record. These land in Sentry, which retains events, and the loguru PII filter runs in the *sink* — it is not guaranteed to have applied on whatever path an event takes to Sentry. Masking at the call site does not depend on that.
+- **The SOS page deliberately omits the customer's message.** It is free-form text from a distressed person and can contain anything; it used to go to a chat the operator read once, and would now be retained.
+
+One behaviour change worth knowing: an SOS with no assigned pro now produces **zero** outbound WhatsApp messages. The signal is not lost — the operator is paged — but nothing leaves the system.
 
 ---
 
@@ -98,12 +107,12 @@ These are the parts where our current message shapes and Meta's template format 
 
 ## Recommended next actions
 
-1. **Delete the operator-facing WhatsApp leg (O1–O3)** before designing any template. It removes four templates from the catalog and is consistent with PRO-75's existing direction. Independent of Meta — can be done today.
-2. **Fold P2 into P1.** One template, one send, one fee, one approval.
+1. ~~**Delete the operator-facing WhatsApp leg (O1–O3)**~~ — ✅ **done 2026-08-13.** Four templates removed, no Meta dependency.
+2. **Fold P2 into P1.** One template, one send, one fee, one approval. Independent of Meta; can be done before PRO-87.
 3. **Decide P4's fate.** If the early-lead notification is not load-bearing, dropping it removes the only media template.
 4. **Then submit**, in priority order: P1/P3 (shared shape) → P6 → P5 → P7/P8 → the rest.
 
-After 1–3, the catalog is roughly **9–11 professional-facing templates and 3 customer-facing**, down from 17 if every current send were templatized one-for-one.
+With 1 done and 2–3 taken, the catalog is roughly **9–11 professional-facing templates and 3 customer-facing**, down from 17 if every current send were templatized one-for-one.
 
 ## Open questions for PRO-87
 

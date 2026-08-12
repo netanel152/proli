@@ -233,6 +233,14 @@ async def world(
     w = World(mock_db, recorder, ai, monkeypatch, fake_redis)
     w.client = client
     w._enqueued = enqueued
+
+    # PRO-88: operator alerts no longer travel over WhatsApp, so they are
+    # invisible to the outbound recorder. Capture them separately — a harness
+    # that can only see WhatsApp would report "the admin was never told"
+    # when in fact they were paged.
+    monkeypatch.setattr(notification_service, "page_operator", w.pages.append)
+    monkeypatch.setattr(monitor_service, "page_operator", w.pages.append)
+
     await w.reset()
 
     yield w

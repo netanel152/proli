@@ -4,14 +4,17 @@ from app.core.database import leads_collection, users_collection
 from app.core.constants import LeadStatus, UserStates, WorkerConstants, Defaults, Actor
 from app.core.phone import to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
-from app.core.config import settings
 from app.core.logger import logger
 from app.core.redis_client import get_redis_client
 from app.core.datetime_utils import within_business_hours
 from app.providers.whatsapp import get_whatsapp, record_account_state
 from app.providers.whatsapp.facade import _PAUSE_KEY
 from app.services import matching_service
-from app.services.notification_service import send_oncall_alert, notify_pro_new_lead
+from app.services.notification_service import (
+    send_oncall_alert,
+    notify_pro_new_lead,
+    page_operator,
+)
 from app.core.messages import Messages
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
@@ -26,25 +29,32 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
     The customer copy commits to a callback within the hour, but the only other
     admin notification for ``PENDING_ADMIN_REVIEW`` leads is the 4-hourly batched
     Reporter — too slow to honour that promise. This fires immediately; the
-    Reporter stays the safety net if this send is suppressed or fails.
+    Reporter stays the safety net.
 
-    Best-effort by design: an alert failure must never abort the escalation, so
-    every exception is swallowed after logging. The customer phone is included
-    because the admin needs it to actually call them — that is the point of the
-    escalation — but it is never written to the log line.
+    PRO-88 moved this off WhatsApp. The admin never messages the bot, so their
+    Cloud API service window is permanently closed and this alert would have
+    needed its own approved template to keep working. It now pages via
+    ``logger.critical`` → Sentry → email, the channel PRO-75 already made the
+    guaranteed one.
+
+    Still best-effort: an alert failure must never abort the escalation, so
+    exceptions are swallowed after logging. The phone is masked to its last 4
+    digits — the operator opens the lead in the admin panel for the rest,
+    rather than the full number being retained in a Sentry event.
     """
     try:
-        admin_chat_id = to_chat_id(settings.ADMIN_PHONE)
-        message = Messages.SOS.ADMIN_MAX_REASSIGNMENTS.format(
-            phone=to_local_phone(lead.get("chat_id")),
-            issue=lead.get("issue_type") or "לא ידוע",
+        local_phone = to_local_phone(lead.get("chat_id")) or ""
+        page_operator(
+            f"Lead escalated to PENDING_ADMIN_REVIEW after {attempts} failed "
+            f"reassignments — customer ***{local_phone[-4:]}, "
+            f"issue={lead.get('issue_type') or 'unknown'}, "
             # `or` (not a dict default) covers a null full_address, not just a
             # missing key — same guard as send_sos_alert.
-            address=lead.get("full_address") or "לא ידוע",
-            attempts=attempts,
+            f"address={lead.get('full_address') or 'unknown'}, "
+            f"lead={lead.get('_id')}. Customer was promised a callback within "
+            "the hour."
         )
-        await whatsapp.send_message(admin_chat_id, message)
-        logger.info(f"📣 [Reassign] Admin alerted for escalated lead {lead.get('_id')}")
+        logger.info(f"📣 [Reassign] Admin paged for escalated lead {lead.get('_id')}")
     except Exception as e:
         logger.error(
             f"Failed to alert admin about escalated lead {lead.get('_id')}: {e}. "
@@ -351,30 +361,25 @@ async def send_periodic_admin_report():
         count = len(stuck_leads)
         logger.warning(f"🕵️ [SOS Reporter] Found {count} stuck leads.")
 
-        # Build Message
-        message_lines = [
-            Messages.SOS.ADMIN_REPORT_HEADER,
-            Messages.SOS.ADMIN_REPORT_BODY.format(count=count, timeout=timeout_minutes),
+        # PRO-88: paged via Sentry, not WhatsApp. The admin's Cloud API service
+        # window is permanently closed, so this batched digest would have needed
+        # its own approved template. Phones are masked to their last 4 digits —
+        # this is a "go look at the panel" signal, not a data export.
+        report_lines = [
+            f"{count} lead(s) stuck for more than {timeout_minutes} minutes:"
         ]
-
         for lead in stuck_leads:
-            chat_id = lead.get("chat_id", "Unknown").split("@")[0]
-            issue = lead.get("issue_type", "Unknown Issue")
-            city = lead.get("full_address") or "Unknown City"
+            local = (lead.get("chat_id") or "").split("@")[0]
             created_at = lead.get("created_at")
-            time_str = created_at.strftime("%H:%M") if created_at else "??"
-
-            message_lines.append(
-                f"- {chat_id}: {issue} in {city} (Waiting since {time_str})"
+            report_lines.append(
+                f"- ***{local[-4:]}: {lead.get('issue_type') or 'unknown issue'}"
+                f" in {lead.get('full_address') or 'unknown city'}"
+                f" (waiting since {created_at.strftime('%H:%M') if created_at else '??'})"
             )
+        report_lines.append("Open the admin panel to reassign or call.")
 
-        message_lines.append(Messages.SOS.ADMIN_REPORT_FOOTER)
-        full_message = "\n".join(message_lines)
-
-        # Send to Admin
-        admin_chat_id = to_chat_id(settings.ADMIN_PHONE)
-        await whatsapp.send_message(admin_chat_id, full_message)
-        logger.info(f"✅ [SOS Reporter] Sent report to Admin: {settings.ADMIN_PHONE}")
+        page_operator("\n".join(report_lines))
+        logger.info(f"✅ [SOS Reporter] Paged operator about {count} stuck leads.")
 
     except Exception as e:
         logger.error(f"❌ [SOS Reporter] Error: {e}")
