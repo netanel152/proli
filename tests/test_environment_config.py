@@ -342,3 +342,99 @@ def test_prod_like_accepts_a_present_webhook_token(env):
     s = make_settings(ENVIRONMENT=env, WEBHOOK_TOKEN="a-real-token")
     # PRO-94: SecretStr — the value survives, but only via get_secret_value().
     assert s.WEBHOOK_TOKEN.get_secret_value() == "a-real-token"
+
+
+# ---------------------------------------------------------------------------
+# PRO-96: ENVIRONMENT must not contradict RAILWAY_ENVIRONMENT_NAME
+#
+# The masquerade happened twice, in both directions, and both times a human
+# found it with a manual sweep — the second one after production had been
+# running with its destructive-seed guard inverted for an unknown period.
+# Railway injects the platform name itself, so it is ground truth an operator
+# cannot mistype.
+#
+# Note the autouse `_no_ambient_railway_env` fixture in conftest clears these
+# variables for every test, so each case here sets exactly what it means to.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "platform_name, declared",
+    [
+        ("Production", PRODUCTION_ENV),
+        ("Staging", STAGING_ENV),
+        ("production", PRODUCTION_ENV),  # case-insensitive
+        ("  Staging  ", STAGING_ENV),  # whitespace-tolerant
+    ],
+)
+def test_matching_platform_environment_boots(monkeypatch, platform_name, declared):
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", platform_name)
+    s = make_settings(ENVIRONMENT=declared)
+    assert s.ENVIRONMENT == declared
+
+
+@pytest.mark.parametrize(
+    "platform_name, declared",
+    [
+        ("Production", STAGING_ENV),  # PRO-96: the real production bug
+        ("Staging", PRODUCTION_ENV),  # PRO-92: the real staging bug
+        ("Production", DEVELOPMENT_ENV),
+    ],
+)
+def test_contradicting_platform_environment_refuses_to_boot(
+    monkeypatch, platform_name, declared
+):
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", platform_name)
+    with pytest.raises(ValidationError, match="contradicts the platform"):
+        make_settings(ENVIRONMENT=declared)
+
+
+def test_error_names_both_values_and_the_fix(monkeypatch):
+    """The message has to be actionable from a Railway deploy log alone — that
+    is the only place anyone will read it."""
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "Production")
+    with pytest.raises(ValidationError) as exc_info:
+        make_settings(ENVIRONMENT=STAGING_ENV)
+    message = str(exc_info.value)
+    assert "'staging'" in message  # what we declared
+    assert "'Production'" in message  # what the platform says
+    assert "railway variables --set" in message  # how to fix it
+
+
+def test_no_platform_variable_is_not_a_contradiction(monkeypatch):
+    """Local, docker-compose and CI have no platform opinion to contradict.
+
+    Specifically guards against normalize_environment's unset → `development`
+    default being mistaken for a genuine platform claim, which would break
+    every non-development local run.
+    """
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT", raising=False)
+    for env in VALID_ENVIRONMENTS:
+        assert make_settings(ENVIRONMENT=env).ENVIRONMENT == env
+
+
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_blank_platform_variable_is_ignored(monkeypatch, blank):
+    """Railway allows empty variables, and docker-compose's `- VAR=` idiom is
+    used in this repo — an empty value means unset, not `development`."""
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", blank)
+    assert make_settings(ENVIRONMENT=PRODUCTION_ENV).ENVIRONMENT == PRODUCTION_ENV
+
+
+@pytest.mark.parametrize("preview_name", ["pr-42", "netanel-branch", "ephemeral"])
+def test_preview_environments_are_exempt(monkeypatch, preview_name):
+    """A Railway PR/preview environment has no counterpart in our three-value
+    vocabulary, so it maps to whatever the operator chose. Failing these closed
+    would block previews and buy no safety."""
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", preview_name)
+    assert make_settings(ENVIRONMENT=STAGING_ENV).ENVIRONMENT == STAGING_ENV
+
+
+def test_falls_back_to_the_legacy_railway_variable(monkeypatch):
+    """Railway's older `RAILWAY_ENVIRONMENT` is still injected alongside the
+    newer name; either one is enough to catch the mismatch."""
+    monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT", "Production")
+    with pytest.raises(ValidationError, match="contradicts the platform"):
+        make_settings(ENVIRONMENT=STAGING_ENV)

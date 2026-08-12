@@ -272,6 +272,62 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def environment_must_match_the_platform(self):
+        """PRO-96: refuse to boot when ENVIRONMENT contradicts the platform.
+
+        This has now gone wrong twice, in both directions, and neither was
+        caught by the system: staging api+worker+admin claimed ``production``
+        (PRO-92), and production api+worker claimed ``staging`` (PRO-96). Both
+        were found by a human running a manual sweep, and the second one left
+        ``seed_db.py``'s destructive guard — which allow-lists
+        ``(development, staging)`` — disarmed on the production database for an
+        unknown length of time.
+
+        ``ENVIRONMENT`` is a value an operator types, so it drifts. Railway
+        injects ``RAILWAY_ENVIRONMENT_NAME`` itself and an operator cannot set
+        it wrong, which makes it ground truth worth cross-checking against. A
+        boot failure is the right response rather than a warning: a service
+        that is lying about which environment it is in should not be running
+        the destructive-tooling guards that key off the answer.
+
+        Deliberately skipped in two cases, both of which mean "the platform has
+        no opinion" rather than "the values agree":
+
+        * The variable is absent — a local checkout, docker-compose, or CI.
+          These are the environments where ``ENVIRONMENT`` is the only source
+          of truth, so there is nothing to contradict.
+        * The variable holds a name outside our three-value vocabulary — a
+          Railway PR/preview environment (``pr-42``) or a personal branch
+          environment. Those legitimately map to whatever ``ENVIRONMENT`` the
+          operator chose, and failing them closed would block previews for no
+          safety gain.
+        """
+        raw_platform_env = os.getenv("RAILWAY_ENVIRONMENT_NAME") or os.getenv(
+            "RAILWAY_ENVIRONMENT"
+        )
+        if not raw_platform_env or not raw_platform_env.strip():
+            return self
+
+        # normalize_environment maps unset → "development"; the guard above is
+        # what keeps that default from being read as a real platform claim.
+        platform_env = normalize_environment(raw_platform_env)
+        if platform_env not in VALID_ENVIRONMENTS:
+            return self
+
+        if platform_env != self.ENVIRONMENT:
+            raise ValueError(
+                f"ENVIRONMENT={self.ENVIRONMENT!r} contradicts the platform: "
+                f"Railway reports this service is in {raw_platform_env!r}. One "
+                "of the two is wrong, and a service that misidentifies its own "
+                "environment silently inverts the destructive-seed guards and "
+                "mistags Sentry (PRO-92, PRO-96). Fix with:\n"
+                f"  railway variables --set 'ENVIRONMENT={platform_env}' "
+                "--service <name> --environment "
+                f"{raw_platform_env} --skip-deploys"
+            )
+        return self
+
     def iter_secret_values(self, *, min_length: int = 8) -> list[str]:
         """Every configured secret, unwrapped — for the log redaction filter only.
 
