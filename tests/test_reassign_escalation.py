@@ -100,10 +100,18 @@ async def test_exhausted_reassignment_notifies_customer(
 
 
 @pytest.mark.asyncio
-async def test_exhausted_reassignment_alerts_admin(
+async def test_exhausted_reassignment_pages_admin(
     mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_matching
 ):
+    """PRO-88: the admin is paged via Sentry, never over WhatsApp.
+
+    The admin never messages the bot, so their Cloud API service window is
+    permanently closed — this alert would have needed its own approved
+    template to keep working.
+    """
     monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    pages = []
+    monkeypatch.setattr(monitor_service, "page_operator", pages.append)
     await mock_db.leads.delete_many({})
     lead = await _insert_exhausted_lead(mock_db)
 
@@ -115,31 +123,35 @@ async def test_exhausted_reassignment_alerts_admin(
         for call in mock_whatsapp.send_message.await_args_list
         if call.args[0] == admin_chat_id
     ]
-    assert len(admin_calls) == 1
-    admin_message = admin_calls[0].args[1]
-    assert str(WorkerConstants.MAX_REASSIGNMENTS) in admin_message
-    assert lead["issue_type"] in admin_message
-    assert to_local_phone(lead["chat_id"]) in admin_message
+    assert admin_calls == [], "admin must no longer receive WhatsApp"
+
+    assert len(pages) == 1
+    page = pages[0]
+    assert str(WorkerConstants.MAX_REASSIGNMENTS) in page
+    assert lead["issue_type"] in page
+    # Masked, not the full local number — this page is retained in Sentry.
+    assert to_local_phone(lead["chat_id"]) not in page
+    assert f"***{to_local_phone(lead['chat_id'])[-4:]}" in page
 
 
 @pytest.mark.asyncio
 async def test_exhausted_reassignment_survives_admin_alert_failure(
     mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_matching
 ):
-    """Admin paging is best-effort — a failed send must not abort the
-    escalation. This is the important resilience case."""
+    """Admin paging is best-effort — a failed page must not abort the
+    escalation. This is the important resilience case.
+
+    PRO-88 changed what "fails" means here: the admin leg is no longer a
+    WhatsApp send, so the failure is injected into page_operator itself.
+    """
     monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
     await mock_db.leads.delete_many({})
     lead = await _insert_exhausted_lead(mock_db)
 
-    admin_chat_id = to_chat_id(settings.ADMIN_PHONE)
+    def exploding_page(_summary):
+        raise RuntimeError("Sentry transport is down")
 
-    async def flaky_send(chat_id, message):
-        if chat_id == admin_chat_id:
-            raise RuntimeError("Green API is down")
-        return None
-
-    mock_whatsapp.send_message = AsyncMock(side_effect=flaky_send)
+    monkeypatch.setattr(monitor_service, "page_operator", exploding_page)
 
     result = await reassign_lead(lead)
 
