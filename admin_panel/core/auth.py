@@ -21,8 +21,14 @@ MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_SECONDS = 900  # 15 minutes
 
 try:
-    _redis_url = settings.REDIS_URL or f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
-    _rate_redis = _sync_redis.from_url(_redis_url, decode_responses=True, socket_connect_timeout=2)
+    _redis_url = (
+        settings.REDIS_URL.get_secret_value()
+        if settings.REDIS_URL
+        else f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+    )
+    _rate_redis = _sync_redis.from_url(
+        _redis_url, decode_responses=True, socket_connect_timeout=2
+    )
 except Exception as e:
     logger.warning(f"Admin rate limiter: Redis init failed, lockout disabled: {e}")
     _rate_redis = None
@@ -70,16 +76,19 @@ def _reset_attempts(identifier: str) -> None:
     except Exception as e:
         logger.warning(f"Admin lockout reset failed: {e}")
 
+
 # MongoDB-backed session store — survives worker/Streamlit restarts
 # Falls back to in-memory if DB is unavailable
 _active_sessions: dict[str, dict] = {}  # local cache to avoid a DB hit on every rerun
 
 # Sync MongoDB client for admin panel (Streamlit is synchronous)
-_ca = certifi.where() if "+srv" in settings.MONGO_URI else None
+_mongo_uri = settings.MONGO_URI.get_secret_value()  # PRO-94: SecretStr
+_ca = certifi.where() if "+srv" in _mongo_uri else None
 _kwargs = {"tlsCAFile": _ca} if _ca else {}
 from pymongo import uri_parser as _uri_parser
-_sync_client = MongoClient(settings.MONGO_URI, **_kwargs)
-_sync_db = _sync_client[_uri_parser.parse_uri(settings.MONGO_URI).get("database") or "proli_db"]
+
+_sync_client = MongoClient(_mongo_uri, **_kwargs)
+_sync_db = _sync_client[_uri_parser.parse_uri(_mongo_uri).get("database") or "proli_db"]
 _admins_col = _sync_db.admins
 _audit_col = _sync_db.audit_log
 _sessions_col = _sync_db.admin_sessions
@@ -88,12 +97,14 @@ _sessions_col = _sync_db.admin_sessions
 def _log_audit_sync(username: str, action: str, details: dict | None = None):
     """Synchronous audit log for admin panel actions."""
     try:
-        _audit_col.insert_one({
-            "admin_user": username,
-            "action": action,
-            "details": details or {},
-            "timestamp": datetime.utcnow(),
-        })
+        _audit_col.insert_one(
+            {
+                "admin_user": username,
+                "action": action,
+                "details": details or {},
+                "timestamp": datetime.utcnow(),
+            }
+        )
     except Exception as e:
         logger.error(f"Audit log write failed: {e}")
 
@@ -118,6 +129,7 @@ def get_current_username() -> str:
 def make_hash(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
 
+
 def check_hash(password, hashed):
     try:
         return bcrypt.checkpw(password.encode(), hashed.encode())
@@ -127,16 +139,19 @@ def check_hash(password, hashed):
 
 # --- Admin CRUD (sync for Streamlit) ---
 
+
 def create_admin(username: str, password: str, role: str) -> bool:
     """Create a new admin user."""
     if _admins_col.find_one({"username": username}):
         return False
-    _admins_col.insert_one({
-        "username": username,
-        "password_hash": make_hash(password),
-        "role": role,
-        "created_at": datetime.utcnow(),
-    })
+    _admins_col.insert_one(
+        {
+            "username": username,
+            "password_hash": make_hash(password),
+            "role": role,
+            "created_at": datetime.utcnow(),
+        }
+    )
     return True
 
 
@@ -154,8 +169,7 @@ def list_admins() -> list:
 def update_admin_role(username: str, new_role: str) -> bool:
     """Update an admin's role."""
     result = _admins_col.update_one(
-        {"username": username},
-        {"$set": {"role": new_role}}
+        {"username": username}, {"$set": {"role": new_role}}
     )
     return result.modified_count > 0
 
@@ -211,7 +225,9 @@ def check_password(cookies):
         st.stop()
 
     if not has_db_admins and not admin_hash:
-        st.warning(T_auth.get("plain_password_warning", "Using plain-text ADMIN_PASSWORD."))
+        st.warning(
+            T_auth.get("plain_password_warning", "Using plain-text ADMIN_PASSWORD.")
+        )
 
     # Check if we are in the process of logging out
     if st.session_state.get("logout_pending"):
@@ -243,11 +259,17 @@ def check_password(cookies):
         with st.form("login_form"):
             # Show username field if DB admins exist
             if has_db_admins:
-                username = st.text_input(T_auth.get("admin_username_label", "Username"), placeholder="admin")
+                username = st.text_input(
+                    T_auth.get("admin_username_label", "Username"), placeholder="admin"
+                )
             else:
                 username = ""
 
-            password = st.text_input(T_auth["admin_password_label"], type="password", placeholder=T_auth["admin_password_placeholder"])
+            password = st.text_input(
+                T_auth["admin_password_label"],
+                type="password",
+                placeholder=T_auth["admin_password_placeholder"],
+            )
             remember_me = st.checkbox(T_auth["remember_me"])
             submitted = st.form_submit_button(T_auth["login_button"], type="primary")
 
@@ -258,7 +280,9 @@ def check_password(cookies):
                 locked, seconds_left = _is_locked(identifier)
                 if locked:
                     minutes_left = max(1, seconds_left // 60)
-                    logger.warning(f"Admin login locked out: {identifier} ({seconds_left}s remaining)")
+                    logger.warning(
+                        f"Admin login locked out: {identifier} ({seconds_left}s remaining)"
+                    )
                     st.error(
                         T_auth.get(
                             "login_locked",
@@ -282,7 +306,9 @@ def check_password(cookies):
 
                         _reset_attempts(identifier)
 
-                        logger.info(f"Admin login: {admin_username} (role: {admin_role})")
+                        logger.info(
+                            f"Admin login: {admin_username} (role: {admin_role})"
+                        )
                         st.session_state["authenticated"] = True
                         st.session_state["admin_username"] = admin_username
                         st.session_state["admin_role"] = admin_role
@@ -299,14 +325,18 @@ def check_password(cookies):
                             }
                             _active_sessions[secure_token] = session_data
                             _persist_session(secure_token, session_data)
-                            cookie_manager.set("proli_auth_token", secure_token, expires_at=expires)
+                            cookie_manager.set(
+                                "proli_auth_token", secure_token, expires_at=expires
+                            )
 
                         st.success(T_auth.get("connected", "Connected!"))
                         time.sleep(1)
                         st.rerun()
                     else:
                         _record_failed_attempt(identifier)
-                        logger.warning(f"Failed admin login attempt (user: {identifier})")
+                        logger.warning(
+                            f"Failed admin login attempt (user: {identifier})"
+                        )
                         st.error(T_auth["wrong_password"])
 
     return False
@@ -347,9 +377,7 @@ def _persist_session(token: str, session_data: dict):
     """Persist a session to MongoDB so it survives restarts."""
     try:
         _sessions_col.update_one(
-            {"_token": token},
-            {"$set": {"_token": token, **session_data}},
-            upsert=True
+            {"_token": token}, {"$set": {"_token": token, **session_data}}, upsert=True
         )
     except Exception as e:
         logger.warning(f"Failed to persist admin session: {e}")
@@ -360,7 +388,11 @@ def _load_session(token: str) -> dict | None:
     try:
         doc = _sessions_col.find_one({"_token": token})
         if doc:
-            return {"expiry": doc["expiry"], "username": doc["username"], "role": doc["role"]}
+            return {
+                "expiry": doc["expiry"],
+                "username": doc["username"],
+                "role": doc["role"],
+            }
     except Exception as e:
         logger.warning(f"Failed to load admin session: {e}")
     return None

@@ -3,17 +3,22 @@ from pymongo import MongoClient, uri_parser
 from app.core.config import settings
 import certifi
 
+# PRO-94: MONGO_URI is a SecretStr (it embeds the Atlas password). Unwrapped
+# once here and handed straight to the driver — never logged, never formatted
+# into a message.
+_MONGO_URI = settings.MONGO_URI.get_secret_value()
+
 # Determine if SSL is needed (usually for Atlas/Cloud)
-ca_file = certifi.where() if "+srv" in settings.MONGO_URI else None
+ca_file = certifi.where() if "+srv" in _MONGO_URI else None
 kwargs = {"tlsCAFile": ca_file} if ca_file else {}
 
 # Extract database name from URI (supports proli_db, proli_staging_db, etc.)
-_parsed_uri = uri_parser.parse_uri(settings.MONGO_URI)
+_parsed_uri = uri_parser.parse_uri(_MONGO_URI)
 DB_NAME = _parsed_uri.get("database") or "proli_db"
 
 # --- Async Client (Motor) for FastAPI ---
 client = AsyncIOMotorClient(
-    settings.MONGO_URI,
+    _MONGO_URI,
     maxPoolSize=settings.MONGO_MAX_POOL_SIZE,
     minPoolSize=settings.MONGO_MIN_POOL_SIZE,
     maxIdleTimeMS=settings.MONGO_MAX_IDLE_TIME_MS,
@@ -35,14 +40,15 @@ admins_collection = db.admins
 # --- Sync Client (PyMongo) ---
 # Kept strictly for synchronous scripts or legacy tools if needed.
 # Use 'sync_client' explicitly if you need blocking calls.
-sync_client = MongoClient(settings.MONGO_URI, **kwargs)
+sync_client = MongoClient(_MONGO_URI, **kwargs)
 sync_db = sync_client[DB_NAME]
+
 
 def check_db_connection():
     try:
         # Motor's ping is async, so we use the sync client for a quick health check function
         # if this function is called synchronously.
-        sync_client.admin.command('ping')
+        sync_client.admin.command("ping")
         return True
     except Exception:
         return False

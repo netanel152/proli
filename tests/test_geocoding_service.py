@@ -15,6 +15,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
 from app.services import geocoding_service as geo
 
@@ -75,7 +76,9 @@ def mock_redis_with_ttl(monkeypatch):
 @pytest.fixture
 def mock_google_maps_key(monkeypatch):
     """Pretend the API key is set so the network path is enabled."""
-    monkeypatch.setattr(geo.settings, "GOOGLE_MAPS_API_KEY", "test-key")
+    # PRO-94: the field is a SecretStr, and the service unwraps it — patch with
+    # the same type so the test exercises the real call, not a str shortcut.
+    monkeypatch.setattr(geo.settings, "GOOGLE_MAPS_API_KEY", SecretStr("test-key"))
 
 
 @pytest.mark.asyncio

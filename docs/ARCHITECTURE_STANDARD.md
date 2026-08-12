@@ -513,6 +513,30 @@ Rules:
 - Settings are read from `settings`, never from `os.environ` in service
   code — the settings object is the one place defaults, validation and
   documentation coexist.
+- **Every credential-bearing setting is a `SecretStr` (PRO-94).** pydantic's
+  default `__repr__` prints all field values, so before this rule any
+  traceback that touched the settings object — a pytest `AttributeError`, a
+  Sentry exception context, a Railway deploy log — dumped the whole secret
+  set in plaintext. It happened on 2026-08-09 and forced a full rotation.
+  The convention is enforced by name: any field ending in `TOKEN`, `KEY`,
+  `SECRET`, `PASSWORD`, `DSN`, `_URI` or `_URL` must be `SecretStr`, and
+  `tests/test_settings_secret_masking.py` fails the build otherwise.
+
+```python
+# BAD — a bare str. Masks nothing; one traceback away from a rotation cycle.
+META_ACCESS_TOKEN: str | None = None
+
+# GOOD — masked in repr(), str() and f-strings; unwrapped only where used.
+META_ACCESS_TOKEN: SecretStr | None = None
+```
+
+- **Unwrap at the point of use, never into a name that outlives it.**
+  `settings.MONGO_URI.get_secret_value()` handed straight to a driver
+  constructor is fine; assigning it to a module-level constant produces a
+  plain `str` that the next `logger.info(f"...")` will happily print. The
+  log-redaction filter in `app/core/logger.py` is the second layer, sourced
+  from the `SecretStr` fields automatically — a new credential is covered the
+  moment it is typed correctly, with no list to remember.
 
 ## 12. Failure Policy: Fail-Open vs Fail-Closed
 

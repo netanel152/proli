@@ -340,4 +340,5 @@ def test_development_does_not_require_a_webhook_token():
 @pytest.mark.parametrize("env", [STAGING_ENV, PRODUCTION_ENV])
 def test_prod_like_accepts_a_present_webhook_token(env):
     s = make_settings(ENVIRONMENT=env, WEBHOOK_TOKEN="a-real-token")
-    assert s.WEBHOOK_TOKEN == "a-real-token"
+    # PRO-94: SecretStr — the value survives, but only via get_secret_value().
+    assert s.WEBHOOK_TOKEN.get_secret_value() == "a-real-token"

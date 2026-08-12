@@ -45,7 +45,7 @@ def _init_sentry() -> None:
     )
 
     sentry_sdk.init(
-        dsn=settings.SENTRY_DSN,
+        dsn=settings.SENTRY_DSN.get_secret_value(),
         # PRO-34: validated + normalized to development|staging|production, so
         # staging reports into its own Sentry environment rather than
         # fragmenting across casing/typo variants of the same label.

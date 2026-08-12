@@ -21,13 +21,18 @@ def mask_pii(message: str) -> str:
 # PRO-80: secret values that must never appear in logs, redacted wherever they
 # occur — a URL query string (uvicorn access log: `/webhook?token=<WEBHOOK_TOKEN>`),
 # a URL path, or an exception string. Built once at import from settings;
-# empty/unset secrets are skipped so nothing over-redacts (e.g. WEBHOOK_TOKEN is
-# optional).
+# empty/unset secrets are skipped so nothing over-redacts.
 #
-# PRO-86 removed GREEN_API_TOKEN from this list along with the provider itself.
-# When PRO-89 adds a Cloud API credential it must be appended here — a provider
-# token reaching a log line is the exact leak class PRO-80 exists to stop.
-_SECRET_VALUES = [v for v in (settings.WEBHOOK_TOKEN,) if v]
+# PRO-94 replaced the hand-maintained tuple (WEBHOOK_TOKEN only, after PRO-86
+# dropped the Green token) with every SecretStr field on Settings. The old list
+# carried a standing "remember to append the next credential here" comment —
+# exactly the kind of instruction that gets missed. Typing a new field
+# SecretStr now enrolls it in redaction automatically.
+#
+# Second layer by design: SecretStr makes the *repr* leak impossible, this
+# catches a value that reached a log line by some other route (an httpx
+# exception echoing a URL, a uvicorn access line). Neither alone is enough.
+_SECRET_VALUES = settings.iter_secret_values()
 
 
 def redact_secrets(message: str) -> str:
