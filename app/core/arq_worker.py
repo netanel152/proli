@@ -13,23 +13,22 @@ from app.scheduler import start_scheduler
 
 # Redis configuration for ARQ
 if settings.REDIS_URL:
-    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
+    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL.get_secret_value())
 else:
     redis_settings = RedisSettings(
-        host=settings.REDIS_HOST,
-        port=settings.REDIS_PORT,
-        database=settings.REDIS_DB
+        host=settings.REDIS_HOST, port=settings.REDIS_PORT, database=settings.REDIS_DB
     )
+
 
 async def startup(ctx):
     """
     Called when the worker starts.
     """
     logger.info("ARQ Worker starting...")
-    
+
     # 1. Verify DB Connection
     try:
-        await client.admin.command('ping')
+        await client.admin.command("ping")
         logger.info("✅ Worker connected to MongoDB.")
     except Exception as e:
         logger.critical(f"❌ Worker failed to connect to MongoDB: {e}")
@@ -52,6 +51,7 @@ async def startup(ctx):
     ctx["heartbeat_task"] = asyncio.create_task(_heartbeat_loop())
     logger.info("💓 Worker heartbeat started.")
 
+
 async def shutdown(ctx):
     """
     Called when the worker shuts down.
@@ -70,7 +70,10 @@ async def shutdown(ctx):
     # Close shared HTTP client
     await close_http_client()
 
-async def process_message_task(ctx, chat_id: str, user_text: str, media_url: str = None):
+
+async def process_message_task(
+    ctx, chat_id: str, user_text: str, media_url: str = None
+):
     """
     ARQ Task wrapper for process_incoming_message.
     Sends a user-friendly error message if processing fails.
@@ -97,14 +100,15 @@ class WorkerSettings:
     """
     Configuration for the ARQ worker.
     """
+
     functions = [process_message_task]
     redis_settings = redis_settings
     on_startup = startup
     on_shutdown = shutdown
     max_jobs = 10
-    job_timeout = 300       # 5 minutes per job
-    max_tries = 5           # Retry transient failures up to 5 times
+    job_timeout = 300  # 5 minutes per job
+    max_tries = 5  # Retry transient failures up to 5 times
     retry_jobs = True
     # Keep results in Redis for 7 days so failed jobs are visible for debugging
-    keep_result = 604800    # 7 days in seconds
+    keep_result = 604800  # 7 days in seconds
     keep_result_forever = False

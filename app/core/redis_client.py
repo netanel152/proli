@@ -15,6 +15,7 @@ _arq_lock = asyncio.Lock()
 
 class ChatLockBusyError(Exception):
     """Raised when another worker is already processing a message for this chat_id."""
+
     def __init__(self, chat_id: str):
         self.chat_id = chat_id
         super().__init__(f"Chat lock held for {chat_id}")
@@ -53,6 +54,7 @@ def with_scheduler_lock(key: str, ttl: int):
     finally block so normal completion frees it immediately; TTL protects
     against crashes. On Redis error the job runs locally (degraded mode).
     """
+
     def decorator(func):
         @functools.wraps(func)
         async def wrapper(*args, **kwargs):
@@ -61,17 +63,23 @@ def with_scheduler_lock(key: str, ttl: int):
             try:
                 redis = await get_redis_client()
             except Exception as e:
-                logger.warning(f"with_scheduler_lock Redis unavailable for '{key}': {e} — running local only")
+                logger.warning(
+                    f"with_scheduler_lock Redis unavailable for '{key}': {e} — running local only"
+                )
                 return await func(*args, **kwargs)
 
             try:
                 acquired = bool(await redis.set(lock_key, "1", ex=ttl, nx=True))
             except Exception as e:
-                logger.warning(f"with_scheduler_lock SETNX failed for '{key}': {e} — running local only")
+                logger.warning(
+                    f"with_scheduler_lock SETNX failed for '{key}': {e} — running local only"
+                )
                 return await func(*args, **kwargs)
 
             if not acquired:
-                logger.debug(f"⏭️ Scheduler job '{key}' skipped — lock held by another worker")
+                logger.debug(
+                    f"⏭️ Scheduler job '{key}' skipped — lock held by another worker"
+                )
                 return
 
             try:
@@ -80,9 +88,14 @@ def with_scheduler_lock(key: str, ttl: int):
                 try:
                     await redis.delete(lock_key)
                 except Exception as e:
-                    logger.debug(f"with_scheduler_lock release swallow for '{key}': {e}")
+                    logger.debug(
+                        f"with_scheduler_lock release swallow for '{key}': {e}"
+                    )
+
         return wrapper
+
     return decorator
+
 
 async def get_redis_client() -> Redis:
     """
@@ -98,13 +111,14 @@ async def get_redis_client() -> Redis:
         if _redis_client is not None:
             return _redis_client
 
-        redis_url = settings.REDIS_URL or f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+        redis_url = (
+            settings.REDIS_URL.get_secret_value()
+            if settings.REDIS_URL
+            else f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}"
+        )
         try:
             client = from_url(
-                redis_url,
-                encoding="utf-8",
-                decode_responses=True,
-                max_connections=20
+                redis_url, encoding="utf-8", decode_responses=True, max_connections=20
             )
             await client.ping()
             _redis_client = client
@@ -113,6 +127,7 @@ async def get_redis_client() -> Redis:
             logger.error(f"Could not connect to Redis: {e}")
             raise
     return _redis_client
+
 
 async def get_arq_pool():
     """
@@ -130,13 +145,15 @@ async def get_arq_pool():
 
         try:
             if settings.REDIS_URL:
-                _arq_pool = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+                _arq_pool = await create_pool(
+                    RedisSettings.from_dsn(settings.REDIS_URL.get_secret_value())
+                )
             else:
                 _arq_pool = await create_pool(
                     RedisSettings(
                         host=settings.REDIS_HOST,
                         port=settings.REDIS_PORT,
-                        database=settings.REDIS_DB
+                        database=settings.REDIS_DB,
                     )
                 )
             logger.info("ARQ Redis pool created.")
@@ -144,6 +161,7 @@ async def get_arq_pool():
             logger.error(f"Could not create ARQ pool: {e}")
             raise
     return _arq_pool
+
 
 async def close_redis_client():
     """Closes Redis and ARQ pool connections."""

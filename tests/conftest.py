@@ -262,7 +262,7 @@ async def integration_db(monkeypatch):
     if not settings.MONGO_TEST_URI:
         pytest.skip("MONGO_TEST_URI is not set in environment/config")
 
-    client = AsyncIOMotorClient(settings.MONGO_TEST_URI)
+    client = AsyncIOMotorClient(settings.MONGO_TEST_URI.get_secret_value())
     db = client.proli_test_db
 
     # Define Collections

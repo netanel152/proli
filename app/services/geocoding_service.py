@@ -222,7 +222,7 @@ async def _call_google(name: str) -> Optional[Tuple[float, float]]:
         "address": name,
         "components": "country:IL",
         "language": "he",
-        "key": settings.GOOGLE_MAPS_API_KEY,
+        "key": settings.GOOGLE_MAPS_API_KEY.get_secret_value(),
     }
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:

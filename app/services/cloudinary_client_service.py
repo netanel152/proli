@@ -4,11 +4,12 @@ from app.core.config import settings
 from app.core.logger import logger
 
 cloudinary.config(
-  cloud_name = settings.CLOUDINARY_CLOUD_NAME,
-  api_key = settings.CLOUDINARY_API_KEY,
-  api_secret = settings.CLOUDINARY_API_SECRET,
-  secure = True
+    cloud_name=settings.CLOUDINARY_CLOUD_NAME,
+    api_key=settings.CLOUDINARY_API_KEY.get_secret_value(),
+    api_secret=settings.CLOUDINARY_API_SECRET.get_secret_value(),
+    secure=True,
 )
+
 
 def upload_image(file_object) -> str | None:
     """Synchronous upload used by Admin Panel (Streamlit)."""

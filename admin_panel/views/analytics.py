@@ -12,9 +12,10 @@ from app.core.constants import LeadStatus, WorkerConstants
 from app.core.database import DB_NAME
 import certifi
 
-_ca = certifi.where() if "+srv" in settings.MONGO_URI else None
+_mongo_uri = settings.MONGO_URI.get_secret_value()  # PRO-94: SecretStr
+_ca = certifi.where() if "+srv" in _mongo_uri else None
 _kwargs = {"tlsCAFile": _ca} if _ca else {}
-_sync_client = MongoClient(settings.MONGO_URI, **_kwargs)
+_sync_client = MongoClient(_mongo_uri, **_kwargs)
 _db = _sync_client[DB_NAME]
 
 
