@@ -77,6 +77,96 @@ async def send_oncall_alert(message: str, *, assume_authorized: bool = False) ->
         return False
 
 
+def format_lead_extra_info(lead: dict) -> str:
+    """Floor/apartment line shown to the pro inside a lead offer."""
+    return Messages.Pro.EXTRA_INFO_LINE.format(
+        floor=lead.get("floor") or "-", apartment=lead.get("apartment") or "-"
+    )
+
+
+def format_media_links(lead: dict) -> str:
+    """Customer media as a numbered text-links block, or "" when there is none.
+
+    Media is always sent as text links, never re-sent as files. That decision
+    was made once in the initial-offer path (re-sending files duplicates
+    uploads the customer already made); the reassignment path used to re-send
+    files and the admin path used to drop media entirely — this is now the one
+    policy for all three.
+    """
+    media_urls = lead.get("media_urls") or []
+    if not media_urls:
+        return ""
+    links = "".join(f"\n{i}. {url}" for i, url in enumerate(media_urls, 1))
+    return "\n\n" + Messages.Pro.MEDIA_ATTACHED_HEADER + links
+
+
+def build_new_lead_message(lead: dict) -> str:
+    """The lead-offer text a pro receives on reassignment or admin assignment.
+
+    Owns the header choice (emergency vs normal), the missing-field fallbacks
+    (Hebrew, from Messages.Fallbacks) and the media policy. Pure — no I/O — so
+    the message shape is testable without a database or a send.
+
+    The *initial* offer (workflow_service) uses the richer APPROVAL_REQUEST
+    template (customer phone, price line, loyalty header) and stays separate on
+    purpose; it shares format_lead_extra_info and format_media_links so the
+    pieces cannot drift.
+    """
+    header = (
+        Messages.Pro.EMERGENCY_LEAD_HEADER
+        if lead.get("is_emergency")
+        else Messages.Pro.NEW_LEAD_HEADER
+    )
+    details = Messages.Pro.NEW_LEAD_DETAILS.format(
+        customer_name=lead.get("customer_name") or Messages.Fallbacks.CUSTOMER_NAME,
+        full_address=lead.get("full_address") or Messages.Fallbacks.UNKNOWN,
+        extra_info=format_lead_extra_info(lead),
+        issue_type=lead.get("issue_type") or Messages.Fallbacks.UNKNOWN,
+        appointment_time=lead.get("appointment_time") or Messages.Fallbacks.TIME_ASAP,
+    )
+    return (
+        header
+        + "\n\n"
+        + details
+        + Messages.Pro.NEW_LEAD_FOOTER
+        + format_media_links(lead)
+    )
+
+
+async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
+    """Send the lead offer (and a navigation link) to a pro.
+
+    Fails open: a failed send is logged at ERROR and returns False rather than
+    raising — the callers (reassignment, admin assignment) have already updated
+    the lead, and aborting mid-flow would leave the assignment half-applied
+    with no offer *and* no error path. The False return lets a caller decide
+    whether to compensate.
+
+    ``whatsapp`` is injected (not the module-level facade) so flow callers pass
+    the instance they already hold and tests pass a mock, per the DI convention.
+    """
+    phone = (pro or {}).get("phone_number")
+    if not lead or not phone:
+        logger.error(
+            f"notify_pro_new_lead missing lead or pro phone (lead={bool(lead)})"
+        )
+        return False
+
+    pro_chat_id = to_chat_id(phone)
+    try:
+        await whatsapp.send_message(pro_chat_id, build_new_lead_message(lead))
+        if lead.get("full_address"):
+            await whatsapp.send_location_link(
+                pro_chat_id, lead["full_address"], Messages.Pro.NAVIGATE_TO
+            )
+        return True
+    except Exception as e:
+        logger.error(
+            f"Failed to send lead offer to pro for lead {lead.get('_id')}: {e}"
+        )
+        return False
+
+
 async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
     """Sends a reminder to the pro to mark a job as finished. Capped at MAX_PRO_REMINDERS."""
     try:

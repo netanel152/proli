@@ -52,6 +52,35 @@ jobs:
           fi
           echo "OK — no Green API references."
 
+      # ARCHITECTURE_STANDARD.md §6.2 — the single-egress rule, mechanised.
+      # Two ways to bypass the facade's circuit breaker / kill switch / dry-run:
+      # an HTTP client called directly from a service, or a provider constructed
+      # outside app/providers/whatsapp/. Both fail the build. geocoding_service
+      # is the one allowlisted HTTP consumer (Nominatim, not a messaging vendor);
+      # tests may construct providers freely — they test them.
+      - name: Guard — all outbound traffic through the provider facade
+        run: |
+          if grep -rInE '^\s*(import|from)\s+(httpx|requests)\b' app/services/ \
+               | grep -v 'app/services/geocoding_service.py' ; then
+            echo ""
+            echo "::error::HTTP client import in a service. Outbound WhatsApp goes"
+            echo "::error::through app/providers/whatsapp/ (PRO-86); other HTTP"
+            echo "::error::belongs in app/core/http_client.py or a provider. If this"
+            echo "::error::service is a legitimate non-vendor HTTP consumer, add it"
+            echo "::error::to the allowlist in this step with a reason."
+            exit 1
+          fi
+          if grep -rInE '(CloudAPIProvider|DryRunProvider)\s*\(' app/ \
+               --exclude-dir=__pycache__ \
+               | grep -v 'app/providers/whatsapp/' ; then
+            echo ""
+            echo "::error::Provider constructed outside app/providers/whatsapp/."
+            echo "::error::Use app.providers.whatsapp.get_whatsapp() — a bare provider"
+            echo "::error::skips the circuit breaker and the operator kill switch."
+            exit 1
+          fi
+          echo "OK — single egress holds."
+
       - uses: actions/setup-python@v5
         with:
           # Matches the Dockerfile's base image, so CI resolves the same wheels

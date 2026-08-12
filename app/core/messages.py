@@ -179,6 +179,14 @@ class Messages:
         NEW_LEAD_DETAILS = "👤 *לקוח:* {customer_name}\n📍 *כתובת:* {full_address}\nℹ️ *פרטים נוספים:* {extra_info}\n🛠️ *תקלה:* {issue_type}\n⏰ *תאריך ושעה מועדפים:* {appointment_time}"
         NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"
         NEW_LEAD_FOOTER = "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
+        # Floor/apartment line rendered into {extra_info} of NEW_LEAD_DETAILS and
+        # APPROVAL_REQUEST. '-' placeholders keep the line shape stable when a
+        # field is missing, so the pro sees the same layout on every offer.
+        EXTRA_INFO_LINE = "קומה {floor}, דירה {apartment}"
+        # Header for the numbered media-links block appended to a lead offer.
+        # Media is always sent as text links, never re-sent as files — see
+        # notification_service.format_media_links for the policy.
+        MEDIA_ATTACHED_HEADER = "📸 *מדיה מצורפת:*"
         APPROVAL_REQUEST = (
             "📋 *פרטי עבודה חדשה לאישורך:*\n\n"
             "👤 *לקוח:* {customer_name} ({customer_phone})\n"
@@ -600,6 +608,15 @@ class Messages:
         # Customer status pull — '?' must be exact match; words matched after .strip().lower()
         STATUS_COMMANDS_EXACT = ("?",)
         STATUS_COMMANDS_WORDS = ("סטטוס", "status")
+
+    class Fallbacks:
+        # Substitutes for missing lead fields in pro-facing messages. One home,
+        # one language: three call sites used to hand-roll these, and the
+        # monitor path showed English ("Unknown", "Pending") inside a Hebrew
+        # message. All lead-offer fallbacks come from here.
+        CUSTOMER_NAME = "לקוח"
+        UNKNOWN = "לא ידוע"
+        TIME_ASAP = "בהקדם"
 
     class Errors:
         AI_OVERLOAD = "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."

@@ -23,6 +23,7 @@ from app.core.redis_client import (
 )
 from app.services.matching_service import determine_best_pro
 from app.services.notification_service import send_sos_alert
+from app.services import notification_service
 from app.services.data_management_service import has_consent, record_consent
 from app.services.customer_flow import (
     send_customer_completion_check as _send_completion_check,
@@ -1615,9 +1616,7 @@ async def _finalize_deal(
             pro_phone = to_chat_id(pro_phone)
 
             customer_phone = strip_suffix(chat_id)
-            extra_info = (
-                f"קומה {lead.get('floor') or '-'}, דירה {lead.get('apartment') or '-'}"
-            )
+            extra_info = notification_service.format_lead_extra_info(lead)
 
             emergency_header = (
                 Messages.Pro.EMERGENCY_LEAD_HEADER + "\n\n" if is_emergency else ""
@@ -1653,12 +1652,8 @@ async def _finalize_deal(
                     transcription=transcription
                 )
 
-            # Add media links as text to avoid re-sending files
-            all_media = lead.get("media_urls", [])
-            if all_media:
-                approval_msg += "\n\n📸 *מדיה מצורפת:*"
-                for i, m_url in enumerate(all_media, 1):
-                    approval_msg += f"\n{i}. {m_url}"
+            # Media links as text — the one policy, owned by notification_service
+            approval_msg += notification_service.format_media_links(lead)
 
             await whatsapp.send_message(pro_phone, approval_msg)
 
