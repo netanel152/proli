@@ -99,4 +99,32 @@ jobs:
       # them is a separate cleanup; `black .` / `flake8 .` stay local commands
       # (see CLAUDE.md).
       - name: Run tests
-        run: pytest -q
+        run: |
+          set -o pipefail
+          pytest -q | tee pytest-output.txt
+
+      # docs/TESTING.md's "Current status" line is the single source of truth
+      # for the test baseline, but until this step it was only enforced by
+      # agents remembering to read it. Now it is a build invariant, both ways:
+      # fewer passed than the baseline = a regression slipped in; more passed
+      # = tests were added without bumping the doc (a stale baseline makes the
+      # next regression invisible). Update the line in the same PR that moves
+      # the count.
+      - name: Guard — test baseline matches docs/TESTING.md
+        run: |
+          baseline=$(grep -oP 'Current status: \K[0-9]+(?= passed)' docs/TESTING.md)
+          actual=$(grep -oP '\b\K[0-9]+(?= passed)' pytest-output.txt | tail -1)
+          if [ -z "$baseline" ] || [ -z "$actual" ]; then
+            echo "::error::Could not parse the baseline ('Current status: N passed' in docs/TESTING.md) or the pytest summary."
+            exit 1
+          fi
+          echo "baseline=$baseline actual=$actual"
+          if [ "$actual" -lt "$baseline" ]; then
+            echo "::error::Regression: $actual tests passed but docs/TESTING.md says $baseline."
+            exit 1
+          elif [ "$actual" -gt "$baseline" ]; then
+            echo "::error::Stale baseline: $actual tests passed but docs/TESTING.md still says $baseline."
+            echo "::error::Update the 'Current status' line in docs/TESTING.md in this PR."
+            exit 1
+          fi
+          echo "OK — baseline holds at $baseline passed."
