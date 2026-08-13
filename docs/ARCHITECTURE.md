@@ -333,7 +333,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | Cache/State | Redis | Context, FSM, rate limit, idempotency |
 | Admin UI | Streamlit | |
 | Media | Cloudinary | CDN-backed |
-| WhatsApp | Provider facade (`app/providers/whatsapp/`) | dry-run by default; Meta Cloud API pending PRO-89 |
+| WhatsApp | Provider facade (`app/providers/whatsapp/`) | dry-run by default; Meta Cloud API (`CloudAPIProvider`, PRO-89) is code-complete but not yet live — PRO-87 onboarding (Business Portfolio, template approval) is still open |
 | Logging | Loguru | PII-masked (Israeli phone numbers), JSON in production |
 | Infrastructure | Docker Compose / Railway | 6 services: api, worker, admin, mongo, redis, nginx |
 

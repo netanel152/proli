@@ -41,7 +41,7 @@ Proli uses **Loguru** with PII masking applied to all sinks.
 - **Console:** Human-readable colored output in development; JSON in production.
 - **File:** `logs/proli.log` — rotating at 10 MB, retained 10 days, gzip-compressed.
 - **PII masking:** Israeli phone numbers are masked in all environments: `972521234567` → `97252****567`.
-- **Secret redaction (PRO-80):** known secret values (`WEBHOOK_TOKEN`) are replaced with `***REDACTED***` wherever they appear in a log line — a URL query string (e.g. the uvicorn access line `POST /webhook?token=…`), a URL path, an exception string, etc. Complements PRO-79, which suppresses `httpx`/`httpcore` INFO request logs at the source. PRO-86 removed `GREEN_API_TOKEN` from the redaction list along with the provider itself; PRO-89 must add the Cloud API credential when it lands.
+- **Secret redaction (PRO-80):** known secret values are replaced with `***REDACTED***` wherever they appear in a log line — a URL query string (e.g. the uvicorn access line `POST /webhook?token=…`), a URL path, an exception string, etc. Complements PRO-79, which suppresses `httpx`/`httpcore` INFO request logs at the source. Since PRO-94 the redaction list is sourced automatically from every `SecretStr` field on `Settings`, so the PRO-89 `META_ACCESS_TOKEN`/`META_APP_SECRET`/`META_VERIFY_TOKEN` are covered without any redaction-list change.
 - **Token Accounting (FinOps):** AI token usage is tracked per `pro_id` and stored in the `total_tokens_used` field of the `users` collection. This is handled by a fire-and-forget background task.
 
 Log patterns to watch:
@@ -268,6 +268,8 @@ The routing engine found no matching pro.
 
 Configure the full URL, including the token, at your WhatsApp provider: `https://your-domain/webhook?token=<value>`. Requests without a valid token receive `403 Forbidden`. `WEBHOOK_TOKEN` is **required** (the app refuses to boot without it) whenever `ENVIRONMENT` is `staging`/`production` — PRO-86 removed the sender instance-id check that used to be the other half of webhook authentication, so an unset token would otherwise mean no authentication at all.
 
+The PRO-89 Meta Cloud API route (`GET`/`POST /webhook/meta`) uses a separate auth model, not `WEBHOOK_TOKEN`: the `GET` handshake checks `hub.verify_token` against `META_VERIFY_TOKEN`, and every `POST` is authenticated by an `X-Hub-Signature-256` HMAC over the raw body keyed by `META_APP_SECRET` (both required for `cloud` in staging/production).
+
 ### Admin authentication
 
 Passwords are never stored in plaintext. The system uses bcrypt with a random salt. Sessions use `secrets.token_hex(32)` tokens validated server-side on each request. Logout invalidates the token immediately.
@@ -306,7 +308,12 @@ python scripts/generate_admin_hash.py
 | `ADMIN_PASSWORD` | — | Plain-text password (hashed on startup) |
 | `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts |
 | `WEBHOOK_TOKEN` | — | Enables `?token=<value>` webhook auth. **Required** (boot fails without it) when `ENVIRONMENT` is `staging`/`production` — PRO-86 removed the other half of webhook authentication (the sender instance-id check) |
-| `WHATSAPP_PROVIDER` | `dryrun` | Outbound transport: `dryrun` (logs, never transmits) or `cloud` (Meta Cloud API — stub, raises `NotImplementedError` until PRO-89). An unrecognised value falls back to `dryrun` |
+| `WHATSAPP_PROVIDER` | `dryrun` | Outbound transport: `dryrun` (logs, never transmits) or `cloud` (the PRO-89 `CloudAPIProvider` — Meta Graph API, code-complete but not yet onboarded, see PRO-87). An unrecognised value falls back to `dryrun` |
+| `META_ACCESS_TOKEN` | — | Secret. Meta Graph API System User token; required once `WHATSAPP_PROVIDER=cloud` and `WHATSAPP_DRY_RUN` is not `true` |
+| `META_APP_SECRET` | — | Secret. Signs inbound `/webhook/meta` (`X-Hub-Signature-256`); required for `cloud` in staging/production |
+| `META_VERIFY_TOKEN` | — | Secret. Echoed back during the Meta subscription handshake (`GET /webhook/meta`); required for `cloud` in staging/production |
+| `META_PHONE_NUMBER_ID` | — | Not secret. Graph API phone-number node id; required once `WHATSAPP_PROVIDER=cloud` and `WHATSAPP_DRY_RUN` is not `true` |
+| `META_GRAPH_API_VERSION` | `v23.0` | Graph API version pinned in every outbound request URL |
 | `ENVIRONMENT` | `development` | One of `development` \| `staging` \| `production` — any other value raises at startup. `staging` and `production` are both "prod-like": JSON logs + PII masking on stdout, `diagnose=False`, and `MONGO_URI` required by the admin panel. `production` additionally blocks `scripts/seed_db.py` |
 | `LOG_LEVEL` | `INFO` | Loguru log level |
 | `MAX_CHAT_HISTORY` | `20` | Max messages stored per chat in Redis |

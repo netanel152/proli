@@ -48,7 +48,11 @@ CLOUDINARY_API_SECRET=...
 ADMIN_PASSWORD_HASH=...  # Generate with: python scripts/generate_admin_hash.py
 ADMIN_PHONE=972501234567  # Admin WhatsApp number for SOS alerts
 WEBHOOK_TOKEN=...  # Random string for webhook auth — required (boot fails without it) once ENVIRONMENT is staging/production (PRO-86)
-WHATSAPP_PROVIDER=dryrun  # dryrun (default) | cloud — cloud is a stub until PRO-89 implements it
+WHATSAPP_PROVIDER=dryrun  # dryrun (default) | cloud — cloud selects the PRO-89 CloudAPIProvider (Meta Graph API)
+META_ACCESS_TOKEN=...        # secret — required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
+META_APP_SECRET=...          # secret — signs inbound /webhook/meta; required for cloud in staging/production
+META_VERIFY_TOKEN=...        # secret — echoed back during the Meta subscription handshake; required for cloud in staging/production
+META_PHONE_NUMBER_ID=...     # not secret — Graph node id, required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
 ENVIRONMENT=production   # per-environment — see below
 ```
 
@@ -119,10 +123,17 @@ python scripts/seed_coverage_matrix.py
 
 ## Step 5: Configure the WhatsApp webhook
 
-Green API is gone (PRO-85 — instance deleted, tariff cancelled) and inbound is not yet
-provider-abstracted — that lands with PRO-89's Cloud API wiring. Until then there is no
-live vendor to point at `/webhook`; when a provider's console asks for a webhook URL, set
-it to the **API service** public domain, including the webhook token:
+Green API is gone (PRO-85 — instance deleted, tariff cancelled). Its replacement, the
+Meta Cloud API transport (PRO-89), is code-complete and has its own inbound route,
+`/webhook/meta` — but there is still no live Meta account to register it with until
+PRO-87 (Business Portfolio + template approval) completes. Once it does, register the
+**API service** public domain as the Callback URL in the Meta App dashboard, with a
+verify token matching `META_VERIFY_TOKEN`:
+```
+https://api-production-XXXX.up.railway.app/webhook/meta
+```
+The legacy `/webhook` route (Green-API-shaped payload) remains for local/manual testing
+(`docs/MANUAL_TEST_PLAN.md`) — no live vendor points at it either:
 ```
 https://api-production-XXXX.up.railway.app/webhook?token=YOUR_WEBHOOK_TOKEN
 ```

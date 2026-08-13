@@ -58,6 +58,17 @@ def to_chat_id(raw) -> str:
     return f"{digits}{CHAT_SUFFIX}" if digits else ""
 
 
+def mask_chat_id(raw) -> str:
+    """Last-4-digits display mask for logs and operator pages: ``...4567``.
+
+    PRO-89 review finding: ``chat_id[-4:]`` on a ``@c.us``-suffixed id yields
+    the literal string ``"c.us"`` — every recipient renders identically and
+    the page tells the operator nothing. Strip the suffix first, here, once.
+    """
+    digits = strip_suffix(raw)
+    return f"...{digits[-4:]}" if digits else "?"
+
+
 def to_local_phone(raw) -> str:
     """Israeli local display form: ``0XXXXXXXXX``.
 
