@@ -34,3 +34,6 @@ settings.local.json
 # --- Claude Code local state (not for teammates) ---
 .claude/worktrees/
 .claude/agent-memory/
+# claude-flow rewrites its neural/policy state every session — pure local
+# churn that used to show up as dirty-tree noise in every PR.
+.claude-flow/
