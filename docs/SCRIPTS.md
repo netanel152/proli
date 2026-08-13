@@ -143,14 +143,6 @@ python scripts/reset_test.py --all            # Full environment wipe
 python scripts/reset_test.py 972501234567     # Wipe specific customer only
 ```
 
-### `test_connection.py`
-
-Checks connectivity to MongoDB, Redis, and Gemini API.
-
-```bash
-python scripts/test_connection.py
-```
-
 ### `check_models.py`
 
 Lists Gemini models available to your API key. Useful for verifying access to `gemini-2.5-flash-lite` etc.
