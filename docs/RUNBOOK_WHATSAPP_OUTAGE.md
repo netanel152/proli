@@ -12,14 +12,18 @@ Every outbound WhatsApp message passes through exactly one object — `WhatsAppF
 (PRO-85 — the old instance was deleted, the tariff cancelled); this runbook is now
 provider-agnostic rather than describing one vendor's console.
 
-> **Where things stand today:** until PRO-89 ships a working `CloudAPIProvider`, there is
-> no live transmitting provider in this deployment — `WHATSAPP_PROVIDER=cloud` raises
-> `NotImplementedError` on the first send, and the default `dryrun` never transmits at all.
-> That means the account-outage scenario this runbook exists for (§1–§3) is currently
-> **dormant** — there is nothing to page about. §5 (the historical Green API "number
-> reputation" material) is kept only as institutional memory for whichever real provider
-> replaces it. What stays live regardless of provider: §2's breaker/kill-switch mechanics,
-> §4 (manual kill switch), and `WHATSAPP_DRY_RUN`.
+> **Where things stand today:** `CloudAPIProvider` (PRO-89) is code-complete against the Meta
+> Graph API — `WHATSAPP_PROVIDER=cloud` sends for real once `META_ACCESS_TOKEN` /
+> `META_PHONE_NUMBER_ID` (and, in prod-like environments, `META_APP_SECRET` /
+> `META_VERIFY_TOKEN`) are configured; `Settings` refuses to boot with `cloud` selected and
+> those missing. But **PRO-87 (Meta Business Portfolio + template approval) has not landed**
+> — no template is approved, no sandbox number exists — so this deployment still runs the
+> default `dryrun` and has never sent a real message via Cloud API. That means the
+> account-outage scenario this runbook exists for (§1–§3) is currently **dormant** — there is
+> nothing to page about. §5 (the historical Green API "number reputation" material) is kept
+> only as institutional memory for whichever real provider replaces it. What stays live
+> regardless of provider: §2's breaker/kill-switch mechanics, §4 (manual kill switch), and
+> `WHATSAPP_DRY_RUN`.
 
 ---
 
@@ -190,8 +194,9 @@ and is not affected by the auto breaker. Remember to clear it, or outbound stays
 
 ## 7. Escalation
 
-- **Provider support** — once a real transmitting provider is live (PRO-89), via its support
-  channel. _(Fill in the exact support channel + account contact once that lands.)_
+- **Provider support** — once Meta onboarding (PRO-87) is complete and Cloud API is actually
+  live, via Meta's Business Support channel. _(Fill in the exact support channel + account
+  contact once that lands.)_
 - **On-call:** `ONCALL_PHONE` (or `ADMIN_PHONE` if unset).
 - If rotating numbers repeatedly, revisit §4 — a recurring ban means a behavior problem, not
   an account problem.

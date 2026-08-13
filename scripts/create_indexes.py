@@ -14,8 +14,10 @@ from app.core.database import (
     audit_log_collection,
     consent_collection,
     admins_collection,
+    wa_delivery_collection,
     db,
 )
+
 
 async def create_all_indexes(silent: bool = False):
     """
@@ -23,6 +25,7 @@ async def create_all_indexes(silent: bool = False):
     Safe to call on every startup -- MongoDB skips existing indexes.
     Set silent=True to suppress print output (e.g. when called from app startup).
     """
+
     def log(msg):
         if not silent:
             print(msg)
@@ -46,9 +49,15 @@ async def create_all_indexes(silent: bool = False):
         await leads_collection.create_index([("chat_id", ASCENDING)])
         await leads_collection.create_index([("status", ASCENDING)])
         await leads_collection.create_index([("created_at", ASCENDING)])
-        await leads_collection.create_index([("pro_id", ASCENDING), ("status", ASCENDING)])
-        await leads_collection.create_index([("status", ASCENDING), ("created_at", ASCENDING)])
-        await leads_collection.create_index([("chat_id", ASCENDING), ("status", ASCENDING)])
+        await leads_collection.create_index(
+            [("pro_id", ASCENDING), ("status", ASCENDING)]
+        )
+        await leads_collection.create_index(
+            [("status", ASCENDING), ("created_at", ASCENDING)]
+        )
+        await leads_collection.create_index(
+            [("chat_id", ASCENDING), ("status", ASCENDING)]
+        )
         log("  Leads: done")
     except Exception as e:
         log(f"  Error indexing Leads: {e}")
@@ -60,7 +69,7 @@ async def create_all_indexes(silent: bool = False):
         await messages_collection.create_index(
             [("timestamp", ASCENDING)],
             expireAfterSeconds=7776000,  # 90 days TTL
-            background=True
+            background=True,
         )
         log("  Messages: done")
     except Exception as e:
@@ -70,7 +79,9 @@ async def create_all_indexes(silent: bool = False):
     try:
         log("Indexing Slots Collection...")
         await slots_collection.create_index([("pro_id", ASCENDING)])
-        await slots_collection.create_index([("pro_id", ASCENDING), ("start_time", ASCENDING)])
+        await slots_collection.create_index(
+            [("pro_id", ASCENDING), ("start_time", ASCENDING)]
+        )
         log("  Slots: done")
     except Exception as e:
         log(f"  Error indexing Slots: {e}")
@@ -100,14 +111,33 @@ async def create_all_indexes(silent: bool = False):
     except Exception as e:
         log(f"  Error indexing Admins: {e}")
 
+    # --- WhatsApp Delivery Statuses (PRO-89) ---
+    try:
+        log("Indexing WA Delivery Collection...")
+        # Unique: every status callback does an upsert keyed on wamid, and
+        # 3-4 callbacks per message (sent/delivered/read) would otherwise
+        # race into duplicate docs on an unindexed scan.
+        await wa_delivery_collection.create_index(
+            [("wa_message_id", ASCENDING)], unique=True
+        )
+        # Delivery facts have no business value after the lead has long since
+        # closed; 30 days matches the debugging horizon, not the data model.
+        await wa_delivery_collection.create_index(
+            [("created_at", ASCENDING)],
+            expireAfterSeconds=30 * 24 * 3600,
+            background=True,
+        )
+        log("  WA Delivery: done")
+    except Exception as e:
+        log(f"  Error indexing WA Delivery: {e}")
+
     # --- Admin Sessions Collection ---
     try:
         log("Indexing Admin Sessions Collection...")
         admin_sessions_col = db.admin_sessions
         await admin_sessions_col.create_index([("_token", ASCENDING)], unique=True)
         await admin_sessions_col.create_index(
-            [("expiry", ASCENDING)],
-            expireAfterSeconds=0
+            [("expiry", ASCENDING)], expireAfterSeconds=0
         )
         log("  Admin Sessions: done")
     except Exception as e:
@@ -115,7 +145,8 @@ async def create_all_indexes(silent: bool = False):
 
     log("Index creation completed.")
 
+
 if __name__ == "__main__":
-    if os.name == 'nt':
+    if os.name == "nt":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(create_all_indexes())

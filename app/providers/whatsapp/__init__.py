@@ -8,7 +8,11 @@ and the kill switch, which is precisely the class of bug this ticket removes.
 from app.core.config import settings
 from app.core.logger import logger
 from app.providers.whatsapp.base import NormalizedMessage, WhatsAppProvider
-from app.providers.whatsapp.cloud_api import CloudAPIProvider
+from app.providers.whatsapp.cloud_api import (
+    CloudAPIProvider,
+    ServiceWindowClosedError,
+    TemplateNotRegisteredError,
+)
 from app.providers.whatsapp.dry_run import DryRunProvider
 from app.providers.whatsapp.facade import WhatsAppFacade, record_account_state
 
@@ -73,6 +77,8 @@ __all__ = [
     "CloudAPIProvider",
     "DryRunProvider",
     "NormalizedMessage",
+    "ServiceWindowClosedError",
+    "TemplateNotRegisteredError",
     "WhatsAppFacade",
     "WhatsAppProvider",
     "build_provider",

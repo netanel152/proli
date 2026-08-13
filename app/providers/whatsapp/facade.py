@@ -195,7 +195,7 @@ class WhatsAppFacade:
             return await self._provider.get_state()
         except NotImplementedError:
             logger.warning(
-                f"Provider {self._provider.name!r} cannot report state yet (PRO-89)."
+                f"Provider {self._provider.name!r} does not implement a state probe."
             )
             return None
         except Exception as e:

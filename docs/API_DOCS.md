@@ -65,7 +65,7 @@ Returns 503 if the database is unavailable. Use this endpoint with a synthetic m
 ### 2. WhatsApp Webhook
 **POST** `/webhook`
 
-The main entry point for receiving inbound WhatsApp messages. Inbound wiring is not yet provider-abstracted (PRO-89) — the payload shape below is still the Green API webhook envelope, unchanged by the PRO-86 provider-facade migration, which only touched outbound.
+The legacy entry point for receiving inbound WhatsApp messages, still live alongside the PRO-89 Meta webhook below — the payload shape here is the historical Green API-shaped webhook envelope, unchanged by the PRO-86 provider-facade migration, which only touched outbound.
 
 **Headers:**
 - `Content-Type: application/json`
@@ -121,3 +121,17 @@ All responses return `200 OK` to prevent the sender from retrying:
 | `ignored_rate_limit` | Rate limit exceeded |
 | `forbidden` | Invalid or missing webhook token (403) |
 | `error` | Internal processing error |
+
+### 4. Meta Cloud API Webhook
+**GET / POST** `/webhook/meta`
+
+The PRO-89 inbound entry point for the Meta Cloud API transport. Mounted alongside the legacy `/webhook` route above and live even when `WHATSAPP_PROVIDER=dryrun`, so Meta's subscription handshake and inbound delivery can be verified during PRO-87 onboarding while outbound stays muted.
+
+**GET — subscription handshake:** Meta calls this once when the webhook is registered, with `hub.mode=subscribe`, `hub.verify_token`, and `hub.challenge` query params. Echoes `hub.challenge` back (`200`) iff `hub.verify_token` matches `META_VERIFY_TOKEN`; otherwise `403 forbidden`.
+
+**POST — inbound messages and delivery statuses:**
+- **Auth:** `X-Hub-Signature-256` — an HMAC-SHA256 of the raw request body keyed by `META_APP_SECRET`, checked in constant time. If `META_APP_SECRET` is unset, the request is rejected (`403`) in a prod-like environment and allowed through only in dev-like ones (the `cloud`-provider boot validator already refuses to start without the secret in prod-like environments).
+- Opens the sender's 24h service window (`wa:window:{chat_id}` in Redis) on every inbound message, including stickers/reactions, before normalization.
+- Delivery-status events (`sent`/`delivered`/`read`/`failed`) are applied first via `delivery.apply_status_event`; a `failed` with Meta error code `131047` (window closed) drives the template-retry path.
+- Each normalized message is deduped (Redis `SET NX`, 24h TTL, same idempotency namespace as `/webhook`) and enqueued as a `process_message_task`.
+- **Response policy:** `200` for everything decided (processed, duplicate, ignored, malformed body); `503` only for an infrastructure failure that prevented enqueueing, with the idempotency claim released so Meta's retry can land.

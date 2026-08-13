@@ -10,10 +10,11 @@ the first real test.
 > whole checklist** until it is 100% green. Record the run in the sign-off table.
 
 > ⚠️ **PRO-86 update:** Green API is gone (PRO-85). Real sends now require
-> `WHATSAPP_PROVIDER=cloud`, which is a stub that raises `NotImplementedError` until
-> PRO-89 lands — so this checklist is **not currently runnable end-to-end** (no
-> configuration produces `whatsapp.status: "up"` yet). Re-enable once PRO-89 ships a
-> working `CloudAPIProvider`.
+> `WHATSAPP_PROVIDER=cloud`, which selects the PRO-89 `CloudAPIProvider` —
+> code-complete against the Meta Graph API, but with no live account behind it yet:
+> PRO-87 (Business Portfolio, template approval, a sandbox number) has not landed, so
+> this checklist is **not currently runnable end-to-end** (no configuration produces
+> `whatsapp.status: "up"` yet). Re-enable once PRO-87 onboarding completes.
 
 ---
 
@@ -28,7 +29,7 @@ the first real test.
 Keywords used below (from `app/core/messages.py`, exact): emergency `הצפה`/`דחוף` · SOS
 `נציג`/`אנושי`/`מנהל` · status `סטטוס`/`?` · cancel `בטל` · reschedule `מועד אחר` ·
 register `הרשמה` · reset `התחלה` · rating `1`–`5` · admin wizard `ניהול`. Pro approval is
-**text, not buttons** — nothing may send an interactive message until PRO-88/PRO-89 land (see CLAUDE.md) — the pro replies per the prompt (e.g. `1`/`אשר`).
+**text, not buttons** — nothing may send an interactive message (the PRO-89 transport exists, but no template is approved and adopting buttons is a product decision not yet made — see CLAUDE.md) — the pro replies per the prompt (e.g. `1`/`אשר`).
 
 ### Pre-flight (must all be green before starting)
 

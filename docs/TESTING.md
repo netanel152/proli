@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 885 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 90 skips are cells of the PRO-83 state × input matrix — but not all of them are deliberate `N/A`: 15 (`defect-finish`, `defect-cancel`, `defect-price`) are dark because of the same tracked product defects the strict xfails document below, not by design. The xfails are four product defects the harness documents — see below).
+**Current status: 974 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 90 skips are cells of the PRO-83 state × input matrix — but not all of them are deliberate `N/A`: 15 (`defect-finish`, `defect-cancel`, `defect-price`) are dark because of the same tracked product defects the strict xfails document below, not by design. The xfails are four product defects the harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR. CI enforces it exactly (the "Guard — test baseline" step in `.github/workflows/tests.yml` fails the build when the passed count is below **or** above this line), so a regression and a stale baseline are both unmergeable.
 
@@ -84,9 +84,13 @@ pytest -m integration
 | `test_pre_bash_guard.py` | Bash pre-tool guard `evaluate()`: blocks `git commit`/`push` on main/master, force-push, `rm -rf` on protected paths, `.env` redirects, mongo `drop()`; allows feature-branch work |
 | `test_whatsapp_facade.py` | PRO-86 single outbound egress + PRO-82 fail-closed breaker: every outbound method gated, the boot-window regression (absent `wa:instance:state` blocks sending), auto/manual pause keys, Redis-error fail-open, `record_account_state` TTL/write rules, provider selection (`WHATSAPP_DRY_RUN` override, `dryrun`/`cloud`, unknown-name fallback), `DryRunProvider`/`CloudAPIProvider` behavior, and the admin panel's `send_text_sync` bridge |
 | `test_health_whatsapp_status.py` | `/health` WhatsApp state mapping: `authorized`→up, `yellowCard`→degraded, else down; a non-transmitting provider→degraded; raw `state`, `provider`, `transmits` surfaced |
-| `test_phone.py` | PRO-49 phone helpers: `to_chat_id` / `strip_suffix` / `to_local_phone` across `972…`, `+972…`, leading `0`, already-suffixed, and falsy input (idempotent, None-safe) |
+| `test_phone.py` | PRO-49 phone helpers: `to_chat_id` / `strip_suffix` / `to_local_phone` across `972…`, `+972…`, leading `0`, already-suffixed, and falsy input (idempotent, None-safe); PRO-89 `mask_chat_id` (strips the `@c.us` suffix before the last-4 mask, falsy/suffix-only → `"?"`) |
+| `test_cloud_api_provider.py` | PRO-89 `CloudAPIProvider`: text/file/template/interactive sends via the Graph API, the 24h service-window gate and its window-closed page/raise path, template registry resolution (draft/unknown both refuse to transmit), text chunking and interactive button/list/text-menu degradation at Meta's size limits, `get_state()` status mapping, and Meta webhook parsing (`parse_meta_webhook`/`parse_status_events`, `fetch_meta_media`'s two-hop authorized fetch, HTTPS-only and 25MB-cap enforcement) |
+| `test_meta_webhook_route.py` | PRO-89 `GET`/`POST /webhook/meta`: the `hub.challenge` handshake, `X-Hub-Signature-256` HMAC verification (incl. prod-like fail-closed when `META_APP_SECRET` is unset, and a non-ASCII forged header), service-window opening on every inbound, wamid idempotency, and the 200-vs-503 response policy |
+| `test_settings_meta_cloud_provider.py` | PRO-89 `Settings.require_cloud_provider_config`: `cloud` without Meta credentials fails boot, `WHATSAPP_DRY_RUN=true` exempts the transmit tier, prod-like environments additionally require `META_APP_SECRET`/`META_VERIFY_TOKEN`, and `dryrun` never requires any of it |
+| `test_arq_worker_meta_media.py` | PRO-89 `_resolve_inbound_media`: a `meta-media://` marker is fetched from Meta and re-hosted on Cloudinary before the worker processes the message; failure degrades to text-only, never a crashed task |
 | `test_logger_redaction.py` | PRO-80 log scrubbing: `mask_pii` phone masking + `redact_secrets` (provider token / WEBHOOK_TOKEN redacted in query string & URL path, None-safe) applied by the `_pii_filter` sink |
-| `test_settings_secret_masking.py` | PRO-94 secret masking: every credential field is a `SecretStr`, the incident regression (`repr`/`str`/f-string/`model_dump`/an `AttributeError` traceback leak nothing), `MONGO_URI`'s default is wrapped, `iter_secret_values` skips unset and too-short values, the naming-convention guard for credentials that do not exist yet (PRO-89's `META_*`), source scans proving no secret reaches an f-string, a log call or a module-level name, and PRO-99's `hide_input_in_errors=True` regression (construction-time `ValidationError`s — field, secret-field and model validator paths — no longer echo raw input in `str()`/traceback, while `errors()`/`.json()` still carry it and the validator's own actionable message survives) |
+| `test_settings_secret_masking.py` | PRO-94 secret masking: every credential field is a `SecretStr`, the incident regression (`repr`/`str`/f-string/`model_dump`/an `AttributeError` traceback leak nothing), `MONGO_URI`'s default is wrapped, `iter_secret_values` skips unset and too-short values, the naming-convention guard for credential-shaped fields that don't exist yet (already covering PRO-89's `META_*`, added as `SecretStr` from the start), source scans proving no secret reaches an f-string, a log call or a module-level name, and PRO-99's `hide_input_in_errors=True` regression (construction-time `ValidationError`s — field, secret-field and model validator paths — no longer echo raw input in `str()`/traceback, while `errors()`/`.json()` still carry it and the validator's own actionable message survives) |
 | `test_redis_isolation.py` | PRO-78 guard for the autouse `fake_redis` fixture: `get_redis_client()` returns a `fakeredis` instance, each test gets a fresh empty store (no cross-test bleed), and `StateManager` round-trips through the fake |
 
 ### Health & Regression
@@ -111,7 +115,7 @@ pytest -m integration
 ### `conftest.py` (autouse for all non-integration tests)
 
 - **MongoDB:** `mongomock_motor` (`AsyncMongoMockClient`) — in-memory, no real DB
-- **WhatsApp:** `whatsapp` module-level instance mocked with `AsyncMock` for `send_message`, `send_location_link`, `send_interactive_buttons`
+- **WhatsApp:** `whatsapp` module-level instance mocked with `AsyncMock` for `send_message`, `send_location_link`
 - **AI Engine:** `ai.analyze_conversation` returns a predefined `AIResponse` (city=Tel Aviv, issue=Leak, is_deal=False)
 - **Consent:** `has_consent` patched to return `True` by default
 - **ContextManager:** mocked globally (clears Redis dependency)
@@ -206,9 +210,10 @@ async def test_something(mock_db, monkeypatch):
 > the same logic offline; manual transport verification lives exclusively in
 > `docs/PILOT_E2E_CHECKLIST.md` (PRO-64). Green API itself is gone (PRO-85), and the
 > PRO-29 plan for a separate staging instance to gate live-fire automation on is
-> cancelled — live-fire automation is blocked until PRO-89 ships a real transmitting
-> provider (see `scripts/seed_coverage_matrix.py`, which now guards on
-> `provider.transmits` rather than an instance id).
+> cancelled — the PRO-89 `CloudAPIProvider` is code-complete, but live-fire automation
+> is still blocked until PRO-87 (Meta Business Portfolio + template approval) puts a real
+> transmitting account behind it (see `scripts/seed_coverage_matrix.py`, which now guards
+> on `provider.transmits` rather than an instance id).
 
 ---
 

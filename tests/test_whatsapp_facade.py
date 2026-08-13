@@ -303,20 +303,27 @@ def test_dry_run_provider_parses_a_normalized_payload():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "call",
-    [
-        lambda p: p.send_text("c", "t"),
-        lambda p: p.send_file("c", "u"),
-        lambda p: p.send_template("c", "tpl"),
-        lambda p: p.send_interactive("c", "b", []),
-    ],
-)
-async def test_cloud_provider_raises_until_pro_89(call):
-    """Selecting cloud before PRO-89 lands is a misconfiguration and must fail
-    loudly at the first send rather than degrade to silence."""
-    with pytest.raises(NotImplementedError, match="PRO-89"):
-        await call(CloudAPIProvider())
+async def test_cloud_provider_get_state_is_none_when_unconfigured():
+    """PRO-89 landed the real implementation — the provider no longer raises
+    NotImplementedError. An unconfigured provider (no META_ACCESS_TOKEN /
+    META_PHONE_NUMBER_ID in this suite's default settings) must still answer
+    the watchdog's poll with 'not known-good' rather than raising and
+    crashing the scheduler job."""
+    assert await CloudAPIProvider().get_state() is None
+
+
+@pytest.mark.asyncio
+async def test_cloud_provider_send_text_raises_when_service_window_closed(
+    fake_redis,
+):
+    """No inbound message has ever opened `wa:window:{chat_id}` for this
+    chat_id in a fresh fakeredis, so the 24h service window is closed and no
+    approved fallback template exists (PRO-88/89) — the send must fail
+    structured (ServiceWindowClosedError) rather than silently drop."""
+    from app.providers.whatsapp.cloud_api import ServiceWindowClosedError
+
+    with pytest.raises(ServiceWindowClosedError):
+        await CloudAPIProvider().send_text("972500000001@c.us", "hi")
 
 
 @pytest.mark.asyncio

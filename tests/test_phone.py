@@ -1,7 +1,7 @@
 """Tests for the canonical phone helpers (PRO-49): to_chat_id, strip_suffix, to_local_phone."""
 
 import pytest
-from app.core.phone import to_chat_id, strip_suffix, to_local_phone
+from app.core.phone import mask_chat_id, to_chat_id, strip_suffix, to_local_phone
 
 
 # --- to_chat_id ---
@@ -77,3 +77,22 @@ def test_round_trip_chat_id_local():
     # chat_id → local → chat_id is stable
     chat = "972501234567@c.us"
     assert to_chat_id(to_local_phone(chat)) == chat
+
+
+# --- mask_chat_id (PRO-89 review finding) ---
+
+
+def test_mask_chat_id_strips_suffix_before_taking_last_four_digits():
+    """The bug this guards: chat_id[-4:] on a `@c.us`-suffixed id yields the
+    literal string 'c.us' for every recipient — the operator page told them
+    nothing. Stripping the suffix first is the fix."""
+    assert mask_chat_id("972501234567@c.us") == "...4567"
+
+
+def test_mask_chat_id_on_bare_digits():
+    assert mask_chat_id("972501234567") == "...4567"
+
+
+@pytest.mark.parametrize("bad", [None, "", "@c.us"])
+def test_mask_chat_id_falsy_or_suffix_only_returns_placeholder(bad):
+    assert mask_chat_id(bad) == "?"
