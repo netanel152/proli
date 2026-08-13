@@ -46,9 +46,9 @@ WhatsApp yellowCard trigger. To keep manual testing safe:
 
 > **No automatic guard here:** the `--instance-id` production check described
 > in earlier versions of this doc belonged to the deleted scripts above. The
-> guard itself (`tests/qa_safety.py`) is now vestigial — it still reads the
-> long-gone `GREEN_API_INSTANCE_ID` env var and degrades safely to "always
-> production" once that variable is cleaned up (PRO-86). PRO-29, which was
+> guard itself (`tests/qa_safety.py`) was vestigial — it read an instance-id
+> env var that died with the old vendor (PRO-85/86) — and was deleted, along
+> with its 18 tests, in the 2026-08 test-suite cleanup. PRO-29, which was
 > going to supply a separate staging instance to gate future live-fire
 > automation on, is cancelled; that automation is blocked on PRO-89 instead.
 > This manual plan has no equivalent check — confirm by hand that you're

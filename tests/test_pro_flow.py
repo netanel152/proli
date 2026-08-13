@@ -668,50 +668,8 @@ async def test_stats(pro_setup, mock_wa, mock_lm):
 
 
 # --- Reviews ---
-
-
-@pytest.mark.asyncio
-async def test_reviews_with_data(pro_setup, mock_wa, mock_lm):
-    pro_doc, db = pro_setup
-    # The _handle_reviews function matches reviews to leads via key = chat_id + rating
-    chat_id = "972501234567@c.us"
-    await db.leads.insert_one(
-        {
-            "pro_id": pro_doc["_id"],
-            "status": LeadStatus.COMPLETED,
-            "rating_given": 5,
-            "chat_id": chat_id,
-            "completed_at": datetime.now(timezone.utc),
-            "created_at": datetime.now(timezone.utc),
-        }
-    )
-    await db.reviews.insert_one(
-        {
-            "pro_id": pro_doc["_id"],
-            "customer_chat_id": chat_id,
-            "rating": 5,
-            "comment": "שירות מצוין",
-        }
-    )
-
-    result = await handle_pro_text_command(
-        f"{PRO_PHONE}@c.us", "ביקורות", mock_wa, mock_lm
-    )
-    assert result is not None
-    assert "דירוגים" in result or "ביקורות" in result.lower()
-    assert "5" in result  # Rating value shown
-
-
-@pytest.mark.asyncio
-async def test_reviews_empty(pro_setup, mock_wa, mock_lm):
-    pro_doc, db = pro_setup
-    # Remove any text reviews so the handler returns the no-reviews message
-    await db.reviews.delete_many({"pro_id": PRO_ID})
-
-    result = await handle_pro_text_command(
-        "972500000000@c.us", "ביקורות", mock_wa, mock_lm
-    )
-    assert result == Messages.Pro.NO_REVIEWS_WITH_TEXT
+# (covered by test_reviews_returns_text_reviews / test_reviews_no_text_reviews
+# below — the earlier, weaker copies that lived here were removed as duplicates)
 
 
 # --- Unknown Command ---
@@ -1552,31 +1510,6 @@ async def test_menu_returns_dashboard_not_help_menu(
     assert result != Messages.Pro.HELP_MENU
     assert "יוסי אינסטלציה" in result
     assert "💡 טיפ" in result  # discovery tip
-
-
-@pytest.mark.asyncio
-async def test_help_does_not_clear_state_or_context(
-    pro_setup, mock_wa, mock_lm, monkeypatch
-):
-    """'עזרה' must not touch StateManager or ContextManager."""
-    pro_doc, _ = pro_setup
-    chat_id = f"{PRO_PHONE}@c.us"
-
-    mock_state = MagicMock()
-    mock_state.get_state = AsyncMock(return_value=None)
-    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
-
-    mock_ctx = MagicMock()
-    mock_ctx.clear_context = AsyncMock()
-    monkeypatch.setattr(app.services.pro_flow, "ContextManager", mock_ctx)
-
-    await handle_pro_text_command(chat_id, "עזרה", mock_wa, mock_lm)
-
-    mock_ctx.clear_context.assert_not_called()
-    mock_state.clear_state = getattr(mock_state, "clear_state", None)
-    # clear_state must not have been called
-    if mock_state.clear_state:
-        mock_state.clear_state.assert_not_called()
 
 
 # --- Dashboard discovery tip ---

@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 909 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
+**Current status: 885 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 90 skips are cells of the PRO-83 state × input matrix — but not all of them are deliberate `N/A`: 15 (`defect-finish`, `defect-cancel`, `defect-price`) are dark because of the same tracked product defects the strict xfails document below, not by design. The xfails are four product defects the harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR. CI enforces it exactly (the "Guard — test baseline" step in `.github/workflows/tests.yml` fails the build when the passed count is below **or** above this line), so a regression and a stale baseline are both unmergeable.
 
@@ -46,7 +46,6 @@ pytest -m integration
 | `test_smart_dispatcher_logic.py` | Dispatcher AI: missing info → clarify, city+issue → handoff to pro, audio transcription flow |
 | `test_pro_flow.py` | Pro commands: approve, reject, finish (multi-job selection), pause bot, resume, dashboard fallback, vacation mode, PRO-63 `מצא` reassignment-lifecycle reset after escalation |
 | `test_customer_flow.py` | Post-job: completion checks, rating prompts, review collection |
-| `test_sos_logic.py` | SOS alerts: admin notification, pro notification, BOT_PAUSED_BY_CUSTOMER message |
 | `test_dual_role_routing.py` | Pro-as-customer routing: `לקוח` mode switch, sticky CUSTOMER_MODE while their own lead is open, context-aware keyword bypass, soft-hold escape |
 
 ### Matching & Routing
@@ -101,7 +100,6 @@ pytest -m integration
 | File | What it covers |
 |------|---------------|
 | `test_db_integration.py` | Real MongoDB read/write: lead persistence, status flow, chat history, pro lifecycle |
-| `test_full_flow.py` | Complete journey: message → AI → Pro → Booking → Completion → Rating |
 | `test_integration_webhook.py` | HTTP POST to `/webhook` endpoint |
 | `test_scheduler.py` | Daily reminders, stale monitor timing |
 | `test_sos_monitor.py` | Auto-healing and admin reporting for stuck leads |
