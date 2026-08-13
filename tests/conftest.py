@@ -126,6 +126,20 @@ def patch_dependencies(request, monkeypatch, mock_db):
     monkeypatch.setattr(app.core.database, "consent_collection", consent)
     monkeypatch.setattr(app.core.database, "audit_log_collection", audit_log)
     monkeypatch.setattr(app.core.database, "admins_collection", admins)
+    monkeypatch.setattr(
+        app.core.database, "wa_delivery_collection", mock_db.wa_delivery
+    )
+
+    # PRO-89: delivery.py takes its own reference at import time (`from
+    # app.core.database import wa_delivery_collection`), so patching the
+    # database module alone leaves it pointed at the real Mongo — which is
+    # exactly how a local suite run leaked a test doc into proli_staging_db
+    # on 2026-08-13 (developer .env pointed MONGO_URI at staging).
+    import app.providers.whatsapp.delivery
+
+    monkeypatch.setattr(
+        app.providers.whatsapp.delivery, "wa_delivery_collection", mock_db.wa_delivery
+    )
 
     # Patch Scheduler Collections
     import app.scheduler
