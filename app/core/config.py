@@ -355,7 +355,26 @@ class Settings(BaseSettings):
                 values.append(raw)
         return values
 
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # PRO-99: a ValidationError fires *during* construction, before any
+    # SecretStr wrapping (PRO-94), so pydantic's default error text echoes the
+    # raw input under ``input_value=`` — for a settings model that is the raw
+    # env dict, credentials included. The PRO-96 environment cross-check is
+    # *designed* to fail loudly on misconfig, and without this flag it paid for
+    # that by dumping a partial GEMINI_API_KEY into the Railway crash logs.
+    # ``hide_input_in_errors=True`` suppresses only the automatic echo;
+    # validator messages that deliberately name a non-secret bad value
+    # (``got 'prod'``) are unaffected, so boot errors stay actionable.
+    #
+    # Boundary: the flag reaches ``__str__``/``__repr__``/tracebacks only.
+    # ``ValidationError.errors()`` and ``.json()`` still carry the entire raw
+    # input dict — no boot handler may ever render either. Trade-off: plain
+    # typed fields with no custom message also lose their echo (an invalid
+    # ``MONGO_MAX_POOL_SIZE`` reports "should be a valid integer" without the
+    # value); ``loc`` still names the field, and the operator can read the
+    # value off Railway.
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", hide_input_in_errors=True
+    )
 
 
 settings = Settings()
