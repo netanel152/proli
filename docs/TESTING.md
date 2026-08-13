@@ -4,7 +4,7 @@ The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode
 
 **Current status: 909 passed, 96 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set; the remaining skips are the explicit `N/A` cells of the PRO-83 state × input matrix, and the xfails are four product defects that harness documents — see below).
 
-> This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR.
+> This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR. CI enforces it exactly (the "Guard — test baseline" step in `.github/workflows/tests.yml` fails the build when the passed count is below **or** above this line), so a regression and a stale baseline are both unmergeable.
 
 ---
 
