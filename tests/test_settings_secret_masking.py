@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Union, get_args, get_origin
 
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
+from pydantic_settings import SettingsConfigDict
 
 from app.core.config import Settings
 
@@ -348,3 +349,158 @@ def test_get_secret_value_is_not_assigned_to_a_module_level_name_in_services():
     assert not offenders, "Secret unwrapped into a module-level name:\n" + "\n".join(
         offenders
     )
+
+
+# ---------------------------------------------------------------------------
+# 5. PRO-99: hide_input_in_errors — the *construction-time* leak
+# ---------------------------------------------------------------------------
+#
+# SecretStr (section 1-4 above) only protects an object that already exists.
+# A pydantic ValidationError fires *during* construction — before any field is
+# wrapped — so pydantic's default error text echoes the raw input under
+# ``input_value=``. For Settings that raw input is the whole env dict,
+# credentials included. This is exactly how a partial GEMINI_API_KEY reached
+# the Railway crash logs via the PRO-96 environment cross-check:
+# ``environment_must_match_the_platform`` is *designed* to fail loudly on
+# misconfig, and without ``hide_input_in_errors=True`` that failure carried
+# every other credential along with it.
+
+
+def test_hide_input_in_errors_is_configured():
+    """Named guard for the flag itself.
+
+    A future reshuffle of ``SettingsConfigDict`` (e.g. adding
+    ``populate_by_name`` or switching ``env_file``) could drop this kwarg
+    without anyone noticing — the leak only shows up the next time a
+    ValidationError fires in production. This test fails with a reason
+    instead of the leak tests below failing with a wall of sentinels.
+    """
+    assert Settings.model_config.get("hide_input_in_errors") is True, (
+        "Settings.model_config lost hide_input_in_errors=True (PRO-99). "
+        "Without it, any ValidationError raised during construction echoes "
+        "the raw input — including every SecretStr field's plaintext value, "
+        "which SecretStr wrapping cannot protect because it hasn't happened "
+        "yet — into the traceback."
+    )
+
+
+def test_field_validator_error_does_not_echo_raw_input():
+    """PRO-34's ENVIRONMENT field_validator path.
+
+    A ``field_validator`` error's ``input_value`` echo is only the offending
+    field's own value (``'prod'``) — never the whole env dict, since
+    per-field validation is not passed sibling fields. So this path cannot
+    leak a *different* field's sentinel; ``ENVIRONMENT`` itself is not a
+    credential. What this test pins is narrower: the echo mechanism is off
+    at all (no ``input_value=`` token in the rendering), and that turning it
+    off did not also swallow the validator's own actionable message.
+    """
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            CLOUDINARY_CLOUD_NAME="sentinel-cloud-name",
+            ENVIRONMENT="prod",
+            **SENTINELS,
+        )
+
+    rendered_str = str(exc_info.value)
+    rendered_tb = "".join(
+        traceback.format_exception(
+            type(exc_info.value), exc_info.value, exc_info.value.__traceback__
+        )
+    )
+
+    assert "input_value" not in rendered_str
+    assert "input_value" not in rendered_tb
+
+    # The flag must silence only the automatic raw-input echo, not the
+    # validator's own deliberate, non-secret message.
+    assert "got 'prod'" in rendered_str
+
+
+def test_secret_field_validator_error_does_not_echo_the_secret():
+    """ADMIN_PASSWORD's own validator: without the flag this renders
+    ``input_value='tiny-pw'`` — the password itself, in the boot traceback."""
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            GEMINI_API_KEY="k",
+            CLOUDINARY_CLOUD_NAME="c",
+            CLOUDINARY_API_KEY="k2",
+            CLOUDINARY_API_SECRET="s",
+            ADMIN_PASSWORD="tiny-pw",
+        )
+    rendered = str(exc_info.value)
+    assert "tiny-pw" not in rendered
+    assert "at least 8 characters" in rendered  # still actionable
+
+
+def test_model_validator_error_does_not_echo_raw_input(monkeypatch):
+    """PRO-96's environment_must_match_the_platform model_validator path —
+    the exact incident: this is a ``mode="after"`` validator, so pydantic's
+    default error context for it is the *entire* validated input dict, not
+    just the one field that disagrees.
+
+    ``tests/conftest.py`` clears both Railway env vars suite-wide (so the
+    rest of the suite is not sensitive to the ambient platform), which is
+    why this test sets ``RAILWAY_ENVIRONMENT_NAME`` back itself.
+    """
+    monkeypatch.setenv("RAILWAY_ENVIRONMENT_NAME", "production")
+
+    with pytest.raises(ValidationError) as exc_info:
+        Settings(
+            CLOUDINARY_CLOUD_NAME="sentinel-cloud-name",
+            ENVIRONMENT="staging",
+            **SENTINELS,
+        )
+
+    rendered_str = str(exc_info.value)
+    rendered_tb = "".join(
+        traceback.format_exception(
+            type(exc_info.value), exc_info.value, exc_info.value.__traceback__
+        )
+    )
+
+    _assert_no_sentinels(
+        rendered_str, context="ValidationError str() (model_validator)"
+    )
+    _assert_no_sentinels(
+        rendered_tb, context="ValidationError traceback (model_validator)"
+    )
+    assert "input_value" not in rendered_str
+    assert "input_value" not in rendered_tb
+
+    # The deliberate, non-secret message must survive.
+    assert "contradicts the platform" in rendered_str
+    assert "ENVIRONMENT='staging'" in rendered_str
+
+    # Boundary: hide_input_in_errors reaches __str__/__repr__/traceback only.
+    # e.errors() and e.json() still carry the entire raw env dict — no boot
+    # handler may render either.
+    assert SENTINELS["ADMIN_PASSWORD"] in repr(exc_info.value.errors())
+
+
+class _EchoingSettings(Settings):
+    """Same model with the flag explicitly off — a subclass inherits the
+    parent's ``model_config`` as a starting point, but pydantic does not
+    merge it key-by-key, so this override must restate every key rather than
+    adding just ``hide_input_in_errors=False`` on top."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env", extra="ignore", hide_input_in_errors=False
+    )
+
+
+def test_input_value_marker_is_present_when_the_flag_is_off():
+    """Keeps the negative ``"input_value" not in rendered`` assertions above
+    honest: they depend on a pydantic-internal token, so if pydantic ever
+    renamed or removed it, those assertions would pass vacuously with the
+    flag doing nothing. This proves the marker is real and observable in
+    this pydantic version by triggering it on purpose.
+    """
+    with pytest.raises(ValidationError) as exc_info:
+        _EchoingSettings(
+            CLOUDINARY_CLOUD_NAME="sentinel-cloud-name",
+            ENVIRONMENT="prod",
+            **SENTINELS,
+        )
+
+    assert "input_value" in str(exc_info.value)
