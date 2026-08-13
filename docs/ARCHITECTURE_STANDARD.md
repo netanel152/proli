@@ -537,6 +537,14 @@ META_ACCESS_TOKEN: SecretStr | None = None
   log-redaction filter in `app/core/logger.py` is the second layer, sourced
   from the `SecretStr` fields automatically — a new credential is covered the
   moment it is typed correctly, with no list to remember.
+- **`SecretStr` only protects an object that already exists.** A
+  `ValidationError` raised *during* `Settings` construction (e.g. PRO-96's
+  environment cross-check) fires before any field is wrapped, so pydantic's
+  default error text echoed the raw input — env vars included — under
+  `input_value=`. `Settings.model_config` sets `hide_input_in_errors=True`
+  (PRO-99) to close that gap; it covers `__str__`/`__repr__`/tracebacks only
+  — `ValidationError.errors()`/`.json()` still carry the raw input dict, so
+  no boot handler may render either.
 
 ## 12. Failure Policy: Fail-Open vs Fail-Closed
 
