@@ -2,11 +2,13 @@
 
 > ⚠️ **PRO-86 update:** Green API is gone entirely (PRO-85 — instance deleted, tariff
 > cancelled) and outbound now goes through the provider facade (`app/providers/whatsapp/`).
-> Until PRO-89 ships a working `CloudAPIProvider`, there is **no live transmitting provider**
-> — `WHATSAPP_PROVIDER` defaults to `dryrun` (never transmits) and `cloud` is a stub that
-> raises `NotImplementedError`. The real-send steps in this plan are **not currently
-> executable**; the "Green API" references below describe the pre-PRO-86 setup and are kept
-> as a template for whichever real provider PRO-89 wires up.
+> `CloudAPIProvider` (PRO-89) is code-complete against the Meta Graph API, but there is
+> still **no live transmitting provider** in this deployment — `WHATSAPP_PROVIDER` defaults
+> to `dryrun` (never transmits), and selecting `cloud` for real requires Meta credentials
+> that don't exist yet because PRO-87 (Business Portfolio, template approval, a sandbox
+> number) hasn't landed. The real-send steps in this plan are **not currently executable**;
+> the "Green API" references below describe the pre-PRO-86 setup and are kept as a template
+> for whichever real provider goes live.
 
 ## Setup Requirements
 
@@ -50,7 +52,8 @@ WhatsApp yellowCard trigger. To keep manual testing safe:
 > env var that died with the old vendor (PRO-85/86) — and was deleted, along
 > with its 18 tests, in the 2026-08 test-suite cleanup. PRO-29, which was
 > going to supply a separate staging instance to gate future live-fire
-> automation on, is cancelled; that automation is blocked on PRO-89 instead.
+> automation on, is cancelled; that automation is blocked on PRO-87 (Meta
+> onboarding) instead.
 > This manual plan has no equivalent check — confirm by hand that you're
 > pointed at a QA/non-production number before starting.
 

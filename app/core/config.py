@@ -3,6 +3,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 import os
 
 from app.core.constants import (
+    CLOUD_PROVIDER,
     DEVELOPMENT_ENV,
     DRYRUN_PROVIDER,
     PRODUCTION_ENV,
@@ -207,6 +208,28 @@ class Settings(BaseSettings):
     # the same code either way, so the offline E2E harness (PRO-83) still
     # asserts on the exact bytes a recipient would have received.
     WHATSAPP_DRY_RUN: bool = False
+
+    # PRO-89 — Meta Cloud API credentials. All optional at the type level
+    # because the default provider is dryrun; require_cloud_provider_config
+    # below is what makes them mandatory the moment `cloud` is selected for
+    # real. Field names deliberately end in _TOKEN/_SECRET so the PRO-94
+    # SecretStr convention test and the log redaction filter cover them
+    # automatically.
+    #
+    # META_ACCESS_TOKEN     — System User token, sends via Graph API.
+    # META_APP_SECRET       — signs webhooks; verifies X-Hub-Signature-256.
+    # META_VERIFY_TOKEN     — operator-chosen string echoed back during the
+    #                         webhook subscription handshake (GET /webhook/meta).
+    # META_PHONE_NUMBER_ID  — the sender. An opaque Graph id, not the phone
+    #                         number itself; appears in every API URL, not secret.
+    META_ACCESS_TOKEN: SecretStr | None = None
+    META_APP_SECRET: SecretStr | None = None
+    META_VERIFY_TOKEN: SecretStr | None = None
+    META_PHONE_NUMBER_ID: str | None = None
+    # Pinned rather than "latest": Graph versions live ~2 years and a silent
+    # major-version jump is how a working payload starts 400ing. Bump on purpose.
+    META_GRAPH_API_VERSION: str = "v23.0"
+
     LOG_LEVEL: str = "INFO"
 
     # Backup (optional - S3 upload). AWS credentials are read by boto3
@@ -270,6 +293,54 @@ class Settings(BaseSettings):
                 "production: it is the only thing authenticating POST /webhook "
                 "since PRO-86 removed the sender instance-id check."
             )
+        return self
+
+    @model_validator(mode="after")
+    def require_cloud_provider_config(self):
+        """PRO-89: selecting the cloud transport without its credentials must
+        fail at boot, not at the first send.
+
+        Two tiers, matching what each credential protects:
+
+        * ``META_ACCESS_TOKEN`` + ``META_PHONE_NUMBER_ID`` are required the
+          moment ``cloud`` would actually transmit — without them every send
+          raises, which is a dead service pretending to be healthy.
+          ``WHATSAPP_DRY_RUN=true`` exempts this tier: the emergency mute must
+          keep working even on a half-configured box (the outage runbook has
+          the operator flip it under pressure).
+        * ``META_APP_SECRET`` + ``META_VERIFY_TOKEN`` authenticate *inbound*
+          webhooks, so they are required in prod-like environments whenever the
+          provider is ``cloud`` — dry-run or not, the route is still exposed
+          and an unsigned payload must not be able to drive the worker.
+        """
+        if self.WHATSAPP_PROVIDER != CLOUD_PROVIDER:
+            return self
+
+        if not self.WHATSAPP_DRY_RUN:
+            missing = [
+                name
+                for name in ("META_ACCESS_TOKEN", "META_PHONE_NUMBER_ID")
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(
+                    f"WHATSAPP_PROVIDER=cloud requires {', '.join(missing)} "
+                    "to be set (or WHATSAPP_DRY_RUN=true to run muted)."
+                )
+
+        if self.is_prod_like:
+            missing = [
+                name
+                for name in ("META_APP_SECRET", "META_VERIFY_TOKEN")
+                if not getattr(self, name)
+            ]
+            if missing:
+                raise ValueError(
+                    f"WHATSAPP_PROVIDER=cloud in a {self.ENVIRONMENT} "
+                    f"environment requires {', '.join(missing)}: they are what "
+                    "authenticates POST/GET /webhook/meta (X-Hub-Signature-256 "
+                    "and the subscription handshake)."
+                )
         return self
 
     @model_validator(mode="after")

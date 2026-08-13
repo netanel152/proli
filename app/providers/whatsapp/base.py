@@ -6,9 +6,9 @@ and knows nothing about circuit breakers, kill switches or dry-run — those are
 facade concerns, so the guarantees hold identically for any provider.
 
 Green API is gone (PRO-85 operator decision, instance 7105567180 deleted). The
-only implementations are :class:`~app.providers.whatsapp.dry_run.DryRunProvider`
-and the :class:`~app.providers.whatsapp.cloud_api.CloudAPIProvider` stub that
-PRO-89 fills in.
+implementations are :class:`~app.providers.whatsapp.dry_run.DryRunProvider`
+(logs, never transmits) and the Meta Cloud API
+:class:`~app.providers.whatsapp.cloud_api.CloudAPIProvider` (PRO-89).
 """
 
 from abc import ABC, abstractmethod
@@ -21,10 +21,10 @@ class NormalizedMessage:
     """Provider-agnostic inbound message.
 
     The internal shape every provider's ``parse_webhook`` must produce, so the
-    worker never sees a vendor payload. Inbound wiring (``/webhook`` calling
-    through to this) lands in PRO-89 alongside the Cloud API payload shape —
-    designing a "neutral" inbound model against a single vendor was judged
-    premature, see the PRO-86 plan comment.
+    worker never sees a vendor payload. PRO-89 wired the Cloud API side:
+    ``/webhook/meta`` normalizes Meta envelopes through
+    ``cloud_api.normalize_meta_message`` into exactly this shape before
+    anything is enqueued.
     """
 
     chat_id: str
@@ -86,8 +86,10 @@ class WhatsAppProvider(ABC):
         """Deliver an interactive (button/list) message.
 
         Green API could not do this at all, which is why the project convention
-        was numeric text menus. Cloud API can, but nothing may use it until the
-        PRO-88 template catalog and PRO-89 transport exist — see CLAUDE.md.
+        was numeric text menus. The PRO-89 transport exists now, but no *flow*
+        calls this yet: adopting buttons over numeric menus is an explicit
+        product decision still to be made (see CLAUDE.md and the PRO-88
+        catalog §"numbered-reply menus"), not a door PRO-89 opened by default.
         """
 
     async def send_typing(self, chat_id: str) -> None:
