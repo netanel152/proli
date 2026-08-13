@@ -78,7 +78,7 @@ facts rather than impressions:
 | Python files under `admin_panel/`       | 12                             |
 | Test files under `tests/`               | 56                             |
 | Test functions                          | ~613                           |
-| Test baseline (`docs/TESTING.md`)       | 863 passed, 96 skipped, 4 xfail |
+| Test baseline (`docs/TESTING.md`)       | 974 passed, 96 skipped, 4 xfail |
 | Files over 500 lines                    | 8                              |
 | Files over 1,000 lines                  | 2                              |
 
@@ -144,10 +144,11 @@ network, no Mongo and no Redis. New handlers follow the same shape.
 
 **5. Text-only menus.** Every WhatsApp menu is numeric or keyword replies —
 `"Reply '1' to approve, '2' to reject"` — never interactive buttons.
-`send_interactive` exists on the provider ABC because Meta Cloud API supports
-it, but nothing in any flow may call it until PRO-88 (template catalog) and
-PRO-89 (CloudAPIProvider) land. This is a CLAUDE.md-level rule and reviewers
-enforce it.
+`send_interactive` exists on the provider ABC and the PRO-89 `CloudAPIProvider`
+transport can send it, but nothing in any flow may call it: no template is
+approved yet (PRO-87 onboarding is still open) and adopting buttons is an
+explicit product decision not yet made (PRO-88 catalog). This is a
+CLAUDE.md-level rule and reviewers enforce it.
 
 **6. Every safety check states its failure direction.** Rate limiting fails
 open; the outbound egress fails closed. Neither is an accident, and neither
@@ -322,7 +323,8 @@ Rules:
 - Nothing outside `app/providers/whatsapp/` constructs a provider. Ever.
 - No HTTP client at a vendor messaging endpoint anywhere in the repo.
 - `send_interactive` is defined on the ABC and MUST NOT be called from any
-  flow until PRO-88/PRO-89 land.
+  flow — the PRO-89 transport exists, but no template is approved (PRO-87)
+  and adopting buttons is a product decision not yet made (PRO-88).
 - Two CI guards enforce this mechanically (the "Guard" steps in
   `.github/workflows/tests.yml`): the build fails on any reference to the
   old vendor's domain, on an `httpx`/`requests` import under

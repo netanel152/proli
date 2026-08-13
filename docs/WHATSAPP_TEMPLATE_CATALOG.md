@@ -1,6 +1,6 @@
 # WhatsApp Template Catalog (PRO-88)
 
-**Status:** inventory complete, template designs draft. Nothing here has been submitted to Meta.
+**Status:** inventory complete, template designs draft. Nothing here has been submitted to Meta. The machine-readable half of this catalog now exists in code — `app/providers/whatsapp/template_registry.py` (PRO-89) — with every entry `DRAFT`; flipping an entry to `APPROVED` (with the exact name Meta approves) is the single code change that arms it for sending.
 
 ## What this document is
 
@@ -95,7 +95,7 @@ These are the parts where our current message shapes and Meta's template format 
 
 **1. Multi-line interpolated blocks.** `build_new_lead_message` composes a header, a details block with five substitutions, a footer, and a media-links block built at runtime from a list of unknown length. Template variables are generally constrained in ways free-form text is not — notably around newlines and adjacent placeholders. The media-links block (`\n1. url\n2. url…`) is the least template-shaped thing we send.
 
-**2. The numbered-reply menus survive, but verify how.** CLAUDE.md's text-only rule was inherited from the old vendor's limitation and now rests on PRO-88/89 not having landed. Numeric-reply instructions are plain body text, so they should templatize cleanly — but the reason to keep them text-only rather than adopting interactive buttons is now a *choice*, not a constraint, and this catalog is where that choice should be made explicitly.
+**2. The numbered-reply menus survive, but verify how.** CLAUDE.md's text-only rule was inherited from the old vendor's limitation; PRO-88/89 have both now landed (the catalog and the `CloudAPIProvider` transport), and `send_interactive` can send real buttons/lists. Numeric-reply instructions are plain body text, so they should templatize cleanly — but the reason to keep them text-only rather than adopting interactive buttons is a *choice*, not a constraint (no template is even approved yet — that's PRO-87), and this catalog is where that choice should be made explicitly.
 
 **3. Media.** P4 sends an image with a caption. Templates carry media in a header component with a different structure and different approval path than a text template.
 

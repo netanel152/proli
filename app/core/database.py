@@ -36,6 +36,11 @@ reviews_collection = db.reviews
 consent_collection = db.consent
 audit_log_collection = db.audit_log
 admins_collection = db.admins
+# PRO-89: WhatsApp delivery statuses (sent/delivered/read/failed per wamid).
+# Deliberately separate from `messages` — get_chat_history rehydrates the AI
+# context from any `messages` doc matching a chat_id, so status records there
+# would be replayed into the Gemini prompt.
+wa_delivery_collection = db.wa_delivery
 
 # --- Sync Client (PyMongo) ---
 # Kept strictly for synchronous scripts or legacy tools if needed.

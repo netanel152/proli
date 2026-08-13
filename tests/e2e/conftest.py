@@ -202,6 +202,7 @@ async def world(
         "consent_collection": mock_db.consent,
         "audit_log_collection": mock_db.audit_log,
         "admins_collection": mock_db.admins,
+        "wa_delivery_collection": mock_db.wa_delivery,
     }
     for module in [
         m for name, m in list(sys.modules.items()) if name.startswith("app.")

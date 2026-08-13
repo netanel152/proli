@@ -56,7 +56,7 @@
 | Cache / State | Redis |
 | Admin UI | Streamlit |
 | Media | Cloudinary |
-| WhatsApp | Provider facade (`app/providers/whatsapp/`, PRO-86) — dry-run by default; Meta Cloud API pending PRO-89 |
+| WhatsApp | Provider facade (`app/providers/whatsapp/`, PRO-86) — dry-run by default; Meta Cloud API (`CloudAPIProvider`, PRO-89) is code-complete but not yet onboarded (PRO-87) |
 | Security | Bcrypt, webhook token verification, session cookies |
 | Infrastructure | Docker Compose / Railway |
 
@@ -90,7 +90,11 @@ ADMIN_PASSWORD=...                   # generate hash: python scripts/generate_ad
 ADMIN_PHONE=972501234567             # WhatsApp number for SOS alerts
 ONCALL_PHONE=972501234567            # on-call number for infra alerts (defaults to ADMIN_PHONE)
 WEBHOOK_TOKEN=...                    # enables ?token=<value> webhook auth — required if ENVIRONMENT is staging/production
-WHATSAPP_PROVIDER=dryrun             # dryrun (default) | cloud — cloud is a stub until PRO-89
+WHATSAPP_PROVIDER=dryrun             # dryrun (default) | cloud — cloud selects the PRO-89 CloudAPIProvider (Meta Graph API)
+META_ACCESS_TOKEN=...                # secret — required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
+META_APP_SECRET=...                  # secret — signs inbound /webhook/meta; required for cloud in staging/production
+META_VERIFY_TOKEN=...                # secret — Meta subscription handshake; required for cloud in staging/production
+META_PHONE_NUMBER_ID=...             # not secret — Graph API phone-number node id
 ENVIRONMENT=development              # development | staging | production (anything else fails at startup)
 ```
 

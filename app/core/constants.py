@@ -173,7 +173,25 @@ class WorkerConstants:
     # polarity is inverted: an expired pause key releases the breaker, an expired
     # confirmation key engages it.
     WA_STATE_CONFIRM_TTL_SECONDS = 360  # 6 min (3× the 2-min poll interval)
+    # PRO-89 — Meta Cloud API 24h customer-service window. Free-form messages
+    # are deliverable only inside the 24 hours following the recipient's most
+    # recent inbound message; outside it only a pre-approved template can be
+    # sent. `wa:window:{chat_id}` is refreshed with this TTL on every inbound
+    # message, so key-present == window-open by construction.
+    SERVICE_WINDOW_TTL_SECONDS = 86400  # 24h — Meta's rule, not ours to tune
+    # PRO-89 — cap on inbound Meta media the worker will download and re-host.
+    # Meta allows documents/video up to 100MB; buffering that three times over
+    # (download → BytesIO → Cloudinary) in a worker with max_jobs=10 is an OOM
+    # waiting to happen, and nothing downstream (Gemini, the pro's offer
+    # message) benefits from an asset that large.
+    MAX_INBOUND_MEDIA_BYTES = 25 * 1024 * 1024  # 25MB
     # ADMIN_PHONE moved to config.py / env var
+
+
+# PRO-89 — Graph API error code on a send Meta rejected because the 24h
+# customer-service window was closed. A `failed` delivery status carrying this
+# code is re-routed through the template registry rather than merely logged.
+META_ERROR_WINDOW_CLOSED = 131047
 
 
 class APIStatus:
