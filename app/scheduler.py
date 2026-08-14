@@ -167,9 +167,56 @@ async def run_slot_regeneration():
         logger.error(f"❌ [Scheduler] Slot regeneration error: {e}")
 
 
+# PRO-111 — consecutive backup-failure counter. Lives in Redis (shared across
+# worker replicas and redeploys), cleared on the first successful run. No TTL:
+# a failure streak must survive until a success actually clears it.
+BACKUP_FAILURE_COUNT_KEY = "backup:consecutive_failures"
+
+
+async def _report_backup_failure(detail: str) -> None:
+    """PRO-111 escalation: a single failed nightly run is ERROR (transient blip);
+    BACKUP_FAILURE_ESCALATION_THRESHOLD consecutive failed runs is CRITICAL —
+    the Sentry paging threshold — because the previous failure already went
+    unnoticed and durable backups are growing stale. Redis errors fail open:
+    an uncounted streak stays ERROR (explicit `counted` flag, so this holds
+    even if the threshold is ever lowered to 1) rather than crashing the job
+    or paging on day one."""
+    from redis.exceptions import ResponseError
+    from app.core.redis_client import get_redis_client
+
+    failures = 1
+    counted = False
+    try:
+        redis = await get_redis_client()
+        try:
+            failures = int(await redis.incr(BACKUP_FAILURE_COUNT_KEY))
+        except ResponseError:
+            # A corrupted (non-integer) value would make INCR raise every
+            # night and silently disable escalation forever — reset it.
+            await redis.set(BACKUP_FAILURE_COUNT_KEY, 1)
+            failures = 1
+        counted = True
+    except Exception as e:
+        logger.warning(f"[Scheduler] Backup failure counter unavailable: {e}")
+
+    if counted and failures >= WorkerConstants.BACKUP_FAILURE_ESCALATION_THRESHOLD:
+        logger.critical(
+            f"🚨 [Scheduler] Nightly backup: {failures} consecutive failed runs — "
+            f"no durable backup is landing in S3. {detail}"
+        )
+    else:
+        logger.error(f"❌ [Scheduler] Backup failed: {detail}")
+
+
 @with_scheduler_lock("run_daily_backup", ttl=82000)
 async def run_daily_backup():
-    """Run automated daily backup via subprocess."""
+    """Run automated daily backup via subprocess (PRO-111: mongodump → S3).
+
+    scripts/backup.py exits non-zero when the dump fails OR when --upload-s3
+    can't land the archive in S3 (missing bucket / failed upload) — a backup
+    that only exists on Railway's ephemeral disk is treated as a failure.
+    """
+    import asyncio
     import subprocess
     import sys
 
@@ -177,7 +224,11 @@ async def run_daily_backup():
         os.path.dirname(os.path.dirname(__file__)), "scripts", "backup.py"
     )
     try:
-        result = subprocess.run(
+        # to_thread: a real mongodump + S3 upload takes minutes — running it
+        # synchronously would stall the worker's event loop (and every other
+        # scheduler job / inbound message) for the whole dump.
+        result = await asyncio.to_thread(
+            subprocess.run,
             [sys.executable, script_path, "--upload-s3"],
             capture_output=True,
             text=True,
@@ -185,10 +236,31 @@ async def run_daily_backup():
         )
         if result.returncode == 0:
             logger.info("✅ [Scheduler] Daily backup completed successfully.")
+            try:
+                from app.core.redis_client import get_redis_client
+
+                redis = await get_redis_client()
+                await redis.delete(BACKUP_FAILURE_COUNT_KEY)
+            except Exception as e:
+                logger.warning(f"[Scheduler] Backup failure counter reset skipped: {e}")
         else:
-            logger.error(f"❌ [Scheduler] Backup failed: {result.stderr}")
+            # Tail only — enough to diagnose without dumping a full trace into
+            # every log line. loguru sinks write to stdout (app/core/logger.py),
+            # so backup.py's own failure reason is on stdout; stderr carries
+            # raw tool output (e.g. a mongodump crash).
+            # Belt-and-braces (PRO-94): this feeds a CRITICAL that reaches
+            # Sentry — scrub every known secret BEFORE truncating, so a secret
+            # straddling the 500-char cut can't slip through half-redacted.
+            from app.core.logger import redact_secrets
+
+            tail = redact_secrets(result.stderr.strip() or result.stdout.strip())
+            await _report_backup_failure(
+                f"exit={result.returncode}, output: {tail[-500:]}"
+            )
     except Exception as e:
-        logger.error(f"❌ [Scheduler] Backup error: {e}")
+        from app.core.logger import redact_secrets
+
+        await _report_backup_failure(redact_secrets(f"{e}"))
 
 
 @with_scheduler_lock("run_sos_reporter", ttl=14000)

@@ -232,9 +232,18 @@ class Settings(BaseSettings):
 
     LOG_LEVEL: str = "INFO"
 
-    # Backup (optional - S3 upload). AWS credentials are read by boto3
-    # directly from the environment; no need to re-declare them here.
+    # Backup (S3 upload — PRO-111: required on the Railway worker; the nightly
+    # job treats a missing bucket as a hard failure). The AWS credentials are
+    # still read by boto3 directly from the environment — they are declared
+    # here ONLY so they enroll in the PRO-94 log-redaction list (botocore
+    # error strings can echo the access key); never read them via `settings`.
     BACKUP_S3_BUCKET: str | None = None
+    # Custom endpoint for S3-compatible storage (Cloudflare R2:
+    # https://<account_id>.r2.cloudflarestorage.com). Unset = regular AWS S3.
+    # Plain str, not SecretStr — an R2 account id is not a credential.
+    BACKUP_S3_ENDPOINT: str | None = None
+    AWS_ACCESS_KEY_ID: SecretStr | None = None
+    AWS_SECRET_ACCESS_KEY: SecretStr | None = None
 
     # Sentry (optional — error reporting for worker)
     # When unset, Sentry is disabled (no-op). When set, only CRITICAL-level

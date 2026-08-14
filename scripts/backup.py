@@ -56,10 +56,18 @@ def run_mongodump() -> Path | None:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
         if result.returncode != 0:
             logger.error(f"mongodump failed: {result.stderr}")
+            archive_path.unlink(missing_ok=True)
             return None
 
-        size_mb = archive_path.stat().st_size / (1024 * 1024)
-        logger.info(f"Backup complete: {archive_name} ({size_mb:.1f} MB)")
+        # PRO-111: a 0-byte/truncated archive uploaded to S3 is the same false
+        # confidence this issue is about, one layer down — treat it as failure.
+        size = archive_path.stat().st_size if archive_path.exists() else 0
+        if size < 1024:
+            logger.error(f"mongodump produced a {size}B archive — treating as failure.")
+            archive_path.unlink(missing_ok=True)
+            return None
+
+        logger.info(f"Backup complete: {archive_name} ({size / (1024 * 1024):.1f} MB)")
         return archive_path
 
     except FileNotFoundError:
@@ -67,6 +75,9 @@ def run_mongodump() -> Path | None:
         return None
     except subprocess.TimeoutExpired:
         logger.error("mongodump timed out after 300s.")
+        # Don't leave a truncated .gz behind — retention would count it as a
+        # valid daily and it could end up in someone's restore drill.
+        archive_path.unlink(missing_ok=True)
         return None
 
 
@@ -74,7 +85,9 @@ def upload_to_s3(archive_path: Path) -> bool:
     """Upload backup archive to S3 if credentials are configured."""
     bucket = getattr(settings, "BACKUP_S3_BUCKET", None)
     if not bucket:
-        logger.warning("BACKUP_S3_BUCKET not set, skipping S3 upload.")
+        # PRO-111: under --upload-s3 this is a hard failure, not a skip — an
+        # archive left on Railway's ephemeral disk is wiped on redeploy.
+        logger.error("BACKUP_S3_BUCKET not set — no durable target for backup.")
         return False
 
     try:
@@ -84,7 +97,9 @@ def upload_to_s3(archive_path: Path) -> bool:
         return False
 
     try:
-        s3 = boto3.client("s3")
+        # PRO-111: endpoint_url routes to S3-compatible storage (Cloudflare R2)
+        # when BACKUP_S3_ENDPOINT is set; unset falls through to regular AWS S3.
+        s3 = boto3.client("s3", endpoint_url=settings.BACKUP_S3_ENDPOINT or None)
         key = f"proli-backups/{archive_path.name}"
         s3.upload_file(str(archive_path), bucket, key)
         logger.info(f"Uploaded to s3://{bucket}/{key}")
@@ -160,8 +175,12 @@ def main():
     if not archive_path:
         sys.exit(1)
 
-    if args.upload_s3:
-        upload_to_s3(archive_path)
+    if args.upload_s3 and not upload_to_s3(archive_path):
+        # PRO-111: --upload-s3 is strict. Exiting 0 here made the scheduler
+        # log "completed successfully" while nothing durable existed — the
+        # exact false confidence this issue is about.
+        cleanup_old_backups()
+        sys.exit(1)
 
     cleanup_old_backups()
     logger.info("Backup process complete.")
