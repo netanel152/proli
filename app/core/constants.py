@@ -190,6 +190,16 @@ class WorkerConstants:
     # logs CRITICAL, which is the Sentry paging threshold. Counter lives in
     # Redis (`backup:consecutive_failures`), cleared on the first success.
     BACKUP_FAILURE_ESCALATION_THRESHOLD = 2
+    # PRO-112 — Mongo auth failures on scheduler jobs are a *config* failure
+    # (rotated/deleted DB user), not a data condition: left at ERROR they
+    # accumulate silently while the worker is effectively dead. This many auth
+    # failures within the rolling window logs CRITICAL (the Sentry paging
+    # threshold). A rolling window rather than a consecutive-failure streak:
+    # outside business hours the PRO-73-gated jobs return early without
+    # touching Mongo, and their "successes" would keep resetting a streak.
+    SCHEDULER_MONGO_AUTH_TRIP_THRESHOLD = 3
+    SCHEDULER_MONGO_AUTH_WINDOW_SECONDS = 1800  # 30 min rolling count window
+    SCHEDULER_MONGO_AUTH_REALERT_SECONDS = 3600  # re-page hourly while broken
     # ADMIN_PHONE moved to config.py / env var
 
 

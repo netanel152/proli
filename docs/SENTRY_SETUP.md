@@ -23,6 +23,11 @@ This file is the runbook referenced from `app/worker.py`, `app/main.py`, and
   `logger.critical(...)` (or raises and lets arq's top-level handler catch it).
   Python's `logging.CRITICAL` maps to Sentry's **`fatal`** level — filter on that
   in the alert rule below.
+  > **Caveat (PRO-112):** `LoggingIntegration` only hooks *stdlib* `logging`, so a
+  > loguru `logger.critical(...)` call does not by itself create a Sentry event —
+  > `app/scheduler.py`'s Mongo auth-failure escalation pages via
+  > `logging.getLogger("proli.scheduler").critical(...)` instead. Auditing/fixing
+  > the other `logger.critical` call sites in this doc is PRO-113's scope.
 - **No-op when `SENTRY_DSN` is unset.** Tests, local dev, and the open-source
   checkout never touch the Sentry API. `_init_sentry()` logs
   `"Sentry disabled (SENTRY_DSN not set)."` and returns early.
