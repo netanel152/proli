@@ -206,11 +206,43 @@ Professionals can register directly via WhatsApp:
 
 ## Backup & Restore
 
+### Decision of record (PRO-111)
+
+The primary backup mechanism is the **in-app nightly `mongodump` → Cloudflare R2** path (via R2's S3-compatible API — plain AWS S3 works too by leaving `BACKUP_S3_ENDPOINT` unset). Atlas continuous backups are not available on the current cluster tier (M10+ only), so the in-app job is not a redundancy — it is the only durable backup. Treat its health accordingly.
+
 ### Automated backup
 
-Runs daily at 02:00 IL via APScheduler. Creates a gzipped `mongodump`, saved to `backups/`. Optionally uploads to S3 if `BACKUP_S3_BUCKET` and AWS credentials are configured.
+Runs daily at 02:00 IL via APScheduler (`run_daily_backup` on the worker). Creates a gzipped `mongodump` and uploads it to `s3://$BACKUP_S3_BUCKET/proli-backups/`.
 
-Retention: 7 daily + 4 weekly backups.
+**S3 upload is mandatory, not optional** — `backup.py --upload-s3` exits non-zero if `BACKUP_S3_BUCKET` is unset or the upload fails, because a local archive on Railway's ephemeral filesystem is wiped on every redeploy. The local `backups/` copy is a working artifact, not a backup.
+
+Required on the Railway **worker** service:
+
+| Variable | Purpose |
+|---|---|
+| `BACKUP_S3_BUCKET` | Destination bucket (objects land under `proli-backups/`) |
+| `BACKUP_S3_ENDPOINT` | S3-compatible endpoint — for Cloudflare R2: `https://<account_id>.r2.cloudflarestorage.com`. Unset = regular AWS S3 |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | R2 API token credentials (or an AWS IAM user scoped to `s3:PutObject`/`s3:GetObject`/`s3:ListBucket` on the bucket) |
+| `AWS_REGION` (or `AWS_DEFAULT_REGION`) | With R2: set `AWS_REGION=auto`. With AWS S3: the bucket region (e.g. `eu-west-1`) |
+
+The runtime Docker image installs `mongodb-database-tools` from MongoDB's official apt repo (PRO-111) — `mongodump`/`mongorestore` are available in every container built from `Dockerfile`.
+
+Local retention (relevant for local/dev runs): 7 daily + 4 weekly backups. S3-side retention is managed by a bucket lifecycle rule, not by the app.
+
+### Failure escalation (PRO-111)
+
+- **1 failed nightly run** → `ERROR` log (visible in Railway logs; assumed transient).
+- **2 consecutive failures** (`WorkerConstants.BACKUP_FAILURE_ESCALATION_THRESHOLD`) → `CRITICAL` log → **Sentry pages the operator** (backups are now >48h stale).
+- The streak counter lives in Redis (`backup:consecutive_failures`), is shared across worker replicas, survives redeploys, and is cleared by the first successful run. If Redis itself is down the job fails open: the failure is logged at ERROR and the job never crashes.
+
+> **Known gap:** escalation only fires when the job *runs*. A worker that is down at 02:00 (or an APScheduler misfire) produces no failure and no page. Freshness monitoring (`backup:last_success` + a >48h watchdog) is tracked separately.
+
+### Verification procedure (run after any change to backup config)
+
+1. On the Railway worker: `railway run python scripts/backup.py --upload-s3` (or wait for the 02:00 run) — expect exit 0 and `Uploaded to s3://...` in the log.
+2. Confirm the object exists in the bucket (S3 console or `aws s3 ls s3://$BACKUP_S3_BUCKET/proli-backups/`).
+3. **Restore drill** against a scratch DB — a backup that was never restored is a hypothesis, not a backup: point `MONGO_URI` at a scratch cluster/database, then `python scripts/restore.py --from-s3 proli-backups/<latest-key>` and spot-check `users`/`leads` counts.
+4. Attach the run log / S3 listing to the relevant Linear issue when this is a launch-gate item.
 
 ### Manual commands
 
@@ -318,10 +350,11 @@ python scripts/generate_admin_hash.py
 | `LOG_LEVEL` | `INFO` | Loguru log level |
 | `MAX_CHAT_HISTORY` | `20` | Max messages stored per chat in Redis |
 | `AI_MODELS` | Flash Lite 3.1, Flash 3.5, Flash 2.5, Flash 1.5 | Gemini model fallback chain |
-| `BACKUP_S3_BUCKET` | — | S3 bucket for automated backup upload |
-| `AWS_ACCESS_KEY_ID` | — | AWS credentials for S3 |
-| `AWS_SECRET_ACCESS_KEY` | — | AWS credentials for S3 |
-| `AWS_REGION` | `eu-west-1` | AWS region |
+| `BACKUP_S3_BUCKET` | — | Bucket for the nightly backup — **required on the worker** (PRO-111: the nightly job fails without it) |
+| `BACKUP_S3_ENDPOINT` | — | S3-compatible endpoint (Cloudflare R2); unset = AWS S3 |
+| `AWS_ACCESS_KEY_ID` | — | AWS credentials for S3 (required on the worker with `BACKUP_S3_BUCKET`) |
+| `AWS_SECRET_ACCESS_KEY` | — | AWS credentials for S3 (required on the worker with `BACKUP_S3_BUCKET`) |
+| `AWS_REGION` | — | Region — boto3 has **no** default; unset → `NoRegionError` → backup failure. With R2 set `auto` |
 | `GOOGLE_MAPS_API_KEY` | — | Google Geocoding API key; falls back to static city dict if unset |
 | `GEOCODING_NEGATIVE_TTL_SECONDS` | `86400` | How long a **definitive** geocoding miss is cached (Google answered `ZERO_RESULTS`, or the match fell outside Israel) |
 | `GEOCODING_TRANSIENT_TTL_SECONDS` | `60` | How long a **transient** geocoding failure is cached (missing key, `REQUEST_DENIED`, `OVER_QUERY_LIMIT`, network error). Deliberately short: these say nothing about the city, so inheriting the 24 h TTL would keep every name attempted during an outage unresolvable for a day after the fix (PRO-19) |

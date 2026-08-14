@@ -185,6 +185,11 @@ class WorkerConstants:
     # waiting to happen, and nothing downstream (Gemini, the pro's offer
     # message) benefits from an asset that large.
     MAX_INBOUND_MEDIA_BYTES = 25 * 1024 * 1024  # 25MB
+    # PRO-111 — nightly backup failure escalation. A single failed run stays
+    # ERROR (transient: Mongo hiccup, S3 blip); this many CONSECUTIVE failures
+    # logs CRITICAL, which is the Sentry paging threshold. Counter lives in
+    # Redis (`backup:consecutive_failures`), cleared on the first success.
+    BACKUP_FAILURE_ESCALATION_THRESHOLD = 2
     # ADMIN_PHONE moved to config.py / env var
 
 
