@@ -51,7 +51,8 @@ def download_from_s3(s3_key: str) -> Path | None:
     local_path = BACKUP_DIR / Path(s3_key).name
 
     try:
-        s3 = boto3.client("s3")
+        # PRO-111: same endpoint override as backup.py — Cloudflare R2 when set.
+        s3 = boto3.client("s3", endpoint_url=settings.BACKUP_S3_ENDPOINT or None)
         s3.download_file(bucket, s3_key, str(local_path))
         logger.info(f"Downloaded s3://{bucket}/{s3_key} -> {local_path}")
         return local_path
