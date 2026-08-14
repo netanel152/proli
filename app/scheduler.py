@@ -17,6 +17,10 @@ from app.services.monitor_service import (
     check_whatsapp_instance_state,
 )
 from datetime import datetime, timedelta
+import functools
+import logging
+import re
+from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 from app.core.constants import LeadStatus, WorkerConstants
 from app.core.phone import to_chat_id, strip_suffix
 from app.core.datetime_utils import within_business_hours
@@ -78,7 +82,128 @@ async def send_daily_reminders():
                     logger.error(f"❌ Failed to send to {pro['business_name']}: {e}")
 
 
+# PRO-112 — Mongo auth-failure escalation. `bad auth` (Atlas 8000) on a
+# scheduler job means the worker's MONGO_URI credentials are wrong — a config
+# failure that kills every Mongo-touching job at once, not a data condition.
+# Counted in Redis over a rolling window (shared across worker replicas); at
+# the threshold logs CRITICAL — the Sentry paging level — throttled by the
+# `:paged` key so a dead worker pages hourly instead of on every 2–5-min tick.
+MONGO_AUTH_FAILURE_COUNT_KEY = "scheduler:mongo_auth_failures"
+MONGO_AUTH_FAILURE_PAGED_KEY = "scheduler:mongo_auth_failures:paged"
+
+# Error codes that unambiguously mean credentials/permissions:
+# 13 Unauthorized, 18 AuthenticationFailed. Atlas's 8000 (AtlasError) is its
+# *generic* policy code (also over-quota, disallowed commands, connection
+# limits), so an 8000 counts only when the message itself says auth — as the
+# real-world "bad auth : authentication failed" does. The text match is
+# deliberately narrow: a bare "auth" substring would false-positive on any
+# server message echoing a field name like "author".
+_MONGO_AUTH_ERROR_CODES = {13, 18}
+_AUTH_TEXT = re.compile(
+    r"bad auth|authentication failed|not authorized|requires authentication",
+    re.IGNORECASE,
+)
+
+
+def _is_mongo_auth_failure(exc: Exception) -> bool:
+    # getattr: ServerSelectionTimeoutError carries no `code` attribute.
+    if getattr(exc, "code", None) in _MONGO_AUTH_ERROR_CODES:
+        return True
+    return bool(_AUTH_TEXT.search(str(exc)))
+
+
+async def _record_mongo_auth_failure(job_name: str, exc: Exception) -> None:
+    """Count an auth failure and escalate at the threshold. Fails open on
+    every Redis error — the caller re-raises the original exception
+    regardless, so the existing ERROR/Sentry behavior is unchanged whenever
+    the counter is unavailable."""
+    from redis.exceptions import ResponseError
+    from app.core.logger import mask_pii, redact_secrets
+    from app.core.redis_client import get_redis_client
+
+    try:
+        redis = await get_redis_client()
+        try:
+            # One MULTI/EXEC round trip: INCR and its rolling-window EXPIRE
+            # must not be split — a crash between them would leave the counter
+            # TTL-less, and a single unrelated auth failure months later would
+            # increment straight past the threshold and page immediately.
+            pipe = redis.pipeline()
+            pipe.incr(MONGO_AUTH_FAILURE_COUNT_KEY)
+            pipe.expire(
+                MONGO_AUTH_FAILURE_COUNT_KEY,
+                WorkerConstants.SCHEDULER_MONGO_AUTH_WINDOW_SECONDS,
+            )
+            failures = int((await pipe.execute())[0])
+        except ResponseError:
+            # A corrupted (non-integer) value would make INCR raise on every
+            # failure and silently disable escalation forever — reset it.
+            await redis.set(
+                MONGO_AUTH_FAILURE_COUNT_KEY,
+                1,
+                ex=WorkerConstants.SCHEDULER_MONGO_AUTH_WINDOW_SECONDS,
+            )
+            failures = 1
+        if failures < WorkerConstants.SCHEDULER_MONGO_AUTH_TRIP_THRESHOLD:
+            return
+        paged = await redis.set(
+            MONGO_AUTH_FAILURE_PAGED_KEY,
+            "1",
+            ex=WorkerConstants.SCHEDULER_MONGO_AUTH_REALERT_SECONDS,
+            nx=True,
+        )
+        if paged:
+            # loguru emits no stdlib LogRecord, and sentry_sdk's
+            # LoggingIntegration hooks *stdlib* logging only — a loguru
+            # `logger.critical` never creates a Sentry issue. Page through
+            # stdlib; InterceptHandler (app/core/logger.py) routes the record
+            # back into loguru, so the stdout/file sinks and the redaction
+            # filter still apply.
+            logging.getLogger("proli.scheduler").critical(
+                f"🚨 [Scheduler] Mongo auth failure on '{job_name}' — "
+                f"{failures} auth failures since the first one (no gap longer "
+                f"than {WorkerConstants.SCHEDULER_MONGO_AUTH_WINDOW_SECONDS // 60} "
+                f"min). MONGO_URI credentials are likely wrong (rotation "
+                f"fallout?); every Mongo-touching scheduler job is failing. "
+                # mask_pii inline too: Sentry copies the stdlib record BEFORE
+                # loguru's sink-level _pii_filter runs, so sink-side masking
+                # alone would not cover the Sentry payload.
+                f"Detail: {mask_pii(redact_secrets(str(exc)))[:500]}"
+            )
+    except Exception as e:
+        logger.warning(f"[Scheduler] Mongo auth-failure counter unavailable: {e}")
+
+
+def track_mongo_auth_failures(func):
+    """PRO-112 — wrap a scheduler job so Mongo *auth* failures (bad
+    credentials, deleted DB user) are counted and escalated to CRITICAL.
+    Stacked UNDER @with_scheduler_lock so lock-skipped runs don't count.
+    Always re-raises: the original exception still reaches APScheduler and
+    Sentry exactly as before."""
+
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        try:
+            return await func(*args, **kwargs)
+        except (OperationFailure, ServerSelectionTimeoutError) as e:
+            # AutoReconnect broadly is deliberately NOT counted (collateral of
+            # the auth storm, per PRO-112); a server-selection timeout counts
+            # only when its SDAM detail literally reports an auth failure —
+            # a handshake auth error can surface that way on some ticks.
+            if _is_mongo_auth_failure(e):
+                try:
+                    await _record_mongo_auth_failure(func.__name__, e)
+                except Exception as track_err:  # never mask the real failure
+                    logger.warning(
+                        f"[Scheduler] auth-failure tracking failed: {track_err}"
+                    )
+            raise
+
+    return wrapper
+
+
 @with_scheduler_lock("monitor_unfinished_jobs", ttl=1500)
+@track_mongo_auth_failures
 async def monitor_unfinished_jobs():
     """
     Monitors 'booked' leads and takes action based on their age.
@@ -149,6 +274,7 @@ async def _customer_cold_job_allowed(toggle_key: str) -> bool:
 
 
 @with_scheduler_lock("run_sos_healer", ttl=500)
+@track_mongo_auth_failures
 async def run_sos_healer():
     """Wrapper for SOS Auto-Healer — gated (business hours + toggle, PRO-73)."""
     if not await _customer_cold_job_allowed("sos_healer_active"):
@@ -264,6 +390,7 @@ async def run_daily_backup():
 
 
 @with_scheduler_lock("run_sos_reporter", ttl=14000)
+@track_mongo_auth_failures
 async def run_sos_reporter():
     """Wrapper for SOS Admin Reporter with Toggle Check"""
     config = await settings_collection.find_one({"_id": "scheduler_config"})
@@ -273,6 +400,7 @@ async def run_sos_reporter():
 
 
 @with_scheduler_lock("run_lead_janitor", ttl=20000)
+@track_mongo_auth_failures
 async def run_lead_janitor():
     """Auto-reject CONTACTED leads with no pro — gated (business hours + toggle, PRO-73)."""
     if not await _customer_cold_job_allowed("lead_janitor_active"):
@@ -281,6 +409,7 @@ async def run_lead_janitor():
 
 
 @with_scheduler_lock("run_sla_monitor", ttl=270)
+@track_mongo_auth_failures
 async def run_sla_monitor():
     """Silent-handoff deflection — gated (business hours + toggle, PRO-73)."""
     if not await _customer_cold_job_allowed("sla_monitor_active"):
@@ -288,12 +417,18 @@ async def run_sla_monitor():
     await check_sla_deflection()
 
 
+# No @track_mongo_auth_failures here or on the stale-lead nudger: their
+# monitor_service callees catch Exception internally, so a Mongo auth failure
+# never propagates to the wrapper — the decorator would be dead code implying
+# coverage it doesn't provide. The six decorated jobs (incl. the 2-min
+# WhatsApp state monitor) trip the threshold on their own.
 @with_scheduler_lock("run_pro_approval_sla", ttl=270)
 async def run_pro_approval_sla():
     """PRO-56 — nudge silent pros (T+10) + offer the customer a reassignment (T+25)."""
     await check_pro_approval_sla()
 
 
+# No @track_mongo_auth_failures — see the note above run_pro_approval_sla.
 @with_scheduler_lock("run_stale_lead_nudger", ttl=3000)
 async def run_stale_lead_nudger():
     """Wrapper for Stale Lead Nudger"""
@@ -301,6 +436,7 @@ async def run_stale_lead_nudger():
 
 
 @with_scheduler_lock("run_whatsapp_state_monitor", ttl=90)
+@track_mongo_auth_failures
 async def run_whatsapp_state_monitor():
     """PRO-20 — Green API deauth watchdog. Toggle via `whatsapp_monitor_active`.
     Lock TTL is kept under the polling interval so a missed/crashed tick doesn't
