@@ -3,8 +3,14 @@ from unittest.mock import AsyncMock, MagicMock, patch, call
 from datetime import datetime, timedelta
 import pytz
 from bson import ObjectId
-from app.scheduler import monitor_unfinished_jobs, send_daily_reminders
-from app.core.constants import LeadStatus
+from app.scheduler import (
+    monitor_unfinished_jobs,
+    send_daily_reminders,
+    run_daily_backup,
+    BACKUP_FAILURE_COUNT_KEY,
+)
+from app.core.constants import LeadStatus, WorkerConstants
+import app.scheduler as scheduler_module
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")
 
@@ -230,8 +236,6 @@ async def test_send_daily_reminders_excludes_booked_lead_with_appointment_tomorr
         }
     )
 
-    import app.scheduler as scheduler_module
-
     await scheduler_module.send_daily_reminders()
 
     scheduler_module.whatsapp.send_message.assert_not_called()
@@ -271,3 +275,288 @@ async def test_send_daily_reminders_excludes_booked_lead_without_appointment_dat
     await scheduler_module.send_daily_reminders()
 
     scheduler_module.whatsapp.send_message.assert_not_called()
+
+
+# --- PRO-111: nightly backup failure escalation ---------------------------
+#
+# run_daily_backup shells out to scripts/backup.py --upload-s3 via
+# subprocess.run (imported inside the function — patched globally on the
+# `subprocess` module, which is the same module object regardless of where
+# it's imported from). Redis touches (BACKUP_FAILURE_COUNT_KEY, plus the
+# with_scheduler_lock wrapper) go through the autouse `fake_redis` fixture
+# (PRO-78) — no explicit patching needed for the happy paths; only the
+# "Redis unavailable" case patches get_redis_client directly.
+
+
+def _completed_process(
+    returncode: int, stderr: str = "", stdout: str = ""
+) -> MagicMock:
+    result = MagicMock()
+    result.returncode = returncode
+    result.stderr = stderr
+    result.stdout = stdout
+    return result
+
+
+@pytest.mark.asyncio
+async def test_run_daily_backup_success_deletes_counter_no_error_or_critical(
+    monkeypatch, fake_redis
+):
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess, "run", MagicMock(return_value=_completed_process(0))
+    )
+    # Seed a stale failure streak — success must clear it.
+    await fake_redis.set(BACKUP_FAILURE_COUNT_KEY, "3")
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+
+    await run_daily_backup()
+
+    assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) is None
+    mock_logger.error.assert_not_called()
+    mock_logger.critical.assert_not_called()
+    mock_logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_run_daily_backup_first_failure_logs_error_not_critical(
+    monkeypatch, fake_redis
+):
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        MagicMock(return_value=_completed_process(1, stderr="mongodump: boom")),
+    )
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+
+    await run_daily_backup()
+
+    assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "1"
+    mock_logger.error.assert_called_once()
+    mock_logger.critical.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_daily_backup_second_consecutive_failure_logs_critical(
+    monkeypatch, fake_redis
+):
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        MagicMock(return_value=_completed_process(1, stderr="s3 upload failed")),
+    )
+    # Simulate last night's failure already having incremented the counter.
+    await fake_redis.set(BACKUP_FAILURE_COUNT_KEY, "1")
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+
+    await run_daily_backup()
+
+    assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "2"
+    assert WorkerConstants.BACKUP_FAILURE_ESCALATION_THRESHOLD == 2
+    mock_logger.critical.assert_called_once()
+    mock_logger.error.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_daily_backup_success_after_failures_resets_streak(
+    monkeypatch, fake_redis
+):
+    """A success clears the counter; the *next* failure starts the streak over
+    at 1 (ERROR), proving the counter doesn't silently carry the old streak
+    forward past a success."""
+    import subprocess
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+
+    # Night 1: failure -> counter = 1
+    monkeypatch.setattr(
+        subprocess, "run", MagicMock(return_value=_completed_process(1))
+    )
+    await run_daily_backup()
+    assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "1"
+
+    # Night 2: success -> counter cleared
+    monkeypatch.setattr(
+        subprocess, "run", MagicMock(return_value=_completed_process(0))
+    )
+    await run_daily_backup()
+    assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) is None
+
+    mock_logger.reset_mock()
+
+    # Night 3: failure again -> counter = 1, ERROR not CRITICAL
+    monkeypatch.setattr(
+        subprocess, "run", MagicMock(return_value=_completed_process(1))
+    )
+    await run_daily_backup()
+
+    assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "1"
+    mock_logger.error.assert_called_once()
+    mock_logger.critical.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_daily_backup_redis_unavailable_fails_open_logs_error(
+    monkeypatch,
+):
+    """If Redis itself is down, the failure count can't be tracked — the
+    escalation logic fails open (defaults to 1, ERROR) rather than raising
+    or silently paging on day one."""
+    import subprocess
+    import app.core.redis_client as redis_client_module
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        MagicMock(return_value=_completed_process(1, stderr="mongodump: boom")),
+    )
+    monkeypatch.setattr(
+        redis_client_module,
+        "get_redis_client",
+        AsyncMock(side_effect=Exception("redis down")),
+    )
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+
+    # Must not raise.
+    await run_daily_backup()
+
+    mock_logger.error.assert_called_once()
+    mock_logger.critical.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_daily_backup_subprocess_raises_reports_failure(
+    monkeypatch, fake_redis
+):
+    """A subprocess.run exception (e.g. TimeoutExpired) is routed through the
+    same _report_backup_failure escalation path, not left to propagate."""
+    import subprocess
+
+    def _raise(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd="backup.py", timeout=600)
+
+    monkeypatch.setattr(subprocess, "run", MagicMock(side_effect=_raise))
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+
+    await run_daily_backup()
+
+    assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "1"
+    mock_logger.error.assert_called_once()
+    mock_logger.critical.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_run_daily_backup_scrubs_mongo_uri_from_failure_log(
+    monkeypatch, fake_redis
+):
+    """PRO-94 belt-and-braces: even if the child process's stderr echoes the
+    raw connection string (e.g. mongodump printing its own --uri argument
+    back in an error), the tail that reaches logger.critical/error must never
+    contain it — that tail is what feeds Sentry."""
+    import subprocess
+    from app.core.config import settings
+
+    mongo_uri = settings.MONGO_URI.get_secret_value()
+
+    # Second consecutive failure -> CRITICAL, the path that pages Sentry.
+    await fake_redis.set(BACKUP_FAILURE_COUNT_KEY, "1")
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        MagicMock(
+            return_value=_completed_process(
+                1, stderr=f"mongodump: connection failed uri={mongo_uri} boom"
+            )
+        ),
+    )
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+
+    await run_daily_backup()
+
+    mock_logger.critical.assert_called_once()
+    logged_message = mock_logger.critical.call_args[0][0]
+    assert mongo_uri not in logged_message
+    assert "***" in logged_message
+
+
+@pytest.mark.asyncio
+async def test_run_daily_backup_falls_back_to_stdout_when_stderr_empty(
+    monkeypatch, fake_redis
+):
+    """loguru sinks write to stdout (app/core/logger.py), so backup.py's own
+    failure reason (e.g. the S3-upload-failed message) lands on stdout, not
+    stderr. The tail must fall back to stdout when stderr is empty."""
+    import subprocess
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        MagicMock(
+            return_value=_completed_process(
+                1, stderr="", stdout="BACKUP_S3_BUCKET not set — no durable target"
+            )
+        ),
+    )
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+
+    await run_daily_backup()
+
+    mock_logger.error.assert_called_once()
+    logged_message = mock_logger.error.call_args[0][0]
+    assert "BACKUP_S3_BUCKET not set" in logged_message
+
+
+@pytest.mark.asyncio
+async def test_run_daily_backup_corrupted_counter_resets_then_recovers_streak(
+    monkeypatch, fake_redis
+):
+    """A non-integer value in BACKUP_FAILURE_COUNT_KEY makes redis.incr raise
+    ResponseError. _report_backup_failure resets it to 1 (still ERROR, not
+    CRITICAL — a reset streak is not yet 2-in-a-row) rather than crashing or
+    silently disabling escalation forever. The *next* failure then correctly
+    reaches 2 -> CRITICAL, proving the reset actually took."""
+    import subprocess
+
+    await fake_redis.set(BACKUP_FAILURE_COUNT_KEY, "not-a-number")
+
+    monkeypatch.setattr(
+        subprocess, "run", MagicMock(return_value=_completed_process(1))
+    )
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+
+    await run_daily_backup()
+
+    assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "1"
+    mock_logger.error.assert_called_once()
+    mock_logger.critical.assert_not_called()
+
+    mock_logger.reset_mock()
+
+    # Next failure: streak is now a clean 1 -> 2, so this one escalates.
+    await run_daily_backup()
+
+    assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "2"
+    mock_logger.critical.assert_called_once()
+    mock_logger.error.assert_not_called()
