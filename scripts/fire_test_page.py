@@ -46,6 +46,7 @@ def main() -> int:
     try:
         import sentry_sdk
         from sentry_sdk.integrations.logging import LoggingIntegration
+        from sentry_sdk.integrations.loguru import LoguruIntegration
     except ImportError:
         logger.error(
             "sentry-sdk is not installed; run `pip install -r requirements.txt`."
@@ -60,6 +61,9 @@ def main() -> int:
         integrations=[
             LoggingIntegration(level=logging.INFO, event_level=logging.CRITICAL)
         ],
+        # Mirrors the services (PRO-113 follow-up): the auto-enabled loguru
+        # integration duplicated every page and shipped unscrubbed loguru text.
+        disabled_integrations=[LoguruIntegration()],
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         send_default_pii=False,
         attach_stacktrace=True,

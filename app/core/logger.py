@@ -120,6 +120,18 @@ def json_formatter(record):
     return json.dumps(subset) + "\n"
 
 
+def _is_logging_machinery_frame(frame) -> bool:
+    """True for frames the InterceptHandler walk must step over: stdlib
+    logging itself, plus sentry_sdk's logging integration — its
+    ``sentry_patched_callhandlers`` wraps ``Logger.callHandlers``, so when
+    Sentry is active one of its frames sits mid-walk and, unskipped, every
+    intercepted line renders as sentry_sdk.integrations.logging (PRO-113)."""
+    filename = frame.f_code.co_filename
+    return filename == logging.__file__ or filename.replace("\\", "/").endswith(
+        "sentry_sdk/integrations/logging.py"
+    )
+
+
 class InterceptHandler(logging.Handler):
     """
     Redirect standard logging to Loguru.
@@ -136,7 +148,7 @@ class InterceptHandler(logging.Handler):
         # ran and every intercepted line rendered as logging:callHandlers.
         # Force the first step, then walk out of the logging machinery.
         frame, depth = logging.currentframe(), 0
-        while frame and (depth == 0 or frame.f_code.co_filename == logging.__file__):
+        while frame and (depth == 0 or _is_logging_machinery_frame(frame)):
             frame = frame.f_back
             depth += 1
         # PRO-113: page_critical is a one-line shim in this module; skip it so
