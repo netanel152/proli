@@ -605,16 +605,17 @@ async def test_definitive_miss_does_not_open_circuit(
 @pytest.mark.asyncio
 async def test_open_circuit_logs_critical(mock_redis_with_ttl, mock_google_maps_key):
     """_open_circuit is the one line in this module that actually pages an
-    operator (Sentry is CRITICAL-only). Verify it emits logger.critical —
-    following the monkeypatched-MagicMock-logger pattern already used
-    elsewhere in tests/ (e.g. test_whatsapp_state_monitor.py) rather than
-    caplog, since loguru routes through InterceptHandler."""
-    mock_logger = MagicMock()
+    operator (Sentry is CRITICAL-only). Verify it emits page_critical (PRO-113,
+    the only operator-paging primitive) — following the monkeypatched-
+    MagicMock pattern already used elsewhere in tests/ (e.g.
+    test_whatsapp_state_monitor.py) rather than caplog, since loguru routes
+    through InterceptHandler."""
+    mock_page_critical = MagicMock()
 
-    with patch("app.services.geocoding_service.logger", mock_logger):
+    with patch("app.services.geocoding_service.page_critical", mock_page_critical):
         await geo._open_circuit("quota exhausted")
 
-    mock_logger.critical.assert_called_once()
+    mock_page_critical.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -622,20 +623,22 @@ async def test_open_circuit_via_resolve_logs_critical_exactly_once(
     mock_redis_with_ttl, mock_google_maps_key
 ):
     """End-to-end: a transient Google failure that trips the breaker inside
-    resolve_city_to_coords must produce exactly one logger.critical call —
+    resolve_city_to_coords must produce exactly one page_critical call —
     the rate-limiting property (at most once per window) depends on this
     being the only call site."""
     store, ttls = mock_redis_with_ttl
-    mock_logger = MagicMock()
+    mock_page_critical = MagicMock()
 
-    with patch("app.services.geocoding_service.logger", mock_logger), patch(
+    with patch(
+        "app.services.geocoding_service.page_critical", mock_page_critical
+    ), patch(
         "app.services.geocoding_service._call_google",
         side_effect=geo.GeocodingUnavailable("quota exhausted"),
     ):
         result = await geo.resolve_city_to_coords("ראש העין")
 
     assert result is None
-    mock_logger.critical.assert_called_once()
+    mock_page_critical.assert_called_once()
 
 
 @pytest.mark.asyncio

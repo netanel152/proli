@@ -4,7 +4,7 @@ from app.core.database import leads_collection, users_collection
 from app.core.constants import LeadStatus, UserStates, WorkerConstants, Defaults, Actor
 from app.core.phone import to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
-from app.core.logger import logger
+from app.core.logger import logger, page_critical
 from app.core.redis_client import get_redis_client
 from app.core.datetime_utils import within_business_hours
 from app.providers.whatsapp import get_whatsapp, record_account_state
@@ -34,7 +34,7 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
     PRO-88 moved this off WhatsApp. The admin never messages the bot, so their
     Cloud API service window is permanently closed and this alert would have
     needed its own approved template to keep working. It now pages via
-    ``logger.critical`` → Sentry → email, the channel PRO-75 already made the
+    ``page_critical`` → Sentry → email, the channel PRO-75 already made the
     guaranteed one.
 
     Still best-effort: an alert failure must never abort the escalation, so
@@ -499,7 +499,7 @@ async def check_whatsapp_instance_state():
             return  # already paged within the realert window
 
         await redis.set(ALERTED_KEY, "1", ex=86400)
-        # logger.critical → forwarded to Sentry as an issue (worker is CRITICAL-only),
+        # page_critical → forwarded to Sentry as an issue (worker is CRITICAL-only),
         # which is the out-of-band operator page. We deliberately do NOT try to
         # send an on-call alert over WhatsApp here: WhatsApp is the down channel,
         # so paging over it would only amplify the outage (PRO-75). The structured
@@ -512,7 +512,7 @@ async def check_whatsapp_instance_state():
             impact = "messages are being silently filtered by WhatsApp (accepted, never delivered)"
         else:
             impact = "no messages are being processed"
-        logger.critical(
+        page_critical(
             f"🚨 [WA Monitor] WhatsApp account NON-AUTHORIZED for "
             f"~{downtime_minutes:.0f}m (state={state or 'unreachable'}, "
             f"provider={whatsapp.provider.name}) — {impact}. "

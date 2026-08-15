@@ -65,7 +65,7 @@ import httpx
 
 from app.core.config import settings
 from app.core.constants import ISRAEL_CITIES_COORDS
-from app.core.logger import logger
+from app.core.logger import logger, page_critical
 from app.core.redis_client import get_redis_client
 
 # Israel bounding box — generous enough to include Eilat in the south
@@ -165,9 +165,10 @@ async def _cache_set(key: str, value: str, ttl: Optional[int] = None) -> None:
 async def _open_circuit(reason: str) -> None:
     """Trip the breaker for one transient-TTL window, and page.
 
-    ``logger.critical`` is deliberate and is the only thing in this module
-    that reaches an operator: Sentry is configured CRITICAL-only, so an
-    ``error`` here would be a breadcrumb nobody sees. Geocoding being down
+    ``page_critical`` is deliberate and is the only thing in this module
+    that reaches an operator: Sentry is configured CRITICAL-only (and only
+    sees stdlib records, PRO-113), so an ``error`` here would be a
+    breadcrumb nobody sees. Geocoding being down
     is precisely the silent failure PRO-19 exists to surface — every city
     outside the static dict falls back to a regex that rarely matches, and
     those leads escalate to PENDING_ADMIN_REVIEW while the system looks
@@ -175,10 +176,11 @@ async def _open_circuit(reason: str) -> None:
 
     Safe to page from here because it is rate-limited by construction: this
     runs at most once per ``GEOCODING_TRANSIENT_TTL_SECONDS`` window, so a
-    sustained outage is ~1 event per window (which Sentry then groups),
-    not one per lookup.
+    sustained outage is ~1 event per window, not one per lookup. (Each
+    ``reason`` renders a distinct message, so Sentry may open a distinct
+    issue per reason rather than grouping — acceptable at this rate.)
     """
-    logger.critical(
+    page_critical(
         f"Geocoding unavailable — circuit opened for "
         f"{settings.GEOCODING_TRANSIENT_TTL_SECONDS}s ({reason}). Cities "
         f"outside the static dict will not resolve; their leads will escalate."

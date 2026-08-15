@@ -178,10 +178,11 @@ async def test_get_state_instance_returns_none_for_an_unimplemented_provider():
 #
 # PRO-75: SMS is gone. send_oncall_alert is now state-guarded and WhatsApp-only:
 #   * probes whatsapp.get_state_instance() first
-#   * state != "authorized" → NEVER calls whatsapp.send_message; logs
-#     logger.critical (the Sentry-forwarded out-of-band page) and returns False
+#   * state != "authorized" → NEVER calls whatsapp.send_message; pages via
+#     page_critical (PRO-113, the Sentry-forwarded out-of-band page) and
+#     returns False
 #   * state == "authorized" → sends via whatsapp.send_message, returns True;
-#     an exception during send is caught, logs logger.critical, returns False
+#     an exception during send is caught, paged via page_critical, returns False
 # ===========================================================================
 
 
@@ -209,21 +210,21 @@ async def test_send_oncall_alert_not_authorized_never_sends_whatsapp(
     monkeypatch, state
 ):
     """Instance not authorized (any non-'authorized' state, including unreachable
-    → None) → NO WhatsApp send is attempted; logger.critical is emitted instead;
+    → None) → NO WhatsApp send is attempted; page_critical is emitted instead;
     returns False."""
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value=state)
     mock_wa.send_message = AsyncMock()
-    mock_logger = MagicMock()
+    mock_page_critical = MagicMock()
 
     monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
-    monkeypatch.setattr(notif_module, "logger", mock_logger)
+    monkeypatch.setattr(notif_module, "page_critical", mock_page_critical)
 
     result = await notif_module.send_oncall_alert("system alert")
 
     assert result is False
     mock_wa.send_message.assert_not_awaited()
-    mock_logger.critical.assert_called_once()
+    mock_page_critical.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -231,19 +232,19 @@ async def test_send_oncall_alert_authorized_but_send_raises_returns_false(
     monkeypatch,
 ):
     """Instance reports authorized but the send itself blows up → caught,
-    logger.critical emitted, returns False (no re-raise, no SMS to fall back to)."""
+    page_critical emitted, returns False (no re-raise, no SMS to fall back to)."""
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value="authorized")
     mock_wa.send_message = AsyncMock(side_effect=Exception("Green API unreachable"))
-    mock_logger = MagicMock()
+    mock_page_critical = MagicMock()
 
     monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
-    monkeypatch.setattr(notif_module, "logger", mock_logger)
+    monkeypatch.setattr(notif_module, "page_critical", mock_page_critical)
 
     result = await notif_module.send_oncall_alert("system alert")
 
     assert result is False
-    mock_logger.critical.assert_called_once()
+    mock_page_critical.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -369,19 +370,19 @@ async def test_wa_monitor_not_authorized_above_threshold_first_page_sets_keys_an
     monkeypatch,
 ):
     """(e) downtime > threshold, last_alert absent → threshold crossed: sets alerted +
-    last_alert, emits logger.critical. PRO-75: does NOT call send_oncall_alert on the
+    last_alert, pages via page_critical. PRO-75: does NOT call send_oncall_alert on the
     down path — paging an outage about WhatsApp over WhatsApp would amplify it, so the
-    down-path page is logger.critical (Sentry) only."""
+    down-path page is page_critical (PRO-113, forwarded to Sentry) only."""
     redis = _FakeRedis({_DOWN_SINCE_KEY: _above_threshold_ts()})
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value="notAuthorized")
     mock_alert = AsyncMock(return_value=True)
-    mock_logger = MagicMock()
+    mock_page_critical = MagicMock()
 
     monkeypatch.setattr(monitor_module, "whatsapp", mock_wa)
     monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
     monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
-    monkeypatch.setattr(monitor_module, "logger", mock_logger)
+    monkeypatch.setattr(monitor_module, "page_critical", mock_page_critical)
 
     await monitor_module.check_whatsapp_instance_state()
 
@@ -390,10 +391,10 @@ async def test_wa_monitor_not_authorized_above_threshold_first_page_sets_keys_an
     # Redis side effects still happen (threshold crossed, dedup window opened)
     assert redis._store.get(_ALERTED_KEY) == "1"
     assert redis._store.get(_LAST_ALERT_KEY) == "1"
-    # logger.critical must be emitted (forwarded to Sentry in production) and
+    # page_critical must be emitted (forwarded to Sentry in production) and
     # must include the current state for an actionable page.
-    mock_logger.critical.assert_called_once()
-    critical_text = mock_logger.critical.call_args[0][0]
+    mock_page_critical.assert_called_once()
+    critical_text = mock_page_critical.call_args[0][0]
     assert "notAuthorized" in critical_text
 
 
@@ -614,17 +615,17 @@ async def test_wa_monitor_yellowcard_critical_text_mentions_silent_filtering(
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value="yellowCard")
     mock_alert = AsyncMock()
-    mock_logger = MagicMock()
+    mock_page_critical = MagicMock()
 
     monkeypatch.setattr(monitor_module, "whatsapp", mock_wa)
     monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
     monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
-    monkeypatch.setattr(monitor_module, "logger", mock_logger)
+    monkeypatch.setattr(monitor_module, "page_critical", mock_page_critical)
 
     await monitor_module.check_whatsapp_instance_state()
 
-    mock_logger.critical.assert_called_once()
-    critical_text = mock_logger.critical.call_args[0][0]
+    mock_page_critical.assert_called_once()
+    critical_text = mock_page_critical.call_args[0][0]
     assert "silently filtered by WhatsApp" in critical_text
 
 
@@ -639,17 +640,17 @@ async def test_wa_monitor_not_authorized_critical_text_mentions_no_processing(
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value="notAuthorized")
     mock_alert = AsyncMock()
-    mock_logger = MagicMock()
+    mock_page_critical = MagicMock()
 
     monkeypatch.setattr(monitor_module, "whatsapp", mock_wa)
     monkeypatch.setattr(monitor_module, "get_redis_client", _redis_factory(redis))
     monkeypatch.setattr(monitor_module, "send_oncall_alert", mock_alert)
-    monkeypatch.setattr(monitor_module, "logger", mock_logger)
+    monkeypatch.setattr(monitor_module, "page_critical", mock_page_critical)
 
     await monitor_module.check_whatsapp_instance_state()
 
-    mock_logger.critical.assert_called_once()
-    critical_text = mock_logger.critical.call_args[0][0]
+    mock_page_critical.assert_called_once()
+    critical_text = mock_page_critical.call_args[0][0]
     assert "no messages are being processed" in critical_text
     assert "silently filtered by WhatsApp" not in critical_text
 

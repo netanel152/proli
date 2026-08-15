@@ -20,19 +20,25 @@ This file is the runbook referenced from `app/worker.py`, `app/main.py`, and
 - **CRITICAL-only.** A `LoggingIntegration` is configured with
   `level=INFO` (breadcrumbs) and `event_level=CRITICAL` (issue creation). Regular
   `ERROR`/`WARNING` noise stays in stdout/loguru. To page the operator, code calls
-  `logger.critical(...)` (or raises and lets arq's top-level handler catch it).
+  `page_critical(...)` (`app/core/logger.py`) — never raises, so it is also the
+  right call from a fail-open path.
   Python's `logging.CRITICAL` maps to Sentry's **`fatal`** level — filter on that
   in the alert rule below.
-  > **Caveat (PRO-112):** `LoggingIntegration` only hooks *stdlib* `logging`, so a
-  > loguru `logger.critical(...)` call does not by itself create a Sentry event —
-  > `app/scheduler.py`'s Mongo auth-failure escalation pages via
-  > `logging.getLogger("proli.scheduler").critical(...)` instead. Auditing/fixing
-  > the other `logger.critical` call sites in this doc is PRO-113's scope.
+  > **PRO-113:** `LoggingIntegration` only hooks *stdlib* `logging`, so a loguru
+  > `logger.critical(...)` call does not by itself create a Sentry event.
+  > `page_critical` is the only paging primitive — it logs through
+  > `logging.getLogger("proli.paging")`, the stdlib channel `LoggingIntegration`
+  > actually watches, with secrets/PII scrubbed inline before the record is
+  > built. Loguru `logger.critical` is stdout-only and is banned under `app/`
+  > (enforced by `tests/test_page_critical.py`). To verify paging end-to-end,
+  > use `scripts/fire_test_page.py` rather than a one-off `logger.critical` call.
 - **No-op when `SENTRY_DSN` is unset.** Tests, local dev, and the open-source
   checkout never touch the Sentry API. `_init_sentry()` logs
   `"Sentry disabled (SENTRY_DSN not set)."` and returns early.
-- **Small, PII-free payloads.** `send_default_pii=False`, no request bodies, no
-  local variables; `attach_stacktrace=True`.
+- **Small, PII-free payloads.** `send_default_pii=False`, no request bodies,
+  `attach_stacktrace=True`; `include_local_variables=False` (PRO-113) — the
+  default `True` would otherwise ship unscrubbed frame locals (PII/secrets)
+  alongside the stack trace.
 
 ---
 
@@ -86,7 +92,8 @@ free-tier budget — while still re-notifying so the incident can't be silently 
 2. Trigger a critical event — either:
    - disconnect / deauthorize the WhatsApp (Green API) instance and wait for the
      state monitor to page, **or**
-   - run a one-off `logger.critical("sentry paging test", extra=...)` on the worker.
+   - run `railway run python scripts/fire_test_page.py --service worker` (or
+     `--service api`) — the operator verification tool built for this purpose.
 3. **Confirm the email arrives.** If it does not, nothing is wired — check, in order:
    the DSN is on the right service, `sentry-sdk` installed, and the alert-rule level
    filter is `fatal`.
@@ -99,5 +106,5 @@ free-tier budget — while still re-notifying so the incident can't be silently 
 - **PRO-71** — yellowCard circuit breaker: halts outbound when the instance is not
   authorized. The alert is outbound, so it must go via Sentry, not WhatsApp.
 - **PRO-75** — Delete SMS, page via Sentry email: removes the dead SMS-first
-  fallback and makes `notification_service` emit `logger.critical` (→ this alert)
+  fallback and makes `notification_service` emit `page_critical` (→ this alert)
   instead of sending over the flagged number.

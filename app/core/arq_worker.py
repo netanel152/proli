@@ -4,7 +4,7 @@ from arq.connections import RedisSettings
 from arq.worker import Retry
 from app.core.config import settings
 from app.services.workflow_service import process_incoming_message, whatsapp
-from app.core.logger import logger
+from app.core.logger import logger, page_critical
 from app.core.database import client
 from app.core.http_client import close_http_client
 from app.core.redis_client import get_redis_client, ChatLockBusyError
@@ -33,7 +33,7 @@ async def startup(ctx):
         await client.admin.command("ping")
         logger.info("✅ Worker connected to MongoDB.")
     except Exception as e:
-        logger.critical(f"❌ Worker failed to connect to MongoDB: {e}")
+        page_critical(f"❌ Worker failed to connect to MongoDB: {e}")
         raise e  # Stop startup if DB is down
 
     # 2. Start Scheduler

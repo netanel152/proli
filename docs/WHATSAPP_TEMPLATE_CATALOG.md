@@ -65,7 +65,7 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 
 The admin never sends the bot an inbound message, so **every operator-facing send had a permanently closed window** — each would have needed its own approved template to keep working. PRO-75 had already made Sentry → email the guaranteed operator page precisely because alerting about WhatsApp over WhatsApp amplifies an outage.
 
-O1–O3 now route through `notification_service.page_operator()` — a single `logger.critical` → Sentry → email. **Four templates removed from this catalog at zero cost to the operator's signal.**
+O1–O3 now route through `notification_service.page_operator()` — a single `page_critical` → Sentry → email. **Four templates removed from this catalog at zero cost to the operator's signal.**
 
 Two properties worth keeping in mind when reading those call sites:
 

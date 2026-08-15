@@ -1,6 +1,6 @@
 from app.providers.whatsapp import get_whatsapp
 from app.core.database import leads_collection, users_collection
-from app.core.logger import logger
+from app.core.logger import logger, page_critical
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, WorkerConstants
 from app.core.phone import to_chat_id, to_local_phone
@@ -22,7 +22,7 @@ async def _send_best_effort(chat_id: str, message: str) -> bool:
 
 
 def page_operator(summary: str) -> None:
-    """Page the operator without WhatsApp — ``logger.critical`` → Sentry → email.
+    """Page the operator without WhatsApp — ``page_critical`` → Sentry → email.
 
     PRO-88: the admin never sends the bot an inbound message, so under Meta
     Cloud API their 24-hour service window is *permanently* closed. Every
@@ -36,14 +36,13 @@ def page_operator(summary: str) -> None:
     alerts and still tries WhatsApp as a courtesy when the account is
     authorized. This is for *business* alerts and never transmits.
 
-    **Callers must keep PII out of ``summary``.** Sentry retains events, and
-    the loguru PII filter runs in the sink — it is not guaranteed to have
-    applied on whatever path an event takes to Sentry. Mask phone numbers at
-    the call site (last 4 digits, matching the project convention) and pass
+    **Callers must still keep PII out of ``summary``.** ``page_critical``
+    scrubs phone numbers and secrets inline (PRO-113 — Sentry copies the
+    record before the loguru sink filter), but that is a backstop: pass
     identifiers the operator can look up in the admin panel rather than the
     customer record itself.
     """
-    logger.critical(summary)
+    page_critical(summary)
 
 
 async def send_oncall_alert(message: str, *, assume_authorized: bool = False) -> bool:
@@ -53,8 +52,9 @@ async def send_oncall_alert(message: str, *, assume_authorized: bool = False) ->
     WhatsApp is frequently the *failing* component for these alerts (Green API
     deauth / yellowCard). Sending an alert about WhatsApp over WhatsApp amplifies
     the outage instead of reporting it (PRO-75), so if the instance is not
-    authorized we never send: we emit ``logger.critical`` — forwarded to Sentry
-    → email, the guaranteed out-of-band page — and return. When authorized this
+    authorized we never send: we emit ``page_critical`` — the stdlib CRITICAL
+    Sentry actually forwards to email, the guaranteed out-of-band page
+    (PRO-113) — and return. When authorized this
     is a courtesy channel (e.g. the recovery notice); Sentry stays the guaranteed
     page regardless of the return value. Routes to ONCALL_PHONE when set, else
     ADMIN_PHONE.
@@ -73,7 +73,7 @@ async def send_oncall_alert(message: str, *, assume_authorized: bool = False) ->
     # True — losing the alert exactly when the runbook has dry-run switched on.
     # Sentry is the guaranteed channel, so go straight to it.
     if not whatsapp.provider.transmits:
-        logger.critical(
+        page_critical(
             f"WhatsApp provider {whatsapp.provider.name!r} cannot transmit — "
             f"on-call alert to {masked} NOT sent over WhatsApp; paging via "
             "Sentry email."
@@ -83,7 +83,7 @@ async def send_oncall_alert(message: str, *, assume_authorized: bool = False) ->
     if not assume_authorized:
         state = await whatsapp.get_state_instance()
         if state != "authorized":
-            logger.critical(
+            page_critical(
                 f"WhatsApp account not authorized (state={state or 'unreachable'}, "
                 f"provider={whatsapp.provider.name}) — on-call alert to {masked} "
                 "NOT sent over WhatsApp; paging via Sentry email."
@@ -96,7 +96,7 @@ async def send_oncall_alert(message: str, *, assume_authorized: bool = False) ->
         logger.info(f"On-call alert delivered via WhatsApp to {masked}")
         return True
     except Exception as e:
-        logger.critical(
+        page_critical(
             f"On-call WhatsApp alert to {masked} failed: {e}. Relying on Sentry email."
         )
         return False
