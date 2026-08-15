@@ -32,6 +32,7 @@ def _init_sentry() -> None:
     try:
         import sentry_sdk
         from sentry_sdk.integrations.logging import LoggingIntegration
+        from sentry_sdk.integrations.loguru import LoguruIntegration
     except ImportError:
         logger.warning(
             "SENTRY_DSN is set but sentry-sdk is not installed. "
@@ -51,6 +52,13 @@ def _init_sentry() -> None:
         # fragmenting across casing/typo variants of the same label.
         environment=settings.ENVIRONMENT,
         integrations=[logging_integration],
+        # PRO-113 follow-up: sentry-sdk AUTO-ENABLES LoguruIntegration
+        # (event_level=ERROR) when loguru is installed — an uncontrolled side
+        # door that (a) duplicated every page as a second issue and (b) sent
+        # loguru ERROR+ messages to Sentry UNSCRUBBED, bypassing _pii_filter
+        # (sentry's own loguru sink has no filter). Paging is stdlib-only by
+        # design (page_critical); loguru must not reach Sentry at all.
+        disabled_integrations=[LoguruIntegration()],
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         send_default_pii=False,
         attach_stacktrace=True,
