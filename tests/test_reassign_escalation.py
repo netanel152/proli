@@ -14,6 +14,7 @@ reassignment is unaffected.
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
+from bson import ObjectId
 
 from app.core.constants import LeadStatus, WorkerConstants
 from app.core.messages import Messages
@@ -96,6 +97,46 @@ async def test_exhausted_reassignment_notifies_customer(
 
     mock_whatsapp.send_message.assert_any_call(
         lead["chat_id"], Messages.SOS.MAX_REASSIGNMENTS_REACHED
+    )
+
+
+@pytest.mark.asyncio
+async def test_successful_reassignment_tells_customer_who_was_found(
+    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context
+):
+    """On a successful reassign the customer must be told the new pro's name —
+    otherwise the thread goes silent after CUSTOMER_REASSIGNING until the new
+    pro engages."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי אינסטלציה",
+        "phone_number": "972559444143",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
+    )
+    # Isolate the customer-notification assertion from the pro-offer send and the
+    # DB write (whose collection wiring varies with suite order).
+    monkeypatch.setattr(
+        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=True)
+    )
+    monkeypatch.setattr(
+        monitor_service, "set_lead_status", AsyncMock(return_value=True)
+    )
+    lead = await _insert_exhausted_lead(mock_db, reassignment_count=0)
+
+    result = await reassign_lead(lead)
+
+    assert result is True
+    mock_whatsapp.send_message.assert_any_call(
+        lead["chat_id"],
+        Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
+            pro_name="אבי אינסטלציה"
+        ),
     )
 
 
