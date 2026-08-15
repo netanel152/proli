@@ -312,12 +312,14 @@ async def test_run_daily_backup_success_deletes_counter_no_error_or_critical(
 
     mock_logger = MagicMock()
     monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
 
     await run_daily_backup()
 
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) is None
     mock_logger.error.assert_not_called()
-    mock_logger.critical.assert_not_called()
+    mock_page_critical.assert_not_called()
     mock_logger.info.assert_called()
 
 
@@ -335,12 +337,14 @@ async def test_run_daily_backup_first_failure_logs_error_not_critical(
 
     mock_logger = MagicMock()
     monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
 
     await run_daily_backup()
 
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "1"
     mock_logger.error.assert_called_once()
-    mock_logger.critical.assert_not_called()
+    mock_page_critical.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -359,12 +363,14 @@ async def test_run_daily_backup_second_consecutive_failure_logs_critical(
 
     mock_logger = MagicMock()
     monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
 
     await run_daily_backup()
 
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "2"
     assert WorkerConstants.BACKUP_FAILURE_ESCALATION_THRESHOLD == 2
-    mock_logger.critical.assert_called_once()
+    mock_page_critical.assert_called_once()
     mock_logger.error.assert_not_called()
 
 
@@ -379,6 +385,8 @@ async def test_run_daily_backup_success_after_failures_resets_streak(
 
     mock_logger = MagicMock()
     monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
 
     # Night 1: failure -> counter = 1
     monkeypatch.setattr(
@@ -395,6 +403,7 @@ async def test_run_daily_backup_success_after_failures_resets_streak(
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) is None
 
     mock_logger.reset_mock()
+    mock_page_critical.reset_mock()
 
     # Night 3: failure again -> counter = 1, ERROR not CRITICAL
     monkeypatch.setattr(
@@ -404,7 +413,7 @@ async def test_run_daily_backup_success_after_failures_resets_streak(
 
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "1"
     mock_logger.error.assert_called_once()
-    mock_logger.critical.assert_not_called()
+    mock_page_critical.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -430,12 +439,14 @@ async def test_run_daily_backup_redis_unavailable_fails_open_logs_error(
 
     mock_logger = MagicMock()
     monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
 
     # Must not raise.
     await run_daily_backup()
 
     mock_logger.error.assert_called_once()
-    mock_logger.critical.assert_not_called()
+    mock_page_critical.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -453,12 +464,14 @@ async def test_run_daily_backup_subprocess_raises_reports_failure(
 
     mock_logger = MagicMock()
     monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
 
     await run_daily_backup()
 
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "1"
     mock_logger.error.assert_called_once()
-    mock_logger.critical.assert_not_called()
+    mock_page_critical.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -488,11 +501,13 @@ async def test_run_daily_backup_scrubs_mongo_uri_from_failure_log(
 
     mock_logger = MagicMock()
     monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
 
     await run_daily_backup()
 
-    mock_logger.critical.assert_called_once()
-    logged_message = mock_logger.critical.call_args[0][0]
+    mock_page_critical.assert_called_once()
+    logged_message = mock_page_critical.call_args[0][0]
     assert mongo_uri not in logged_message
     assert "***" in logged_message
 
@@ -545,18 +560,21 @@ async def test_run_daily_backup_corrupted_counter_resets_then_recovers_streak(
 
     mock_logger = MagicMock()
     monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
 
     await run_daily_backup()
 
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "1"
     mock_logger.error.assert_called_once()
-    mock_logger.critical.assert_not_called()
+    mock_page_critical.assert_not_called()
 
     mock_logger.reset_mock()
+    mock_page_critical.reset_mock()
 
     # Next failure: streak is now a clean 1 -> 2, so this one escalates.
     await run_daily_backup()
 
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "2"
-    mock_logger.critical.assert_called_once()
+    mock_page_critical.assert_called_once()
     mock_logger.error.assert_not_called()

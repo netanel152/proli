@@ -48,7 +48,7 @@ polls the provider's `get_state()` every **2 min** (`WA_STATE_CHECK_INTERVAL_MIN
 but only for a **transmitting** provider (`provider.transmits`); a non-transmitting provider
 (dry-run) has no account to watch, so the watchdog skips its tick outright (PRO-86). Once a
 transmitting provider has been non-authorized for **> 5 min** (`WA_STATE_ALERT_THRESHOLD_MINUTES`)
-the watchdog emits `logger.critical` → **Sentry → email** to the on-call operator, then
+the watchdog emits `page_critical` → **Sentry → email** to the on-call operator, then
 re-pages every **60 min** (`WA_STATE_REALERT_MINUTES`) until recovery.
 
 > ⚠️ Paging depends on `SENTRY_DSN` being set on the Railway `worker` service **and** a

@@ -18,7 +18,6 @@ from app.services.monitor_service import (
 )
 from datetime import datetime, timedelta
 import functools
-import logging
 import re
 from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 from app.core.constants import LeadStatus, WorkerConstants
@@ -27,7 +26,7 @@ from app.core.datetime_utils import within_business_hours
 import os
 import pytz
 from app.services.scheduling_service import regenerate_all_templates
-from app.core.logger import logger
+from app.core.logger import logger, page_critical
 from app.core.redis_client import with_scheduler_lock
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")
@@ -153,21 +152,16 @@ async def _record_mongo_auth_failure(job_name: str, exc: Exception) -> None:
             nx=True,
         )
         if paged:
-            # loguru emits no stdlib LogRecord, and sentry_sdk's
-            # LoggingIntegration hooks *stdlib* logging only — a loguru
-            # `logger.critical` never creates a Sentry issue. Page through
-            # stdlib; InterceptHandler (app/core/logger.py) routes the record
-            # back into loguru, so the stdout/file sinks and the redaction
-            # filter still apply.
-            logging.getLogger("proli.scheduler").critical(
+            # Scrub BEFORE truncating (PRO-94/PRO-111 precedent): cutting
+            # first could leave half a secret or phone number the scrubbers
+            # no longer recognize. page_critical scrubs the whole message
+            # again — harmless — and is the stdlib path Sentry actually sees.
+            page_critical(
                 f"🚨 [Scheduler] Mongo auth failure on '{job_name}' — "
                 f"{failures} auth failures since the first one (no gap longer "
                 f"than {WorkerConstants.SCHEDULER_MONGO_AUTH_WINDOW_SECONDS // 60} "
                 f"min). MONGO_URI credentials are likely wrong (rotation "
                 f"fallout?); every Mongo-touching scheduler job is failing. "
-                # mask_pii inline too: Sentry copies the stdlib record BEFORE
-                # loguru's sink-level _pii_filter runs, so sink-side masking
-                # alone would not cover the Sentry payload.
                 f"Detail: {mask_pii(redact_secrets(str(exc)))[:500]}"
             )
     except Exception as e:
@@ -326,7 +320,7 @@ async def _report_backup_failure(detail: str) -> None:
         logger.warning(f"[Scheduler] Backup failure counter unavailable: {e}")
 
     if counted and failures >= WorkerConstants.BACKUP_FAILURE_ESCALATION_THRESHOLD:
-        logger.critical(
+        page_critical(
             f"🚨 [Scheduler] Nightly backup: {failures} consecutive failed runs — "
             f"no durable backup is landing in S3. {detail}"
         )

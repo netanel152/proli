@@ -9,6 +9,7 @@ intercepted via an ``httpx.MockTransport`` swapped in for
 """
 
 import json
+import logging
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -991,6 +992,32 @@ async def test_window_closed_page_dedupe_downgrades_second_call_to_error(fake_re
 
     assert page_records == ["CRITICAL", "ERROR"]
     assert await fake_redis.exists(f"wa:window:page:{CHAT_ID}")
+
+
+@pytest.mark.asyncio
+async def test_window_closed_page_dedupe_uses_stdlib_path_for_critical_only(
+    fake_redis, caplog
+):
+    """PRO-113: the CRITICAL branch (``page_critical``) is provably distinct
+    from the downgraded ERROR branch (plain loguru ``logger.error``) — not
+    just a different rendered level in the same loguru sink, but a different
+    *transport*. Only ``page_critical`` reaches Sentry's LoggingIntegration,
+    because only it emits a stdlib LogRecord on ``proli.paging``; loguru's
+    ``logger.error`` never touches stdlib ``logging`` at all, so caplog
+    (which hooks stdlib logging exclusively) must see exactly one record —
+    the first, paged block — and nothing for the second, downgraded one."""
+    provider = CloudAPIProvider()
+
+    with caplog.at_level(logging.CRITICAL, logger="proli.paging"):
+        with pytest.raises(ServiceWindowClosedError):
+            await provider.send_text(CHAT_ID, "first")
+        with pytest.raises(ServiceWindowClosedError):
+            await provider.send_text(CHAT_ID, "second")
+
+    paging_records = [r for r in caplog.records if r.name == "proli.paging"]
+    assert len(paging_records) == 1
+    assert "service window closed" in paging_records[0].message
+    assert paging_records[0].levelname == "CRITICAL"
 
 
 @pytest.mark.asyncio
