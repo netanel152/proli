@@ -98,6 +98,10 @@ class UserStates(str, Enum):
     PRO_AWAITING_FINAL_PRICE = "pro_awaiting_final_price"
     # Loyalty flow
     AWAITING_LOYALTY_CONFIRMATION = "awaiting_loyalty_confirmation"
+    # PRO-116: a customer with a confirmed BOOKED job messages about something
+    # else — ask whether it's a new request or about the existing job, instead
+    # of silently spawning a second parallel lead.
+    AWAITING_NEW_OR_EXISTING = "awaiting_new_or_existing"
 
 
 class WorkerConstants:
