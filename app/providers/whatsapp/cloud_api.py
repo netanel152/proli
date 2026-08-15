@@ -30,7 +30,7 @@ from urllib.parse import urlparse
 from app.core.config import settings
 from app.core.constants import WorkerConstants
 from app.core.http_client import get_http_client
-from app.core.logger import logger
+from app.core.logger import logger, page_critical
 from app.core.phone import mask_chat_id as _mask
 from app.core.phone import strip_suffix, to_chat_id
 from app.providers.whatsapp import template_registry
@@ -184,7 +184,7 @@ class CloudAPIProvider(WhatsAppProvider):
         re-routed as a template, and a page + raise when neither is possible.
 
         The structured error is the AC: a closed window with no approved
-        fallback must page the operator (``logger.critical`` → Sentry) and
+        fallback must page the operator (``page_critical`` → Sentry) and
         surface to the caller — never a silent drop.
 
         A returned fallback is sent with **no params**, so only a
@@ -207,7 +207,7 @@ class CloudAPIProvider(WhatsAppProvider):
         # provider goes live — so only the first block per recipient per day
         # pages (CRITICAL → Sentry → email); the rest stay at ERROR. A page
         # that fires dozens of times a morning stops being a page.
-        log = logger.critical if page else logger.error
+        log = page_critical if page else logger.error
         log(
             f"WhatsApp {kind} to {_mask(chat_id)} blocked: 24h service window "
             "closed and no approved fallback template is registered "
@@ -293,7 +293,7 @@ class CloudAPIProvider(WhatsAppProvider):
     ) -> dict[str, Any] | None:
         spec = template_registry.resolve(template_name)
         if spec is None:
-            logger.critical(
+            page_critical(
                 f"WhatsApp template send to {_mask(chat_id)} blocked: "
                 f"{template_name!r} is not an approved template in the "
                 "registry (PRO-88/PRO-89). The message was NOT sent."

@@ -57,7 +57,7 @@ Log patterns to watch:
 | `worker:heartbeat` | Worker liveness key (120 s expiry) |
 | `[WA Monitor]` | WhatsApp provider account state watchdog (deauth); skips its tick entirely for a non-transmitting provider (dry-run) |
 | `⛔ Outbound halted` | Circuit breaker suppressing sends — instance not authorized |
-| `Geocoding unavailable — circuit opened` | `logger.critical` → Sentry page; Google Geocoding is failing transiently (missing key, quota, network) and the `geo:unavailable` breaker is open (PRO-19) |
+| `Geocoding unavailable — circuit opened` | `page_critical` → Sentry page; Google Geocoding is failing transiently (missing key, quota, network) and the `geo:unavailable` breaker is open (PRO-19) |
 
 ### Incident runbooks
 

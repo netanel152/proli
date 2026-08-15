@@ -119,10 +119,10 @@ auto-answered. After ~15 min the pause auto-expires.
 **Steps (C):** run intake for a city with **no covering pro** (e.g. **אילת**).
 **Expected (current code):** no pro found within the max radius → lead → `PENDING_ADMIN_REVIEW`;
 the **customer** receives the "pending review" message; the admin is paged via
-**`logger.critical` → Sentry email** (not a WhatsApp to `ADMIN_PHONE`). The lead appears in the
+**`page_critical` → Sentry email** (not a WhatsApp to `ADMIN_PHONE`). The lead appears in the
 admin panel's pending-review view and via the `ניהול` wizard.
 - Verify the **Sentry email** arrives (reuses the PRO-18 / PRO-75 paging path).
-- ⚠️ **Note:** this `logger.critical` fires on *every* unmatchable lead — expect one email each. If that's too noisy for a routine no-pro case, downgrade the log level (separate ticket).
+- ⚠️ **Note:** this `page_critical` fires on *every* unmatchable lead — expect one email each. If that's too noisy for a routine no-pro case, downgrade the log level (separate ticket).
 - `ADMIN_PHONE`/`ONCALL_PHONE` not-hard-coded (PRO-48) is verified via the **SOS/handoff** path (scenario 7), which *does* WhatsApp the admin.
 - [ ] Pass  · [ ] File: ______
 
