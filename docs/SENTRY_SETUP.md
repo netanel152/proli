@@ -32,6 +32,17 @@ This file is the runbook referenced from `app/worker.py`, `app/main.py`, and
   > built. Loguru `logger.critical` is stdout-only and is banned under `app/`
   > (enforced by `tests/test_page_critical.py`). To verify paging end-to-end,
   > use `scripts/fire_test_page.py` rather than a one-off `logger.critical` call.
+- **Loguru never reaches Sentry.** sentry-sdk *auto-enables* its
+  `LoguruIntegration` (at `event_level=ERROR`) whenever loguru is installed;
+  both `_init_sentry` copies pass `disabled_integrations=[LoguruIntegration]`
+  to close that side door (PRO-113 follow-up). Before this, every page was
+  duplicated as a second issue and loguru `ERROR`+ text reached Sentry outside
+  `_pii_filter`'s guarantee (message scrubbing depended on sink registration
+  order; exception values and `extra` were never scrubbed). Consequence:
+  breadcrumbs on Sentry events come from **stdlib-origin** records only
+  (uvicorn, arq, libraries) — loguru-native application lines do not appear as
+  breadcrumbs. A post-init self-check warns if the integration is somehow
+  still active (a different `sentry_sdk.init` earlier in the same process).
 - **No-op when `SENTRY_DSN` is unset.** Tests, local dev, and the open-source
   checkout never touch the Sentry API. `_init_sentry()` logs
   `"Sentry disabled (SENTRY_DSN not set)."` and returns early.

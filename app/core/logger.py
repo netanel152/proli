@@ -127,8 +127,11 @@ def _is_logging_machinery_frame(frame) -> bool:
     Sentry is active one of its frames sits mid-walk and, unskipped, every
     intercepted line renders as sentry_sdk.integrations.logging (PRO-113)."""
     filename = frame.f_code.co_filename
-    return filename == logging.__file__ or filename.replace("\\", "/").endswith(
-        "sentry_sdk/integrations/logging.py"
+    # Cheap short-circuit before the per-frame normalization allocation —
+    # this runs for every frame of every intercepted record.
+    return filename == logging.__file__ or (
+        "sentry_sdk" in filename
+        and filename.replace("\\", "/").endswith("sentry_sdk/integrations/logging.py")
     )
 
 

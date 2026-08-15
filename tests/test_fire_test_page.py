@@ -12,7 +12,7 @@ no `__init__.py`, but pytest's rootdir insertion makes `import scripts.<mod>`
 work as an implicit namespace package.
 """
 
-import sys
+import builtins
 
 import pytest
 from unittest.mock import MagicMock
@@ -20,7 +20,21 @@ from unittest.mock import MagicMock
 import scripts.fire_test_page as fire_test_page_module
 
 
+class _SentrySdkImportAttempted(Exception):
+    """Sentinel distinct from ImportError. main()'s own `except ImportError`
+    clause would otherwise swallow a real ImportError and let the test pass
+    for the wrong reason (a caught-and-handled import still means the import
+    statement executed) — this exception type is never caught by main(), so
+    if it propagates, the test fails loudly instead of silently."""
+
+
 def test_main_no_dsn_returns_1_and_never_reaches_sentry_import(monkeypatch):
+    """Order-independent version: rather than asserting on `sys.modules`
+    (which lands `sentry_sdk` process-wide the moment ANY test — in this
+    file, in a sibling file, in this process — imports it, regardless of run
+    order), patch `builtins.__import__` to blow up on any `sentry_sdk`/
+    `sentry_sdk.*` import and prove the guarded import statement was never
+    reached at all, however many other tests already loaded sentry_sdk."""
     monkeypatch.setattr(fire_test_page_module.settings, "SENTRY_DSN", None)
     monkeypatch.setattr(
         fire_test_page_module.sys, "argv", ["fire_test_page.py", "--service", "worker"]
@@ -32,6 +46,20 @@ def test_main_no_dsn_returns_1_and_never_reaches_sentry_import(monkeypatch):
     mock_page_critical = MagicMock()
     monkeypatch.setattr(fire_test_page_module, "page_critical", mock_page_critical)
 
+    real_import = builtins.__import__
+
+    def _guarded_import(name, *args, **kwargs):
+        if name == "sentry_sdk" or name.startswith("sentry_sdk."):
+            raise _SentrySdkImportAttempted(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _guarded_import)
+
+    # If main() ever reaches `import sentry_sdk` (or the later
+    # `from sentry_sdk.integrations.loguru import LoguruIntegration`),
+    # _SentrySdkImportAttempted propagates uncaught (main() only catches
+    # ImportError) and fails this test with a clear traceback rather than
+    # returning 1 for the wrong reason.
     result = fire_test_page_module.main()
 
     assert result == 1
@@ -42,10 +70,6 @@ def test_main_no_dsn_returns_1_and_never_reaches_sentry_import(monkeypatch):
     mock_logger.error.assert_called_once()
     logged_message = mock_logger.error.call_args[0][0]
     assert "SENTRY_DSN is not set" in logged_message
-    # sentry_sdk is not a project dependency in this environment (it's only
-    # ever imported lazily, inside main(), past the DSN guard) — proof the
-    # no-DSN branch really did return before that import statement runs.
-    assert "sentry_sdk" not in sys.modules
 
 
 def test_main_no_dsn_requires_service_argument(monkeypatch):
