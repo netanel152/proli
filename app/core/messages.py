@@ -98,6 +98,21 @@ class Messages:
             "⚠️ *עדכון:* איש המקצוע ביטל את העבודה שנקבעה.\n"
             "אנו נחפש לך איש מקצוע אחר בהקדם. 🙏"
         )
+        # PRO-116: shown when a customer with a confirmed BOOKED job writes about
+        # something else — so we don't silently open a second parallel lead.
+        EXISTING_JOB_PROMPT = (
+            "יש לך כבר עבודה מאושרת עם {pro_name} 🛠️\n"
+            "({issue} — {appointment}).\n\n"
+            "זו פנייה *חדשה*?\n"
+            "השב *1* — כן, בעיה חדשה\n"
+            "השב *2* — זה לגבי העבודה הקיימת"
+        )
+        NEW_REQUEST_ACK = (
+            "בסדר גמור 🙂 ספר/י לי מה הבעיה החדשה ואני כבר אדאג לך לאיש מקצוע."
+        )
+        EXISTING_JOB_HANDOFF = (
+            "אין בעיה! העברתי את ההודעה ל{pro_name} והוא יחזור אליך בהקדם. 🛠️"
+        )
 
         # --- Status pull responses (PR #1) ---
         STATUS_NO_ACTIVE_LEAD = (
@@ -224,6 +239,14 @@ class Messages:
             "מועד ישן: {old_time}\n"
             "מועד חדש: {new_time}\n"
             "היומן שלך עודכן אוטומטית."
+        )
+        # PRO-116: the customer has a confirmed job with this pro and wants to
+        # talk about it (not open a new request) — nudge the pro to reach out.
+        CUSTOMER_EXISTING_JOB_QUERY = (
+            "💬 *הלקוח/ה {customer_name} רוצה לעדכן/לשאול לגבי העבודה הקיימת:*\n"
+            "🛠️ {issue}\n"
+            "📞 {customer_phone}\n\n"
+            "אנא צור/י קשר בהקדם."
         )
         NAVIGATE_TO = "🚗 נווט לכתובת:"
         NO_ACTIVE_JOBS_LIST = "אין לך עבודות פעילות כרגע. 👍"

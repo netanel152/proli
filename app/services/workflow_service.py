@@ -125,6 +125,7 @@ PRO_ONLY_KEYWORDS = PRO_BUSINESS_KEYWORDS - AMBIGUOUS_PRO_KEYWORDS
 CUSTOMER_PROMPT_STATES = (
     UserStates.AWAITING_RESCHEDULE_TIME,
     UserStates.AWAITING_LOYALTY_CONFIRMATION,
+    UserStates.AWAITING_NEW_OR_EXISTING,
 )
 
 # Lead statuses that mean the pro-as-customer still has a live request of their
@@ -572,6 +573,64 @@ async def _process_incoming_message_inner(
             await whatsapp.send_message(chat_id, "אנא השב 1 (כן) או 2 (לא).")
             return
 
+    # PRO-116: customer replied to the "new request or about the existing job?"
+    # prompt (sent when they have a confirmed BOOKED job — see the Q3 gate below).
+    if current_state == UserStates.AWAITING_NEW_OR_EXISTING:
+        reply = (user_text or "").strip()
+        if reply in ("1", "כן"):
+            # New request: release the gate so the next message runs normal intake
+            # (the booked lead is already flagged new_request_prompted).
+            await StateManager.set_state(chat_id, UserStates.IDLE)
+            await whatsapp.send_message(chat_id, Messages.Customer.NEW_REQUEST_ACK)
+            await lead_manager.log_message(
+                chat_id, "model", Messages.Customer.NEW_REQUEST_ACK
+            )
+            return
+        elif reply in ("2", "לא"):
+            # About the existing job: hand off to the assigned pro and step the
+            # bot back so the two can talk directly.
+            meta = await StateManager.get_metadata(chat_id)
+            booked_lead_id = meta.get("booked_lead_id")
+            pro_name = "איש המקצוע"
+            try:
+                booked_lead = (
+                    await leads_collection.find_one({"_id": ObjectId(booked_lead_id)})
+                    if booked_lead_id
+                    else None
+                )
+                if booked_lead and booked_lead.get("pro_id"):
+                    pro = await users_collection.find_one(
+                        {"_id": booked_lead["pro_id"]}
+                    )
+                    if pro:
+                        pro_name = pro.get("business_name") or pro_name
+                        if pro.get("phone_number"):
+                            await whatsapp.send_message(
+                                to_chat_id(pro["phone_number"]),
+                                Messages.Pro.CUSTOMER_EXISTING_JOB_QUERY.format(
+                                    customer_name=booked_lead.get("customer_name")
+                                    or Messages.Fallbacks.CUSTOMER_NAME,
+                                    issue=booked_lead.get("issue_type") or "העבודה",
+                                    customer_phone=strip_suffix(chat_id),
+                                ),
+                            )
+            except Exception as e:
+                logger.error(f"Existing-job handoff to pro failed for {chat_id}: {e}")
+            await StateManager.set_state(
+                chat_id,
+                UserStates.PAUSED_FOR_HUMAN,
+                ttl=WorkerConstants.PAUSE_TTL_SECONDS,
+            )
+            msg = Messages.Customer.EXISTING_JOB_HANDOFF.format(pro_name=pro_name)
+            await whatsapp.send_message(chat_id, msg)
+            await lead_manager.log_message(chat_id, "model", msg)
+            return
+        else:
+            await whatsapp.send_message(
+                chat_id, "אנא השב 1 (בעיה חדשה) או 2 (לגבי העבודה הקיימת)."
+            )
+            return
+
     # Interceptor: customer with a confirmed BOOKED lead sends cancel or reschedule keyword.
     # Placed before PRO_BUSINESS_KEYWORDS so Hebrew phrases are not misrouted.
     # Guards against PRO_MODE so pros who happen to use these phrases are unaffected.
@@ -997,6 +1056,49 @@ async def _process_incoming_message_inner(
             {"_id": active_lead["pro_id"], "is_active": True}
         )
 
+    # PRO-116 Q3: a customer with a CONFIRMED (BOOKED) job who writes about
+    # something else must not silently spawn a second parallel lead — that was
+    # the root of the "3 leads / too many approvals" incident (BOOKED is absent
+    # from the active_lead query above by design). Recognize the booked job and
+    # ask whether this is a new request or about the existing one. Fires once per
+    # booked lead (`new_request_prompted`), mirroring `loyalty_offered`.
+    # Emergencies bypass — they must reach matching immediately.
+    if (
+        not active_lead
+        and user_text
+        and not is_emergency_detected
+        and current_state != UserStates.PRO_MODE
+    ):
+        booked_lead = await leads_collection.find_one(
+            {
+                "chat_id": chat_id,
+                "status": LeadStatus.BOOKED,
+                "new_request_prompted": {"$ne": True},
+            },
+            sort=[("created_at", -1)],
+        )
+        if booked_lead:
+            booked_pro = await users_collection.find_one(
+                {"_id": booked_lead.get("pro_id")}
+            )
+            pro_name = (booked_pro or {}).get("business_name") or "איש המקצוע"
+            await leads_collection.update_one(
+                {"_id": booked_lead["_id"]},
+                {"$set": {"new_request_prompted": True}},
+            )
+            await StateManager.set_metadata(
+                chat_id, {"booked_lead_id": str(booked_lead["_id"])}
+            )
+            await StateManager.set_state(chat_id, UserStates.AWAITING_NEW_OR_EXISTING)
+            prompt = Messages.Customer.EXISTING_JOB_PROMPT.format(
+                pro_name=pro_name,
+                issue=booked_lead.get("issue_type") or "העבודה",
+                appointment=booked_lead.get("appointment_time") or "בקרוב",
+            )
+            await whatsapp.send_message(chat_id, prompt)
+            await lead_manager.log_message(chat_id, "model", prompt)
+            return
+
     # Fresh-start guard: if there's no active lead, the user is starting a new
     # conversation. Drop any stale Redis context from a previously-closed lead
     # so the AI doesn't see turns that belong to a different request.
@@ -1011,9 +1113,9 @@ async def _process_incoming_message_inner(
     # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
     if existing_pro and active_lead:
         logger.info(f"⚡ Skipping dispatcher — pro already assigned for {chat_id}")
-        await lead_manager.log_message(
-            chat_id, "user", user_text or (f"[MEDIA: {media_url}]" if media_url else "")
-        )
+        # NOTE: the inbound was already logged once at the top of this function
+        # (step 1). Do NOT log it again here — a second log_message duplicated
+        # every user turn in history and in the AI context window (PRO-116 Q5).
 
         if is_emergency_detected and not active_lead.get("is_emergency"):
             await leads_collection.update_one(
@@ -1094,6 +1196,17 @@ async def _process_incoming_message_inner(
     # Context window trimming is centralized in ai_engine_service.py
     # Inject sticky facts from the active lead so extractions survive the 10-message window.
     lead_facts = active_lead or {}
+    # PRO-116 Q4: a returning customer whose prior lead is booked/closed has no
+    # active_lead, so their name would be re-asked cold every time. Seed ONLY the
+    # name (not city/issue — those are per-request) from their most recent prior
+    # lead that captured one, so we greet them by name instead of re-interrogating.
+    if not active_lead:
+        prior_named = await leads_collection.find_one(
+            {"chat_id": chat_id, "customer_name": {"$nin": [None, ""]}},
+            sort=[("created_at", -1)],
+        )
+        if prior_named and prior_named.get("customer_name"):
+            lead_facts = {"customer_name": prior_named["customer_name"]}
     sticky = {
         "customer_name": lead_facts.get("customer_name") or "none",
         "city": lead_facts.get("city") or lead_facts.get("full_address") or "none",
@@ -1303,7 +1416,45 @@ async def _process_incoming_message_inner(
             else:
                 is_new_assignment = True
 
-            if is_new_assignment:
+            # Build the persona response FIRST so we know whether this same turn
+            # already closes the deal — PRO-116 Q1: if it does, sending the pro
+            # the "שיחה בתהליך — אין צורך לפעול" early notice milliseconds before
+            # the actual approval request is confusing noise. Suppress it then.
+            try:
+                pro_response_obj = await _build_pro_response(
+                    best_pro,
+                    history,
+                    user_text,
+                    extracted_city,
+                    extracted_issue,
+                    transcription,
+                    media_data=media_data,
+                    media_mime=media_mime,
+                    media_url=media_url,
+                )
+            except Exception as e:
+                logger.error(f"Pro response build failed for {chat_id}: {e}")
+                pro_response_obj = None
+
+            # A [DEAL] marker alone is not enough — _finalize_deal's address gate
+            # rejects an incomplete address, in which case the deal does NOT
+            # finalize this turn and the pro still needs the EARLY_LEAD notice.
+            # Only treat the turn as finalizing when the address is actually
+            # complete (same gate helper), so we never suppress the notice on a
+            # deal that will be rejected (PRO-116 Q1).
+            _deal_flagged = bool(
+                pro_response_obj
+                and (
+                    pro_response_obj.is_deal
+                    or DEAL_MARKER_RE.search(pro_response_obj.reply_to_user)
+                )
+            )
+            turn_finalizes = _deal_flagged and bool(
+                pro_response_obj
+                and is_address_complete(pro_response_obj.extracted_data)[0]
+            )
+
+            if is_new_assignment and not turn_finalizes:
                 try:
                     pro_phone = best_pro.get("phone_number")
                     if pro_phone:
@@ -1329,22 +1480,6 @@ async def _process_incoming_message_inner(
                         )
                 except Exception as e:
                     logger.error(f"Failed to notify pro about new lead: {e}")
-
-            try:
-                pro_response_obj = await _build_pro_response(
-                    best_pro,
-                    history,
-                    user_text,
-                    extracted_city,
-                    extracted_issue,
-                    transcription,
-                    media_data=media_data,
-                    media_mime=media_mime,
-                    media_url=media_url,
-                )
-            except Exception as e:
-                logger.error(f"Pro response build failed for {chat_id}: {e}")
-                pro_response_obj = None
 
     # Select which response to send
     final_response = (

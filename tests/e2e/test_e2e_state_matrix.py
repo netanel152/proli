@@ -34,6 +34,7 @@ Input classes
 | `paused_for_human` | silent | silent | silent | silent | silent | TTL ≤ 900s | "מעביר אותך לנציג אנושי" | N/A[race] |
 | `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | TTL ≤ 14400s | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
 | `awaiting_loyalty_confirmation` | → idle, "בודק מולו ומעדכן" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | TTL ≤ 14400s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
+| `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | TTL ≤ 14400s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
 | `pro_mode` | "פקודות המערכת" | "פקודות המערכת" | "פקודות המערכת" | N/A[pro-text-only] | "פקודות המערכת" | TTL ≤ 14400s | "פקודות המערכת" | N/A[race] |
 | `awaiting_intent_confirmation` | → customer_mode, "עברת למצב לקוח" | "בוא ננסה שוב" | "בוא ננסה שוב" | N/A[pro-text-only] | "בוא ננסה שוב" | TTL ≤ 300s | → idle, "ממשיכים כרגיל" | N/A[race] |
 | `pro_selecting_job_to_finish` | N/A[defect-finish] | N/A[defect-finish] | N/A[defect-finish] | N/A[pro-text-only] | N/A[defect-finish] | TTL ≤ 14400s | N/A[defect-finish] | N/A[race] |
@@ -225,6 +226,18 @@ async def arrange_awaiting_loyalty_confirmation(world):
     await world.booked_job(world.pros[R.PRO_PRIMARY], status="new", booked_slot_id=None)
     await world.set_state(UserStates.AWAITING_LOYALTY_CONFIRMATION)
     await world.set_metadata({"past_pro_id": str(world.pros[R.PRO_PRIMARY]["_id"])})
+    return world.customer
+
+
+async def arrange_awaiting_new_or_existing(world):
+    # PRO-116: customer has a confirmed BOOKED job and was asked whether a new
+    # message is a new request or about the existing job.
+    await world.standard_cast()
+    booked = await world.booked_job(
+        world.pros[R.PRO_PRIMARY], status="booked", booked_slot_id=None
+    )
+    await world.set_state(UserStates.AWAITING_NEW_OR_EXISTING)
+    await world.set_metadata({"booked_lead_id": str(booked["_id"])})
     return world.customer
 
 
@@ -509,6 +522,22 @@ MATRIX: dict[str, dict] = {
         ),
         "race": Cell(na=RACE_NA),
     },
+    UserStates.AWAITING_NEW_OR_EXISTING: {
+        "keyword": Cell(
+            send="1", expect_state=UserStates.IDLE, expect=("הבעיה החדשה",)
+        ),
+        "free": Cell(send="בעצם לא משנה", expect=("אנא השב 1 (בעיה חדשה) או 2",)),
+        "offtopic": Cell(send="מה השעה?", expect=("אנא השב 1 (בעיה חדשה) או 2",)),
+        "wrong": Cell(send="", media="image", expect=("אנא השב 1 (בעיה חדשה) או 2",)),
+        "emoji": Cell(send="👍", expect=("אנא השב 1 (בעיה חדשה) או 2",)),
+        "silence": Cell(max_ttl=14400),
+        "interrupt": Cell(
+            send="נציג",
+            expect_state=UserStates.PAUSED_FOR_HUMAN,
+            expect=("מעביר אותך לנציג אנושי",),
+        ),
+        "race": Cell(na=RACE_NA),
+    },
     # --------------------------------------------------------------------- pro
     UserStates.PRO_MODE: {
         "keyword": Cell(send="תפריט", expect=("פקודות המערכת",)),
@@ -738,6 +767,7 @@ ARRANGERS = {
     UserStates.PAUSED_FOR_HUMAN: arrange_paused_for_human,
     UserStates.AWAITING_RESCHEDULE_TIME: arrange_awaiting_reschedule_time,
     UserStates.AWAITING_LOYALTY_CONFIRMATION: arrange_awaiting_loyalty_confirmation,
+    UserStates.AWAITING_NEW_OR_EXISTING: arrange_awaiting_new_or_existing,
     UserStates.PRO_MODE: arrange_pro_mode,
     UserStates.AWAITING_INTENT_CONFIRMATION: arrange_awaiting_intent_confirmation,
     UserStates.PRO_SELECTING_JOB_TO_FINISH: arrange_pro_selecting_finish,
