@@ -150,7 +150,7 @@ All jobs run inside the Worker process via APScheduler.
 | Stale Lead Nudger | Every 4 h | Reminds pros to close booked leads older than 24 h |
 | Lead Janitor | Every 6 h | Closes `CONTACTED` leads with no assigned pro after 24 h. PRO-73: gated to business hours (08:00–21:00 IL) + `lead_janitor_active` toggle (default OFF) |
 | Slot Regeneration | Sunday 01:00 IL | Generates appointment slots from recurring weekly templates |
-| Daily Backup | 02:00 IL (daily) | Creates gzipped `mongodump`; uploads to S3 if configured |
+| Daily Backup | 02:00 IL (daily), production only (PRO-127) | Creates gzipped `mongodump`; uploads to S3 if configured |
 
 Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "scheduler_config"}` with fields `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `lead_janitor_active`, `sla_monitor_active`. The last two, plus `sos_healer_active`, gate cold customer-facing re-engagement jobs and default OFF (pilot safety, PRO-73) until enabled post warm-up.
 

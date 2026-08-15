@@ -59,7 +59,7 @@ Customer (WhatsApp)
 | SOS Reporter | Every 4 h | Send batched summary of stuck leads to admin WhatsApp |
 | Lead Janitor | Every 6 h | Auto-reject `CONTACTED` leads with no assigned pro after 24 h. PRO-73: gated to business hours (08:00–21:00 IL) + `lead_janitor_active` toggle (default OFF) |
 | Slot Regeneration | Sunday 01:00 IL | Regenerate appointment slots from recurring weekly templates |
-| Daily Backup | 02:00 IL (daily) | Create gzipped `mongodump`; upload to S3 if `BACKUP_S3_BUCKET` is configured |
+| Daily Backup | 02:00 IL (daily), production only (PRO-127) | Create gzipped `mongodump`; upload to S3 if `BACKUP_S3_BUCKET` is configured |
 | WhatsApp Deauth Watchdog | Every 2 min | Poll the configured WhatsApp provider's account state (skipped for a non-transmitting provider, e.g. dry-run); page on-call via `send_oncall_alert` if non-authorized > 5 min |
 
 **Startup/shutdown:** Verifies DB + Redis connectivity, starts APScheduler, updates `worker:heartbeat` key in Redis every 60 s (120 s expiry).

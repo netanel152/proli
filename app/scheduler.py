@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 import functools
 import re
 from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
+from app.core.config import settings
 from app.core.constants import LeadStatus, WorkerConstants
 from app.core.phone import to_chat_id, strip_suffix
 from app.core.datetime_utils import within_business_hours
@@ -542,13 +543,23 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # Job 7: Daily Backup (02:00 Israel time)
-    scheduler.add_job(
-        run_daily_backup,
-        CronTrigger(hour=2, minute=0, timezone=IL_TZ),
-        id="daily_backup",
-        replace_existing=True,
-    )
+    # Job 7: Daily Backup (02:00 Israel time) — production only (PRO-127).
+    # Staging has no R2/AWS credentials, so the job there can only fail and
+    # (now that paging works, PRO-113) page the operator for an environment
+    # that is not meant to back up. Registration-time gate: the job never
+    # enters the scheduler outside production.
+    if settings.is_production:
+        scheduler.add_job(
+            run_daily_backup,
+            CronTrigger(hour=2, minute=0, timezone=IL_TZ),
+            id="daily_backup",
+            replace_existing=True,
+        )
+    else:
+        logger.info(
+            f"[Scheduler] Daily backup job not scheduled (environment="
+            f"{settings.ENVIRONMENT}; backups are production-only, PRO-127)."
+        )
 
     # Job 8: SLA Deflection Monitor (every 5 minutes)
     scheduler.add_job(
