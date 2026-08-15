@@ -212,11 +212,11 @@ The primary backup mechanism is the **in-app nightly `mongodump` → Cloudflare 
 
 ### Automated backup
 
-Runs daily at 02:00 IL via APScheduler (`run_daily_backup` on the worker). Creates a gzipped `mongodump` and uploads it to `s3://$BACKUP_S3_BUCKET/proli-backups/`.
+Runs daily at 02:00 IL via APScheduler (`run_daily_backup` on the worker) — **production only** (PRO-127): `start_scheduler` registers the job only when `settings.is_production`; staging/development log an info line instead, since staging has no R2/AWS credentials and would otherwise page the operator on a guaranteed nightly failure. Creates a gzipped `mongodump` and uploads it to `s3://$BACKUP_S3_BUCKET/proli-backups/`.
 
 **S3 upload is mandatory, not optional** — `backup.py --upload-s3` exits non-zero if `BACKUP_S3_BUCKET` is unset or the upload fails, because a local archive on Railway's ephemeral filesystem is wiped on every redeploy. The local `backups/` copy is a working artifact, not a backup.
 
-Required on the Railway **worker** service:
+Required on the Railway **production worker** service only (PRO-127) — staging must not set these:
 
 | Variable | Purpose |
 |---|---|
@@ -350,10 +350,10 @@ python scripts/generate_admin_hash.py
 | `LOG_LEVEL` | `INFO` | Loguru log level |
 | `MAX_CHAT_HISTORY` | `20` | Max messages stored per chat in Redis |
 | `AI_MODELS` | Flash Lite 3.1, Flash 3.5, Flash 2.5, Flash 1.5 | Gemini model fallback chain |
-| `BACKUP_S3_BUCKET` | — | Bucket for the nightly backup — **required on the worker** (PRO-111: the nightly job fails without it) |
+| `BACKUP_S3_BUCKET` | — | Bucket for the nightly backup — **required on the production worker only** (PRO-127: the job is not scheduled at all in staging/development, so it does not need this there; PRO-111: the nightly job fails without it in production) |
 | `BACKUP_S3_ENDPOINT` | — | S3-compatible endpoint (Cloudflare R2); unset = AWS S3 |
-| `AWS_ACCESS_KEY_ID` | — | AWS credentials for S3 (required on the worker with `BACKUP_S3_BUCKET`) |
-| `AWS_SECRET_ACCESS_KEY` | — | AWS credentials for S3 (required on the worker with `BACKUP_S3_BUCKET`) |
+| `AWS_ACCESS_KEY_ID` | — | AWS credentials for S3 (required on the production worker with `BACKUP_S3_BUCKET`) |
+| `AWS_SECRET_ACCESS_KEY` | — | AWS credentials for S3 (required on the production worker with `BACKUP_S3_BUCKET`) |
 | `AWS_REGION` | — | Region — boto3 has **no** default; unset → `NoRegionError` → backup failure. With R2 set `auto` |
 | `GOOGLE_MAPS_API_KEY` | — | Google Geocoding API key; falls back to static city dict if unset |
 | `GEOCODING_NEGATIVE_TTL_SECONDS` | `86400` | How long a **definitive** geocoding miss is cached (Google answered `ZERO_RESULTS`, or the match fell outside Israel) |
