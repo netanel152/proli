@@ -14,6 +14,14 @@ A CI step fails the build on any reference to the old vendor's domain (`green` +
 
 ## Commands
 
+### One-time clone setup
+
+```bash
+git config core.hooksPath .githooks   # blocks direct pushes to master (PR-only workflow)
+```
+
+**Never commit or push to master/main directly** — all work goes through a feature branch + PR (GitHub branch protection enforces this server-side; `.githooks/pre-push` is the local backstop).
+
 ### Local Development (run all three in separate terminals)
 
 ```bash

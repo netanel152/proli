@@ -1,0 +1,7 @@
+#!/bin/sh
+# Carried over from .git/hooks/pre-commit (installed by code-review-graph)
+# when core.hooksPath was pointed at .githooks — hooksPath replaces the
+# whole hooks directory, so anything not copied here would stop running.
+if command -v code-review-graph >/dev/null 2>&1; then
+    code-review-graph detect-changes --brief || true
+fi
