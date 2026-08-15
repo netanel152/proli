@@ -1627,3 +1627,140 @@ async def test_pro_persona_prompt_falls_back_to_price_list(monkeypatch):
         "custom_system_prompt"
     ]
     assert "החלפת ברז: 250-400₪" in prompt
+
+
+# --- PRO-116: booked-customer gate, single logging, name persistence ---
+# NOTE: mock_db is module-scoped (shared across this file), so each test below
+# uses a UNIQUE chat_id to stay isolated from the others' leads/users.
+
+from datetime import datetime, timezone  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_booked_customer_new_message_asks_new_or_existing(wf_mocks, mock_db):
+    """A customer with a confirmed BOOKED job who writes something new is asked
+    'new request or existing?' instead of silently spawning a second lead."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    mock_state.get_state.return_value = UserStates.IDLE
+    chat = "972500116001@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "אבי אינסטלציה",
+            "phone_number": "972500000000",
+            "is_active": True,
+            "role": "professional",
+        }
+    )
+    await mock_db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "issue_type": "נזילה",
+            "appointment_time": "מחר 08:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    await process_incoming_message(chat, "יש לי בעיה אחרת")
+
+    mock_state.set_state.assert_any_call(chat, UserStates.AWAITING_NEW_OR_EXISTING)
+    sent = " ".join(str(c.args[1]) for c in mock_wa.send_message.call_args_list)
+    assert "פנייה" in sent  # the new-or-existing prompt was shown
+    mock_lm.create_lead_from_dict.assert_not_called()  # no second lead
+    mock_ai.analyze_conversation.assert_not_called()  # dispatcher never ran
+
+
+@pytest.mark.asyncio
+async def test_booked_gate_fires_once_per_lead(wf_mocks, mock_db):
+    """The gate marks the booked lead so it doesn't re-prompt every message."""
+    mock_wa, mock_state, _, _, _ = wf_mocks
+    mock_state.get_state.return_value = UserStates.IDLE
+    chat = "972500116002@c.us"
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat,
+            "status": LeadStatus.BOOKED,
+            "issue_type": "נזילה",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    await process_incoming_message(chat, "משהו חדש")
+    updated = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated.get("new_request_prompted") is True
+
+
+@pytest.mark.asyncio
+async def test_assigned_pro_fast_path_logs_inbound_once(wf_mocks, mock_db):
+    """PRO-116 Q5: the inbound must be logged exactly once on the assigned-pro
+    fast path (was logged twice, polluting history + AI context)."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    mock_state.get_state.return_value = UserStates.IDLE
+    chat = "972500116003@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "אבי",
+            "phone_number": "972500000003",
+            "is_active": True,
+            "role": "professional",
+        }
+    )
+    await mock_db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat,
+            "status": LeadStatus.CONTACTED,
+            "pro_id": pro_id,
+            "issue_type": "נזילה",
+            "full_address": "תל אביב",
+        }
+    )
+    mock_ai.analyze_conversation.return_value = AIResponse(
+        reply_to_user="שלום, כאן אבי",
+        extracted_data=ExtractedData(
+            city=None, issue=None, full_address=None, appointment_time=None
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+
+    await process_incoming_message(chat, "טפטוף קטן")
+
+    user_logs = [
+        c
+        for c in mock_lm.log_message.call_args_list
+        if c.args[0] == chat and c.args[1] == "user"
+    ]
+    assert len(user_logs) == 1
+
+
+@pytest.mark.asyncio
+async def test_returning_customer_name_seeded_from_prior_lead(wf_mocks, mock_db):
+    """PRO-116 Q4: a returning customer's name is injected into the dispatcher
+    prompt from a prior lead, so they aren't asked their name again."""
+    mock_wa, mock_state, _, mock_ai, _ = wf_mocks
+    mock_state.get_state.return_value = UserStates.IDLE
+    chat = "972500116004@c.us"
+    await mock_db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat,
+            "status": LeadStatus.COMPLETED,
+            "customer_name": "מוטי",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    await process_incoming_message(chat, "שלום")
+
+    prompt = mock_ai.analyze_conversation.call_args.kwargs.get(
+        "custom_system_prompt", ""
+    )
+    assert "מוטי" in prompt
