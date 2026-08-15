@@ -1408,7 +1408,12 @@ async def _build_pro_response(
 ):
     """Build the pro persona AI response."""
     pro_name = best_pro.get("business_name", Defaults.PROLI_PRO_NAME)
-    raw_price_list = best_pro.get("price_list", "")
+    # Price source of truth: WhatsApp onboarding stores the pro's prices in
+    # `prices_for_prompt` (see pro_onboarding_service); some admin/seeded pros
+    # use `price_list`. Read the former first, fall back to the latter. Reading
+    # only `price_list` left the scheduler with an EMPTY price list for every
+    # onboarded pro, so the AI invented figures instead of quoting real prices.
+    raw_price_list = best_pro.get("prices_for_prompt") or best_pro.get("price_list", "")
     if isinstance(raw_price_list, dict):
         price_list = ", ".join(f"{k}: {v} ILS" for k, v in raw_price_list.items())
     else:

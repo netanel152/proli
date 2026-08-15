@@ -214,6 +214,61 @@ async def test_action_self_assign_assigns_lead_to_admin_pro(
 
 
 @pytest.mark.asyncio
+async def test_assign_notifies_customer_a_pro_was_found(
+    patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
+):
+    """The customer (lead.chat_id) must be told a pro was found on assignment —
+    not left in silence after PENDING_REVIEW. The message goes to the customer's
+    chat, never to the admin running the wizard."""
+    db = patch_admin_collections
+    # This fixture is not reset between tests — a prior self-assign test seeds a
+    # pro on the same ADMIN_PHONE, so isolate to make the pro-name assertion real.
+    await db.users.delete_many({})
+    await db.leads.delete_many({})
+    monkeypatch.setattr(settings, "ADMIN_PHONE", "972524828796")
+
+    admin_pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": admin_pro_id,
+            "phone_number": "972524828796",
+            "role": "professional",
+            "business_name": "אבי אינסטלציה",
+        }
+    )
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+    mock_state.get_metadata.return_value = {"selected_lead_id": str(lead_id)}
+
+    await admin_flow.handle_admin_message(
+        "admin@c.us",
+        "1",
+        UserStates.ADMIN_SELECTING_ACTION,
+        mock_state,
+        None,
+        mock_whatsapp,
+        None,
+    )
+
+    # A message addressed to the CUSTOMER chat carrying the pro's name.
+    customer_msgs = [
+        c.args[1]
+        for c in mock_whatsapp.send_message.call_args_list
+        if c.args[0] == "customer@c.us"
+    ]
+    assert customer_msgs, "customer was not notified of the assignment"
+    assert any("אבי אינסטלציה" in m for m in customer_msgs)
+
+
+@pytest.mark.asyncio
 async def test_self_assign_resets_reassignment_lifecycle_after_escalation(
     patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
 ):
