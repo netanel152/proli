@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
 from app.core.constants import UserStates, LeadStatus, WorkerConstants
 from app.core.messages import Messages
-from app.services.workflow_service import process_incoming_message, _strip_deal_marker
+from app.services.workflow_service import (
+    process_incoming_message,
+    _strip_deal_marker,
+    _build_pro_response,
+)
 from app.services.ai_engine_service import AIResponse, ExtractedData
 import app.services.workflow_service
 
@@ -1582,3 +1586,44 @@ def test_clean_quoted_price_accepts_price_shapes_and_rejects_free_text():
     assert _clean_quoted_price("צור קשר 050-1234567") is None  # injected free text
     assert _clean_quoted_price("about 500 shekels") is None
     assert _clean_quoted_price("0501234567") is None  # phone, not a price
+
+
+@pytest.mark.asyncio
+async def test_pro_persona_prompt_uses_prices_for_prompt(monkeypatch):
+    """PRO-89 regression: the scheduler prompt must carry the pro's real prices.
+
+    Onboarding stores prices in ``prices_for_prompt``; the builder used to read
+    only ``price_list``, leaving the AI with an empty price list so it invented
+    figures. The pro's actual prices must reach the system prompt.
+    """
+    pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי אינסטלציה",
+        "prices_for_prompt": "פתיחת סתימה: 200-350₪ | ביקור: 150₪",
+        "social_proof": {"rating": 5.0, "review_count": 3},
+    }
+    await _build_pro_response(pro, [], "היי", "רמת גן", "נזילה במטבח", None)
+
+    prompt = app.services.workflow_service.ai.analyze_conversation.call_args.kwargs[
+        "custom_system_prompt"
+    ]
+    assert "פתיחת סתימה: 200-350₪" in prompt
+    assert "150₪" in prompt
+
+
+@pytest.mark.asyncio
+async def test_pro_persona_prompt_falls_back_to_price_list(monkeypatch):
+    """A pro with the legacy ``price_list`` field (no ``prices_for_prompt``)
+    still gets its prices into the prompt."""
+    pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי אינסטלציה",
+        "price_list": "החלפת ברז: 250-400₪",
+        "social_proof": {"rating": 5.0, "review_count": 3},
+    }
+    await _build_pro_response(pro, [], "היי", "רמת גן", "נזילה", None)
+
+    prompt = app.services.workflow_service.ai.analyze_conversation.call_args.kwargs[
+        "custom_system_prompt"
+    ]
+    assert "החלפת ברז: 250-400₪" in prompt

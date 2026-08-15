@@ -249,12 +249,32 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
     )
 
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
+    pro_name = pro.get("business_name") or "איש המקצוע"
 
     if lead:
         await notify_pro_new_lead(lead, pro, whatsapp)
+        # Tell the CUSTOMER a pro was found — mirrors the auto-match path in
+        # workflow_service. Without this the customer sat in silence after the
+        # PENDING_REVIEW message ("צוות Proli יחזור אליך") until they proactively
+        # asked; this path notified only the pro and the admin. Send to the
+        # lead's chat_id, never `chat_id` (that is the ADMIN running the wizard).
+        # Fail-open: a customer-notify hiccup must not abort the assignment.
+        customer_chat_id = lead.get("chat_id")
+        if customer_chat_id:
+            try:
+                await whatsapp.send_message(
+                    customer_chat_id,
+                    Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
+                        pro_name=pro_name
+                    ),
+                )
+            except Exception as e:
+                logger.error(
+                    f"[admin_flow] Failed to notify customer "
+                    f"...{customer_chat_id[-8:]} of assignment: {e}"
+                )
 
     await state_manager.clear_state(chat_id)
-    pro_name = pro.get("business_name") or "איש המקצוע"
     await whatsapp.send_message(chat_id, f"✅ הליד הועבר ל-{pro_name}.")
     logger.info(
         f"[admin_flow] Lead {lead_id} assigned to pro {pro.get('_id')} by admin {chat_id}"

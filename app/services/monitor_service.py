@@ -198,6 +198,21 @@ async def reassign_lead(lead) -> bool:
         # 4. Notify new pro
         await notify_pro_new_lead(lead, new_pro, whatsapp)
 
+        # 4b. Close the loop for the customer: they were told "מאתרים עבורך איש
+        # מקצוע" (CUSTOMER_REASSIGNING) earlier — tell them who was found so the
+        # thread doesn't go silent until the new pro engages. Fail-open.
+        try:
+            await whatsapp.send_message(
+                chat_id,
+                Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
+                    pro_name=new_pro.get("business_name", "איש המקצוע")
+                ),
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to notify customer ...{chat_id[-8:]} of reassignment: {e}"
+            )
+
         # 5. Notify old pro
         if current_pro_id:
             old_pro = await users_collection.find_one({"_id": current_pro_id})
