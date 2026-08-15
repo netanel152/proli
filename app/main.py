@@ -12,7 +12,7 @@ from app.api.routes import webhook, meta_webhook, health, privacy
 from app.core.redis_client import close_redis_client, get_redis_client
 from app.core.http_client import close_http_client as _close_shared_http_client
 from app.core.database import client as mongo_client
-from app.core.logger import logger
+from app.core.logger import logger, page_critical
 from scripts.create_indexes import create_all_indexes
 
 
@@ -54,6 +54,12 @@ def _init_sentry() -> None:
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         send_default_pii=False,
         attach_stacktrace=True,
+        # PRO-113: attach_stacktrace + sentry-sdk's default
+        # include_local_variables=True would ship every frame's locals with
+        # each page — page_critical's own unscrubbed `message`, raw phone
+        # numbers, whole lead documents, a Mongo exception carrying the URI.
+        # The inline scrub only covers the message string, so locals stay off.
+        include_local_variables=False,
     )
     sentry_sdk.set_tag("service", "proli-api")
     logger.info(
@@ -86,7 +92,7 @@ async def lifespan(app: FastAPI):
         await mongo_client.admin.command("ping")
         logger.info("✅ API connected to MongoDB.")
     except Exception as e:
-        logger.critical(f"❌ API failed to connect to MongoDB on startup: {e}")
+        page_critical(f"❌ API failed to connect to MongoDB on startup: {e}")
         raise
 
     # Verify Redis is reachable
@@ -95,7 +101,7 @@ async def lifespan(app: FastAPI):
         await redis.ping()
         logger.info("✅ API connected to Redis.")
     except Exception as e:
-        logger.critical(f"❌ API failed to connect to Redis on startup: {e}")
+        page_critical(f"❌ API failed to connect to Redis on startup: {e}")
         raise
 
     # Ensure all MongoDB indexes exist (idempotent — safe to run on every startup)

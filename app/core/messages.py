@@ -423,7 +423,7 @@ class Messages:
 
     class Alerts:
         # PRO-20 — infra paging for Green API instance deauth (SPOF).
-        # The WA-down page is now an out-of-band logger.critical → Sentry email
+        # The WA-down page is now an out-of-band page_critical → Sentry email
         # (PRO-75); we never send a WA-down alert over WhatsApp. Only the recovery
         # notice (instance authorized again) goes over WhatsApp.
         WHATSAPP_RECOVERED = (

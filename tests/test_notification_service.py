@@ -31,7 +31,7 @@ def pages(monkeypatch):
 
     The admin leg of send_sos_alert no longer goes over WhatsApp — the admin
     never messages the bot, so their Cloud API service window is permanently
-    closed. It pages via logger.critical → Sentry instead. Patching the
+    closed. It pages via page_critical (PRO-113) → Sentry instead. Patching the
     function rather than reading a loguru sink keeps these tests asserting the
     *decision to page* rather than log formatting.
     """

@@ -20,7 +20,7 @@ from typing import Any
 
 from app.core.constants import META_ERROR_WINDOW_CLOSED
 from app.core.database import wa_delivery_collection
-from app.core.logger import logger
+from app.core.logger import logger, page_critical
 from app.core.phone import mask_chat_id as _mask
 from app.providers.whatsapp import template_registry
 
@@ -99,7 +99,7 @@ async def _retry_as_template(
     kind = record.get("kind") or "text"
     fallback = template_registry.freeform_fallback(kind)
     if fallback is None:
-        logger.critical(
+        page_critical(
             f"WhatsApp {kind} to {_mask(chat_id)} was rejected by Meta with "
             f"error {META_ERROR_WINDOW_CLOSED} (24h service window closed) and "
             "no approved fallback template is registered (PRO-89). The "
@@ -125,7 +125,7 @@ async def _retry_as_template(
             f"{fallback.key!r}"
         )
     except Exception as e:
-        logger.critical(
+        page_critical(
             f"Template retry for window-closed send to {_mask(chat_id)} "
             f"failed: {e} (wamid {wa_message_id})"
         )

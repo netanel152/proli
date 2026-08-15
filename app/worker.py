@@ -18,8 +18,10 @@ def _init_sentry() -> None:
         (stuck leads, reassignment loops, SOS monitor crashes) surface here.
       * CRITICAL-only filter. Regular ERROR/WARNING noise stays in stdout and
         loguru. Sentry is reserved for operator-paging events. If a surface
-        needs Sentry coverage, it should call `logger.critical(...)` or raise
-        and let arq's top-level handler catch it.
+        needs Sentry coverage, it must call `page_critical(...)` from
+        app/core/logger.py (PRO-113: a plain loguru `logger.critical` emits
+        no stdlib LogRecord and never reaches Sentry) or raise and let
+        arq's top-level handler catch it.
       * No-op when SENTRY_DSN is unset. Tests, local dev, and the open-source
         checkout never touch the Sentry API.
     """
@@ -51,9 +53,14 @@ def _init_sentry() -> None:
         environment=settings.ENVIRONMENT,
         integrations=[logging_integration],
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-        # Keep payloads small — no request bodies, no local vars.
         send_default_pii=False,
         attach_stacktrace=True,
+        # PRO-113: send_default_pii does NOT cover frame locals —
+        # include_local_variables defaults to True and attach_stacktrace
+        # would ship every frame's locals with each page (the unscrubbed
+        # `message` argument, raw phone numbers, whole lead documents, a
+        # Mongo exception carrying the URI). Locals stay off.
+        include_local_variables=False,
     )
     sentry_sdk.set_tag("service", "proli-worker")
     logger.info(

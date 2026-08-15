@@ -47,9 +47,48 @@ def redact_secrets(message: str) -> str:
 
 
 def _pii_filter(record):
-    """Loguru sink filter: always mask PII and redact secrets before writing."""
-    record["message"] = redact_secrets(mask_pii(record["message"]))
+    """Loguru sink filter: always mask PII and redact secrets before writing.
+
+    Secrets first, then PII: a secret that happens to contain a ``972…`` digit
+    run would otherwise be mangled by ``mask_pii`` and no longer match
+    ``redact_secrets`` (same order as ``page_critical``)."""
+    record["message"] = mask_pii(redact_secrets(record["message"]))
     return True
+
+
+# PRO-113 — the ONLY way to page the operator. sentry_sdk's LoggingIntegration
+# hooks the *stdlib* logging module; loguru emits no stdlib LogRecord, so a
+# loguru `logger.critical` is stdout-only and has never created a Sentry
+# issue. This primitive emits through stdlib (InterceptHandler routes the
+# record back into loguru, so the stdout/file sinks still apply), which is
+# what actually reaches Sentry's event_level=CRITICAL threshold.
+_PAGING_LOGGER = logging.getLogger("proli.paging")
+
+
+def page_critical(message: str) -> None:
+    """Emit a CRITICAL that actually pages (Sentry issue → operator email).
+
+    Scrubbing happens inline, not only at the sink: ``_pii_filter`` mutates
+    loguru's own record dict and never touches the stdlib ``LogRecord`` that
+    Sentry reads, so sink-side masking can never cover the Sentry payload —
+    regardless of handler ordering. ``stacklevel=2`` makes the record (and
+    the Sentry culprit) point at the caller, not this helper.
+
+    Deliberately no ``exc_info``: a rendered exception *value* (e.g. a
+    pymongo auth error echoing a credentialed URI) would reach Sentry as
+    frames/vars that ``redact_secrets`` never sees. Callers interpolate the
+    scrubbed ``str(exc)`` into the message instead.
+    """
+    safe = mask_pii(redact_secrets(message))
+    try:
+        _PAGING_LOGGER.critical(safe, stacklevel=2)
+    except Exception:
+        # Paging must never become the failure it reports: the loguru call
+        # this replaced could not raise (sinks default to catch=True), and
+        # several call sites are documented fail-open paths. `safe`, not
+        # `message`: a bare test/aux sink without _pii_filter must never
+        # see the unscrubbed text either.
+        logger.opt(depth=1).critical(safe)
 
 
 # Create logs directory if it doesn't exist
@@ -92,10 +131,22 @@ class InterceptHandler(logging.Handler):
         except ValueError:
             level = record.levelno
 
-        frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
+        # On Python 3.12 logging.currentframe() returns *this* frame (not a
+        # logging-internal one), so the original loguru recipe's loop never
+        # ran and every intercepted line rendered as logging:callHandlers.
+        # Force the first step, then walk out of the logging machinery.
+        frame, depth = logging.currentframe(), 0
+        while frame and (depth == 0 or frame.f_code.co_filename == logging.__file__):
             frame = frame.f_back
             depth += 1
+        # PRO-113: page_critical is a one-line shim in this module; skip it so
+        # the rendered location is the real caller (matching stacklevel=2).
+        # Identity check, not name — another function merely named
+        # page_critical must not be skipped.
+        if frame and frame.f_code is page_critical.__code__:
+            frame, depth = frame.f_back, depth + 1
+        if frame is None:  # walked off the top — depth is now meaningless
+            depth = 1
 
         logger.opt(depth=depth, exception=record.exc_info).log(
             level, record.getMessage()
@@ -160,4 +211,4 @@ def setup_logging():
 
 
 setup_logging()
-__all__ = ["logger", "setup_logging"]
+__all__ = ["logger", "setup_logging", "page_critical", "mask_pii", "redact_secrets"]

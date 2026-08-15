@@ -7,9 +7,10 @@ Covers:
      ServerSelectionTimeoutError (SDAM-surfaced auth failures) are recorded
      when the message matches auth text; non-auth variants re-raise without
      recording; AutoReconnect is never caught; normal return passthrough.
-  3. Escalation threshold + re-page throttle, paging via STDLIB logging
-     (`logging.getLogger("proli.scheduler").critical`) so Sentry's
-     LoggingIntegration actually sees it — loguru CRITICAL never reached it.
+  3. Escalation threshold + re-page throttle, paging via `page_critical`
+     (PRO-113 — the only operator-paging primitive; it emits a stdlib
+     CRITICAL on `proli.paging` so Sentry's LoggingIntegration actually
+     sees it — loguru CRITICAL never reached it).
   4. Fail-open on a broken Redis client (loguru `logger.warning`).
   5. The tracking-failure guard: even if `_record_mongo_auth_failure` itself
      raises, the original exception still propagates.
@@ -21,8 +22,6 @@ explicit patching needed except for the "Redis unavailable" case, which
 patches `get_redis_client` directly (mirrors tests/test_scheduler.py's
 PRO-111 backup-failure tests).
 """
-
-import logging
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
@@ -40,13 +39,12 @@ import app.scheduler as scheduler_module
 
 
 def _patched_stdlib_critical(monkeypatch):
-    """The escalation page goes through stdlib `logging`, not loguru (loguru
-    CRITICAL never reaches Sentry's LoggingIntegration). `logging.getLogger`
-    is a name-keyed singleton registry, so patching the `critical` method on
-    the instance obtained here is the same object the production code calls
-    `logging.getLogger("proli.scheduler").critical(...)` on."""
+    """PRO-113: the escalation page goes through `page_critical`, the only
+    operator-paging primitive (it emits a stdlib CRITICAL on `proli.paging`
+    so Sentry's LoggingIntegration actually sees it — loguru CRITICAL never
+    reached it). Patch it at the point of use, `app.scheduler.page_critical`."""
     mock_critical = MagicMock()
-    monkeypatch.setattr(logging.getLogger("proli.scheduler"), "critical", mock_critical)
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_critical)
     return mock_critical
 
 
