@@ -1,0 +1,29 @@
+#!/bin/sh
+# Block direct pushes to master/main from any client using this clone.
+#
+# Context (2026-08-15): an automated session pushed an un-reviewed commit
+# straight to master (dcf05b7), bypassing review and breaking the CI test
+# baseline guard. All work goes through a feature branch + PR. Server-side
+# enforcement is GitHub branch protection; this hook is the local backstop.
+#
+# Wired via:  git config core.hooksPath .githooks   (run once per clone)
+# Emergency override (deliberate, visible):
+#   PROLI_ALLOW_MASTER_PUSH=1 git push ...
+
+if [ "$PROLI_ALLOW_MASTER_PUSH" = "1" ]; then
+    exit 0
+fi
+
+while read local_ref local_sha remote_ref remote_sha; do
+    case "$remote_ref" in
+        refs/heads/master|refs/heads/main)
+            echo "" >&2
+            echo "pre-push: direct push to ${remote_ref#refs/heads/} is blocked." >&2
+            echo "  Push a feature branch and open a PR instead:" >&2
+            echo "    git checkout -b feature/my-change && git push -u origin HEAD" >&2
+            echo "  Deliberate override: PROLI_ALLOW_MASTER_PUSH=1 git push ..." >&2
+            exit 1
+            ;;
+    esac
+done
+exit 0
