@@ -46,12 +46,19 @@ def main() -> int:
     try:
         import sentry_sdk
         from sentry_sdk.integrations.logging import LoggingIntegration
-        from sentry_sdk.integrations.loguru import LoguruIntegration
     except ImportError:
         logger.error(
             "sentry-sdk is not installed; run `pip install -r requirements.txt`."
         )
         return 1
+
+    disabled_integrations: list = []
+    try:
+        from sentry_sdk.integrations.loguru import LoguruIntegration
+
+        disabled_integrations.append(LoguruIntegration)
+    except Exception:  # DidNotEnable is a plain Exception, not ImportError
+        logger.warning("LoguruIntegration unavailable; continuing without it.")
 
     # Mirror the services' init (app/main.py / app/worker.py _init_sentry):
     # CRITICAL-only issue creation, INFO breadcrumbs, no PII, no frame locals.
@@ -63,7 +70,7 @@ def main() -> int:
         ],
         # Mirrors the services (PRO-113 follow-up): the auto-enabled loguru
         # integration duplicated every page and shipped unscrubbed loguru text.
-        disabled_integrations=[LoguruIntegration()],
+        disabled_integrations=disabled_integrations,
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         send_default_pii=False,
         attach_stacktrace=True,

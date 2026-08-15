@@ -150,7 +150,8 @@ class WorkerConstants:
     INBOUND_RATE_LIMIT_WINDOW_SECONDS = 60  # sliding-window size for the inbound limit
     DAILY_AI_CALL_CAP = 40  # max Gemini/multimodal calls per chat per day (Israel-time)
     RATE_LIMIT_ABUSE_TRIP_THRESHOLD = (
-        3  # trips within a window → escalate to logger.error (Sentry)
+        3  # trips within a window → escalate to logger.error (stdout/file
+        # only — loguru does not reach Sentry, PRO-113; not an operator page)
     )
     # PRO-20 — Green API instance deauth monitor (SPOF). The WhatsApp instance
     # is a single point of failure: if it loses authorization (phone offline,

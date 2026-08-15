@@ -102,8 +102,10 @@ class SecurityService:
     async def record_trip(chat_id: str, window_seconds: int = 60) -> int:
         """
         Count how often a chat has tripped a limit recently so the caller can escalate
-        repeated abuse to logger.error (→ Sentry). Returns the running trip count for the
-        window. Fail-open: any Redis error returns 0 (no escalation).
+        repeated abuse from logger.warning to logger.error (stdout/file only — loguru
+        does not reach Sentry, PRO-113; abuse is a rate-limit signal, not an operator
+        page). Returns the running trip count for the window. Fail-open: any Redis
+        error returns 0 (no escalation).
         """
         try:
             redis = await get_redis_client()

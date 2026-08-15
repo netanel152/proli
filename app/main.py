@@ -32,13 +32,34 @@ def _init_sentry() -> None:
     try:
         import sentry_sdk
         from sentry_sdk.integrations.logging import LoggingIntegration
-        from sentry_sdk.integrations.loguru import LoguruIntegration
     except ImportError:
         logger.warning(
             "SENTRY_DSN is set but sentry-sdk is not installed. "
             "Run `pip install -r requirements.txt`. Continuing without Sentry."
         )
         return
+
+    # PRO-113 follow-up: sentry-sdk AUTO-ENABLES LoguruIntegration
+    # (event_level=ERROR) when loguru is installed — an uncontrolled side
+    # door that (a) duplicated every page as a second issue and (b) sent
+    # loguru ERROR+ to Sentry outside _pii_filter's guarantee: message
+    # scrubbing depended on sink registration order, and exception values /
+    # `extra` were never scrubbed at all. Paging is stdlib-only by design
+    # (page_critical); loguru must not reach Sentry. Imported separately from
+    # sentry_sdk itself so a failure of this hardening helper degrades to a
+    # warning instead of silently disabling ALL paging — if this module can't
+    # import, sentry can't auto-enable it either.
+    disabled_integrations: list = []
+    try:
+        from sentry_sdk.integrations.loguru import LoguruIntegration
+
+        disabled_integrations.append(LoguruIntegration)
+    except Exception:  # DidNotEnable is a plain Exception, not ImportError
+        LoguruIntegration = None
+        logger.warning(
+            "LoguruIntegration unavailable; it cannot be auto-enabled either. "
+            "Continuing with stdlib-only Sentry."
+        )
 
     logging_integration = LoggingIntegration(
         level=logging.INFO,
@@ -52,13 +73,7 @@ def _init_sentry() -> None:
         # fragmenting across casing/typo variants of the same label.
         environment=settings.ENVIRONMENT,
         integrations=[logging_integration],
-        # PRO-113 follow-up: sentry-sdk AUTO-ENABLES LoguruIntegration
-        # (event_level=ERROR) when loguru is installed — an uncontrolled side
-        # door that (a) duplicated every page as a second issue and (b) sent
-        # loguru ERROR+ messages to Sentry UNSCRUBBED, bypassing _pii_filter
-        # (sentry's own loguru sink has no filter). Paging is stdlib-only by
-        # design (page_critical); loguru must not reach Sentry at all.
-        disabled_integrations=[LoguruIntegration()],
+        disabled_integrations=disabled_integrations,
         traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
         send_default_pii=False,
         attach_stacktrace=True,
@@ -69,6 +84,18 @@ def _init_sentry() -> None:
         # The inline scrub only covers the message string, so locals stay off.
         include_local_variables=False,
     )
+    # Self-check, not positional trust: disabled_integrations is a no-op if a
+    # different sentry_sdk.init already installed the integration earlier in
+    # this process (sentry caches installs in module globals).
+    if (
+        LoguruIntegration is not None
+        and sentry_sdk.get_client().get_integration(LoguruIntegration) is not None
+    ):
+        logger.warning(
+            "LoguruIntegration active despite disabled_integrations — Sentry "
+            "was initialized earlier in this process; loguru may reach Sentry "
+            "unscrubbed."
+        )
     sentry_sdk.set_tag("service", "proli-api")
     logger.info(
         f"Sentry initialized (environment={settings.ENVIRONMENT}, CRITICAL-only)."
