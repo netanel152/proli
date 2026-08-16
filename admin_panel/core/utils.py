@@ -2,7 +2,7 @@ import streamlit as st
 from pymongo import MongoClient, uri_parser
 import os
 import certifi
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 from bson import ObjectId
 import pytz
@@ -188,4 +188,16 @@ def send_completion_check_sync(lead_id: str):
     )
 
     message_text = Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name)
-    return send_text_sync(to_chat_id(customer_chat_id), message_text)
+    sent = send_text_sync(to_chat_id(customer_chat_id), message_text)
+
+    # Stamp the lead exactly like the async path does. An operator send bypasses
+    # the cap (it is a deliberate human action) but must still restart the
+    # cooldown, or the 30-min stale-job monitor would nudge again minutes later.
+    leads_collection.update_one(
+        {"_id": ObjectId(lead_id)},
+        {
+            "$inc": {"completion_check_sent_count": 1},
+            "$set": {"completion_check_sent_at": datetime.now(timezone.utc)},
+        },
+    )
+    return sent

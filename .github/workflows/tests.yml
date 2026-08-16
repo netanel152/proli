@@ -12,11 +12,6 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     env:
-      # Settings() requires these at import. They are deliberately fake: the suite
-      # never reaches a real service (mongomock for Mongo, fakeredis for Redis,
-      # recorded fixtures for Gemini, and tests/e2e's transport guard makes any
-      # real HTTP call fail the run).
-      # PRO-86: GREEN_API_* are gone — Settings no longer declares them.
       GEMINI_API_KEY: "ci-not-a-real-key"
       CLOUDINARY_CLOUD_NAME: "ci"
       CLOUDINARY_API_KEY: "ci"

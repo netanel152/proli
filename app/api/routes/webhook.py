@@ -38,16 +38,6 @@ async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=N
                 )
                 return {"status": APIStatus.PROCESSING, "detail": "duplicate"}
 
-        # PRO-86: the sender-identity check that lived here compared
-        # payload.instanceData.idInstance against GREEN_API_INSTANCE_ID. That
-        # config key is gone with the provider, so the check went with it.
-        #
-        # ⚠️ This leaves WEBHOOK_TOKEN (the ?token= query param above) as the only
-        # thing authenticating an inbound call. PRO-89 must restore a
-        # provider-appropriate replacement when it wires up Cloud API inbound —
-        # for Meta that is the X-Hub-Signature-256 HMAC over the raw body, which
-        # is strictly stronger than the id comparison removed here.
-
         # Basic Filters
         if payload.typeWebhook == "incomingMessageReceived":
             sender_data = payload.senderData

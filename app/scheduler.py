@@ -7,6 +7,7 @@ from app.services.workflow_service import (
     send_customer_completion_check,
     whatsapp,
 )
+from app.services.customer_flow import completion_check_due_filter
 from app.services.monitor_service import (
     check_and_reassign_stale_leads,
     send_periodic_admin_report,
@@ -227,11 +228,20 @@ async def monitor_unfinished_jobs():
         logger.info(f"[Monitor] T1: Sending pro reminder for lead {lead['_id']}")
         await send_pro_reminder(str(lead["_id"]))
 
-    # Tier 2: 6-24 hours old -> Check with Customer
+    # Tier 2: 6-24 hours old -> Check with Customer.
+    # This job re-runs every 30 min and a lead stays BOOKED (and therefore inside
+    # this window) until somebody answers, so the query MUST exclude leads that
+    # were already nudged — otherwise every open lead re-sends on every tick.
+    # `send_customer_completion_check` re-applies the same predicate atomically;
+    # this filter is the cheap pre-selection, not the authority.
     t2_start = now_utc - timedelta(hours=24)
     t2_end = now_utc - timedelta(hours=6)
     t2_leads_cursor = leads_collection.find(
-        {"status": LeadStatus.BOOKED, "created_at": {"$gte": t2_start, "$lt": t2_end}}
+        {
+            "status": LeadStatus.BOOKED,
+            "created_at": {"$gte": t2_start, "$lt": t2_end},
+            **completion_check_due_filter(now_utc),
+        }
     )
     async for lead in t2_leads_cursor:
         logger.info(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")

@@ -478,10 +478,6 @@ def assert_seed_allowed() -> None:
             f"expected {STAGING_DB_NAME!r}.\n"
             "   ENVIRONMENT says staging but MONGO_URI points somewhere else."
         )
-    # PRO-86: this used to compare GREEN_API_INSTANCE_ID against the production
-    # instance id. Green API is gone, and the replacement asks the question that
-    # actually matters rather than a proxy for it — can the configured transport
-    # reach a real handset at all?
     provider = build_provider()
     if provider.transmits:
         raise SystemExit(
