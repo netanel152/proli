@@ -19,7 +19,7 @@ class FileMessageData(BaseSchema):
     fileName: Optional[str] = None
 
 class LocationMessageData(BaseSchema):
-    """Green API location message data."""
+    """Location message data (legacy inbound envelope)."""
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     nameLocation: Optional[str] = None

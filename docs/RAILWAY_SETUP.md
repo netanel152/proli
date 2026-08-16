@@ -123,7 +123,7 @@ python scripts/seed_coverage_matrix.py
 
 ## Step 5: Configure the WhatsApp webhook
 
-Green API is gone (PRO-85 — instance deleted, tariff cancelled). Its replacement, the
+The legacy WhatsApp vendor is gone (PRO-85 — instance deleted, tariff cancelled). Its replacement, the
 Meta Cloud API transport (PRO-89), is code-complete and has its own inbound route,
 `/webhook/meta` — but there is still no live Meta account to register it with until
 PRO-87 (Business Portfolio + template approval) completes. Once it does, register the
@@ -132,7 +132,7 @@ verify token matching `META_VERIFY_TOKEN`:
 ```
 https://api-production-XXXX.up.railway.app/webhook/meta
 ```
-The legacy `/webhook` route (Green-API-shaped payload) remains for local/manual testing
+The legacy `/webhook` route (legacy-vendor payload shape) remains for local/manual testing
 (`docs/MANUAL_TEST_PLAN.md`) — no live vendor points at it either:
 ```
 https://api-production-XXXX.up.railway.app/webhook?token=YOUR_WEBHOOK_TOKEN

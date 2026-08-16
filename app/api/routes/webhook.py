@@ -13,7 +13,7 @@ router = APIRouter()
 @router.post("/webhook")
 async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=None)):
     """
-    Main entry point for Green API Webhooks.
+    Legacy inbound webhook — the retired vendor's payload envelope.
     """
     # Webhook Token Verification
     if settings.WEBHOOK_TOKEN:

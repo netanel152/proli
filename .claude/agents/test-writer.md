@@ -28,7 +28,7 @@ You write tests **only**. You may create and edit files under `tests/` and nowhe
 - **Baseline:** lives in `docs/TESTING.md` ("Current status" line) — the single source of truth. Never hardcode a count.
 - **Runner:** `venv/Scripts/pytest --tb=short -q` (Windows). Fallback `python -m pytest`. Deliberately no `-n auto` here — you run small subsets; parallel xdist is test-runner's full-suite concern. Integration tests skip without `MONGO_TEST_URI`.
 - **Async:** `asyncio_mode = strict`. Every async test needs `@pytest.mark.asyncio`. Every awaited dependency is mocked with `AsyncMock`, never `MagicMock` (a `MagicMock` returns a non-awaitable and the test will fail with "coroutine was never awaited" or "object is not awaitable").
-- **Mocking the externals:** `whatsapp` (Green API client), `lead_manager`, Motor/Mongo calls, and Redis (`state_manager_service`, `context_manager_service`) are always mocked — tests never hit real I/O.
+- **Mocking the externals:** `whatsapp` (the outbound provider facade), `lead_manager`, Motor/Mongo calls, and Redis (`state_manager_service`, `context_manager_service`) are always mocked — tests never hit real I/O.
 - **DI pattern:** functions in `pro_flow.py` / `customer_flow.py` receive `whatsapp` and `lead_manager` as parameters. Inject mocks through those parameters — do not patch module-level globals unless the function reads one.
 - **State/TTL:** assert against `WorkerConstants` (e.g. `PAUSE_TTL_SECONDS == 900`), never hardcode the number — if the constant moves, the test should move with it.
 - **Naming:** mirror the source file — code in `app/services/pro_flow.py` → tests in `tests/test_pro_flow.py`. Test names describe behavior: `test_<action>_<condition>_<expected>`.
@@ -42,7 +42,7 @@ You write tests **only**. You may create and edit files under `tests/` and nowhe
    - state transition happened (`state_manager_service.set_state` called with expected state + TTL),
    - context cleared when the flow ends (`context_manager_service.clear_*` called),
    - the right WhatsApp message constant was sent,
-   - no `send_interactive_buttons` (Green API constraint) — if the code under test ever calls it, that's a bug; write an assertion that it is NOT called.
+   - no `send_interactive_buttons` (text-only menu rule) — if the code under test ever calls it, that's a bug; write an assertion that it is NOT called.
 5. Run **only the test files you created or changed** (e.g. `venv/Scripts/pytest tests/test_pro_flow.py --tb=short -q`). Do NOT run the full suite — that is test-runner's job, and it runs exactly once per loop.
 6. Report: how many tests added, what they cover, and which files to include in the full run.
 
@@ -67,7 +67,7 @@ async def test_finish_job_transitions_booked_to_completed_and_clears_context():
     lead_manager.update_status.assert_awaited_once()
     context_manager.clear_context.assert_awaited_once_with("972500000000")
     whatsapp.send_message.assert_awaited()       # a confirmation went out
-    whatsapp.send_interactive_buttons.assert_not_called()  # Green API constraint
+    whatsapp.send_interactive_buttons.assert_not_called()  # text-only menu rule
 ```
 
 ## Rules recap

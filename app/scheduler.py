@@ -443,7 +443,7 @@ async def run_stale_lead_nudger():
 @with_scheduler_lock("run_whatsapp_state_monitor", ttl=90)
 @track_mongo_auth_failures
 async def run_whatsapp_state_monitor():
-    """PRO-20 — Green API deauth watchdog. Toggle via `whatsapp_monitor_active`.
+    """PRO-20 — WhatsApp account deauth watchdog. Toggle via `whatsapp_monitor_active`.
     Lock TTL is kept under the polling interval so a missed/crashed tick doesn't
     block the next one from running."""
     config = await settings_collection.find_one({"_id": "scheduler_config"})
@@ -595,7 +595,7 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # Job 10: Green API deauth watchdog — page on-call if the WhatsApp instance
+    # Job 10: WhatsApp account deauth watchdog — page on-call if the account
     # loses authorization (SPOF). Polls every WA_STATE_CHECK_INTERVAL_MINUTES.
     scheduler.add_job(
         run_whatsapp_state_monitor,

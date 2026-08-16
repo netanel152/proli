@@ -163,7 +163,7 @@ class WorkerConstants:
         3  # trips within a window → escalate to logger.error (stdout/file
         # only — loguru does not reach Sentry, PRO-113; not an operator page)
     )
-    # PRO-20 — Green API instance deauth monitor (SPOF). The WhatsApp instance
+    # PRO-20 — WhatsApp account deauth monitor (SPOF). The WhatsApp instance
     # is a single point of failure: if it loses authorization (phone offline,
     # ban, session drop) no message is processed. A worker job polls
     # getStateInstance and pages on sustained deauth.

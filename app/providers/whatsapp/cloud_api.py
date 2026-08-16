@@ -57,7 +57,7 @@ _MAX_BUTTONS = 3
 _MAX_LIST_ROWS = 10
 _BUTTON_TITLE_LIMIT = 20
 _LIST_ROW_TITLE_LIMIT = 24
-# Cloud API hard caps. Green API's ceilings were far higher, so bodies that
+# Cloud API hard caps. The legacy vendor's ceilings were far higher, so bodies that
 # have always worked (the daily agenda, מצא results) can newly overflow: text
 # is chunked across sends, an oversized interactive body degrades to text.
 _TEXT_BODY_LIMIT = 4096

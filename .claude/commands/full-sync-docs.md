@@ -98,7 +98,7 @@ Read each file below in full. Check every listed claim against Phase 1 ground tr
 | Section | What to check |
 |---------|---------------|
 | Endpoint list | Every route from Phase 1.4 has a section; no extra routes listed |
-| Supported webhook message types | Does not list `buttonsResponseMessage` (removed — Green API does not support interactive buttons) |
+| Supported webhook message types | Does not list `buttonsResponseMessage` (removed — menus are text-only, see CLAUDE.md) |
 | Health check response JSON | Field names match actual `health.py` response structure |
 
 ### `docs/MANUAL_TEST_PLAN.md`

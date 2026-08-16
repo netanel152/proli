@@ -115,7 +115,7 @@ SEED_BATCH = "coverage_v1"
 
 # --- Safety ---------------------------------------------------------------
 STAGING_DB_NAME = "proli_staging_db"
-# The third guard used to be a deny-list on the production Green API instance id
+# The third guard used to be a deny-list on the legacy vendor's production instance id
 # — a backstop that stopped catching anything the moment the instance rotated.
 # PRO-86 replaced it with a direct capability check (`provider.transmits`), which
 # is an allow-list in the only terms that matter: a transport that cannot reach a

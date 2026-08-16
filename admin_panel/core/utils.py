@@ -162,7 +162,7 @@ def send_completion_check_sync(lead_id: str):
     """
     Sync version of send_customer_completion_check for use in Streamlit.
     Uses sync PyMongo; the send goes through the outbound facade (PRO-86), which
-    previously was a raw httpx.post straight at Green API and therefore skipped
+    previously was a raw httpx.post straight at the legacy vendor and therefore skipped
     the circuit breaker and the kill switch.
 
     Returns True when the facade accepted the message. A suppressed send (breaker
