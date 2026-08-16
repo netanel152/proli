@@ -115,7 +115,7 @@ SEED_BATCH = "coverage_v1"
 
 # --- Safety ---------------------------------------------------------------
 STAGING_DB_NAME = "proli_staging_db"
-# The third guard used to be a deny-list on the production Green API instance id
+# The third guard used to be a deny-list on the legacy vendor's production instance id
 # — a backstop that stopped catching anything the moment the instance rotated.
 # PRO-86 replaced it with a direct capability check (`provider.transmits`), which
 # is an allow-list in the only terms that matter: a transport that cannot reach a
@@ -478,10 +478,6 @@ def assert_seed_allowed() -> None:
             f"expected {STAGING_DB_NAME!r}.\n"
             "   ENVIRONMENT says staging but MONGO_URI points somewhere else."
         )
-    # PRO-86: this used to compare GREEN_API_INSTANCE_ID against the production
-    # instance id. Green API is gone, and the replacement asks the question that
-    # actually matters rather than a proxy for it — can the configured transport
-    # reach a real handset at all?
     provider = build_provider()
     if provider.transmits:
         raise SystemExit(

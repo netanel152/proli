@@ -22,7 +22,7 @@ python scripts/seed_db.py
 
 Staging-only. Seeds 27 deterministic professionals positioned around `WorkerConstants.GEO_RADIUS_STEPS` so `matching_service.determine_best_pro` (radius expansion, load balancing, rating sort, text fallback, coverage gaps) can be exercised with a known-correct answer per scenario (PRO-84, `docs/MANUAL_TEST_PLAN.md` TC-19..TC-28). Every document is tagged `seed_batch: "coverage_v1"`.
 
-Refuses to write anything unless `ENVIRONMENT=staging`, the target database is `proli_staging_db`, the configured WhatsApp provider cannot transmit (`provider.transmits` is `False` — i.e. `WHATSAPP_DRY_RUN=true` or `WHATSAPP_PROVIDER=dryrun`; PRO-86 replaced the old Green API production-instance-id check with this capability check), and no untagged (foreign) professional already exists in the database. All seeded phone numbers fall in `972000000100`-`972000000199` — structurally unreachable, since a valid Israeli MSISDN never has `0` immediately after `972`.
+Refuses to write anything unless `ENVIRONMENT=staging`, the target database is `proli_staging_db`, the configured WhatsApp provider cannot transmit (`provider.transmits` is `False` — i.e. `WHATSAPP_DRY_RUN=true` or `WHATSAPP_PROVIDER=dryrun`; PRO-86 replaced the legacy vendor's production-instance-id check with this capability check), and no untagged (foreign) professional already exists in the database. All seeded phone numbers fall in `972000000100`-`972000000199` — structurally unreachable, since a valid Israeli MSISDN never has `0` immediately after `972`.
 
 Not safe to run alongside `scripts/seed_db.py` in either direction: `seed_db.py`'s `clear_db()` wipes the matrix, and its own seeded pro outranks the intended TC-20 winner.
 
@@ -99,7 +99,7 @@ python scripts/restore.py --no-drop         # Restore without dropping existing 
 
 ### `simulate_webhook.py`
 
-Interactive webhook simulator. Prompts for a message, builds a valid Green API JSON payload, and POSTs it to `http://localhost:8000/webhook`.
+Interactive webhook simulator. Prompts for a message, builds a valid legacy-envelope JSON payload, and POSTs it to `http://localhost:8000/webhook`.
 
 ```bash
 python scripts/simulate_webhook.py

@@ -143,7 +143,7 @@ All jobs run inside the Worker process via APScheduler.
 | Job | Schedule | What it does |
 |-----|----------|-------------|
 | Daily agendas | 08:00 IL (daily) | Sends each pro a list of their booked jobs for the day, keyed on `appointment_datetime`; leads without a resolved `appointment_datetime` (e.g. ASAP) are not included |
-| Stale monitor | Every 30 min | Tier 1 (4–6 h): reminder to pro. Tier 2 (6–24 h): completion check to customer. Tier 3 (>24 h): flag for admin |
+| Stale monitor | Every 30 min | Tier 1 (4–6 h): reminder to pro (capped at `MAX_PRO_REMINDERS`). Tier 2 (6–24 h): completion check to customer (capped at `MAX_CUSTOMER_COMPLETION_CHECKS`, min `CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS` apart — the lead stays BOOKED inside the window, so without the cap every tick re-sent). Tier 3 (>24 h): flag for admin |
 | SOS Healer | Every 10 min | Reassigns stuck leads or escalates to `PENDING_ADMIN_REVIEW`. PRO-73: gated to business hours (08:00–21:00 IL) + `sos_healer_active` toggle (default OFF) |
 | SLA Monitor | Every 5 min | Wakes up silent `PAUSED_FOR_HUMAN` chats after 15m; offers phone call. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default OFF) |
 | SOS Reporter | Every 4 h | Sends batched admin report of all still-stuck leads |

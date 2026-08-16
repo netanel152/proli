@@ -1,11 +1,12 @@
 """
 Tests for customer_flow.py: completion checks, ratings, reviews.
 """
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from bson import ObjectId
-from datetime import datetime, timezone
-from app.core.constants import LeadStatus, Defaults
+from datetime import datetime, timedelta, timezone
+from app.core.constants import LeadStatus, Defaults, WorkerConstants
 from app.core.messages import Messages
 from app.services.customer_flow import (
     send_customer_completion_check,
@@ -31,18 +32,21 @@ def mock_whatsapp():
 
 # --- send_customer_completion_check ---
 
+
 @pytest.mark.asyncio
 async def test_completion_check_sends_text_message(flow_db, mock_whatsapp):
     pro_id = ObjectId()
     await flow_db.users.insert_one({"_id": pro_id, "business_name": "יוסי אינסטלציה"})
 
     lead_id = ObjectId()
-    await flow_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": "972501111111@c.us",
-        "status": LeadStatus.BOOKED,
-        "pro_id": pro_id,
-    })
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": "972501111111@c.us",
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+        }
+    )
 
     await send_customer_completion_check(str(lead_id), mock_whatsapp)
 
@@ -55,11 +59,13 @@ async def test_completion_check_sends_text_message(flow_db, mock_whatsapp):
 @pytest.mark.asyncio
 async def test_completion_check_non_booked_skipped(flow_db, mock_whatsapp):
     lead_id = ObjectId()
-    await flow_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": "972501111111@c.us",
-        "status": LeadStatus.COMPLETED,
-    })
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": "972501111111@c.us",
+            "status": LeadStatus.COMPLETED,
+        }
+    )
 
     await send_customer_completion_check(str(lead_id), mock_whatsapp)
 
@@ -72,25 +78,189 @@ async def test_completion_check_missing_lead(flow_db, mock_whatsapp):
     mock_whatsapp.send_message.assert_not_called()
 
 
+# --- completion-check cap + cooldown -------------------------------------
+#
+# Regression guard for the "customer nudged every 30 minutes" bug: the stale-job
+# monitor re-runs every 30 min and a BOOKED lead stays inside its 6-24h Tier-2
+# window until somebody answers, so an uncapped send fired once per open lead on
+# every single tick. The pro side has had MAX_PRO_REMINDERS since day one; these
+# tests pin the customer-side equivalent.
+
+
+async def _seed_booked_lead(db, chat_id: str, **extra):
+    pro_id = ObjectId()
+    await db.users.insert_one({"_id": pro_id, "business_name": "אבי אינסטלציה"})
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "created_at": datetime.now(timezone.utc) - timedelta(hours=8),
+            **extra,
+        }
+    )
+    return lead_id
+
+
+@pytest.mark.asyncio
+async def test_completion_check_stamps_lead_on_send(flow_db, mock_whatsapp):
+    lead_id = await _seed_booked_lead(flow_db, "972502222201@c.us")
+
+    await send_customer_completion_check(str(lead_id), mock_whatsapp)
+
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["completion_check_sent_count"] == 1
+    assert lead["completion_check_sent_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_completion_check_second_call_within_cooldown_suppressed(
+    flow_db, mock_whatsapp
+):
+    """Two scheduler ticks 30 minutes apart must produce exactly ONE message."""
+    lead_id = await _seed_booked_lead(flow_db, "972502222202@c.us")
+
+    await send_customer_completion_check(str(lead_id), mock_whatsapp)
+    await send_customer_completion_check(str(lead_id), mock_whatsapp)
+
+    mock_whatsapp.send_message.assert_called_once()
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["completion_check_sent_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_completion_check_resends_after_cooldown(flow_db, mock_whatsapp):
+    stale = datetime.now(timezone.utc) - timedelta(
+        hours=WorkerConstants.CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS + 1
+    )
+    lead_id = await _seed_booked_lead(
+        flow_db,
+        "972502222203@c.us",
+        completion_check_sent_count=1,
+        completion_check_sent_at=stale,
+    )
+
+    await send_customer_completion_check(str(lead_id), mock_whatsapp)
+
+    mock_whatsapp.send_message.assert_called_once()
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["completion_check_sent_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_completion_check_stops_at_cap(flow_db, mock_whatsapp):
+    """Cap wins even when the cooldown has long expired."""
+    long_ago = datetime.now(timezone.utc) - timedelta(days=3)
+    lead_id = await _seed_booked_lead(
+        flow_db,
+        "972502222204@c.us",
+        completion_check_sent_count=WorkerConstants.MAX_CUSTOMER_COMPLETION_CHECKS,
+        completion_check_sent_at=long_ago,
+    )
+
+    await send_customer_completion_check(str(lead_id), mock_whatsapp)
+
+    mock_whatsapp.send_message.assert_not_called()
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert (
+        lead["completion_check_sent_count"]
+        == WorkerConstants.MAX_CUSTOMER_COMPLETION_CHECKS
+    )
+
+
+@pytest.mark.asyncio
+async def test_completion_check_manual_trigger_bypasses_cap_but_stamps(
+    flow_db, mock_whatsapp
+):
+    """An operator pressing the admin-panel button is a deliberate human action:
+    it ignores cap + cooldown, but still restarts the cooldown so the scheduler
+    does not pile on top of it minutes later."""
+    recent = datetime.now(timezone.utc) - timedelta(minutes=5)
+    lead_id = await _seed_booked_lead(
+        flow_db,
+        "972502222205@c.us",
+        completion_check_sent_count=WorkerConstants.MAX_CUSTOMER_COMPLETION_CHECKS,
+        completion_check_sent_at=recent,
+    )
+
+    await send_customer_completion_check(
+        str(lead_id), mock_whatsapp, triggered_by="admin_panel"
+    )
+
+    mock_whatsapp.send_message.assert_called_once()
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert (
+        lead["completion_check_sent_count"]
+        == WorkerConstants.MAX_CUSTOMER_COMPLETION_CHECKS + 1
+    )
+    # Mongo (and mongomock) hand datetimes back as naive UTC.
+    assert lead["completion_check_sent_at"] > recent.replace(tzinfo=None)
+
+
+# --- "2 / עדיין לא" reply -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_decline_reply_acks_and_restarts_cooldown(flow_db, mock_whatsapp):
+    stale = datetime.now(timezone.utc) - timedelta(hours=12)
+    chat_id = "972502222206@c.us"
+    lead_id = await _seed_booked_lead(
+        flow_db,
+        chat_id,
+        completion_check_sent_count=1,
+        completion_check_sent_at=stale,
+    )
+
+    result = await handle_customer_completion_text(chat_id, "2", mock_whatsapp)
+
+    assert result == Messages.Customer.COMPLETION_NOT_YET_ACK
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["status"] == LeadStatus.BOOKED  # NOT completed
+    assert lead["completion_check_sent_at"] > stale.replace(tzinfo=None)
+
+
+@pytest.mark.asyncio
+async def test_decline_reply_ignored_when_no_check_was_sent(flow_db, mock_whatsapp):
+    """A bare '2' typed into some other numeric menu must fall through to the
+    normal dispatcher rather than being swallowed here."""
+    chat_id = "972502222207@c.us"
+    await _seed_booked_lead(flow_db, chat_id)
+
+    result = await handle_customer_completion_text(chat_id, "2", mock_whatsapp)
+
+    assert result is None
+
+
 # --- handle_customer_completion_text ---
+
 
 @pytest.mark.asyncio
 async def test_handle_completion_confirms(flow_db, mock_whatsapp):
     pro_id = ObjectId()
-    await flow_db.users.insert_one({
-        "_id": pro_id, "business_name": "יוסי", "phone_number": "972500000000",
-    })
+    await flow_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "יוסי",
+            "phone_number": "972500000000",
+        }
+    )
 
     lead_id = ObjectId()
-    await flow_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": "972501111111@c.us",
-        "status": LeadStatus.BOOKED,
-        "pro_id": pro_id,
-        "created_at": datetime.now(timezone.utc),
-    })
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": "972501111111@c.us",
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
-    result = await handle_customer_completion_text("972501111111@c.us", "כן, הסתיים", mock_whatsapp)
+    result = await handle_customer_completion_text(
+        "972501111111@c.us", "כן, הסתיים", mock_whatsapp
+    )
 
     assert result is not None
     assert "יוסי" in result
@@ -108,16 +278,24 @@ async def test_handle_completion_confirms(flow_db, mock_whatsapp):
 async def test_handle_completion_numeric_yes(flow_db, mock_whatsapp):
     """Reply '1' triggers completion."""
     pro_id = ObjectId()
-    await flow_db.users.insert_one({"_id": pro_id, "business_name": "Test", "phone_number": "972500000001"})
+    await flow_db.users.insert_one(
+        {"_id": pro_id, "business_name": "Test", "phone_number": "972500000001"}
+    )
 
     lead_id = ObjectId()
-    await flow_db.leads.insert_one({
-        "_id": lead_id, "chat_id": "972501111112@c.us",
-        "status": LeadStatus.BOOKED, "pro_id": pro_id,
-        "created_at": datetime.now(timezone.utc),
-    })
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": "972501111112@c.us",
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
-    result = await handle_customer_completion_text("972501111112@c.us", "1", mock_whatsapp)
+    result = await handle_customer_completion_text(
+        "972501111112@c.us", "1", mock_whatsapp
+    )
     assert result is not None
 
 
@@ -125,49 +303,67 @@ async def test_handle_completion_numeric_yes(flow_db, mock_whatsapp):
 async def test_handle_completion_hebrew_yes(flow_db, mock_whatsapp):
     """Reply 'כן' triggers completion."""
     pro_id = ObjectId()
-    await flow_db.users.insert_one({"_id": pro_id, "business_name": "Test2", "phone_number": "972500000002"})
+    await flow_db.users.insert_one(
+        {"_id": pro_id, "business_name": "Test2", "phone_number": "972500000002"}
+    )
 
     lead_id = ObjectId()
-    await flow_db.leads.insert_one({
-        "_id": lead_id, "chat_id": "972501111113@c.us",
-        "status": LeadStatus.BOOKED, "pro_id": pro_id,
-        "created_at": datetime.now(timezone.utc),
-    })
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": "972501111113@c.us",
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
-    result = await handle_customer_completion_text("972501111113@c.us", "כן", mock_whatsapp)
+    result = await handle_customer_completion_text(
+        "972501111113@c.us", "כן", mock_whatsapp
+    )
     assert result is not None
 
 
 @pytest.mark.asyncio
 async def test_handle_completion_no_match(flow_db, mock_whatsapp):
-    result = await handle_customer_completion_text("972501111111@c.us", "שלום", mock_whatsapp)
+    result = await handle_customer_completion_text(
+        "972501111111@c.us", "שלום", mock_whatsapp
+    )
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_handle_completion_no_booked_lead(flow_db, mock_whatsapp):
     # Use a unique chat_id that has no booked leads
-    result = await handle_customer_completion_text("972508888888@c.us", "כן, הסתיים", mock_whatsapp)
+    result = await handle_customer_completion_text(
+        "972508888888@c.us", "כן, הסתיים", mock_whatsapp
+    )
     assert result is None
 
 
 # --- handle_customer_rating_text ---
 
+
 @pytest.mark.asyncio
 async def test_rating_valid(flow_db, monkeypatch):
     pro_id = ObjectId()
-    await flow_db.users.insert_one({
-        "_id": pro_id, "business_name": "Test Pro",
-        "social_proof": {"rating": 5.0, "review_count": 0},
-    })
+    await flow_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "Test Pro",
+            "social_proof": {"rating": 5.0, "review_count": 0},
+        }
+    )
 
     lead_id = ObjectId()
-    await flow_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": "972507777777@c.us",
-        "waiting_for_rating": True,
-        "pro_id": pro_id,
-    })
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": "972507777777@c.us",
+            "waiting_for_rating": True,
+            "pro_id": pro_id,
+        }
+    )
 
     result = await handle_customer_rating_text("972507777777@c.us", "4")
 
@@ -200,24 +396,29 @@ async def test_rating_no_waiting_lead(flow_db):
 
 # --- handle_customer_review_comment ---
 
+
 @pytest.mark.asyncio
 async def test_review_saved(flow_db, monkeypatch):
     pro_id = ObjectId()
     lead_id = ObjectId()
-    await flow_db.leads.insert_one({
-        "_id": lead_id,
-        "chat_id": "972509020202@c.us",
-        "waiting_for_review_comment": True,
-        "pro_id": pro_id,
-        "rating_given": 5,
-    })
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": "972509020202@c.us",
+            "waiting_for_review_comment": True,
+            "pro_id": pro_id,
+            "rating_given": 5,
+        }
+    )
 
     result = await handle_customer_review_comment("972509020202@c.us", "שירות מעולה!")
 
     assert result == Messages.Customer.REVIEW_SAVED
 
     # Review inserted
-    review = await flow_db.reviews.find_one({"pro_id": pro_id, "comment": "שירות מעולה!"})
+    review = await flow_db.reviews.find_one(
+        {"pro_id": pro_id, "comment": "שירות מעולה!"}
+    )
     assert review is not None
     assert review["comment"] == "שירות מעולה!"
     assert review["rating"] == 5
@@ -235,15 +436,18 @@ async def test_review_no_waiting_lead(flow_db):
 
 # --- handle_status_query ---
 
+
 @pytest.mark.asyncio
 async def test_handle_status_query_new_lead(flow_db):
     chat_id = "972511111111@c.us"
-    await flow_db.leads.insert_one({
-        "chat_id": chat_id,
-        "status": LeadStatus.NEW,
-        "issue_type": "נזילה",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await flow_db.leads.insert_one(
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.NEW,
+            "issue_type": "נזילה",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     result = await handle_status_query(chat_id)
 
@@ -256,12 +460,14 @@ async def test_handle_status_query_new_lead(flow_db):
 @pytest.mark.asyncio
 async def test_handle_status_query_contacted_lead(flow_db):
     chat_id = "972511111112@c.us"
-    await flow_db.leads.insert_one({
-        "chat_id": chat_id,
-        "status": LeadStatus.CONTACTED,
-        "issue_type": "תקלת חשמל",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await flow_db.leads.insert_one(
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "issue_type": "תקלת חשמל",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     result = await handle_status_query(chat_id)
 
@@ -276,14 +482,16 @@ async def test_handle_status_query_booked_lead_includes_pro_name(flow_db):
     chat_id = "972511111113@c.us"
     pro_id = ObjectId()
     await flow_db.users.insert_one({"_id": pro_id, "business_name": "יוסי אינסטלציה"})
-    await flow_db.leads.insert_one({
-        "chat_id": chat_id,
-        "status": LeadStatus.BOOKED,
-        "issue_type": "צנרת",
-        "pro_id": pro_id,
-        "appointment_time": "10:00 15/05/2026",
-        "created_at": datetime.now(timezone.utc),
-    })
+    await flow_db.leads.insert_one(
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "issue_type": "צנרת",
+            "pro_id": pro_id,
+            "appointment_time": "10:00 15/05/2026",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     result = await handle_status_query(chat_id)
 
@@ -303,13 +511,15 @@ async def test_handle_status_query_no_active_lead_returns_friendly_message(flow_
 @pytest.mark.asyncio
 async def test_handle_status_query_falls_back_to_recent_completed_lead(flow_db):
     chat_id = "972511111114@c.us"
-    await flow_db.leads.insert_one({
-        "chat_id": chat_id,
-        "status": LeadStatus.COMPLETED,
-        "issue_type": "תיקון דלת",
-        "created_at": datetime.now(timezone.utc),
-        "updated_at": datetime.now(timezone.utc),
-    })
+    await flow_db.leads.insert_one(
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.COMPLETED,
+            "issue_type": "תיקון דלת",
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+    )
 
     result = await handle_status_query(chat_id)
 

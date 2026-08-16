@@ -2,7 +2,7 @@
 
 Replaces tests/test_whatsapp_client.py and
 tests/test_whatsapp_client_circuit_breaker.py, both of which tested the deleted
-Green API client. What is asserted here is the same guarantee one layer up and
+legacy vendor client. What is asserted here is the same guarantee one layer up and
 transport-independent: nothing leaves the process unless the facade says so.
 
 The headline test is

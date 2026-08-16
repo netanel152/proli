@@ -332,7 +332,7 @@ async def test_customer_reply_1_on_offered_lead_triggers_reassign(
     (called_lead,), _ = mock_reassign.await_args
     assert called_lead["_id"] == lead_result.inserted_id
 
-    # Green API constraint — no interactive buttons anywhere in this flow.
+    # Text-only menu rule (CLAUDE.md) — no interactive buttons anywhere in this flow.
     mock_wa.send_interactive_buttons.assert_not_called()
 
 

@@ -462,9 +462,6 @@ async def test_the_slot_bonus_beats_a_higher_rating(seeded):
         ("production", STAGING_DB_NAME, False),
         ("development", STAGING_DB_NAME, False),
         ("staging", "proli_db", False),
-        # PRO-86: the third guard used to compare GREEN_API_INSTANCE_ID against
-        # the production instance. It now asks whether the configured transport
-        # can reach a handset at all.
         ("staging", STAGING_DB_NAME, True),
     ],
 )

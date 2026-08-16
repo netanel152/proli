@@ -12,11 +12,6 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     env:
-      # Settings() requires these at import. They are deliberately fake: the suite
-      # never reaches a real service (mongomock for Mongo, fakeredis for Redis,
-      # recorded fixtures for Gemini, and tests/e2e's transport guard makes any
-      # real HTTP call fail the run).
-      # PRO-86: GREEN_API_* are gone — Settings no longer declares them.
       GEMINI_API_KEY: "ci-not-a-real-key"
       CLOUDINARY_CLOUD_NAME: "ci"
       CLOUDINARY_API_KEY: "ci"
@@ -30,13 +25,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # PRO-86: Green API is gone (PRO-85 — instance deleted, tariff cancelled).
+      # PRO-86: the legacy WhatsApp vendor is gone (PRO-85 — instance deleted,
       # The provider facade is only a single egress if nothing can reach a vendor
-      # endpoint directly, so any reintroduction of a Green API URL — in app code,
+      # tariff cancelled). The provider facade is only a single egress if nothing
+      # can reach a vendor endpoint directly, so any reintroduction of that vendor's
+      # URL — in app code,
       # a script, a test fixture or a doc — fails the build rather than quietly
       # recreating the bypass class that caused the yellowCard incident.
-      # Matches both spellings: `green-api.com` (the real host) and `greenapi.com`.
-      - name: Guard — no Green API references
+      # The pattern below is the one place the retired host may still be named:
+      # it is the detector itself, and `.github` is excluded from its own scan.
+      - name: Guard — no legacy WhatsApp vendor references
         run: |
           if grep -rInE 'greenapi\.com|green-api\.com' \
                --exclude-dir=.git \
@@ -46,11 +44,11 @@ jobs:
                --exclude-dir=logs \
                . ; then
             echo ""
-            echo "::error::Green API reference found. Proli left Green API in PRO-85;"
+            echo "::error::Legacy WhatsApp vendor reference found. Proli left that vendor in PRO-85;"
             echo "::error::all WhatsApp traffic goes through app/providers/whatsapp/."
             exit 1
           fi
-          echo "OK — no Green API references."
+          echo "OK — no legacy WhatsApp vendor references."
 
       # ARCHITECTURE_STANDARD.md §6.2 — the single-egress rule, mechanised.
       # Two ways to bypass the facade's circuit breaker / kill switch / dry-run:

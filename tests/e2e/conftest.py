@@ -50,7 +50,7 @@ from tests.e2e.world import (
 
 @pytest.fixture(scope="package", autouse=True)
 def forbid_real_network():
-    """Hard assert: no HTTP call may reach Green API (or anywhere else) for real.
+    """Hard assert: no HTTP call may reach a WhatsApp provider (or anywhere else) for real.
 
     Patched at the ``httpx`` transport classes rather than at the client, so it
     covers every client in the process — including one built by code the harness

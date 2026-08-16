@@ -5,7 +5,7 @@ fakeredis, a fresh outbound recorder. Messages go through the production
 orchestrator; nothing about the flow is stubbed except the three things that
 cannot be real offline, each of which is a deliberate, documented substitution:
 
-* **The Green API socket** — replaced by ``OutboundRecorder`` at the httpx
+* **The outbound WhatsApp socket** — replaced by ``OutboundRecorder`` at the httpx
   transport (see ``recorder.py``). Everything above it is production code.
 * **Gemini** — replayed from recorded fixtures (see ``ai_replay.py``).
 * **Media fetch** — deterministic fixture bytes instead of a real Cloudinary
@@ -267,7 +267,7 @@ class World:
         id_message: str = "e2e-1",
         media_kind: str | None = None,
     ) -> dict:
-        """A synthetic Green API ``incomingMessageReceived`` payload."""
+        """A synthetic legacy-envelope ``incomingMessageReceived`` payload."""
         from app.core.config import settings
 
         sender = chat_id or self.customer

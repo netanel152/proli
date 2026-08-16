@@ -1,13 +1,13 @@
 # Proli - Manual WhatsApp Test Plan
 
-> ⚠️ **PRO-86 update:** Green API is gone entirely (PRO-85 — instance deleted, tariff
+> ⚠️ **PRO-86 update:** the legacy WhatsApp vendor is gone entirely (PRO-85 — instance deleted, tariff
 > cancelled) and outbound now goes through the provider facade (`app/providers/whatsapp/`).
 > `CloudAPIProvider` (PRO-89) is code-complete against the Meta Graph API, but there is
 > still **no live transmitting provider** in this deployment — `WHATSAPP_PROVIDER` defaults
 > to `dryrun` (never transmits), and selecting `cloud` for real requires Meta credentials
 > that don't exist yet because PRO-87 (Business Portfolio, template approval, a sandbox
 > number) hasn't landed. The real-send steps in this plan are **not currently executable**;
-> the "Green API" references below describe the pre-PRO-86 setup and are kept as a template
+> the legacy-vendor references below describe the pre-PRO-86 setup and are kept as a template
 > for whichever real provider goes live.
 
 ## Setup Requirements
@@ -16,8 +16,8 @@
 |-----------|-------------|
 | FastAPI (uvicorn) | `curl http://localhost:8000/health` |
 | ARQ Worker | Worker terminal shows "APScheduler Started" |
-| ngrok | Running, URL set in Green API dashboard |
-| Green API | Instance authorized, phone connected |
+| ngrok | Running, URL set in the provider's webhook config |
+| WhatsApp provider | Account authorized, phone connected |
 | MongoDB | Health check shows "up" |
 | Redis | Health check shows "up" |
 
@@ -29,7 +29,7 @@
 | 972523651414 | Customer | Adi - test customer |
 
 > ⚠️ **These are REAL WhatsApp numbers, not virtual test doubles.** Every step
-> in this manual plan sends a **genuine outbound Green API message** to the
+> in this manual plan sends a **genuine outbound WhatsApp message** to the
 > numbers above via a real running backend + worker. (The automated scripts
 > that used to hit these same numbers, `tests/simulate_test.py` and
 > `tests/smoke_test_railway.py`, were deleted in PRO-83 — equivalent coverage
@@ -38,7 +38,7 @@
 
 ### QA number & instance policy (PRO-72)
 
-Sending real test bursts from a cold/production Green API number is the #1
+Sending real test bursts from a cold/production WhatsApp number is the #1
 WhatsApp yellowCard trigger. To keep manual testing safe:
 
 - **Use a dedicated QA SIM/instance** for all test runs — never the production
@@ -211,7 +211,7 @@ Can simulate by temporarily clearing pro record.
 | Step | Action | Expected | Verify |
 |------|--------|----------|--------|
 | 1 | Send same WhatsApp message | Processed once | Worker shows 1 task |
-| 2 | Green API sends duplicate webhook (same idMessage) | Webhook returns "duplicate" | No second task created |
+| 2 | Provider sends duplicate webhook (same idMessage) | Webhook returns "duplicate" | No second task created |
 
 ---
 

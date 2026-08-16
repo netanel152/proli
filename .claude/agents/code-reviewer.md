@@ -1,6 +1,6 @@
 ---
 name: code-reviewer
-description: Senior read-only code reviewer. Run on changed files to get severity-grouped findings with fix snippets. Covers async safety, FSM invariants, Green API constraints, PII, secrets, and test coverage.
+description: Senior read-only code reviewer. Run on changed files to get severity-grouped findings with fix snippets. Covers async safety, FSM invariants, text-only menu rules, PII, secrets, and test coverage.
 model: opus
 effort: 3
 color: yellow
@@ -40,7 +40,7 @@ You are READ-ONLY. Never modify files. Never suggest refactors outside the chang
 - Functions in `pro_flow.py` and `customer_flow.py` receive `whatsapp` and `lead_manager` as parameters — they must NOT import shared instances directly.
 - `workflow_service.py` owns the shared instances and passes them down.
 
-**Green API constraint**
+**Text-only menu rule**
 
 - `send_interactive_buttons` must never appear. All menus are text-based (numeric/keyword replies). Flag any button-like UX.
 

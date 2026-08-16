@@ -13,7 +13,7 @@ router = APIRouter()
 @router.post("/webhook")
 async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=None)):
     """
-    Main entry point for Green API Webhooks.
+    Legacy inbound webhook — the retired vendor's payload envelope.
     """
     # Webhook Token Verification
     if settings.WEBHOOK_TOKEN:
@@ -37,16 +37,6 @@ async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=N
                     f"Idempotency: Skipping duplicate message {payload.idMessage}"
                 )
                 return {"status": APIStatus.PROCESSING, "detail": "duplicate"}
-
-        # PRO-86: the sender-identity check that lived here compared
-        # payload.instanceData.idInstance against GREEN_API_INSTANCE_ID. That
-        # config key is gone with the provider, so the check went with it.
-        #
-        # ⚠️ This leaves WEBHOOK_TOKEN (the ?token= query param above) as the only
-        # thing authenticating an inbound call. PRO-89 must restore a
-        # provider-appropriate replacement when it wires up Cloud API inbound —
-        # for Meta that is the X-Hub-Signature-256 HMAC over the raw body, which
-        # is strictly stronger than the id comparison removed here.
 
         # Basic Filters
         if payload.typeWebhook == "incomingMessageReceived":

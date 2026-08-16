@@ -1,5 +1,5 @@
 """
-PRO-20 — Green API instance deauth monitor.
+PRO-20 — WhatsApp account deauth monitor.
 
 Tests cover four units:
   1. WhatsAppClient.get_state_instance()  — happy path + error swallow (2 tests)
@@ -235,7 +235,9 @@ async def test_send_oncall_alert_authorized_but_send_raises_returns_false(
     page_critical emitted, returns False (no re-raise, no SMS to fall back to)."""
     mock_wa = MagicMock()
     mock_wa.get_state_instance = AsyncMock(return_value="authorized")
-    mock_wa.send_message = AsyncMock(side_effect=Exception("Green API unreachable"))
+    mock_wa.send_message = AsyncMock(
+        side_effect=Exception("WhatsApp provider unreachable")
+    )
     mock_page_critical = MagicMock()
 
     monkeypatch.setattr(notif_module, "whatsapp", mock_wa)
@@ -608,7 +610,7 @@ async def test_wa_monitor_authorized_releases_auto_pause_but_not_manual_kill_swi
 async def test_wa_monitor_yellowcard_critical_text_mentions_silent_filtering(
     monkeypatch,
 ):
-    """yellowCard is the insidious case (Green API returns 200, message is
+    """yellowCard is the insidious case (the provider returns 200, message is
     silently filtered) — the paged critical text must say so distinctly
     from a hard-down state, so the operator looks in the right place."""
     redis = _FakeRedis({_DOWN_SINCE_KEY: _above_threshold_ts()})

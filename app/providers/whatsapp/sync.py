@@ -1,6 +1,7 @@
 """PRO-86 — blocking bridge for the synchronous admin panel.
 
-Streamlit call sites used to reach for raw ``httpx.post`` against Green API,
+Streamlit call sites used to reach for raw ``httpx.post`` against the legacy
+WhatsApp vendor,
 which is exactly how outbound traffic escaped the circuit breaker and helped
 earn the yellowCard. They are synchronous, so they cannot ``await`` the facade;
 this module is the one sanctioned way across that boundary.

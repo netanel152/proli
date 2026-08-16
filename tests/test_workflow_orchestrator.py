@@ -387,7 +387,7 @@ async def test_customer_cancel_booked_lead_releases_slot(
         ),
     )
 
-    # Green API constraint: buttons are never used
+    # Text-only menu rule (CLAUDE.md): buttons are never used
     mock_wa.send_interactive_buttons.assert_not_called()
 
 

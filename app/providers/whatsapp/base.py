@@ -5,7 +5,8 @@ Every outbound message in Proli leaves through exactly one place: the facade in
 and knows nothing about circuit breakers, kill switches or dry-run — those are
 facade concerns, so the guarantees hold identically for any provider.
 
-Green API is gone (PRO-85 operator decision, instance 7105567180 deleted). The
+The legacy WhatsApp vendor is gone (PRO-85 operator decision, its instance
+deleted). The
 implementations are :class:`~app.providers.whatsapp.dry_run.DryRunProvider`
 (logs, never transmits) and the Meta Cloud API
 :class:`~app.providers.whatsapp.cloud_api.CloudAPIProvider` (PRO-89).
@@ -85,7 +86,7 @@ class WhatsAppProvider(ABC):
     ) -> dict[str, Any] | None:
         """Deliver an interactive (button/list) message.
 
-        Green API could not do this at all, which is why the project convention
+        The legacy vendor could not do this at all, which is why the project convention
         was numeric text menus. The PRO-89 transport exists now, but no *flow*
         calls this yet: adopting buttons over numeric menus is an explicit
         product decision still to be made (see CLAUDE.md and the PRO-88

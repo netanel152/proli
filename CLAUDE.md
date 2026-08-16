@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Every WhatsApp menu must stay text-based** (numeric or keyword replies). Example: instead of Approve/Reject buttons, send `"Reply '1' to approve, '2' to reject."`
 
-The original reason was a Green API limitation. Green API is gone (PRO-85 — instance deleted, tariff cancelled), and the rule now rests on a different footing: `WhatsAppProvider.send_interactive` exists on the ABC and the PRO-89 `CloudAPIProvider` transport can send it, but **nothing in any flow may call it** — no template is approved yet (PRO-87 onboarding, the Business Portfolio and template review, is still open) and adopting buttons over numeric menus is an explicit product decision not yet made (see the PRO-88 catalog). The Green-shaped `send_interactive_buttons` helper was removed in April 2026 and stays removed.
+The original reason was a limitation of the legacy WhatsApp vendor. That vendor is gone (PRO-85 — instance deleted, tariff cancelled), and the rule now rests on a different footing: `WhatsAppProvider.send_interactive` exists on the ABC and the PRO-89 `CloudAPIProvider` transport can send it, but **nothing in any flow may call it** — no template is approved yet (PRO-87 onboarding, the Business Portfolio and template review, is still open) and adopting buttons over numeric menus is an explicit product decision not yet made (see the PRO-88 catalog). The legacy-vendor-shaped `send_interactive_buttons` helper was removed in April 2026 and stays removed.
 
 **All outbound traffic goes through `app/providers/whatsapp/` (PRO-86).** Never build a provider directly, never call an HTTP client at a vendor endpoint — both bypass the circuit breaker and the operator kill switch, which is precisely what caused the yellowCard incident. Synchronous callers (the Streamlit admin panel) use `app.providers.whatsapp.sync.send_text_sync`.
 
@@ -100,7 +100,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 | Service | Responsibility |
 |---|---|
 | `workflow_service.py` | Central orchestrator — routes messages, manages FSM states, delegates to customer/pro/admin flows; handles emergency bypass and loyalty checks |
-| `customer_flow.py` | Customer completion checks, ratings, reviews, and rescheduling |
+| `customer_flow.py` | Customer completion checks (capped + cooled-down per lead; `"2"`/`עדיין לא` acknowledges and restarts the cooldown instead of falling through to the AI), ratings, reviews, and rescheduling |
 | `pro_flow.py` | Professional text commands (approve, reject, pause, resume, finish, cancel booked job, details, summary, **מצא** — rate-limited stuck-lead search) — implements Dynamic Dashboard and availability controls; on finish, captures an optional **final_price** (PRO-33) via a non-blocking `PRO_AWAITING_FINAL_PRICE` prompt and derives `commission_amount` |
 | `admin_flow.py` | Admin routing wizard (`ניהול` keyword): list PENDING_ADMIN_REVIEW leads → self-assign or pick a pro; assignment notifies the pro via `notification_service.notify_pro_new_lead` |
 | `media_handler.py` | Media type detection and download (images, audio, video) |
@@ -125,6 +125,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 - `LeadStatus`: `contacted → new → booked → completed/rejected/closed/cancelled/pending_admin_review`
 - `UserStates`: `IDLE`, `PRO_MODE`, `CUSTOMER_MODE`, `AWAITING_INTENT_CONFIRMATION`, `CUSTOMER_FLOW`, `AWAITING_ADDRESS`, `AWAITING_MEDIA`, `AWAITING_TIME`, `AWAITING_CONSENT`, `SOS`, `AWAITING_PRO_APPROVAL`, `PAUSED_FOR_HUMAN`, `AWAITING_RESCHEDULE_TIME`, `AWAITING_LOYALTY_CONFIRMATION`, `AWAITING_NEW_OR_EXISTING`, `PRO_SELECTING_JOB_TO_FINISH`, `PRO_SELECTING_JOB_TO_CANCEL`, `PRO_AWAITING_FINAL_PRICE`, `ONBOARDING_*`, `ADMIN_MODE_IDLE`, `ADMIN_SELECTING_LEAD`, `ADMIN_SELECTING_ACTION`, `ADMIN_SELECTING_PRO`
 - `WorkerConstants.MAX_PRO_LOAD = 3`: max concurrent leads per professional
+- `WorkerConstants.MAX_CUSTOMER_COMPLETION_CHECKS = 2` / `CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS = 6`: cap and cooldown on the "did the job finish?" nudge sent to a customer for one booked lead — the customer-side mirror of `MAX_PRO_REMINDERS`. The stale-job monitor re-runs every 30 min and a lead stays BOOKED (and therefore inside the 6–24h Tier-2 window) until somebody answers, so without these the check re-sent once per open lead on every tick. The predicate is `customer_flow.completion_check_due_filter`, applied both in the Tier-2 query and again inside `send_customer_completion_check`'s atomic `find_one_and_update` claim, so two worker replicas can't both win
 - `WorkerConstants.SOS_TIMEOUT_MINUTES = 60`: reassignment trigger threshold
 - `WorkerConstants.STALE_BOOKED_LEAD_HOURS = 24`: threshold for stale job reminders
 - `WorkerConstants.GEO_RADIUS_STEPS = [10000, 20000, 30000]`: progressive geo search radii

@@ -51,7 +51,7 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 | # | Send | Call site | Trigger | Notes |
 |---|---|---|---|---|
 | **C1** | No pro available (`NO_PRO_AVAILABLE`) | `monitor_service.py:307` | Lead janitor, every 6h | Lead can be arbitrarily old. Assume closed. |
-| **C2** | Completion check | `admin_panel/core/utils.py:191` | **Operator clicks a button** | Arbitrary timing by construction. |
+| **C2** | Completion check | `admin_panel/core/utils.py:190` (operator) · `customer_flow.py:send_customer_completion_check` (scheduler) | **Operator clicks a button**, or stale-job monitor Tier 2 | Arbitrary timing by construction. Capped at `MAX_CUSTOMER_COMPLETION_CHECKS` per lead with a `CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS` gap; an operator send bypasses the cap but still restarts the cooldown. |
 | **C3** | Reassignment notices (`CUSTOMER_REASSIGNING`, `MAX_REASSIGNMENTS_REACHED`, `PENDING_REVIEW`) | `monitor_service.py:116, 157, 213` | `SOS_TIMEOUT_MINUTES=60` path → in-window; `STALE_BOOKED_LEAD_HOURS=24` path → **on the boundary** | Same code, two triggers, two different answers. Must be treated as template-required. |
 
 ### Operator-facing — ✅ **resolved, no templates needed**

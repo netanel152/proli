@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 1064 passed, 97 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 91 skips are cells of the PRO-83 state × input matrix — but not all of them are deliberate `N/A`: 15 (`defect-finish`, `defect-cancel`, `defect-price`) are dark because of the same tracked product defects the strict xfails document below, not by design. The xfails are four product defects the harness documents — see below).
+**Current status: 1071 passed, 97 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 91 skips are cells of the PRO-83 state × input matrix — but not all of them are deliberate `N/A`: 15 (`defect-finish`, `defect-cancel`, `defect-price`) are dark because of the same tracked product defects the strict xfails document below, not by design. The xfails are four product defects the harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR. CI enforces it exactly (the "Guard — test baseline" step in `.github/workflows/tests.yml` fails the build when the passed count is below **or** above this line), so a regression and a stale baseline are both unmergeable.
 
@@ -207,9 +207,9 @@ async def test_something(mock_db, monkeypatch):
 > **Deleted in PRO-83:** `tests/simulate_test.py` and `tests/smoke_test_railway.py`.
 > Both claimed their target customer number was "virtual". It was a real handset —
 > only the *inbound* leg was simulated, so every simulated webhook produced a
-> genuine outbound Green API send (PRO-72, the yellowCard). `tests/e2e` now proves
+> genuine outbound WhatsApp send (PRO-72, the yellowCard). `tests/e2e` now proves
 > the same logic offline; manual transport verification lives exclusively in
-> `docs/PILOT_E2E_CHECKLIST.md` (PRO-64). Green API itself is gone (PRO-85), and the
+> `docs/PILOT_E2E_CHECKLIST.md` (PRO-64). That vendor itself is gone (PRO-85), and the
 > PRO-29 plan for a separate staging instance to gate live-fire automation on is
 > cancelled — the PRO-89 `CloudAPIProvider` is code-complete, but live-fire automation
 > is still blocked until PRO-87 (Meta Business Portfolio + template approval) puts a real

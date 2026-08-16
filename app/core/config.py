@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:8501", "http://localhost:3000"]
     MAX_CHAT_HISTORY: int = 20
     ADMIN_PHONE: str = "972524828796"
-    # On-call number for high-urgency infra alerts (e.g. Green API deauth).
+    # On-call number for high-urgency infra alerts (e.g. WhatsApp deauth).
     # When unset, falls back to ADMIN_PHONE. Set to a separate operator's
     # number to route paging away from the day-to-day admin channel.
     ONCALL_PHONE: str | None = None
@@ -284,18 +284,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def require_webhook_auth_in_prod_like(self):
-        """PRO-86: ``/webhook`` has exactly one authentication mechanism left.
-
-        The route used to also reject payloads whose ``instanceData.idInstance``
-        did not match ``GREEN_API_INSTANCE_ID``. That check died with the Green
-        provider, so an unset ``WEBHOOK_TOKEN`` now means *no* authentication at
-        all: any caller could POST a crafted payload and make the worker enqueue
-        AI work and send WhatsApp messages to an arbitrary chat id.
-
-        Refused at boot rather than left to discover in production. Development
-        is exempt so a local checkout still runs without ceremony; PRO-89 should
-        add the Meta ``X-Hub-Signature-256`` HMAC on top of this.
-        """
         if self.is_prod_like and not self.WEBHOOK_TOKEN:
             raise ValueError(
                 "WEBHOOK_TOKEN is required when ENVIRONMENT is staging or "

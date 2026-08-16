@@ -218,9 +218,9 @@ def setup_logging():
         logging_logger.handlers = [InterceptHandler()]
         logging_logger.propagate = False
 
-    # PRO-79: httpx/httpcore log "HTTP Request: GET <url>" at INFO. Green API puts
-    # the auth token in the URL path, so raise these to WARNING to keep the token
-    # out of the logs entirely.
+    # PRO-79: httpx/httpcore log "HTTP Request: GET <url>" at INFO. The legacy
+    # WhatsApp vendor put its auth token in the URL path; keep these at WARNING
+    # so no credential a provider ever puts in a URL reaches the logs.
     for noisy in ["httpx", "httpcore"]:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 

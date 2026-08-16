@@ -7,6 +7,7 @@ from app.services.workflow_service import (
     send_customer_completion_check,
     whatsapp,
 )
+from app.services.customer_flow import completion_check_due_filter
 from app.services.monitor_service import (
     check_and_reassign_stale_leads,
     send_periodic_admin_report,
@@ -227,11 +228,20 @@ async def monitor_unfinished_jobs():
         logger.info(f"[Monitor] T1: Sending pro reminder for lead {lead['_id']}")
         await send_pro_reminder(str(lead["_id"]))
 
-    # Tier 2: 6-24 hours old -> Check with Customer
+    # Tier 2: 6-24 hours old -> Check with Customer.
+    # This job re-runs every 30 min and a lead stays BOOKED (and therefore inside
+    # this window) until somebody answers, so the query MUST exclude leads that
+    # were already nudged — otherwise every open lead re-sends on every tick.
+    # `send_customer_completion_check` re-applies the same predicate atomically;
+    # this filter is the cheap pre-selection, not the authority.
     t2_start = now_utc - timedelta(hours=24)
     t2_end = now_utc - timedelta(hours=6)
     t2_leads_cursor = leads_collection.find(
-        {"status": LeadStatus.BOOKED, "created_at": {"$gte": t2_start, "$lt": t2_end}}
+        {
+            "status": LeadStatus.BOOKED,
+            "created_at": {"$gte": t2_start, "$lt": t2_end},
+            **completion_check_due_filter(now_utc),
+        }
     )
     async for lead in t2_leads_cursor:
         logger.info(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")
@@ -433,7 +443,7 @@ async def run_stale_lead_nudger():
 @with_scheduler_lock("run_whatsapp_state_monitor", ttl=90)
 @track_mongo_auth_failures
 async def run_whatsapp_state_monitor():
-    """PRO-20 — Green API deauth watchdog. Toggle via `whatsapp_monitor_active`.
+    """PRO-20 — WhatsApp account deauth watchdog. Toggle via `whatsapp_monitor_active`.
     Lock TTL is kept under the polling interval so a missed/crashed tick doesn't
     block the next one from running."""
     config = await settings_collection.find_one({"_id": "scheduler_config"})
@@ -585,7 +595,7 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # Job 10: Green API deauth watchdog — page on-call if the WhatsApp instance
+    # Job 10: WhatsApp account deauth watchdog — page on-call if the account
     # loses authorization (SPOF). Polls every WA_STATE_CHECK_INTERVAL_MINUTES.
     scheduler.add_job(
         run_whatsapp_state_monitor,

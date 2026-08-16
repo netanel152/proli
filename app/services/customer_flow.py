@@ -6,28 +6,98 @@ from app.core.database import (
 )
 from app.core.logger import logger
 from app.core.messages import Messages
-from app.core.constants import LeadStatus, Defaults, Actor
+from app.core.constants import LeadStatus, Defaults, Actor, WorkerConstants
 from app.core.phone import to_chat_id
 from app.services.lead_manager_service import set_lead_status
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
 from bson import ObjectId
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import pytz
 
 _IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 
+def completion_check_due_filter(now_utc: datetime | None = None) -> dict:
+    """Mongo sub-filter selecting BOOKED leads that may still be nudged.
+
+    Shared by the Tier-2 scheduler query and the atomic claim below so the two
+    can't drift. `$or … $exists` rather than a bare `$lt`: a lead that has never
+    been nudged has neither field, and `$lt` does not match a missing field.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(
+        hours=WorkerConstants.CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS
+    )
+    return {
+        "$and": [
+            {
+                "$or": [
+                    {"completion_check_sent_count": {"$exists": False}},
+                    {
+                        "completion_check_sent_count": {
+                            "$lt": WorkerConstants.MAX_CUSTOMER_COMPLETION_CHECKS
+                        }
+                    },
+                ]
+            },
+            {
+                "$or": [
+                    {"completion_check_sent_at": {"$exists": False}},
+                    {"completion_check_sent_at": {"$lt": cutoff}},
+                ]
+            },
+        ]
+    }
+
+
 async def send_customer_completion_check(
     lead_id: str, whatsapp, triggered_by: str = "auto"
 ):
-    """Asks the customer if the job has been completed using interactive buttons."""
+    """Asks the customer if the job has been completed (numeric reply, PRO-86 text-only).
+
+    The send is *claimed* first, with a single conditional `find_one_and_update`:
+    the cap and the cooldown live in the update filter, so two worker replicas
+    ticking at the same moment can never both win the claim. Mirrors the cap
+    `send_pro_reminder` has always had on the professional side.
+
+    An operator-triggered send (`triggered_by != "auto"`) bypasses the cap and
+    the cooldown — it is a deliberate human action — but still stamps the lead,
+    so the scheduler waits a full cooldown before piling on top of it.
+    """
     try:
-        lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
-        if not lead or lead.get("status") != LeadStatus.BOOKED:
-            logger.warning(
-                f"send_customer_completion_check called for invalid/non-booked lead: {lead_id}"
-            )
+        oid = ObjectId(lead_id)
+        now_utc = datetime.now(timezone.utc)
+        is_auto = triggered_by == "auto"
+
+        claim_filter = {"_id": oid, "status": LeadStatus.BOOKED}
+        if is_auto:
+            claim_filter.update(completion_check_due_filter(now_utc))
+
+        # Returns the pre-update document (Mongo's default), so
+        # completion_check_sent_count here is the count *before* this send.
+        lead = await leads_collection.find_one_and_update(
+            claim_filter,
+            {
+                "$inc": {"completion_check_sent_count": 1},
+                "$set": {"completion_check_sent_at": now_utc},
+            },
+        )
+
+        if not lead:
+            existing = await leads_collection.find_one({"_id": oid})
+            if not existing or existing.get("status") != LeadStatus.BOOKED:
+                logger.warning(
+                    f"send_customer_completion_check called for invalid/non-booked lead: {lead_id}"
+                )
+            else:
+                logger.info(
+                    f"[CompletionCheck] Lead {lead_id} suppressed — already sent "
+                    f"{existing.get('completion_check_sent_count', 0)}/"
+                    f"{WorkerConstants.MAX_CUSTOMER_COMPLETION_CHECKS}, last at "
+                    f"{existing.get('completion_check_sent_at')} (cooldown "
+                    f"{WorkerConstants.CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS}h)."
+                )
             return
 
         customer_chat_id = lead["chat_id"]
@@ -42,11 +112,51 @@ async def send_customer_completion_check(
             customer_chat_id,
             Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name),
         )
+        sent_no = lead.get("completion_check_sent_count", 0) + 1
         logger.success(
-            f"Sent customer completion check for lead {lead_id} (Trigger: {triggered_by})"
+            f"Sent customer completion check for lead {lead_id} "
+            f"({sent_no}/{WorkerConstants.MAX_CUSTOMER_COMPLETION_CHECKS}, "
+            f"Trigger: {triggered_by})"
         )
     except Exception as e:
         logger.error(f"Error in send_customer_completion_check for lead {lead_id}: {e}")
+
+
+_NOT_YET_TOKENS = {"2", "עדיין לא", "לא", "עוד לא", "not yet", "no"}
+
+
+async def _handle_completion_check_decline(
+    chat_id: str, stripped: str, normalized: str
+):
+    """Answer "2 / עדיין לא" to a completion check: acknowledge and push the
+    cooldown forward so the customer is not asked again for another full
+    cooldown window.
+
+    Deliberately narrow — it only fires when this chat has a BOOKED lead that
+    was *actually* nudged (`completion_check_sent_at` present). Without that
+    guard a bare "2" typed into any other numeric menu while a job is booked
+    would be swallowed here instead of reaching the real handler.
+    """
+    if normalized not in _NOT_YET_TOKENS and stripped not in _NOT_YET_TOKENS:
+        return None
+
+    lead = await leads_collection.find_one_and_update(
+        {
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "completion_check_sent_at": {"$exists": True},
+        },
+        {"$set": {"completion_check_sent_at": datetime.now(timezone.utc)}},
+        sort=[("created_at", -1)],
+    )
+    if not lead:
+        return None
+
+    logger.info(
+        f"[CompletionCheck] Customer {chat_id} answered 'not yet' for lead "
+        f"{lead['_id']} — cooldown restarted."
+    )
+    return Messages.Customer.COMPLETION_NOT_YET_ACK
 
 
 async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
@@ -61,7 +171,7 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     )
 
     if not is_completion:
-        return None
+        return await _handle_completion_check_decline(chat_id, stripped, normalized)
 
     lead = await leads_collection.find_one(
         {"chat_id": chat_id, "status": LeadStatus.BOOKED}, sort=[("created_at", -1)]

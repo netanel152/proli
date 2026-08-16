@@ -401,7 +401,7 @@ async def send_periodic_admin_report():
 
 
 async def check_whatsapp_instance_state():
-    """PRO-20 — Green API deauth watchdog (SPOF protection).
+    """PRO-20 — WhatsApp account deauth watchdog (SPOF protection).
 
     Polls getStateInstance. The WhatsApp instance is a single point of failure:
     if it loses authorization (phone offline, ban, session drop) no customer or
@@ -465,9 +465,7 @@ async def check_whatsapp_instance_state():
             # so an operator-set halt survives instance recovery.
             await redis.delete(DOWN_SINCE_KEY, ALERTED_KEY, LAST_ALERT_KEY, PAUSED_KEY)
             if down_since and alerted:
-                logger.info(
-                    "✅ [WA Monitor] Green API instance recovered (authorized)."
-                )
+                logger.info("✅ [WA Monitor] WhatsApp account recovered (authorized).")
                 await send_oncall_alert(
                     Messages.Alerts.WHATSAPP_RECOVERED, assume_authorized=True
                 )
@@ -490,7 +488,7 @@ async def check_whatsapp_instance_state():
             # First detection — start the clock, don't page yet.
             await redis.set(DOWN_SINCE_KEY, str(now), ex=86400)
             logger.warning(
-                f"[WA Monitor] Green API instance not authorized (state={state}). "
+                f"[WA Monitor] WhatsApp account not authorized (state={state}). "
                 "Starting deauth timer."
             )
             return
@@ -519,7 +517,7 @@ async def check_whatsapp_instance_state():
         # send an on-call alert over WhatsApp here: WhatsApp is the down channel,
         # so paging over it would only amplify the outage (PRO-75). The structured
         # context below (state, downtime, instance) makes the Sentry email actionable.
-        # yellowCard is the insidious case: Green API returns 200 and the message
+        # yellowCard is the insidious case: the provider returns 200 and the message
         # is silently filtered (accepted, never delivered). notAuthorized/blocked/
         # unreachable stop processing outright. Branch the text so a paged operator
         # looks in the right place.

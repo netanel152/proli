@@ -25,7 +25,7 @@ Checks the health of all external dependencies (MongoDB, Redis, the WhatsApp pro
 }
 ```
 
-`whatsapp.status` is `up` (provider reports `authorized`), `degraded` (either the configured provider cannot transmit at all — e.g. `dryrun` — or a transmitting provider reports `yellowCard`), or `down` (not authorized/blocked/unreachable). `whatsapp.state` is the raw value returned by the provider's `get_state()` (PRO-86; was the raw Green API `stateInstance` value). `whatsapp.provider` is the configured provider's name and `whatsapp.transmits` is whether it can reach a real handset.
+`whatsapp.status` is `up` (provider reports `authorized`), `degraded` (either the configured provider cannot transmit at all — e.g. `dryrun` — or a transmitting provider reports `yellowCard`), or `down` (not authorized/blocked/unreachable). `whatsapp.state` is the raw value returned by the provider's `get_state()` (PRO-86; was the legacy vendor's raw `stateInstance` value). `whatsapp.provider` is the configured provider's name and `whatsapp.transmits` is whether it can reach a real handset.
 
 **Response (503 Service Unavailable):**
 ```json
@@ -65,7 +65,7 @@ Returns 503 if the database is unavailable. Use this endpoint with a synthetic m
 ### 2. WhatsApp Webhook
 **POST** `/webhook`
 
-The legacy entry point for receiving inbound WhatsApp messages, still live alongside the PRO-89 Meta webhook below — the payload shape here is the historical Green API-shaped webhook envelope, unchanged by the PRO-86 provider-facade migration, which only touched outbound.
+The legacy entry point for receiving inbound WhatsApp messages, still live alongside the PRO-89 Meta webhook below — the payload shape here is the historical legacy-vendor webhook envelope, unchanged by the PRO-86 provider-facade migration, which only touched outbound.
 
 **Headers:**
 - `Content-Type: application/json`
