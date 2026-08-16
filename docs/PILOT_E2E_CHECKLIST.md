@@ -9,7 +9,7 @@ the first real test.
 > Every failure → open a Linear ticket **before** the pilot, fix, then **re-run the
 > whole checklist** until it is 100% green. Record the run in the sign-off table.
 
-> ⚠️ **PRO-86 update:** Green API is gone (PRO-85). Real sends now require
+> ⚠️ **PRO-86 update:** the legacy WhatsApp vendor is gone (PRO-85). Real sends now require
 > `WHATSAPP_PROVIDER=cloud`, which selects the PRO-89 `CloudAPIProvider` —
 > code-complete against the Meta Graph API, but with no live account behind it yet:
 > PRO-87 (Business Portfolio, template approval, a sandbox number) has not landed, so

@@ -95,9 +95,9 @@ async def test_dry_run_is_forced_on_inside_the_harness(world):
 
 
 @pytest.mark.asyncio
-async def test_a_full_flow_reaches_green_api_zero_times(world, forbid_real_network):
+async def test_a_full_flow_reaches_the_network_zero_times(world, forbid_real_network):
     """The headline acceptance criterion: drive a complete booking and assert that
-    every byte destined for Green API was intercepted, and none escaped."""
+    every byte destined for WhatsApp was intercepted, and none escaped."""
     await world.standard_cast()
     world.ai.script(
         reply("שלום! מה קרה?"),

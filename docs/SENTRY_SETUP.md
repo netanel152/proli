@@ -101,7 +101,7 @@ free-tier budget — while still re-notifying so the incident can't be silently 
 
 1. Confirm `SENTRY_DSN` is set on the Railway `worker` service.
 2. Trigger a critical event — either:
-   - disconnect / deauthorize the WhatsApp (Green API) instance and wait for the
+   - disconnect / deauthorize the WhatsApp account and wait for the
      state monitor to page, **or**
    - run `railway run python scripts/fire_test_page.py --service worker` (or
      `--service api`) — the operator verification tool built for this purpose.

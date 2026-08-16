@@ -1,7 +1,7 @@
 """
 PRO-71 — GET /health WhatsApp status mapping.
 
-GET /health maps Green API's getStateInstance() to a health status:
+GET /health maps the provider's account state to a health status:
   * "authorized"  -> "up"
   * "yellowCard"  -> "degraded" (instance alive, but WhatsApp silently
     filters outbound — a plain truthiness check would misreport this as

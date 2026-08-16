@@ -49,7 +49,7 @@ async def send_oncall_alert(message: str, *, assume_authorized: bool = False) ->
     """Best-effort WhatsApp delivery of an operator alert — but only when the
     WhatsApp instance is actually authorized.
 
-    WhatsApp is frequently the *failing* component for these alerts (Green API
+    WhatsApp is frequently the *failing* component for these alerts (account
     deauth / yellowCard). Sending an alert about WhatsApp over WhatsApp amplifies
     the outage instead of reporting it (PRO-75), so if the instance is not
     authorized we never send: we emit ``page_critical`` — the stdlib CRITICAL

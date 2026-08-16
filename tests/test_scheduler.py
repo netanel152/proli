@@ -277,6 +277,66 @@ async def test_send_daily_reminders_excludes_booked_lead_without_appointment_dat
     scheduler_module.whatsapp.send_message.assert_not_called()
 
 
+# --- Tier 2: the customer must not be re-nudged on every 30-min tick -------
+#
+# Reproduces the reported bug directly: a lead that stays BOOKED sits inside the
+# 6-24h Tier-2 window for the whole window, so before the cap + cooldown landed
+# every tick of monitor_unfinished_jobs re-sent the completion check — once per
+# open lead, per tick. Uses the real mongomock collections (conftest patches
+# app.scheduler.leads_collection) so the Mongo-side filter is genuinely
+# exercised, not a canned cursor.
+
+
+class _FrozenDatetime:
+    """datetime stand-in whose .now() honours the requested tz but never moves."""
+
+    _fixed = None
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls._fixed.astimezone(tz) if tz else cls._fixed.replace(tzinfo=None)
+
+
+@pytest.mark.asyncio
+async def test_monitor_tier2_nudges_customer_once_not_every_tick(mock_db, monkeypatch):
+    await mock_db.leads.delete_many({})
+    await mock_db.users.delete_many({})
+    await mock_db.settings.delete_many({})
+
+    # Noon Israel time — inside the monitor's 8-21 business-hours gate.
+    fixed = IL_TZ.localize(datetime(2026, 3, 10, 12, 0, 0))
+    _FrozenDatetime._fixed = fixed
+    monkeypatch.setattr(scheduler_module, "datetime", _FrozenDatetime)
+    import app.services.customer_flow as customer_flow_module
+
+    monkeypatch.setattr(customer_flow_module, "datetime", _FrozenDatetime)
+
+    pro_id = ObjectId()
+    await mock_db.users.insert_one({"_id": pro_id, "business_name": "אבי אינסטלציה"})
+    # 8 hours old -> squarely inside Tier 2 (6-24h).
+    await mock_db.leads.insert_one(
+        {
+            "chat_id": "972524828796@c.us",
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "created_at": fixed.astimezone(pytz.utc) - timedelta(hours=8),
+        }
+    )
+
+    import app.services.workflow_service as workflow_module
+
+    workflow_module.whatsapp.send_message.reset_mock()
+
+    # Three consecutive ticks, i.e. 90 minutes of the scheduler running.
+    await monitor_unfinished_jobs()
+    await monitor_unfinished_jobs()
+    await monitor_unfinished_jobs()
+
+    assert workflow_module.whatsapp.send_message.call_count == 1
+    lead = await mock_db.leads.find_one({"status": LeadStatus.BOOKED})
+    assert lead["completion_check_sent_count"] == 1
+
+
 # --- PRO-111: nightly backup failure escalation ---------------------------
 #
 # run_daily_backup shells out to scripts/backup.py --upload-s3 via

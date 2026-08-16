@@ -130,6 +130,12 @@ class WorkerConstants:
         24  # Auto-reject CONTACTED leads with no pro after this
     )
     MAX_PRO_REMINDERS = 3  # Max reminder messages sent to a pro for a stale booked lead
+    # Customer-side equivalent of MAX_PRO_REMINDERS. The stale-job monitor re-runs
+    # every 30 min and a BOOKED lead stays selectable for the whole 6–24h Tier-2
+    # window, so without a cap + cooldown every open lead re-sent the completion
+    # check on every tick (once per open lead, per tick).
+    MAX_CUSTOMER_COMPLETION_CHECKS = 2  # Max completion checks per booked lead
+    CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS = 6  # Min gap between two auto checks
     STALE_BOOKED_LEAD_HOURS = 24  # Threshold for considering a booked lead "stale"
     GEO_RADIUS_STEPS = [
         10000,
@@ -157,7 +163,7 @@ class WorkerConstants:
         3  # trips within a window → escalate to logger.error (stdout/file
         # only — loguru does not reach Sentry, PRO-113; not an operator page)
     )
-    # PRO-20 — Green API instance deauth monitor (SPOF). The WhatsApp instance
+    # PRO-20 — WhatsApp account deauth monitor (SPOF). The WhatsApp instance
     # is a single point of failure: if it loses authorization (phone offline,
     # ban, session drop) no message is processed. A worker job polls
     # getStateInstance and pages on sustained deauth.

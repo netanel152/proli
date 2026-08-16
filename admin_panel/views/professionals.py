@@ -475,7 +475,7 @@ def render_pending_approvals(T):
 
 
 def _notify_pro_approved(phone_number: str):
-    # PRO-86: was a raw httpx.post straight at Green API, bypassing the circuit
+    # PRO-86: was a raw httpx.post straight at the legacy vendor, bypassing the circuit
     # breaker and kill switch entirely. Now goes through the one egress.
     if not phone_number:
         return

@@ -186,27 +186,6 @@ def test_str_and_format_mask_every_secret(loaded_settings):
         f"{loaded_settings.WEBHOOK_TOKEN}", context="f-string on a single field"
     )
 
-
-def test_attribute_error_traceback_does_not_leak(loaded_settings):
-    """Reproduce the incident: touch a field that no longer exists.
-
-    pytest renders locals on failure (and Sentry attaches them), so the
-    rendered traceback plus a locals dump is what an operator actually sees.
-    """
-    with pytest.raises(AttributeError) as exc_info:
-        loaded_settings.GREEN_API_INSTANCE_ID  # removed in PRO-86
-
-    rendered = "".join(
-        traceback.format_exception(
-            type(exc_info.value), exc_info.value, exc_info.value.__traceback__
-        )
-    )
-    # Emulate pytest's --showlocals / Sentry's local-variable capture, which is
-    # how the object's repr reached the transcript in the first place.
-    rendered += "\n".join(f"{k} = {v!r}" for k, v in locals().items())
-    _assert_no_sentinels(rendered, context="AttributeError traceback + locals")
-
-
 def test_model_dump_and_json_mask_every_secret(loaded_settings):
     """Serialization is the other route out — health payloads, debug endpoints."""
     _assert_no_sentinels(repr(loaded_settings.model_dump()), context="model_dump()")

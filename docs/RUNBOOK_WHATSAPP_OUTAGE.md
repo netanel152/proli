@@ -8,7 +8,7 @@ paging), `SENTRY_SETUP.md`.
 
 Every outbound WhatsApp message passes through exactly one object — `WhatsAppFacade`
 (`app/providers/whatsapp/facade.py`) — wrapping a single configured transport
-(`WHATSAPP_PROVIDER`: `dryrun` by default, or `cloud`). **Green API is gone entirely**
+(`WHATSAPP_PROVIDER`: `dryrun` by default, or `cloud`). **The legacy WhatsApp vendor is gone entirely**
 (PRO-85 — the old instance was deleted, the tariff cancelled); this runbook is now
 provider-agnostic rather than describing one vendor's console.
 
@@ -20,7 +20,7 @@ provider-agnostic rather than describing one vendor's console.
 > — no template is approved, no sandbox number exists — so this deployment still runs the
 > default `dryrun` and has never sent a real message via Cloud API. That means the
 > account-outage scenario this runbook exists for (§1–§3) is currently **dormant** — there is
-> nothing to page about. §5 (the historical Green API "number reputation" material) is kept
+> nothing to page about. §5 (the historical "number reputation" material) is kept
 > only as institutional memory for whichever real provider replaces it. What stays live
 > regardless of provider: §2's breaker/kill-switch mechanics, §4 (manual kill switch), and
 > `WHATSAPP_DRY_RUN`.
@@ -137,9 +137,9 @@ product sits in front of them. To keep whichever number is live healthy:
 
 ---
 
-## 5. Historical: Green API number-reputation rehabilitation (retired, PRO-85)
+## 5. Historical: legacy-vendor number-reputation rehabilitation (retired, PRO-85)
 
-This section describes the Green API `yellowCard` state — a WhatsApp-side reputation flag
+This section describes the legacy vendor's `yellowCard` state — a WhatsApp-side reputation flag
 on a phone number, distinct from outright deauthorization. **The number and instance this
 was written for are gone** (PRO-85); it is kept only as institutional memory in case a future
 provider surfaces a similar flag, not as a live procedure. None of the commands below

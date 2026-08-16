@@ -62,7 +62,7 @@ async def health_check(response: Response):
     whatsapp_status = "down"
     whatsapp_state = None
     try:
-        # PRO-86: was a hand-rolled Green API call that reached into the client's
+        # PRO-86: was a hand-rolled legacy-vendor call that reached into the client's
         # private httpx handle and rebuilt the URL from its token — a second
         # egress in everything but name. The facade owns the probe now.
         whatsapp_state = await whatsapp.get_state_instance()
