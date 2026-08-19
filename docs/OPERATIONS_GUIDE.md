@@ -212,7 +212,7 @@ The primary backup mechanism is the **in-app nightly `mongodump` → Cloudflare 
 
 ### Automated backup
 
-Runs daily at 02:00 IL via APScheduler (`run_daily_backup` on the worker) — **production only** (PRO-127): `start_scheduler` registers the job only when `settings.is_production`; staging/development log an info line instead, since staging has no R2/AWS credentials and would otherwise page the operator on a guaranteed nightly failure. Creates a gzipped `mongodump` and uploads it to `s3://$BACKUP_S3_BUCKET/proli-backups/`.
+Runs daily at 02:00 IL via APScheduler (`run_daily_backup` on the worker) — **production only** (PRO-127): `start_scheduler` registers the job only when `settings.is_production`; staging/development log an info line instead (PRO-127's decision of record; staging *does* hold working R2 credentials — they were used for the PRO-111 verification runs — but the job stays production-only so staging can never page about an environment that isn't meant to back up). Creates a gzipped `mongodump` and uploads it to `s3://$BACKUP_S3_BUCKET/proli-backups/`.
 
 **S3 upload is mandatory, not optional** — `backup.py --upload-s3` exits non-zero if `BACKUP_S3_BUCKET` is unset or the upload fails, because a local archive on Railway's ephemeral filesystem is wiped on every redeploy. The local `backups/` copy is a working artifact, not a backup.
 
@@ -227,7 +227,17 @@ Required on the Railway **production worker** service only (PRO-127) — staging
 
 The runtime Docker image installs `mongodb-database-tools` from MongoDB's official apt repo (PRO-111) — `mongodump`/`mongorestore` are available in every container built from `Dockerfile`.
 
-Local retention (relevant for local/dev runs): 7 daily + 4 weekly backups. S3-side retention is managed by a bucket lifecycle rule, not by the app.
+### The live R2 target (provisioned 2026-08-15, PRO-111)
+
+| What | Value |
+|---|---|
+| Bucket | `proli-backups`, location **EEUR** (closest R2 region to Israel/Atlas), Standard class |
+| Endpoint | `https://01aad977bca59c60adf697873a5dece8.r2.cloudflarestorage.com` |
+| Object keys | `proli-backups/proli_<YYYYMMDD_HHMMSS>_<weekday>.gz` (the `proli-backups/` prefix inside the bucket is redundant but harmless — expect it in listings) |
+| Lifecycle rule 1 | `expire-backups-after-35-days` — objects deleted after 35 days (≈ the documented 7 daily + 4 weekly coverage) |
+| Lifecycle rule 2 | `abort-stuck-multipart-uploads-after-1-day` — interrupted uploads can't linger as billable parts |
+
+**Retention is bucket-side, deliberately.** `scripts/backup.py::cleanup_old_backups` deletes **local files only**; on Railway's ephemeral disk that path is a no-op in practice, and nothing app-side ever deletes uploaded objects. The lifecycle rules above are the real retention mechanism — enforced by the storage provider rather than by a job that must succeed in order to clean up. Local retention (relevant for local/dev runs only): 7 daily + 4 weekly.
 
 ### Failure escalation (PRO-111)
 
