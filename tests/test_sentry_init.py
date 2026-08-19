@@ -1,24 +1,25 @@
-"""PRO-113 follow-up — sentry-sdk 2.x auto-enables ``LoguruIntegration`` at
-``event_level=ERROR`` the moment loguru is importable, regardless of whether
-the app ever asked for it. That auto-enabled integration (a) duplicated every
-page as a second Sentry issue and (b) shipped raw, unscrubbed loguru text to
-Sentry — bypassing ``app/core/logger.py``'s ``_pii_filter``, since Sentry's
-own loguru sink has no filter of its own.
+"""Shared Sentry init (``app/core/sentry.py``) — the single ``init_sentry``
+that replaced the two hand-synced ``_init_sentry`` copies in ``app/main.py``
+and ``app/worker.py`` (plus the third mirror in ``scripts/fire_test_page.py``).
 
 Covers:
-  1. ``app.main._init_sentry`` / ``app.worker._init_sentry`` both pass
-     ``disabled_integrations=[LoguruIntegration()]`` — the resulting client
-     has no ``loguru`` integration but does have ``logging`` (the one
-     ``page_critical`` actually depends on).
-  2. ``_is_logging_machinery_frame`` — the frame-walk predicate
+  1. ``init_sentry`` passes ``disabled_integrations=[LoguruIntegration()]`` —
+     the resulting client has no ``loguru`` integration but does have
+     ``logging`` (the one ``page_critical`` actually depends on).
+  2. ``auto_enabling_integrations=False`` + ``before_send=_scrub_event`` are
+     actually set on the client — the two options that close the sdk-2.x
+     auto-enabled side doors (FastApi/Arq/PyMongo/Redis/Httpx events used to
+     ship unscrubbed).
+  3. Idempotency: a second ``init_sentry`` call is a no-op returning the
+     first outcome (this is also the Streamlit rerun guard).
+  4. The no-DSN path never imports sentry_sdk (constrains the lazy-import
+     structure that ``tests/test_fire_test_page.py`` also depends on).
+  5. ``_is_logging_machinery_frame`` — the frame-walk predicate
      ``InterceptHandler.emit`` uses to step over stdlib logging *and*
-     sentry_sdk's ``LoggingIntegration`` frame (``sentry_sdk.integrations.
-     logging.sentry_patched_callhandlers`` sits mid-walk once Sentry is
-     active and would otherwise become the rendered "caller").
-  3. End-to-end: with a live Sentry client (dummy DSN, network-free) and its
-     ``LoggingIntegration`` actually patching ``logging.Logger.callHandlers``,
-     a ``page_critical(...)`` call made from a named function renders with
-     that function's name — not ``sentry_patched_callhandlers`` — and PII
+     sentry_sdk's ``LoggingIntegration`` frame.
+  6. End-to-end: with a live Sentry client (dummy DSN, network-free) whose
+     ``LoggingIntegration`` actually patches ``logging.Logger.callHandlers``,
+     ``page_critical(...)`` renders with the true caller's name and PII
      stays masked.
 
 Import hygiene: every ``sentry_sdk`` import in this file lives *inside* a
@@ -32,10 +33,9 @@ this file is collected, which would break
 
 Global-state hygiene: sentry_sdk keeps one process-wide client behind a Hub.
 Every test that calls a real ``sentry_sdk.init(dsn=...)`` is paired with an
-autouse teardown that calls ``sentry_sdk.init(dsn=None)`` — a client with no
-DSN gets no transport, so nothing can transmit even if some other code calls
-``sentry_sdk.init()`` again unexpectedly, and later tests never inherit a
-live client.
+autouse teardown that calls ``sentry_sdk.init(dsn=None)``, and
+``app.core.sentry``'s module flags are reset around every test so one test's
+init can't satisfy (or poison) the next test's assertion.
 """
 
 import logging
@@ -45,6 +45,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import SecretStr
 
+import app.core.sentry as sentry_module
 from app.core.logger import (
     _is_logging_machinery_frame,
     logger as loguru_logger,
@@ -66,7 +67,11 @@ def sentry_sdk():
 
 
 @pytest.fixture(autouse=True)
-def _reset_sentry_client():
+def _reset_sentry_state(monkeypatch):
+    """Reset both the module idempotency flags (so each test exercises a
+    fresh init) and, after the test, the process-wide sentry client."""
+    monkeypatch.setattr(sentry_module, "_initialized", False)
+    monkeypatch.setattr(sentry_module, "_active", False)
     yield
     # Only touch sentry_sdk if this test (or an earlier one in the same
     # process) actually imported it — importing it here ourselves would
@@ -76,43 +81,59 @@ def _reset_sentry_client():
         module.init(dsn=None)
 
 
-def test_main_init_sentry_disables_loguru_integration(monkeypatch, sentry_sdk):
-    import app.main as main_module
+def test_init_sentry_disables_loguru_integration(monkeypatch, sentry_sdk):
+    monkeypatch.setattr(sentry_module.settings, "SENTRY_DSN", DUMMY_DSN)
 
-    monkeypatch.setattr(main_module.settings, "SENTRY_DSN", DUMMY_DSN)
-
-    main_module._init_sentry()
+    assert sentry_module.init_sentry("proli-api") is True
 
     client = sentry_sdk.get_client()
     assert "loguru" not in client.integrations
     assert "logging" in client.integrations
 
 
-def test_worker_init_sentry_disables_loguru_integration(monkeypatch, sentry_sdk):
-    import app.worker as worker_module
+def test_init_sentry_disables_auto_enabling_and_sets_scrubber(monkeypatch, sentry_sdk):
+    """The PR-A core: auto-enabling off (no FastApi/Arq/PyMongo/Redis/Httpx
+    side doors) and every outgoing event routed through _scrub_event."""
+    monkeypatch.setattr(sentry_module.settings, "SENTRY_DSN", DUMMY_DSN)
 
-    monkeypatch.setattr(worker_module.settings, "SENTRY_DSN", DUMMY_DSN)
-
-    worker_module._init_sentry()
+    sentry_module.init_sentry("proli-worker")
 
     client = sentry_sdk.get_client()
-    assert "loguru" not in client.integrations
-    assert "logging" in client.integrations
+    assert client.options["auto_enabling_integrations"] is False
+    assert client.options["before_send"] is sentry_module._scrub_event
+    assert client.options["include_local_variables"] is False
+    assert client.options["send_default_pii"] is False
+    # Allowlist is currently empty beyond LoggingIntegration: none of the
+    # previously auto-enabled integrations may be present.
+    for side_door in ("fastapi", "starlette", "arq", "pymongo", "redis", "httpx"):
+        assert side_door not in client.integrations, side_door
 
 
-def test_main_init_sentry_noop_without_dsn(monkeypatch, sentry_sdk):
-    """The existing no-op guard must still short-circuit before touching
-    sentry_sdk at all — this is the same branch app/main.py has always had;
-    pinning it here guards against the disabled_integrations change having
-    moved the DSN check."""
-    import app.main as main_module
+def test_init_sentry_is_idempotent(monkeypatch, sentry_sdk):
+    """Second call must not re-init (Streamlit reruns its script on every
+    interaction; module state persists in the server process)."""
+    monkeypatch.setattr(sentry_module.settings, "SENTRY_DSN", DUMMY_DSN)
 
-    monkeypatch.setattr(main_module.settings, "SENTRY_DSN", None)
-    before = sentry_sdk.get_client()
+    assert sentry_module.init_sentry("proli-admin") is True
+    client_after_first = sentry_sdk.get_client()
 
-    main_module._init_sentry()
+    calls = []
+    monkeypatch.setattr(sentry_sdk, "init", lambda *a, **k: calls.append(k))
+    assert sentry_module.init_sentry("proli-admin") is True
+    assert calls == []
+    assert sentry_sdk.get_client() is client_after_first
+    assert sentry_module.sentry_active() is True
 
-    assert sentry_sdk.get_client() is before
+
+def test_init_sentry_noop_without_dsn_never_imports_sdk(monkeypatch):
+    """The no-op guard must short-circuit before touching sentry_sdk at all —
+    the property tests/test_fire_test_page.py builds on."""
+    monkeypatch.setattr(sentry_module.settings, "SENTRY_DSN", None)
+    monkeypatch.delitem(sys.modules, "sentry_sdk", raising=False)
+
+    assert sentry_module.init_sentry("proli-api") is False
+    assert sentry_module.sentry_active() is False
+    assert "sentry_sdk" not in sys.modules
 
 
 class TestIsLoggingMachineryFrame:
@@ -155,23 +176,8 @@ def test_page_critical_renders_true_caller_not_sentry_patched_callhandlers(
     — patched), a real ``page_critical`` call must still render with the
     calling function's name. Before PRO-113's frame-walk fix this rendered as
     ``sentry_patched_callhandlers`` for every single call site."""
-    from sentry_sdk.integrations.logging import LoggingIntegration
-    from sentry_sdk.integrations.loguru import LoguruIntegration
-
-    import app.main as main_module
-
-    monkeypatch.setattr(main_module.settings, "SENTRY_DSN", DUMMY_DSN)
-    sentry_sdk.init(
-        dsn=DUMMY_DSN.get_secret_value(),
-        integrations=[
-            LoggingIntegration(level=logging.INFO, event_level=logging.CRITICAL)
-        ],
-        disabled_integrations=[LoguruIntegration()],
-        traces_sample_rate=0.0,
-        send_default_pii=False,
-        attach_stacktrace=True,
-        include_local_variables=False,
-    )
+    monkeypatch.setattr(sentry_module.settings, "SENTRY_DSN", DUMMY_DSN)
+    assert sentry_module.init_sentry("proli-api") is True
     # Sanity: LoggingIntegration really is wired into this client, not just
     # requested — otherwise this test would pass for the wrong reason.
     assert "logging" in sentry_sdk.get_client().integrations
