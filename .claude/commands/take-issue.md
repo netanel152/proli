@@ -50,6 +50,8 @@ Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live
 
 **11. Close the loop in Linear.** Post a comment on $1 summarizing what was implemented and link the PR. Move the issue to "In Review" (not Done — a human merges the PR). 
 
+**12. Update the living system-audit artifact.** Republish the "Proli System Audit" artifact via the Artifact tool with `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7` (the `url` parameter is what updates it in place — omitting it forks a new artifact). Add a Fix-log row for $1 (date, one-line outcome, PR link) and, if $1 appears among the audit's "Filed in Linear" cards, mark that card done. Keep the title and 🩺 favicon unchanged.
+
 **Evidence gate:** If the issue carries `launch-readiness` or `ops-verification`, it may NOT be moved past "In Review" — by anyone, including Linear↔GitHub automation on PR merge — without evidence attached to the issue: an execution log, screenshot, or checklist with boxes actually ticked. A merged PR that only *adds a document or script* is not evidence that it was *executed*. If the deliverable is "run X", the Done criterion is the run, not the artifact.
 
 ## Final output
