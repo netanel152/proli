@@ -66,4 +66,4 @@ arq~=0.25
 boto3~=1.34
 
 # Error Reporting (optional — worker only, activates only when SENTRY_DSN is set)
-sentry-sdk~=2.18
+sentry-sdk~=2.68
