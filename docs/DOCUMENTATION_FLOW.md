@@ -146,11 +146,13 @@ All jobs run inside the Worker process via APScheduler.
 | Stale monitor | Every 30 min | Tier 1 (4–6 h): reminder to pro (capped at `MAX_PRO_REMINDERS`). Tier 2 (6–24 h): completion check to customer (capped at `MAX_CUSTOMER_COMPLETION_CHECKS`, min `CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS` apart — the lead stays BOOKED inside the window, so without the cap every tick re-sent). Tier 3 (>24 h): flag for admin |
 | SOS Healer | Every 10 min | Reassigns stuck leads or escalates to `PENDING_ADMIN_REVIEW`. PRO-73: gated to business hours (08:00–21:00 IL) + `sos_healer_active` toggle (default OFF) |
 | SLA Monitor | Every 5 min | Wakes up silent `PAUSED_FOR_HUMAN` chats after 15m; offers phone call. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default OFF) |
+| Pro-Approval SLA | Every 5 min | Nudges a silent pro at T+10m, then offers the customer a reassignment at T+25m (half thresholds for emergency leads); the reassignment offer is gated to business hours (PRO-73), the pro nudge is not |
 | SOS Reporter | Every 4 h | Sends batched admin report of all still-stuck leads |
 | Stale Lead Nudger | Every 4 h | Reminds pros to close booked leads older than 24 h |
 | Lead Janitor | Every 6 h | Closes `CONTACTED` leads with no assigned pro after 24 h. PRO-73: gated to business hours (08:00–21:00 IL) + `lead_janitor_active` toggle (default OFF) |
 | Slot Regeneration | Sunday 01:00 IL | Generates appointment slots from recurring weekly templates |
 | Daily Backup | 02:00 IL (daily), production only (PRO-127) | Creates gzipped `mongodump`; uploads to S3 if configured |
+| WhatsApp Deauth Watchdog | Every 2 min | Polls the WhatsApp provider's account state (skipped for a non-transmitting provider); pages on-call if non-authorized > 5 min |
 
 Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "scheduler_config"}` with fields `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `lead_janitor_active`, `sla_monitor_active`. The last two, plus `sos_healer_active`, gate cold customer-facing re-engagement jobs and default OFF (pilot safety, PRO-73) until enabled post warm-up.
 

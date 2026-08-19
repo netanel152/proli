@@ -51,7 +51,7 @@
 | Language | Python 3.12+ |
 | API | FastAPI + Uvicorn |
 | Worker | ARQ (Redis task queue) + APScheduler |
-| AI | Google Gemini (Flash Lite 2.5 → Flash 2.5 → Flash 1.5 fallback) |
+| AI | Google Gemini (Flash Lite 3.1 → Flash 3.5 → Flash 2.5 → Flash 1.5 fallback) |
 | Database | MongoDB Atlas (async Motor) |
 | Cache / State | Redis |
 | Admin UI | Streamlit |
