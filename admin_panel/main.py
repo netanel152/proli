@@ -13,6 +13,13 @@ if parent_dir not in sys.path:
 from admin_panel.core.config import TRANS
 from admin_panel.ui.components import load_css
 from admin_panel.core.auth import check_password, logout, get_manager
+from app.core.sentry import init_sentry, sentry_active
+
+# Idempotent (module state survives Streamlit's per-interaction reruns), so
+# this runs the real init exactly once per server process. No integrations
+# are enabled for the admin service — Streamlit swallows exceptions into its
+# own error UI, so the view dispatch below captures explicitly instead.
+init_sentry("proli-admin")
 
 from admin_panel.views.home import view_leads_dashboard
 from admin_panel.views.professionals import view_professionals
@@ -25,7 +32,7 @@ st.set_page_config(
     page_title="Proli Admin",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="expanded",
 )
 
 cookie_manager = get_manager()
@@ -36,7 +43,7 @@ if not check_password(cookies):
     st.stop()
 
 # --- Language Logic ---
-if 'lang_code' not in st.session_state:
+if "lang_code" not in st.session_state:
     st.session_state.lang_code = cookies.get("proli_lang", "EN")
 
 T = TRANS[st.session_state.lang_code]
@@ -71,7 +78,7 @@ with st.sidebar:
         T.get("lang_label", "Language / שפה"),
         lang_options,
         index=default_index,
-        key="lang_select"
+        key="lang_select",
     )
 
     if selected_lang != st.session_state.lang_code:
@@ -89,7 +96,7 @@ with st.sidebar:
         T["nav_professionals"],
         T["nav_schedule"],
         T.get("nav_analytics", "Analytics"),
-        T["nav_settings"]
+        T["nav_settings"],
     ]
 
     if "current_page" not in st.session_state:
@@ -108,7 +115,7 @@ with st.sidebar:
         index=page_options.index(st.session_state.current_page),
         key="nav_radio",
         on_change=on_nav_change,
-        label_visibility="collapsed"
+        label_visibility="collapsed",
     )
 
     st.divider()
@@ -117,7 +124,7 @@ with st.sidebar:
     auto_refresh = st.toggle(
         T.get("auto_refresh", "Auto-refresh"),
         value=st.session_state.get("auto_refresh", False),
-        key="auto_refresh_toggle"
+        key="auto_refresh_toggle",
     )
 
     if auto_refresh:
@@ -126,33 +133,47 @@ with st.sidebar:
             options=[15, 30, 60, 120],
             value=st.session_state.get("refresh_interval_val", 30),
             format_func=lambda x: f"{x}s",
-            key="refresh_interval_slider"
+            key="refresh_interval_slider",
         )
         st.session_state["refresh_interval_val"] = refresh_interval
 
         # Show indicator
-        st.markdown("""
+        st.markdown(
+            """
             <div class="refresh-indicator">
                 <div class="refresh-dot"></div>
                 <span>Live</span>
             </div>
-        """, unsafe_allow_html=True)
-
+        """,
+            unsafe_allow_html=True,
+        )
 
 
 # --- Page Rendering ---
 current_selection = st.session_state.get("current_page", page)
 
-if current_selection == T["nav_dashboard"]:
-    view_leads_dashboard(T)
-elif current_selection == T["nav_professionals"]:
-    view_professionals(T)
-elif current_selection == T["nav_schedule"]:
-    view_schedule_editor(T)
-elif current_selection == T.get("nav_analytics", "Analytics"):
-    view_analytics(T)
-elif current_selection == T["nav_settings"]:
-    view_system_settings(T)
+try:
+    if current_selection == T["nav_dashboard"]:
+        view_leads_dashboard(T)
+    elif current_selection == T["nav_professionals"]:
+        view_professionals(T)
+    elif current_selection == T["nav_schedule"]:
+        view_schedule_editor(T)
+    elif current_selection == T.get("nav_analytics", "Analytics"):
+        view_analytics(T)
+    elif current_selection == T["nav_settings"]:
+        view_system_settings(T)
+except Exception as _view_exc:
+    # Streamlit renders its own red error box but swallows the exception
+    # from every outer hook (no excepthook fires) — without this, an admin
+    # panel crash is invisible outside the operator's browser tab.
+    if sentry_active():
+        import sentry_sdk
+
+        sentry_sdk.set_tag("view", str(current_selection))
+        sentry_sdk.capture_exception(_view_exc)
+        sentry_sdk.flush(timeout=2)
+    raise  # let Streamlit still render its error UI
 
 # --- Auto-Refresh Logic ---
 if st.session_state.get("auto_refresh_toggle", False):

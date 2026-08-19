@@ -4,7 +4,8 @@ from arq.connections import RedisSettings
 from arq.worker import Retry
 from app.core.config import settings
 from app.services.workflow_service import process_incoming_message, whatsapp
-from app.core.logger import logger, page_critical
+from app.core.logger import logger, mask_pii, page_critical
+from app.core.sentry import sentry_active
 from app.core.database import client
 from app.core.http_client import close_http_client
 from app.core.redis_client import get_redis_client, ChatLockBusyError
@@ -46,8 +47,11 @@ async def startup(ctx):
             try:
                 redis = await get_redis_client()
                 await redis.set("worker:heartbeat", str(time.time()), ex=120)
-            except Exception:
-                pass
+            except Exception as e:
+                # WARNING, deliberately not ERROR: the bridge must not spend
+                # Sentry budget on this — a dead heartbeat already surfaces
+                # as worker_alive=false on /health, which is the real signal.
+                logger.warning(f"💓 Heartbeat write failed: {e}")
             await asyncio.sleep(60)
 
     ctx["heartbeat_task"] = asyncio.create_task(_heartbeat_loop())
@@ -99,13 +103,27 @@ async def _resolve_inbound_media(media_url: str | None) -> str | None:
 
 
 async def process_message_task(
-    ctx, chat_id: str, user_text: str, media_url: str = None
+    ctx, chat_id: str, user_text: str, media_url: str = None, message_id: str = None
 ):
     """
     ARQ Task wrapper for process_incoming_message.
     Sends a user-friendly error message if processing fails.
+
+    ``message_id`` (the provider's wamid) is optional so jobs enqueued
+    before the kwarg existed still deserialize.
     """
     logger.info(f"Task started: processing message for {chat_id}")
+    if sentry_active():
+        # PRO-134: tags set at task start (not in an except) so they ride
+        # every event and breadcrumb this job produces. ArqIntegration
+        # isolates scope per job. chat_id is masked — never the raw phone.
+        import sentry_sdk
+
+        scope = sentry_sdk.get_isolation_scope()
+        scope.set_tag("chat_id", mask_pii(chat_id))
+        scope.set_tag("provider", settings.WHATSAPP_PROVIDER)
+        if message_id:
+            scope.set_tag("wamid", message_id)
     try:
         media_url = await _resolve_inbound_media(media_url)
         await process_incoming_message(chat_id, user_text, media_url)
@@ -115,7 +133,12 @@ async def process_message_task(
         logger.info(f"Chat lock busy for {chat_id} — requeuing with 2s defer")
         raise Retry(defer=2)
     except Exception as e:
-        logger.error(f"Error in process_message_task for {chat_id}: {e}", exc_info=True)
+        # sentry_skip: the re-raise below propagates to ArqIntegration, which
+        # captures the full exception — the bridge reporting this log line
+        # too would double-count every task failure.
+        logger.bind(sentry_skip=True).error(
+            f"Error in process_message_task for {chat_id}: {e}", exc_info=True
+        )
         # Send user-friendly fallback message
         try:
             await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)

@@ -12,7 +12,7 @@ from app.core.redis_client import close_redis_client, get_redis_client
 from app.core.http_client import close_http_client as _close_shared_http_client
 from app.core.database import client as mongo_client
 from app.core.logger import logger, page_critical
-from app.core.sentry import init_sentry
+from app.core.sentry import init_sentry, sentry_active
 from scripts.create_indexes import create_all_indexes
 
 
@@ -27,6 +27,13 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
         request.state.request_id = request_id
+        if sentry_active():
+            # StarletteIntegration's ASGI wrapper creates the per-request
+            # isolation scope outside all user middleware, so this tag lands
+            # on every event/breadcrumb this request produces (PRO-134).
+            import sentry_sdk
+
+            sentry_sdk.get_isolation_scope().set_tag("request_id", request_id)
         start = time.perf_counter()
         response = await call_next(request)
         duration_ms = round((time.perf_counter() - start) * 1000, 1)
