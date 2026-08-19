@@ -172,3 +172,4 @@ All config is in `app/core/config.py` via `pydantic-settings`. Required env vars
 - Suggest `/cost` when a session is running long to monitor cache ratio.
 - Recommend starting a new session when switching to an unrelated task.
 - After finishing a code-change task, delegate to the **docs-syncer** subagent (incremental mode) to update any `.md` files made stale by the diff.
+- After completing any task/bug (PR opened or Linear issue moved), update the **living system-audit artifact** — republish it via the Artifact tool with `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7` (passing the URL is what updates in place; omitting it forks a new artifact). Add a Fix-log row (date, item, outcome + PR link) and update the affected item's status card. Keep the title ("Proli System Audit") and favicon (🩺) unchanged.
