@@ -99,10 +99,19 @@ python scripts/restore.py --no-drop         # Restore without dropping existing 
 
 ### `simulate_webhook.py`
 
-Interactive webhook simulator. Prompts for a message, builds a valid legacy-envelope JSON payload, and POSTs it to `http://localhost:8000/webhook`.
+Interactive webhook simulator. Prompts for a message, builds a valid legacy-envelope JSON payload, and POSTs it to `http://localhost:8000/webhook`. Lives under `tests/`, not `scripts/`.
 
 ```bash
-python scripts/simulate_webhook.py
+python tests/simulate_webhook.py
+```
+
+### `fire_test_page.py`
+
+Fires one clearly-marked test CRITICAL through the `page_critical` → Sentry paging path (PRO-113 verification) using the shared `app/core/sentry.py` `init_sentry()`. Run once per service, in that service's environment, to confirm the DSN, integration wiring, and alert rule work end-to-end.
+
+```bash
+railway run python scripts/fire_test_page.py --service worker
+railway run python scripts/fire_test_page.py --service api
 ```
 
 ### `simulate_sla_deflection.py`
@@ -141,14 +150,6 @@ Clears test state: deletes test leads/messages from MongoDB, wipes Redis state/c
 ```bash
 python scripts/reset_test.py --all            # Full environment wipe
 python scripts/reset_test.py 972501234567     # Wipe specific customer only
-```
-
-### `check_models.py`
-
-Lists Gemini models available to your API key. Useful for verifying access to `gemini-2.5-flash-lite` etc.
-
-```bash
-python scripts/check_models.py
 ```
 
 ### `init_production.py`

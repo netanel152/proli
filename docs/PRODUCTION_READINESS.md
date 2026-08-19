@@ -1,10 +1,18 @@
 # Production Readiness Audit Report
+
+> **⚠️ Historical record — point-in-time snapshot of the March 2026 code
+> review.** This document is NOT a statement of current production
+> readiness. Current launch gates live in Linear (`launch-readiness` label,
+> PRO-64 pilot checklist, PRO-128 deployment) and
+> `docs/PILOT_E2E_CHECKLIST.md`. Kept for the audit trail of what the March
+> review found and fixed. (Re-stamped 2026-08-20.)
+
 **Date:** 2026-03-22
-**Status:** **READY** — All code-level blockers resolved
+**Status at the time:** READY — all code-level blockers from that review resolved
 
-## Current State
+## State as of March 2026
 
-All 19 issues from the March 2026 code review have been resolved. The codebase has strong architecture, comprehensive security, and proper deployment configuration.
+All 19 issues from the March 2026 code review had been resolved at the time of writing.
 
 ## Resolved Issues (March 2026)
 

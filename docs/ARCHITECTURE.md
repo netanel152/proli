@@ -253,9 +253,11 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold (1h TTL) |
 | `PRO_SELECTING_JOB_TO_FINISH` | Pro has multiple active jobs and is picking which one to finish |
 | `PRO_SELECTING_JOB_TO_CANCEL` | Pro has multiple booked jobs and is picking which one to cancel |
+| `PRO_AWAITING_FINAL_PRICE` | Post-completion prompt asking the pro what they charged (skippable, never gates COMPLETED) |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
 | `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |
 | `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro |
+| `AWAITING_NEW_OR_EXISTING` | A customer with a confirmed BOOKED job messages about something else; asked whether it's a new request or about the existing job |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
 | `ADMIN_MODE_IDLE` / `ADMIN_SELECTING_LEAD` / `ADMIN_SELECTING_ACTION` / `ADMIN_SELECTING_PRO` | Admin routing wizard steps (`ניהול` keyword, 15m TTL) |
 
@@ -328,7 +330,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | API framework | FastAPI | Async, OpenAPI built-in |
 | Task queue | ARQ | Lightweight, Redis-backed |
 | Scheduler | APScheduler | 11 cron/interval jobs |
-| AI | Google Gemini (google-genai) | Flash Lite 2.5 → Flash 2.5 → Flash 1.5 fallback |
+| AI | Google Gemini (google-genai) | Flash Lite 3.1 → Flash 3.5 → Flash 2.5 → Flash 1.5 fallback |
 | Database | MongoDB 6.0 + Motor | Async driver |
 | Cache/State | Redis | Context, FSM, rate limit, idempotency |
 | Admin UI | Streamlit | |
