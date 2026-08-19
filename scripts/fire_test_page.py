@@ -13,7 +13,6 @@ marked as a test and safe to resolve immediately.
 """
 
 import argparse
-import logging
 import os
 import sys
 
@@ -21,6 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.config import settings  # noqa: E402
 from app.core.logger import logger, page_critical  # noqa: E402
+from app.core.sentry import init_sentry  # noqa: E402
 
 
 def main() -> int:
@@ -43,40 +43,17 @@ def main() -> int:
         )
         return 1
 
-    try:
-        import sentry_sdk
-        from sentry_sdk.integrations.logging import LoggingIntegration
-    except ImportError:
+    # Same init the services use (app/core/sentry.py): CRITICAL-only issue
+    # creation, allowlisted integrations, before_send scrubbing, no PII, no
+    # frame locals. Returns False if sentry-sdk is missing.
+    if not init_sentry(f"proli-{args.service}"):
         logger.error(
-            "sentry-sdk is not installed; run `pip install -r requirements.txt`."
+            "Sentry did not initialize (is sentry-sdk installed? "
+            "`pip install -r requirements.txt`)."
         )
         return 1
 
-    disabled_integrations: list = []
-    try:
-        from sentry_sdk.integrations.loguru import LoguruIntegration
-
-        disabled_integrations.append(LoguruIntegration)
-    except Exception:  # DidNotEnable is a plain Exception, not ImportError
-        logger.warning("LoguruIntegration unavailable; continuing without it.")
-
-    # Mirror the services' init (app/main.py / app/worker.py _init_sentry):
-    # CRITICAL-only issue creation, INFO breadcrumbs, no PII, no frame locals.
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN.get_secret_value(),
-        environment=settings.ENVIRONMENT,
-        integrations=[
-            LoggingIntegration(level=logging.INFO, event_level=logging.CRITICAL)
-        ],
-        # Mirrors the services (PRO-113 follow-up): the auto-enabled loguru
-        # integration duplicated every page and shipped unscrubbed loguru text.
-        disabled_integrations=disabled_integrations,
-        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-        send_default_pii=False,
-        attach_stacktrace=True,
-        include_local_variables=False,
-    )
-    sentry_sdk.set_tag("service", f"proli-{args.service}")
+    import sentry_sdk  # safe: init_sentry already imported it successfully
 
     page_critical(
         f"🧪 [PRO-113] Test operator page from service 'proli-{args.service}' "

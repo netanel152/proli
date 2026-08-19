@@ -1,113 +1,19 @@
-import logging
 import sys
 
 from arq import run_worker
 
 from app.core.arq_worker import WorkerSettings
-from app.core.config import settings
 from app.core.logger import logger
-
-
-def _init_sentry() -> None:
-    """
-    Initialize Sentry if SENTRY_DSN is configured.
-
-    Design choices (see SENTRY_SETUP.md for the full rationale):
-      * Worker-only scope. The FastAPI webhook returns 200 OK immediately and
-        does almost no business logic — all failures we actually care about
-        (stuck leads, reassignment loops, SOS monitor crashes) surface here.
-      * CRITICAL-only filter. Regular ERROR/WARNING noise stays in stdout and
-        loguru. Sentry is reserved for operator-paging events. If a surface
-        needs Sentry coverage, it must call `page_critical(...)` from
-        app/core/logger.py (PRO-113: a plain loguru `logger.critical` emits
-        no stdlib LogRecord and never reaches Sentry) or raise and let
-        arq's top-level handler catch it.
-      * No-op when SENTRY_DSN is unset. Tests, local dev, and the open-source
-        checkout never touch the Sentry API.
-    """
-    if not settings.SENTRY_DSN:
-        logger.info("Sentry disabled (SENTRY_DSN not set).")
-        return
-
-    try:
-        import sentry_sdk
-        from sentry_sdk.integrations.logging import LoggingIntegration
-    except ImportError:
-        logger.warning(
-            "SENTRY_DSN is set but sentry-sdk is not installed. "
-            "Run `pip install -r requirements.txt`. Continuing without Sentry."
-        )
-        return
-
-    # PRO-113 follow-up: sentry-sdk AUTO-ENABLES LoguruIntegration
-    # (event_level=ERROR) when loguru is installed — an uncontrolled side
-    # door that (a) duplicated every page as a second issue and (b) sent
-    # loguru ERROR+ to Sentry outside _pii_filter's guarantee: message
-    # scrubbing depended on sink registration order, and exception values /
-    # `extra` were never scrubbed at all. Paging is stdlib-only by design
-    # (page_critical); loguru must not reach Sentry. Imported separately from
-    # sentry_sdk itself so a failure of this hardening helper degrades to a
-    # warning instead of silently disabling ALL paging — if this module can't
-    # import, sentry can't auto-enable it either.
-    disabled_integrations: list = []
-    try:
-        from sentry_sdk.integrations.loguru import LoguruIntegration
-
-        disabled_integrations.append(LoguruIntegration)
-    except Exception:  # DidNotEnable is a plain Exception, not ImportError
-        LoguruIntegration = None
-        logger.warning(
-            "LoguruIntegration unavailable; it cannot be auto-enabled either. "
-            "Continuing with stdlib-only Sentry."
-        )
-
-    # LoggingIntegration: breadcrumbs at INFO, but only CRITICAL creates issues.
-    logging_integration = LoggingIntegration(
-        level=logging.INFO,  # breadcrumb threshold
-        event_level=logging.CRITICAL,  # issue-creation threshold
-    )
-
-    sentry_sdk.init(
-        dsn=settings.SENTRY_DSN.get_secret_value(),
-        # PRO-34: validated + normalized to development|staging|production, so
-        # staging reports into its own Sentry environment rather than
-        # fragmenting across casing/typo variants of the same label.
-        environment=settings.ENVIRONMENT,
-        integrations=[logging_integration],
-        disabled_integrations=disabled_integrations,
-        traces_sample_rate=settings.SENTRY_TRACES_SAMPLE_RATE,
-        send_default_pii=False,
-        attach_stacktrace=True,
-        # PRO-113: send_default_pii does NOT cover frame locals —
-        # include_local_variables defaults to True and attach_stacktrace
-        # would ship every frame's locals with each page (the unscrubbed
-        # `message` argument, raw phone numbers, whole lead documents, a
-        # Mongo exception carrying the URI). Locals stay off.
-        include_local_variables=False,
-    )
-    # Self-check, not positional trust: disabled_integrations is a no-op if a
-    # different sentry_sdk.init already installed the integration earlier in
-    # this process (sentry caches installs in module globals).
-    if (
-        LoguruIntegration is not None
-        and sentry_sdk.get_client().get_integration(LoguruIntegration) is not None
-    ):
-        logger.warning(
-            "LoguruIntegration active despite disabled_integrations — Sentry "
-            "was initialized earlier in this process; loguru may reach Sentry "
-            "unscrubbed."
-        )
-    sentry_sdk.set_tag("service", "proli-worker")
-    logger.info(
-        f"Sentry initialized (environment={settings.ENVIRONMENT}, CRITICAL-only)."
-    )
+from app.core.sentry import init_sentry
 
 
 def main():
     """
     Entry point for the ARQ worker process.
     """
-    _init_sentry()
+    # Shared init (app/core/sentry.py): explicit integration allowlist +
+    # before_send scrubbing. service tag: proli-worker.
+    init_sentry("proli-worker")
     logger.info("Initializing ARQ Worker...")
     try:
         run_worker(WorkerSettings)

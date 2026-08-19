@@ -5,18 +5,38 @@ a general error-mirroring tool: only operator-actionable events reach it, and it
 runs on infrastructure independent of WhatsApp so it can report a WhatsApp outage
 without riding the channel that is down (see PRO-71 / PRO-75).
 
-This file is the runbook referenced from `app/worker.py`, `app/main.py`, and
+This file is the runbook referenced from `app/core/sentry.py` (the single
+shared init all services call), `app/worker.py`, `app/main.py`, and
 `app/core/config.py`.
 
 ---
 
 ## Design choices (as implemented)
 
-- **Both processes initialize Sentry.** `app/worker.py` tags events
-  `service=proli-worker`; `app/main.py` tags `service=proli-api`. The worker is
+- **One shared init: `app/core/sentry.py`.** `init_sentry(service)` replaced
+  the two hand-synced `_init_sentry` copies (`app/main.py` / `app/worker.py`)
+  and the mirror in `scripts/fire_test_page.py`. The worker tags events
+  `service=proli-worker`; the API tags `service=proli-api`. The worker is
   where the failures we page on actually surface (stuck leads, reassignment
   loops, SOS/monitor crashes); the API returns `200 OK` immediately and does
-  almost no business logic.
+  almost no business logic. The init is idempotent (a second call is a no-op).
+- **Integrations are an explicit allowlist.** sentry-sdk 2.x *auto-enables*
+  every integration whose package is importable — FastApi, Starlette, Arq,
+  PyMongo, Redis, Httpx — which silently widened the documented CRITICAL-only
+  design: unhandled API exceptions and failed ARQ jobs were reaching Sentry
+  **unscrubbed** (exception values can echo a credentialed Mongo URI; httpx
+  breadcrumbs can carry a token in a URL — the PRO-79 class).
+  `init_sentry` passes `auto_enabling_integrations=False` and enables
+  integrations per service, deliberately, in `_integrations_for()`.
+- **Every outgoing event is scrubbed (`before_send`).** `_scrub_event` walks
+  the whole event and applies `redact_secrets` → `mask_pii` → structural
+  URI-credential stripping (`://user:pass@host` → `://***@host`, which also
+  catches percent-encoded variants the exact-match secret list can't) to
+  every string leaf — exception values, breadcrumbs, extra, request context.
+  On a scrubber failure the event is **dropped**, unless it came from
+  `proli.paging` (already inline-scrubbed by `page_critical`) — the safety
+  net must never eat a page. This is defense-in-depth on top of
+  `page_critical`'s inline scrub, not a replacement for it.
 - **CRITICAL-only.** A `LoggingIntegration` is configured with
   `level=INFO` (breadcrumbs) and `event_level=CRITICAL` (issue creation). Regular
   `ERROR`/`WARNING` noise stays in stdout/loguru. To page the operator, code calls
@@ -34,7 +54,7 @@ This file is the runbook referenced from `app/worker.py`, `app/main.py`, and
   > use `scripts/fire_test_page.py` rather than a one-off `logger.critical` call.
 - **Loguru never reaches Sentry.** sentry-sdk *auto-enables* its
   `LoguruIntegration` (at `event_level=ERROR`) whenever loguru is installed;
-  both `_init_sentry` copies pass `disabled_integrations=[LoguruIntegration]`
+  `init_sentry` passes `disabled_integrations=[LoguruIntegration]`
   to close that side door (PRO-113 follow-up). Before this, every page was
   duplicated as a second issue and loguru `ERROR`+ text reached Sentry outside
   `_pii_filter`'s guarantee (message scrubbing depended on sink registration
@@ -44,8 +64,9 @@ This file is the runbook referenced from `app/worker.py`, `app/main.py`, and
   breadcrumbs. A post-init self-check warns if the integration is somehow
   still active (a different `sentry_sdk.init` earlier in the same process).
 - **No-op when `SENTRY_DSN` is unset.** Tests, local dev, and the open-source
-  checkout never touch the Sentry API. `_init_sentry()` logs
-  `"Sentry disabled (SENTRY_DSN not set)."` and returns early.
+  checkout never touch the Sentry API. `init_sentry()` logs
+  `"Sentry disabled (SENTRY_DSN not set)."` and returns early — without ever
+  importing `sentry_sdk` (asserted by `tests/test_fire_test_page.py`).
 - **Small, PII-free payloads.** `send_default_pii=False`, no request bodies,
   `attach_stacktrace=True`; `include_local_variables=False` (PRO-113) — the
   default `True` would otherwise ship unscrubbed frame locals (PII/secrets)
@@ -65,7 +86,7 @@ This file is the runbook referenced from `app/worker.py`, `app/main.py`, and
 > If only one has it you are half-blind — most paging events originate in the worker.
 
 `sentry-sdk` is already pinned in `requirements.txt`. If `SENTRY_DSN` is set but the
-package is missing, `_init_sentry()` logs a warning and continues without Sentry
+package is missing, `init_sentry()` logs a warning and continues without Sentry
 (fail-open — a monitoring dependency never takes down a process).
 
 ---
