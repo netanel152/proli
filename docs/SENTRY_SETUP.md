@@ -1,9 +1,17 @@
 # Sentry Setup — Operator Paging
 
-Sentry is Proli's **out-of-band operator-paging channel**. It is deliberately *not*
-a general error-mirroring tool: only operator-actionable events reach it, and it
-runs on infrastructure independent of WhatsApp so it can report a WhatsApp outage
-without riding the channel that is down (see PRO-71 / PRO-75).
+Sentry serves Proli on two strictly separated tiers:
+
+| Tier | Sentry level | What creates it | Pages the operator? |
+|---|---|---|---|
+| **Paging** | `fatal` | `page_critical(...)` only (stdlib `proli.paging`) | **Yes** — the alert rule filters on `fatal` |
+| **Visibility** | `error` | Unhandled exceptions (FastApi/Starlette/Arq integrations, APScheduler `EVENT_JOB_ERROR` listener, worker-death capture, admin view capture) and the throttled loguru ERROR bridge | No — dashboard only |
+
+Paging runs on infrastructure independent of WhatsApp so it can report a WhatsApp
+outage without riding the channel that is down (see PRO-71 / PRO-75). The
+visibility tier exists because ~95% of real failures land at ERROR (a lost
+webhook enqueue, a monitor job dying on every tick, a fail-open rate limit) and
+used to be stdout-only.
 
 This file is the runbook referenced from `app/core/sentry.py` (the single
 shared init all services call), `app/worker.py`, `app/main.py`, and
@@ -63,6 +71,28 @@ shared init all services call), `app/worker.py`, `app/main.py`, and
   (uvicorn, arq, libraries) — loguru-native application lines do not appear as
   breadcrumbs. A post-init self-check warns if the integration is somehow
   still active (a different `sentry_sdk.init` earlier in the same process).
+- **Three services, one init.** `init_sentry("proli-api" | "proli-worker" |
+  "proli-admin")` — api enables Starlette+FastApi (unhandled request
+  exceptions), worker enables Arq (exceptions propagating out of jobs; arq's
+  `WorkerSettings` hooks can't see failures, and the try-exhaustion path
+  returns before any hook runs), admin enables none (Streamlit swallows
+  exceptions into its own error UI — `admin_panel/main.py` wraps the view
+  dispatch and calls `capture_exception` explicitly). The scheduler gets an
+  `EVENT_JOB_ERROR` listener (`app/scheduler.py:_on_job_error`), and
+  `app/worker.py` captures + flushes on worker-process death.
+  *Residual gap (known, accepted):* a job whose worker dies repeatedly
+  mid-run until arq's try-exhaustion produces only an `arq.worker` WARNING;
+  worker death itself is covered by the heartbeat key + startup paging.
+- **loguru ERROR bridge (throttled).** A loguru sink registered only when
+  Sentry is active forwards ERROR-level records (`ERROR ≤ level < CRITICAL`)
+  as non-paging `error` events. Excluded: stdlib-origin records
+  (`_stdlib=True`, bound by `InterceptHandler` — uvicorn/arq/apscheduler
+  either have their own integration or are noise) and explicit
+  `logger.bind(sentry_skip=True)` opt-outs (log-then-raise sites whose
+  exception is captured elsewhere). Spend is bounded twice: one event per
+  `module:function:line` per hour (`should_send`), plus a global cap of 50
+  bridge events per process per rolling day. A monitor job failing every
+  2-min tick forever costs ≤24 events/day.
 - **No-op when `SENTRY_DSN` is unset.** Tests, local dev, and the open-source
   checkout never touch the Sentry API. `init_sentry()` logs
   `"Sentry disabled (SENTRY_DSN not set)."` and returns early — without ever
@@ -74,7 +104,7 @@ shared init all services call), `app/worker.py`, `app/main.py`, and
 
 ---
 
-## Environment variables (set in Railway on **both** services)
+## Environment variables (set in Railway on **all three** services — api, worker, admin)
 
 | Var | Required | Notes |
 |-----|----------|-------|
@@ -82,8 +112,9 @@ shared init all services call), `app/worker.py`, `app/main.py`, and
 | `SENTRY_TRACES_SAMPLE_RATE` | No (default `0.0`) | Leave at `0.0` — no performance tracing; paging only. |
 | `ENVIRONMENT` | No (default `development`) | Tags each event (`production` / `staging`). |
 
-> Set `SENTRY_DSN` on **both** the `api` **and** the `worker` Railway services.
-> If only one has it you are half-blind — most paging events originate in the worker.
+> Set `SENTRY_DSN` on the `api`, `worker`, **and** `admin` Railway services.
+> If only some have it you are partially blind — most paging events originate
+> in the worker; admin crashes are invisible anywhere else.
 
 `sentry-sdk` is already pinned in `requirements.txt`. If `SENTRY_DSN` is set but the
 package is missing, `init_sentry()` logs a warning and continues without Sentry
@@ -102,6 +133,10 @@ Sentry → email is that path. Configure once:
 4. **If (filter):** *The event's level equals* **`fatal`** (this is Python `CRITICAL`).
 5. **Then:** *Send a notification via* **Email** to the operator address.
 6. Leave issue-owner/rate-limit digests off — every critical should page.
+7. The `fatal` filter is what keeps the visibility tier (level `error`) from
+   paging — do not widen it.
+8. Recommended: enable **Spike Protection** (Settings → Subscription) as the
+   server-side backstop for the client-side throttles.
 
 Reconstruct this rule from scratch if the Sentry project is ever recreated; it is
 the only piece of the paging path that lives outside the repo.
@@ -129,6 +164,10 @@ free-tier budget — while still re-notifying so the incident can't be silently 
 3. **Confirm the email arrives.** If it does not, nothing is wired — check, in order:
    the DSN is on the right service, `sentry-sdk` installed, and the alert-rule level
    filter is `fatal`.
+4. Visibility tier: check the events carry masked phones (`97252****567`)
+   and stripped URI credentials (`mongodb+srv://***@…`) — the `before_send`
+   scrubber's whole-event walk is the guarantee here; a raw phone number in
+   any Sentry event is a bug (`tests/test_sentry_scrub.py`).
 
 ---
 

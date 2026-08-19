@@ -163,7 +163,11 @@ class InterceptHandler(logging.Handler):
         if frame is None:  # walked off the top — depth is now meaningless
             depth = 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(
+        # _stdlib marks the record's origin so the Sentry bridge sink
+        # (app/core/sentry.py) can skip stdlib-origin ERRORs — uvicorn/arq/
+        # apscheduler either reach Sentry via their integration already or
+        # are third-party noise the bridge must not re-report.
+        logger.bind(_stdlib=True).opt(depth=depth, exception=record.exc_info).log(
             level, record.getMessage()
         )
 
