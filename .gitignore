@@ -37,3 +37,8 @@ settings.local.json
 # claude-flow rewrites its neural/policy state every session — pure local
 # churn that used to show up as dirty-tree noise in every PR.
 .claude-flow/
+
+# --- Local data & caches (never commit) ---
+# backups/ holds real mongodump output (customer data) - PRO-144
+backups/
+.pytest_cache/
