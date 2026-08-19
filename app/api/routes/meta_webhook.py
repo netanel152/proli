@@ -170,6 +170,7 @@ async def meta_webhook_endpoint(request: Request):
                     chat_id,
                     normalized.text,
                     normalized.media_url,
+                    message_id=normalized.message_id,
                 )
             except Exception:
                 # Release the idempotency claim: the outer handler answers 200

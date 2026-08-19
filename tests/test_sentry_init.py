@@ -92,8 +92,9 @@ def test_init_sentry_disables_loguru_integration(monkeypatch, sentry_sdk):
 
 
 def test_init_sentry_disables_auto_enabling_and_sets_scrubber(monkeypatch, sentry_sdk):
-    """The PR-A core: auto-enabling off (no FastApi/Arq/PyMongo/Redis/Httpx
-    side doors) and every outgoing event routed through _scrub_event."""
+    """The core guarantee: auto-enabling off (integrations arrive only via
+    the explicit allowlist) and every outgoing event routed through
+    _scrub_event."""
     monkeypatch.setattr(sentry_module.settings, "SENTRY_DSN", DUMMY_DSN)
 
     sentry_module.init_sentry("proli-worker")
@@ -103,10 +104,35 @@ def test_init_sentry_disables_auto_enabling_and_sets_scrubber(monkeypatch, sentr
     assert client.options["before_send"] is sentry_module._scrub_event
     assert client.options["include_local_variables"] is False
     assert client.options["send_default_pii"] is False
-    # Allowlist is currently empty beyond LoggingIntegration: none of the
-    # previously auto-enabled integrations may be present.
-    for side_door in ("fastapi", "starlette", "arq", "pymongo", "redis", "httpx"):
+    # Breadcrumb side doors stay closed on every service: driver payloads
+    # (PyMongo/Redis/Httpx) never ship, allowlist or not.
+    for side_door in ("pymongo", "redis", "httpx"):
         assert side_door not in client.integrations, side_door
+
+
+@pytest.mark.parametrize(
+    "service,expected,forbidden",
+    [
+        ("proli-api", {"starlette", "fastapi"}, {"arq"}),
+        ("proli-worker", {"arq"}, {"starlette", "fastapi"}),
+        ("proli-admin", set(), {"arq", "starlette", "fastapi"}),
+    ],
+)
+def test_integration_allowlist_per_service(
+    monkeypatch, sentry_sdk, service, expected, forbidden
+):
+    """Exception capture is enabled surface-by-surface, deliberately:
+    api gets Starlette+FastApi, the worker gets Arq, admin gets none
+    (Streamlit swallows exceptions; its entrypoint captures explicitly)."""
+    monkeypatch.setattr(sentry_module.settings, "SENTRY_DSN", DUMMY_DSN)
+
+    sentry_module.init_sentry(service)
+
+    client = sentry_sdk.get_client()
+    for name in expected:
+        assert name in client.integrations, name
+    for name in forbidden:
+        assert name not in client.integrations, name
 
 
 def test_init_sentry_is_idempotent(monkeypatch, sentry_sdk):

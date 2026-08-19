@@ -209,7 +209,7 @@ async def test_post_with_valid_signature_enqueues_and_opens_window(
     assert resp.status_code == 200
     assert resp.json() == {"status": "processing_message"}
     _capturing_pool.enqueue_job.assert_awaited_once_with(
-        "process_message_task", CHAT_ID, "hi", None
+        "process_message_task", CHAT_ID, "hi", None, message_id="wamid.ROUTE1"
     )
 
     assert await fake_redis.exists(f"wa:window:{CHAT_ID}")

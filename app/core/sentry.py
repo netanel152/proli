@@ -32,6 +32,7 @@ this, and it keeps tests/local dev fully Sentry-free.
 
 import logging
 import re
+import time
 
 from app.core.config import settings
 from app.core.logger import logger, mask_pii, redact_secrets
@@ -113,17 +114,74 @@ def _scrub_event(event, hint):
         return None
 
 
+# In-process throttle for non-paging captures (scheduler job errors, the
+# loguru bridge). Per-replica is deliberate: this is a monitoring throttle,
+# not a correctness lock — adding a Redis dependency to the logging path
+# would invert the fail-open ordering everything else here maintains.
+_THROTTLE_TTL_SECONDS = 3600  # matches the WA_STATE_REALERT_MINUTES precedent
+_THROTTLE_MAX_KEYS = 512
+_throttle: dict = {}
+
+
+def should_send(fingerprint: str, ttl_seconds: int = _THROTTLE_TTL_SECONDS) -> bool:
+    """True at most once per ``ttl_seconds`` per fingerprint. Keeps a
+    perpetually failing scheduler job (every 2-min tick, forever) at ≤24
+    Sentry events/day instead of 720."""
+    now = time.monotonic()
+    last = _throttle.get(fingerprint)
+    if last is not None and now - last < ttl_seconds:
+        return False
+    if len(_throttle) >= _THROTTLE_MAX_KEYS:
+        # Crude size bound: dropping the whole map risks one early re-send
+        # per fingerprint, never unbounded growth.
+        _throttle.clear()
+    _throttle[fingerprint] = now
+    return True
+
+
 def _integrations_for(service: str) -> list:
     """Explicit integration allowlist per service (replaces auto-enabling).
 
-    Currently empty for every service: this restores the documented
-    "CRITICAL-only via page_critical" behavior that auto-enabling had
-    silently widened. Exception-capture integrations (Starlette/FastApi for
-    the api, Arq for the worker) are added here deliberately, service by
-    service, each behind its own try/except (``DidNotEnable`` is a plain
-    Exception, not ImportError).
+    Each import sits behind its own try/except (``DidNotEnable`` is a plain
+    Exception, not ImportError) so a broken integration degrades that one
+    capture surface instead of disabling Sentry. Deliberately absent:
+    PyMongo/Redis/Httpx breadcrumb integrations — the scrubber is
+    defense-in-depth, not an excuse to ship driver payloads.
+
+    - proli-api: Starlette+FastApi — capture unhandled request exceptions
+      (no custom exception handler; adding one would *hide* errors from the
+      integration).
+    - proli-worker: Arq — captures every exception propagating out of a job.
+      Verified against arq 0.26+: WorkerSettings hooks receive only ``ctx``
+      (no exception, no success flag) and the try-exhaustion path returns
+      before any hook runs, so the integration is the only reliable seam.
+      It skips ``Retry``/``JobExecutionFailed`` as control flow.
+    - proli-admin: none — Streamlit swallows exceptions into its own error
+      UI; the admin entrypoint calls ``capture_exception`` explicitly.
     """
-    return []
+    integrations = []
+    if service == "proli-api":
+        try:
+            from sentry_sdk.integrations.fastapi import FastApiIntegration
+            from sentry_sdk.integrations.starlette import StarletteIntegration
+
+            integrations += [StarletteIntegration(), FastApiIntegration()]
+        except Exception:
+            logger.warning(
+                "Starlette/FastApi Sentry integrations unavailable — "
+                "unhandled API exceptions will not reach Sentry."
+            )
+    elif service == "proli-worker":
+        try:
+            from sentry_sdk.integrations.arq import ArqIntegration
+
+            integrations.append(ArqIntegration())
+        except Exception:
+            logger.warning(
+                "Arq Sentry integration unavailable — failed jobs will not "
+                "reach Sentry."
+            )
+    return integrations
 
 
 def init_sentry(service: str) -> bool:
