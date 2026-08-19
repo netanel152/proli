@@ -116,8 +116,8 @@ def _is_mongo_auth_failure(exc: Exception) -> bool:
 async def _record_mongo_auth_failure(job_name: str, exc: Exception) -> None:
     """Count an auth failure and escalate at the threshold. Fails open on
     every Redis error — the caller re-raises the original exception
-    regardless, so the existing ERROR/Sentry behavior is unchanged whenever
-    the counter is unavailable."""
+    regardless, so it still reaches APScheduler and the ``_on_job_error``
+    Sentry listener whenever the counter is unavailable."""
     from redis.exceptions import ResponseError
     from app.core.logger import mask_pii, redact_secrets
     from app.core.redis_client import get_redis_client
@@ -174,8 +174,9 @@ def track_mongo_auth_failures(func):
     """PRO-112 — wrap a scheduler job so Mongo *auth* failures (bad
     credentials, deleted DB user) are counted and escalated to CRITICAL.
     Stacked UNDER @with_scheduler_lock so lock-skipped runs don't count.
-    Always re-raises: the original exception still reaches APScheduler and
-    Sentry exactly as before."""
+    Always re-raises: the original exception still reaches APScheduler,
+    whose EVENT_JOB_ERROR listener (``_on_job_error``) captures it to
+    Sentry."""
 
     @functools.wraps(func)
     async def wrapper(*args, **kwargs):
@@ -502,8 +503,40 @@ async def daily_reminders_job():
         logger.error(f"❌ [Scheduler Error] {e}")
 
 
+def _on_job_error(event) -> None:
+    """EVENT_JOB_ERROR → Sentry. Called synchronously from APScheduler's
+    dispatch, so: no awaits, and it must never raise. Throttled to one event
+    per job per hour (``should_send``) — a monitor job failing on every
+    2-min tick forever stays at ≤24 events/day. Events go out at level
+    `error`, so the fatal-only alert rule never pages on them; paging
+    remains ``page_critical``'s job."""
+    try:
+        from app.core.sentry import sentry_active, should_send
+
+        if not sentry_active():
+            return
+        fingerprint = f"apscheduler:{event.job_id}:{type(event.exception).__name__}"
+        if not should_send(fingerprint):
+            return
+        import sentry_sdk
+
+        with sentry_sdk.isolation_scope() as scope:
+            scope.set_tag("scheduler_job_id", event.job_id)
+            sentry_sdk.capture_exception(event.exception)
+    except Exception as e:
+        logger.warning(f"[Scheduler] Sentry job-error capture failed: {e}")
+
+
 def start_scheduler():
     scheduler = AsyncIOScheduler(timezone=IL_TZ)
+
+    # Job exceptions used to stop at APScheduler's own logger.error (stdout
+    # only — LoggingIntegration creates issues at CRITICAL, and loguru ERROR
+    # never reaches Sentry at all). The listener is the one seam APScheduler
+    # offers that sees the exception object itself.
+    from apscheduler.events import EVENT_JOB_ERROR
+
+    scheduler.add_listener(_on_job_error, EVENT_JOB_ERROR)
 
     # Job 1: Daily "Good Morning" Reminders (Cron)
     scheduler.add_job(

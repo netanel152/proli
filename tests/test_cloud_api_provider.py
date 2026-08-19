@@ -1001,11 +1001,15 @@ async def test_window_closed_page_dedupe_uses_stdlib_path_for_critical_only(
     """PRO-113: the CRITICAL branch (``page_critical``) is provably distinct
     from the downgraded ERROR branch (plain loguru ``logger.error``) — not
     just a different rendered level in the same loguru sink, but a different
-    *transport*. Only ``page_critical`` reaches Sentry's LoggingIntegration,
-    because only it emits a stdlib LogRecord on ``proli.paging``; loguru's
+    *transport*. Only ``page_critical`` **pages** (stdlib LogRecord on
+    ``proli.paging`` → LoggingIntegration at ``fatal``); loguru's
     ``logger.error`` never touches stdlib ``logging`` at all, so caplog
     (which hooks stdlib logging exclusively) must see exactly one record —
-    the first, paged block — and nothing for the second, downgraded one."""
+    the first, paged block — and nothing for the second, downgraded one.
+    (Since the ERROR-bridge landed, a loguru ERROR *can* reach Sentry as a
+    non-paging `error` event via the bridge sink — but only when Sentry is
+    active, which it never is in tests; the stdlib-transport distinction
+    asserted here is unchanged.)"""
     provider = CloudAPIProvider()
 
     with caplog.at_level(logging.CRITICAL, logger="proli.paging"):

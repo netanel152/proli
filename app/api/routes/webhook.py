@@ -98,7 +98,11 @@ async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=N
             # Process Standard Message via ARQ Worker
             arq_pool = await get_arq_pool()
             await arq_pool.enqueue_job(
-                "process_message_task", chat_id, user_text, media_url
+                "process_message_task",
+                chat_id,
+                user_text,
+                media_url,
+                message_id=payload.idMessage,
             )
             return {"status": APIStatus.PROCESSING}
 

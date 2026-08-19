@@ -32,6 +32,7 @@ this, and it keeps tests/local dev fully Sentry-free.
 
 import logging
 import re
+import time
 
 from app.core.config import settings
 from app.core.logger import logger, mask_pii, redact_secrets
@@ -113,17 +114,148 @@ def _scrub_event(event, hint):
         return None
 
 
+# In-process throttle for non-paging captures (scheduler job errors, the
+# loguru bridge). Per-replica is deliberate: this is a monitoring throttle,
+# not a correctness lock — adding a Redis dependency to the logging path
+# would invert the fail-open ordering everything else here maintains.
+_THROTTLE_TTL_SECONDS = 3600  # matches the WA_STATE_REALERT_MINUTES precedent
+_THROTTLE_MAX_KEYS = 512
+_throttle: dict = {}
+
+
+def should_send(fingerprint: str, ttl_seconds: int = _THROTTLE_TTL_SECONDS) -> bool:
+    """True at most once per ``ttl_seconds`` per fingerprint. Keeps a
+    perpetually failing scheduler job (every 2-min tick, forever) at ≤24
+    Sentry events/day instead of 720."""
+    now = time.monotonic()
+    last = _throttle.get(fingerprint)
+    if last is not None and now - last < ttl_seconds:
+        return False
+    if len(_throttle) >= _THROTTLE_MAX_KEYS:
+        # Crude size bound: dropping the whole map risks one early re-send
+        # per fingerprint, never unbounded growth.
+        _throttle.clear()
+    _throttle[fingerprint] = now
+    return True
+
+
+# Global ceiling on bridge events per process per rolling day, on top of the
+# per-fingerprint hourly throttle. Worst case (many distinct failing sites)
+# stays inside a free-tier Sentry quota instead of consuming it in one bad
+# night. When the cap trims, the per-site throttle still guarantees each
+# site was reported at least once recently.
+_BRIDGE_DAILY_CAP = 50
+_bridge_window_start = 0.0
+_bridge_count = 0
+
+
+def _bridge_budget_ok() -> bool:
+    global _bridge_window_start, _bridge_count
+    now = time.monotonic()
+    if now - _bridge_window_start >= 86400:
+        _bridge_window_start = now
+        _bridge_count = 0
+    if _bridge_count >= _BRIDGE_DAILY_CAP:
+        return False
+    _bridge_count += 1
+    return True
+
+
+def _bridge_filter(record) -> bool:
+    """Band + opt-outs for the loguru→Sentry bridge sink.
+
+    - CRITICAL stays exclusively on the stdlib paging path (`page_critical`
+      → LoggingIntegration at `fatal`); the bridge must not double-report it.
+    - ``_stdlib=True`` records came *through* ``InterceptHandler`` from
+      stdlib logging (uvicorn, arq, apscheduler) — those either already
+      reach Sentry via their integration or are third-party noise; the
+      bridge exists for loguru-native app code only.
+    - ``sentry_skip=True`` is the explicit opt-out for a ``logger.error``
+      whose exception propagates and is captured elsewhere (e.g. the task
+      wrapper's log-then-raise, which ArqIntegration captures).
+    """
+    if record["level"].no >= logging.CRITICAL:
+        return False
+    extra = record["extra"]
+    if extra.get("_stdlib") or extra.get("sentry_skip"):
+        return False
+    return True
+
+
+def _sentry_bridge_sink(message) -> None:
+    """One controlled door for loguru ERROR visibility (registered only when
+    Sentry is active). Chosen over ``LoggingIntegration(event_level=ERROR)``
+    — a no-op for loguru app code, which emits no stdlib LogRecord — and
+    over per-site ``capture_exception`` calls, the "remember to add it at
+    the next site" anti-pattern PRO-94 exists to kill.
+
+    Events go out at level `error`; the fatal-only alert rule never pages on
+    them. The payload still passes through ``before_send`` scrubbing like
+    everything else (the raw loguru message may not have been through
+    ``_pii_filter``, whose sink-filter mutation order is not guaranteed).
+    """
+    try:
+        record = message.record
+        site = f"{record['module']}:{record['function']}:{record['line']}"
+        if not should_send(f"bridge:{site}"):
+            return
+        if not _bridge_budget_ok():
+            return
+        import sentry_sdk
+
+        with sentry_sdk.isolation_scope() as scope:
+            scope.set_tag("log_site", site)
+            scope.set_tag("via", "loguru-bridge")
+            sentry_sdk.capture_message(record["message"], level="error")
+    except Exception:
+        # The bridge must never become the failure it reports — and it sits
+        # on the logging path of documented fail-open code.
+        pass
+
+
 def _integrations_for(service: str) -> list:
     """Explicit integration allowlist per service (replaces auto-enabling).
 
-    Currently empty for every service: this restores the documented
-    "CRITICAL-only via page_critical" behavior that auto-enabling had
-    silently widened. Exception-capture integrations (Starlette/FastApi for
-    the api, Arq for the worker) are added here deliberately, service by
-    service, each behind its own try/except (``DidNotEnable`` is a plain
-    Exception, not ImportError).
+    Each import sits behind its own try/except (``DidNotEnable`` is a plain
+    Exception, not ImportError) so a broken integration degrades that one
+    capture surface instead of disabling Sentry. Deliberately absent:
+    PyMongo/Redis/Httpx breadcrumb integrations — the scrubber is
+    defense-in-depth, not an excuse to ship driver payloads.
+
+    - proli-api: Starlette+FastApi — capture unhandled request exceptions
+      (no custom exception handler; adding one would *hide* errors from the
+      integration).
+    - proli-worker: Arq — captures every exception propagating out of a job.
+      Verified against arq 0.26+: WorkerSettings hooks receive only ``ctx``
+      (no exception, no success flag) and the try-exhaustion path returns
+      before any hook runs, so the integration is the only reliable seam.
+      It skips ``Retry``/``JobExecutionFailed`` as control flow.
+    - proli-admin: none — Streamlit swallows exceptions into its own error
+      UI; the admin entrypoint calls ``capture_exception`` explicitly.
     """
-    return []
+    integrations = []
+    if service == "proli-api":
+        try:
+            from sentry_sdk.integrations.fastapi import FastApiIntegration
+            from sentry_sdk.integrations.starlette import StarletteIntegration
+
+            integrations += [StarletteIntegration(), FastApiIntegration()]
+        except Exception:
+            logger.warning(
+                "Starlette/FastApi Sentry integrations unavailable — "
+                "unhandled API exceptions will not reach Sentry."
+            )
+    elif service == "proli-worker":
+        try:
+            from sentry_sdk.integrations.arq import ArqIntegration
+
+            integrations.append(ArqIntegration())
+        except Exception:
+            logger.warning(
+                "Arq Sentry integration unavailable — failed jobs will not "
+                "reach Sentry."
+            )
+    return integrations
 
 
 def init_sentry(service: str) -> bool:
@@ -222,9 +354,14 @@ def init_sentry(service: str) -> bool:
             "unscrubbed."
         )
     sentry_sdk.set_tag("service", service)
+    # loguru ERROR → Sentry bridge (band: ERROR ≤ level < CRITICAL after the
+    # filter). Registered only on a successful DSN-backed init, so the no-DSN
+    # path stays sink-free and tests see unchanged loguru behavior.
+    logger.add(_sentry_bridge_sink, level="ERROR", filter=_bridge_filter)
     logger.info(
         f"Sentry initialized (service={service}, "
-        f"environment={settings.ENVIRONMENT}, CRITICAL-only)."
+        f"environment={settings.ENVIRONMENT}, paging=CRITICAL-only, "
+        "error-visibility=bridged+throttled)."
     )
     _active = True
     return True

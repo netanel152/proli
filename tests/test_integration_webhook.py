@@ -52,7 +52,11 @@ def test_webhook_valid_text_message(mock_background_tasks):
     assert response.json() == {"status": "processing_message"}
 
     mock_pool.enqueue_job.assert_called_once_with(
-        "process_message_task", "972501234567@c.us", "Hello Proli", None
+        "process_message_task",
+        "972501234567@c.us",
+        "Hello Proli",
+        None,
+        message_id="F1234567890",
     )
 
 
