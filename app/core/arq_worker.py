@@ -47,8 +47,11 @@ async def startup(ctx):
             try:
                 redis = await get_redis_client()
                 await redis.set("worker:heartbeat", str(time.time()), ex=120)
-            except Exception:
-                pass
+            except Exception as e:
+                # WARNING, deliberately not ERROR: the bridge must not spend
+                # Sentry budget on this — a dead heartbeat already surfaces
+                # as worker_alive=false on /health, which is the real signal.
+                logger.warning(f"💓 Heartbeat write failed: {e}")
             await asyncio.sleep(60)
 
     ctx["heartbeat_task"] = asyncio.create_task(_heartbeat_loop())
@@ -130,7 +133,12 @@ async def process_message_task(
         logger.info(f"Chat lock busy for {chat_id} — requeuing with 2s defer")
         raise Retry(defer=2)
     except Exception as e:
-        logger.error(f"Error in process_message_task for {chat_id}: {e}", exc_info=True)
+        # sentry_skip: the re-raise below propagates to ArqIntegration, which
+        # captures the full exception — the bridge reporting this log line
+        # too would double-count every task failure.
+        logger.bind(sentry_skip=True).error(
+            f"Error in process_message_task for {chat_id}: {e}", exc_info=True
+        )
         # Send user-friendly fallback message
         try:
             await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)

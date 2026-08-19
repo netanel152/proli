@@ -162,8 +162,15 @@ async def determine_best_pro(
                 has_slots = True
                 try:
                     has_slots = await check_pro_availability(pro["_id"])
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Fail-open (pro stays eligible) but no longer silent: a
+                    # broken availability check hands leads to booked-out
+                    # pros with zero trace. ERROR so the Sentry bridge sees
+                    # a systematic failure (throttled per site).
+                    logger.error(
+                        f"Availability check failed for pro {pro['_id']} — "
+                        f"treating as available: {e}"
+                    )
 
                 candidates.append(
                     {

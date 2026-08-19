@@ -139,6 +139,80 @@ def should_send(fingerprint: str, ttl_seconds: int = _THROTTLE_TTL_SECONDS) -> b
     return True
 
 
+# Global ceiling on bridge events per process per rolling day, on top of the
+# per-fingerprint hourly throttle. Worst case (many distinct failing sites)
+# stays inside a free-tier Sentry quota instead of consuming it in one bad
+# night. When the cap trims, the per-site throttle still guarantees each
+# site was reported at least once recently.
+_BRIDGE_DAILY_CAP = 50
+_bridge_window_start = 0.0
+_bridge_count = 0
+
+
+def _bridge_budget_ok() -> bool:
+    global _bridge_window_start, _bridge_count
+    now = time.monotonic()
+    if now - _bridge_window_start >= 86400:
+        _bridge_window_start = now
+        _bridge_count = 0
+    if _bridge_count >= _BRIDGE_DAILY_CAP:
+        return False
+    _bridge_count += 1
+    return True
+
+
+def _bridge_filter(record) -> bool:
+    """Band + opt-outs for the loguru→Sentry bridge sink.
+
+    - CRITICAL stays exclusively on the stdlib paging path (`page_critical`
+      → LoggingIntegration at `fatal`); the bridge must not double-report it.
+    - ``_stdlib=True`` records came *through* ``InterceptHandler`` from
+      stdlib logging (uvicorn, arq, apscheduler) — those either already
+      reach Sentry via their integration or are third-party noise; the
+      bridge exists for loguru-native app code only.
+    - ``sentry_skip=True`` is the explicit opt-out for a ``logger.error``
+      whose exception propagates and is captured elsewhere (e.g. the task
+      wrapper's log-then-raise, which ArqIntegration captures).
+    """
+    if record["level"].no >= logging.CRITICAL:
+        return False
+    extra = record["extra"]
+    if extra.get("_stdlib") or extra.get("sentry_skip"):
+        return False
+    return True
+
+
+def _sentry_bridge_sink(message) -> None:
+    """One controlled door for loguru ERROR visibility (registered only when
+    Sentry is active). Chosen over ``LoggingIntegration(event_level=ERROR)``
+    — a no-op for loguru app code, which emits no stdlib LogRecord — and
+    over per-site ``capture_exception`` calls, the "remember to add it at
+    the next site" anti-pattern PRO-94 exists to kill.
+
+    Events go out at level `error`; the fatal-only alert rule never pages on
+    them. The payload still passes through ``before_send`` scrubbing like
+    everything else (the raw loguru message may not have been through
+    ``_pii_filter``, whose sink-filter mutation order is not guaranteed).
+    """
+    try:
+        record = message.record
+        site = f"{record['module']}:{record['function']}:{record['line']}"
+        if not should_send(f"bridge:{site}"):
+            return
+        if not _bridge_budget_ok():
+            return
+        import sentry_sdk
+
+        with sentry_sdk.isolation_scope() as scope:
+            scope.set_tag("log_site", site)
+            scope.set_tag("via", "loguru-bridge")
+            sentry_sdk.capture_message(record["message"], level="error")
+    except Exception:
+        # The bridge must never become the failure it reports — and it sits
+        # on the logging path of documented fail-open code.
+        pass
+
+
 def _integrations_for(service: str) -> list:
     """Explicit integration allowlist per service (replaces auto-enabling).
 
@@ -280,9 +354,14 @@ def init_sentry(service: str) -> bool:
             "unscrubbed."
         )
     sentry_sdk.set_tag("service", service)
+    # loguru ERROR → Sentry bridge (band: ERROR ≤ level < CRITICAL after the
+    # filter). Registered only on a successful DSN-backed init, so the no-DSN
+    # path stays sink-free and tests see unchanged loguru behavior.
+    logger.add(_sentry_bridge_sink, level="ERROR", filter=_bridge_filter)
     logger.info(
         f"Sentry initialized (service={service}, "
-        f"environment={settings.ENVIRONMENT}, CRITICAL-only)."
+        f"environment={settings.ENVIRONMENT}, paging=CRITICAL-only, "
+        "error-visibility=bridged+throttled)."
     )
     _active = True
     return True
