@@ -50,6 +50,30 @@ git config core.hooksPath .githooks   # blocks direct pushes to dev (PR-only wor
 
 **Never commit or push to `dev` directly** — all work goes through a feature branch + PR (GitHub branch protection enforces this server-side; `.githooks/pre-push` is the local backstop). `production` is written to only by the fast-forward promotion above.
 
+### Two shell traps on Windows, both of which fail *silently*
+
+**`git show <rev>:<path>` is mangled by Git Bash.** MSYS path conversion rewrites the argument, and the error names a path you never typed:
+
+```
+$ git show origin/dev:.github/workflows/tests.yml
+fatal: ambiguous argument 'origin\dev;.github\workflows\tests.yml': unknown revision or path not in the working tree
+```
+
+Note the `:` became `;` and the slashes flipped. If the command is inside a pipeline with `2>/dev/null`, you get **empty output and exit 0** — which reads as "that file/content isn't there" rather than "the command was broken". That misled a real check of whether a fix had landed on `dev`. Two fixes, either works:
+
+```bash
+git show "origin/dev:./.github/workflows/tests.yml"      # leading ./ — simplest
+MSYS_NO_PATHCONV=1 git show origin/dev:.github/workflows/tests.yml
+```
+
+**The working tree is shared with parallel sessions.** Another session can move `HEAD` underneath you between one command and the next, so a file you are about to edit may not be from the branch you think you are on — and nothing announces it. Re-check immediately before editing or committing, and never trust branch state established earlier in a session:
+
+```bash
+git branch --show-current && git log -1 --oneline && git status --short
+```
+
+Stage by explicit path for the same reason; `git add -A` will happily commit the other session's in-flight work.
+
 ### Local Development (run all three in separate terminals)
 
 ```bash
