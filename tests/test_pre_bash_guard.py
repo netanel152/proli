@@ -49,6 +49,33 @@ def test_blocks_push_on_master():
     assert code == 2
 
 
+def test_blocks_commit_on_dev():
+    """`dev` is the integration branch master was renamed to — same rules."""
+    code, msg = guard.evaluate("git commit -m 'x'", "dev")
+    assert code == 2
+    assert "dev" in msg
+
+
+def test_blocks_push_on_production():
+    """`production` is the release branch Railway deploys; promote by merge, not
+    by committing onto it directly."""
+    code, msg = guard.evaluate("git push origin production", "production")
+    assert code == 2
+    assert "production" in msg
+
+
+def test_force_push_to_dev_blocked():
+    code, msg = guard.evaluate("git push --force origin dev", "feature/x")
+    assert code == 2
+    assert "Force-pushing" in msg
+
+
+def test_force_push_to_production_blocked():
+    code, msg = guard.evaluate("git push -f origin production", "feature/x")
+    assert code == 2
+    assert "Force-pushing" in msg
+
+
 def test_allows_commit_on_feature_branch():
     assert guard.evaluate("git commit -m 'x'", "feature/pro-76") == (0, "")
 

@@ -6,7 +6,9 @@ name: tests
 on:
   pull_request:
   push:
-    branches: [master]
+    # `master` is being renamed to `dev`; both are listed so CI keeps running
+    # across the transition. Drop `master` once the rename has settled.
+    branches: [master, dev]
 
 jobs:
   pytest:
