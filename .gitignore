@@ -38,6 +38,9 @@ settings.local.json
 # churn that used to show up as dirty-tree noise in every PR.
 .claude-flow/
 
+# Playwright MCP writes per-run page snapshots and console logs here.
+.playwright-mcp/
+
 # --- Local data & caches (never commit) ---
 # backups/ holds real mongodump output (customer data) - PRO-144
 backups/
