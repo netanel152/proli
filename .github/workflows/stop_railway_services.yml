@@ -1,4 +1,9 @@
 name: 🛑 Stop Railway Proli Services
+
+# `railway down` removes a service's active deployment — the environment stops
+# serving. On production that is an outage, triggered by a dropdown, so the job
+# asks for the environment name to be typed back before it will run.
+
 on:
   workflow_dispatch:
     inputs:
@@ -10,19 +15,37 @@ on:
         options:
           - staging
           - production
+      confirm:
+        description: "Type the environment name again to confirm (staging / production)."
+        required: true
+        type: string
 
 jobs:
   stop-railway:
     runs-on: ubuntu-latest
     steps:
+      - name: Confirm the target
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.confirm }}" != "${{ inputs.target_env }}" ]; then
+            echo "::error::Confirmation '${{ inputs.confirm }}' does not match target '${{ inputs.target_env }}'. Refusing to stop anything."
+            exit 1
+          fi
+          echo "Confirmed: stopping ${{ inputs.target_env }}."
+
       - name: Install Railway CLI
         run: npm install -g @railway/cli
+
       - name: Stop Services in ${{ inputs.target_env }}
         env:
           RAILWAY_TOKEN: ${{ inputs.target_env == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
+          # Explicit rather than relying on the token's default environment, so a
+          # mis-scoped token cannot take down the environment you did not pick.
+          RAILWAY_ENV: ${{ inputs.target_env == 'production' && 'Production' || 'Staging' }}
         run: |
-          echo "Stopping services in ${{ inputs.target_env }}..."
-          railway down --service api -y || echo "api: no active deployment"
-          railway down --service worker -y || echo "worker: no active deployment"
-          railway down --service admin -y || echo "admin: no active deployment"
+          set -uo pipefail
+          echo "Stopping services in $RAILWAY_ENV..."
+          railway down --service api    --environment "$RAILWAY_ENV" -y || echo "api: no active deployment"
+          railway down --service worker --environment "$RAILWAY_ENV" -y || echo "worker: no active deployment"
+          railway down --service admin  --environment "$RAILWAY_ENV" -y || echo "admin: no active deployment"
           echo "All services stopped (redis left running)."
