@@ -41,7 +41,7 @@ jobs:
       HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL || 'https://api-production-d95db.up.railway.app/health' }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
