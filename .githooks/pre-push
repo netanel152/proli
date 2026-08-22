@@ -1,10 +1,17 @@
 #!/bin/sh
-# Block direct pushes to master/main from any client using this clone.
+# Block direct pushes to the integration branch (dev, formerly master) from any
+# client using this clone.
 #
 # Context (2026-08-15): an automated session pushed an un-reviewed commit
 # straight to master (dcf05b7), bypassing review and breaking the CI test
 # baseline guard. All work goes through a feature branch + PR. Server-side
 # enforcement is GitHub branch protection; this hook is the local backstop.
+#
+# `production` is deliberately NOT listed. Releasing is a push *to* that ref —
+# `git push origin dev:production` — so blocking it here would block the very
+# promotion the branch exists for. Direct commits onto production are prevented
+# instead by .claude/hooks/pre-bash-guard.py, which gates on the checked-out
+# branch, and by GitHub branch protection.
 #
 # Wired via:  git config core.hooksPath .githooks   (run once per clone)
 # Emergency override (deliberate, visible):
@@ -16,7 +23,7 @@ fi
 
 while read local_ref local_sha remote_ref remote_sha; do
     case "$remote_ref" in
-        refs/heads/master|refs/heads/main)
+        refs/heads/master|refs/heads/main|refs/heads/dev)
             echo "" >&2
             echo "pre-push: direct push to ${remote_ref#refs/heads/} is blocked." >&2
             echo "  Push a feature branch and open a PR instead:" >&2
