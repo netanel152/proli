@@ -83,22 +83,35 @@ jobs:
         run: |
           set -euo pipefail
           SHA='${{ steps.refs.outputs.dev }}'
-          # A merged PR should already be green — dev requires the pytest check.
-          # This catches the ways that can be bypassed (admin merge, direct push)
-          # before the commit reaches production rather than after.
-          CONCLUSIONS=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
-            --jq '.check_runs[] | "\(.name)=\(.conclusion)"' || true)
-          echo "checks on $SHA:"; echo "${CONCLUSIONS:-  (none reported)}"
+          SELF='${{ github.job }}'
 
-          if [ -z "$CONCLUSIONS" ]; then
-            echo "::error::No check runs found for dev@$SHA. Refusing to promote an unverified commit."
+          # Two check runs must be excluded or this job blocks itself:
+          #   - this run, which is in progress, so conclusion is null
+          #   - any *earlier* run of this same job, whose failure would otherwise
+          #     make the branch permanently unpromotable
+          # Filtering by name covers both, and `status == completed` also drops
+          # anything else still running rather than reading null as a failure.
+          ALL=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+            --jq '.check_runs[] | "\(.name)|\(.status)|\(.conclusion)"' || true)
+          echo "all check runs on $SHA:"
+          echo "${ALL:-  (none reported)}" | sed 's/^/  /'
+
+          OTHERS=$(echo "$ALL" | awk -F'|' -v self="$SELF" '$1 != self && $2 == "completed"')
+
+          # The required check must have actually passed. Asserting the specific
+          # check is what catches an admin merge or a direct push that bypassed
+          # the branch protection — "nothing failed" would also be true of a
+          # commit that was never tested at all.
+          if ! echo "$OTHERS" | grep -qxF 'pytest|completed|success'; then
+            echo "::error::dev@$SHA has no successful 'pytest' check. Refusing to promote an unverified commit."
             exit 1
           fi
-          if echo "$CONCLUSIONS" | grep -qvE '=(success|neutral|skipped)$'; then
-            echo "::error::dev@$SHA has non-passing checks (above). Refusing to promote."
+
+          if echo "$OTHERS" | grep -qvE '\|(success|neutral|skipped)$'; then
+            echo "::error::dev@$SHA has a failing completed check (above). Refusing to promote."
             exit 1
           fi
-          echo "OK — dev is green."
+          echo "OK — dev is green (pytest passed; no completed check failed)."
 
       - name: Record pre-promotion uptime
         id: before
