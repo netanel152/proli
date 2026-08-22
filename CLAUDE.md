@@ -166,6 +166,18 @@ All config is in `app/core/config.py` via `pydantic-settings`. Required env vars
 
 **Every credential-bearing setting is a `pydantic.SecretStr` (PRO-94)** — `GEMINI_API_KEY`, `MONGO_URI`, `MONGO_TEST_URI`, `ADMIN_PASSWORD`, `REDIS_URL`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`, `WEBHOOK_TOKEN`, `GOOGLE_MAPS_API_KEY`, `SENTRY_DSN`, and (PRO-111, declared for redaction only — boto3 still reads the env directly) `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`. pydantic's default `__repr__` prints every field value, so any traceback touching `Settings` used to dump the whole secret set into a log, a Sentry event or a terminal. Read them with `.get_secret_value()` **at the point of use** — never into a module-level name, and never into an f-string or a log line. The convention is enforced by field name: anything ending in `TOKEN`, `KEY`, `SECRET`, `PASSWORD`, `DSN`, `_URI` or `_URL` must be `SecretStr` or `tests/test_settings_secret_masking.py` fails the build (this is what already covers PRO-89's `META_ACCESS_TOKEN`, `META_APP_SECRET` and `META_VERIFY_TOKEN`). `app/core/logger.py` sources its redaction list from those fields automatically, so a new credential is scrubbed from logs the moment it is typed correctly. SecretStr only protects an object that already exists: a `ValidationError` raised *during* `Settings` construction (e.g. PRO-96's environment cross-check) fires before any field is wrapped, so pydantic's default error text used to echo the raw input — env vars included — under `input_value=`. `Settings.model_config` now sets `hide_input_in_errors=True` (PRO-99) to close that construction-time gap; the flag covers `__str__`/`__repr__`/tracebacks only — `ValidationError.errors()`/`.json()` still carry the raw input dict, so no boot handler may render either.
 
+## Linear ↔ GitHub: naming a PR that only does part of an issue
+
+Linear links an issue to a PR through the **branch name, PR title, or PR body**, and its GitHub automation moves the issue to **Done the moment that PR merges**. There is no "partially closes" — any one of those three references is enough, and merging is the trigger.
+
+So the issue key is a *closing* marker, not a citation. Use it only when merging the PR genuinely satisfies the whole issue.
+
+**When a PR delivers only part of an issue** — a repo-side slice of an ops problem, one of three acceptance criteria, groundwork for a follow-up — keep the key out of **all three** of the branch name, the PR title, and the PR body. Describe the work on its own terms (`chore/partial-scope-pr-convention`, not `fix/<key>-…`), and record the connection where it does no harm: a comment on the Linear issue linking the PR. If the slice is substantial enough to deserve tracking, give it its own issue and let the PR close *that*.
+
+This has already gone wrong once: on 2026-08-22 a PR fixing the repo-side third of an open Critical/Ops deploy issue was titled `fix(<KEY>): …`, and merging it flipped the whole issue to Done while production was still broken — the auto-close landed 19 minutes after the issue had been moved to In Progress. Note that the `/take-issue` flow's `feat($1): <summary>` convention is correct *for that flow*, because it runs one issue to completion; it is not a general rule for every PR.
+
+A merged PR that only adds a document or a script is also not evidence that the thing was *run* — see the evidence gate in `.claude/commands/take-issue.md`.
+
 ## Session Guidelines
 
 - Skip files over 100KB unless explicitly required.
