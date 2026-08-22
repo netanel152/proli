@@ -28,7 +28,7 @@ jobs:
       WHATSAPP_DRY_RUN: "true"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # PRO-86: the legacy WhatsApp vendor is gone (PRO-85 — instance deleted,
       # The provider facade is only a single egress if nothing can reach a vendor
@@ -84,7 +84,7 @@ jobs:
           fi
           echo "OK — single egress holds."
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # Matches the Dockerfile's base image, so CI resolves the same wheels
           # production does (the pins in requirements.txt are version-sensitive).
