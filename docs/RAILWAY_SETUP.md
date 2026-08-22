@@ -36,6 +36,33 @@ All 3 services point to the **same GitHub repo** and are intended to use the **s
 - **Port:** Automatically detected
 - **Public Domain:** Yes (admin dashboard URL)
 
+## Which branch deploys where
+
+| Railway environment | tracks git branch | promotion |
+|---|---|---|
+| Staging | `master` | automatic on every merge |
+| Production | `production` | **manual fast-forward** |
+
+Both auto-deploy on a push to the branch they track — that part works and is not the problem.
+
+**The decision (2026-08-22, PRO-128): keep the manual promotion gate.** Production should not ship every merge to `master` unreviewed, particularly before the pilot. What is *not* acceptable is the gate rotting silently, which is exactly what happened: `production` sat on a 2026-07-08 commit for six weeks while `master` moved 132 commits ahead, and nobody noticed because a stale branch looks identical to a quiet one. The stale revision still declared the removed WhatsApp vendor's settings fields, so production crash-looped the entire time.
+
+Promote with a fast-forward — it is refused if it would not be one, which is the safety property worth having:
+
+```bash
+git fetch origin
+git merge-base --is-ancestor origin/production origin/master   # must succeed
+git push origin master:production
+```
+
+Check the gap at any time; if this is not `0`, production is behind:
+
+```bash
+git rev-list --count origin/production..origin/master
+```
+
+If you would rather drop the gate, point the three production services at `master` in the Railway dashboard (each service → Settings → Source → Branch) and delete the `production` branch, so there is no stale ref left to mislead anyone.
+
 ## Step 4: Environment Variables
 
 Set these as **shared variables** (project-level) so all 3 services inherit them:
