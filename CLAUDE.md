@@ -24,15 +24,17 @@ A CI step fails the build on any reference to the old vendor's domain (`green` +
 
 `dev` was named `master` until 2026-08-22. The rename is cosmetic in intent — `dev` says what the branch is for, and stops "master is production" being a reasonable guess — but it is load-bearing in one way: **a stale release branch is indistinguishable from a quiet one**, which is how production once sat six weeks and 132 commits behind while crash-looping (PRO-128).
 
-Releasing is a fast-forward, which is refused if it would not be one:
+**Release by running the `🚢 Promote dev → production` workflow** (Actions tab → Run workflow). It is the supported path and does the whole thing: refuses a non-fast-forward, refuses a `dev` whose CI is not green, moves the ref, then **waits for production to restart and report healthy** and fails the build if it does not. Tick `dry_run` to see the commit range without changing anything.
+
+That last step is why the workflow exists rather than a one-liner. Production's auto-deploy has silently no-opped before, and a promotion you cannot distinguish from a no-op is exactly the failure PRO-128 documents — production sat six weeks behind while looking promoted.
+
+The equivalent by hand, if you need it — but then **verify it deployed yourself**, per "Which branch deploys where" in `docs/RAILWAY_SETUP.md`:
 
 ```bash
 git fetch origin
 git merge-base --is-ancestor origin/production origin/dev   # must succeed
 git push origin dev:production
 ```
-
-Then **verify it actually deployed** — do not skip this, production's auto-deploy has been unreliable and a promotion that silently no-ops is the exact failure PRO-128 documents. See `docs/RAILWAY_SETUP.md` ("Which branch deploys where") for the check and the dashboard fallback.
 
 How far behind production is, at any time:
 

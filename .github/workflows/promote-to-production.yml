@@ -1,0 +1,158 @@
+name: 🚢 Promote dev → production
+
+# The release path. Fast-forwards `production` to `dev` and then proves the
+# deploy actually landed.
+#
+# The proving is the point. On 2026-08-22 a promotion was fast-forwarded three
+# times; the GitHub ref moved every time and Railway picked it up once. A
+# promotion that silently no-ops is indistinguishable from one that worked, and
+# that is the exact shape of PRO-128 — production sat six weeks and 132 commits
+# behind, crash-looping, while looking promoted. So this job fails loudly rather
+# than leaving you to assume.
+#
+# Deliberately NOT `railway up`: that uploads the runner's working directory as a
+# tarball, which deploys code corresponding to no commit Railway knows about.
+# Promotion moves a git ref and lets Railway's own git integration build it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview only — show what would be promoted, change nothing."
+        type: boolean
+        default: false
+      skip_deploy_check:
+        description: "Push the ref but do not wait for the deploy (use only if the health URL is unreachable)."
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+# Never let two promotions overlap; the second would race the first's verification.
+concurrency:
+  group: promote-production
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    env:
+      HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL || 'https://api-production-d95db.up.railway.app/health' }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve refs and assert this is a fast-forward
+        id: refs
+        run: |
+          set -euo pipefail
+          git fetch origin dev production --quiet
+          DEV=$(git rev-parse origin/dev)
+          PROD=$(git rev-parse origin/production)
+          echo "dev=$DEV"  >> "$GITHUB_OUTPUT"
+          echo "prod=$PROD" >> "$GITHUB_OUTPUT"
+
+          if [ "$DEV" = "$PROD" ]; then
+            echo "::notice::production is already at $DEV — nothing to promote."
+            echo "noop=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "noop=false" >> "$GITHUB_OUTPUT"
+
+          # Refuse anything that is not a fast-forward. If production has commits
+          # dev does not, someone committed directly onto the release branch and
+          # this job must not silently discard them.
+          if ! git merge-base --is-ancestor "$PROD" "$DEV"; then
+            echo "::error::Not a fast-forward: production ($PROD) is not an ancestor of dev ($DEV)."
+            echo "::error::Something was committed directly onto production. Reconcile by hand — refusing to overwrite it."
+            exit 1
+          fi
+
+          echo "### Promoting $(git rev-list --count "$PROD".."$DEV") commit(s)" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          git log --no-merges --format='%h %s' "$PROD".."$DEV" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Assert dev's CI is green
+        if: steps.refs.outputs.noop == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          SHA='${{ steps.refs.outputs.dev }}'
+          # A merged PR should already be green — dev requires the pytest check.
+          # This catches the ways that can be bypassed (admin merge, direct push)
+          # before the commit reaches production rather than after.
+          CONCLUSIONS=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+            --jq '.check_runs[] | "\(.name)=\(.conclusion)"' || true)
+          echo "checks on $SHA:"; echo "${CONCLUSIONS:-  (none reported)}"
+
+          if [ -z "$CONCLUSIONS" ]; then
+            echo "::error::No check runs found for dev@$SHA. Refusing to promote an unverified commit."
+            exit 1
+          fi
+          if echo "$CONCLUSIONS" | grep -qvE '=(success|neutral|skipped)$'; then
+            echo "::error::dev@$SHA has non-passing checks (above). Refusing to promote."
+            exit 1
+          fi
+          echo "OK — dev is green."
+
+      - name: Record pre-promotion uptime
+        id: before
+        if: steps.refs.outputs.noop == 'false' && inputs.dry_run == false && inputs.skip_deploy_check == false
+        run: |
+          set -euo pipefail
+          # Captured so the verification step can tell a genuinely new container
+          # from the one already running: a restart resets uptime_seconds.
+          BODY=$(curl -fsS --max-time 20 "$HEALTH_URL" || echo '{}')
+          UP=$(echo "$BODY" | jq -r '.uptime_seconds // 0')
+          echo "uptime=$UP" >> "$GITHUB_OUTPUT"
+          echo "pre-promotion uptime_seconds=$UP"
+
+      - name: Dry run — stop here
+        if: inputs.dry_run == true
+        run: |
+          echo "::notice::Dry run. Nothing was pushed. See the job summary for the commit range."
+
+      - name: Fast-forward production
+        if: steps.refs.outputs.noop == 'false' && inputs.dry_run == false
+        run: |
+          set -euo pipefail
+          git push origin '${{ steps.refs.outputs.dev }}':refs/heads/production
+          echo "production -> ${{ steps.refs.outputs.dev }}"
+
+      - name: Verify the deploy actually landed
+        if: steps.refs.outputs.noop == 'false' && inputs.dry_run == false && inputs.skip_deploy_check == false
+        run: |
+          set -uo pipefail
+          BEFORE='${{ steps.before.outputs.uptime }}'
+          DEADLINE=$(( SECONDS + 600 ))
+
+          echo "Waiting for production to restart and report healthy (up to 10 min)..."
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            BODY=$(curl -fsS --max-time 15 "$HEALTH_URL" 2>/dev/null || echo '')
+            if [ -n "$BODY" ]; then
+              STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
+              UP=$(echo "$BODY" | jq -r '.uptime_seconds // 999999')
+              # uptime lower than before == the process restarted == new deploy.
+              if [ "$STATUS" = "healthy" ] && awk "BEGIN{exit !($UP < $BEFORE)}"; then
+                echo "$BODY" | jq .
+                echo "::notice::Promotion verified — production restarted and is healthy."
+                exit 0
+              fi
+              echo "  status=$STATUS uptime=$UP (was $BEFORE) — still waiting"
+            else
+              echo "  health endpoint not responding yet — still waiting"
+            fi
+            sleep 15
+          done
+
+          echo "::error::The ref moved but production never restarted within 10 minutes."
+          echo "::error::This is the PRO-128 failure mode: a promotion that silently did nothing."
+          echo "::error::Check Railway → each production service → Settings → Source (it must track"
+          echo "::error::the 'production' branch), then use Deployments → Redeploy. Do not assume"
+          echo "::error::this release is live."
+          exit 1

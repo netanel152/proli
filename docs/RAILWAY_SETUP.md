@@ -49,7 +49,11 @@ Staging auto-deploys reliably on every merge to `dev` (the branch renamed from `
 
 **The decision (2026-08-22, PRO-128): keep the manual promotion gate.** Production should not ship every merge to `dev` unreviewed, particularly before the pilot. What is *not* acceptable is the gate rotting silently, which is exactly what happened: `production` sat on a 2026-07-08 commit for six weeks while the integration branch moved 132 commits ahead, and nobody noticed because a stale branch looks identical to a quiet one. The stale revision still declared the removed WhatsApp vendor's settings fields, so production crash-looped the entire time.
 
-Promote with a fast-forward — it is refused if it would not be one, which is the safety property worth having:
+**Preferred: run the `🚢 Promote dev → production` workflow** (Actions → Run workflow). It asserts the fast-forward, asserts `dev`'s CI is green, pushes the ref, and then polls `/health` until production restarts and reports healthy — failing the build if it never does. `dry_run` previews the commit range without touching anything. Use it rather than the manual commands below; the verification is the part that is easy to skip and expensive to skip.
+
+> There is deliberately **no** `railway up` workflow. That command uploads the runner's working directory as a tarball, so it deploys code corresponding to no commit Railway knows about — and the old version of it had no pinned `ref`, meaning "start production" would have shipped `dev`'s tree. If the git integration is broken, fix it in **Settings → Source** or use **Deployments → Redeploy**; do not paper over it with a tarball.
+
+The manual equivalent — a fast-forward, refused if it would not be one:
 
 ```bash
 git fetch origin
