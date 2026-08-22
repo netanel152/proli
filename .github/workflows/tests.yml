@@ -6,9 +6,12 @@ name: tests
 on:
   pull_request:
   push:
-    # `master` is being renamed to `dev`; both are listed so CI keeps running
-    # across the transition. Drop `master` once the rename has settled.
-    branches: [master, dev]
+    # `dev` is the integration branch (renamed from `master` on 2026-08-22).
+    # `production` is listed too: a promotion is a fast-forward of already-tested
+    # commits, so this should always be green — which is the point. A red run on
+    # `production` means something reached the release branch that did not come
+    # through `dev`, and that is worth finding out about loudly.
+    branches: [dev, production]
 
 jobs:
   pytest:
