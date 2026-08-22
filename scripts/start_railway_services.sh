@@ -3,14 +3,19 @@
 # Default to staging if no environment argument is provided
 ENV_NAME=${1:-staging}
 
+# PRO-128: this script used to hardcode environment *IDs*, and both had gone
+# stale — neither resolved any more, so every invocation failed outright. That
+# is a plausible reason production was never deployed by hand for weeks. The
+# Railway CLI accepts an environment *name* wherever it accepts an id, and the
+# names are stable in a way the uuids demonstrably are not, so pass the name.
 if [ "$ENV_NAME" = "production" ]; then
-  ENV_ID="a8c1fc4c-9434-48c4-9461-afce87651d21"
+  RAILWAY_ENV="Production"
 else
-  ENV_ID="93e8ad7e-3582-4ab7-8f71-1775bf0bbddc"
+  RAILWAY_ENV="Staging"
 fi
 
-echo "Starting Proli services on Railway in environment: $ENV_NAME ($ENV_ID)..."
-railway up --service api -e $ENV_ID -d
-railway up --service worker -e $ENV_ID -d
-railway up --service admin -e $ENV_ID -d
-echo "Deployments triggered for $ENV_NAME."
+echo "Starting Proli services on Railway in environment: $RAILWAY_ENV..."
+railway up --service api -e "$RAILWAY_ENV" -d
+railway up --service worker -e "$RAILWAY_ENV" -d
+railway up --service admin -e "$RAILWAY_ENV" -d
+echo "Deployments triggered for $RAILWAY_ENV."

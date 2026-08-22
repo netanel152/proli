@@ -3,14 +3,16 @@
 # Default to staging if no environment argument is provided
 ENV_NAME=${1:-staging}
 
+# PRO-128: environment names rather than hardcoded uuids — see the note in
+# start_railway_services.sh. Both ids in this script were stale and dead.
 if [ "$ENV_NAME" = "production" ]; then
-  ENV_ID="a8c1fc4c-9434-48c4-9461-afce87651d21"
+  RAILWAY_ENV="Production"
 else
-  ENV_ID="93e8ad7e-3582-4ab7-8f71-1775bf0bbddc"
+  RAILWAY_ENV="Staging"
 fi
 
-echo "Stopping Proli services on Railway in environment: $ENV_NAME ($ENV_ID)..."
-railway down --service api -e $ENV_ID -y
-railway down --service worker -e $ENV_ID -y
-railway down --service admin -e $ENV_ID -y
-echo "Done stopping $ENV_NAME."
+echo "Stopping Proli services on Railway in environment: $RAILWAY_ENV..."
+railway down --service api -e "$RAILWAY_ENV" -y
+railway down --service worker -e "$RAILWAY_ENV" -y
+railway down --service admin -e "$RAILWAY_ENV" -y
+echo "Done stopping $RAILWAY_ENV."
