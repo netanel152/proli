@@ -5,6 +5,13 @@ import re
 import subprocess
 import sys
 
+# Branches that never take a direct commit or push.
+#   dev        — the integration branch (renamed from master); deploys to staging
+#   production — the release branch; deploys to production
+#   master/main— kept so the guard still works in clones that predate the rename,
+#                and in any other repo this hook is copied into
+PROTECTED_BRANCHES = ("main", "master", "dev", "production")
+
 
 def _current_branch():
     """Best-effort current git branch; empty string if it can't be determined."""
@@ -49,25 +56,31 @@ def evaluate(command, branch):
     if re.search(r">>?\s*\.env\b", command):
         return 2, "BLOCKED: Redirecting into .env is not allowed."
 
-    # Block git push --force / -f to main or master
+    # Block git push --force / -f to a protected branch
     if (
         re.search(r"git\s+push\b", command)
         and re.search(r"--force\b|-f\b", command)
-        and re.search(r"\b(main|master)\b", command)
+        and re.search(r"\b(main|master|dev|production)\b", command)
     ):
-        return 2, "BLOCKED: Force-pushing to main/master is not allowed."
+        return 2, "BLOCKED: Force-pushing to a protected branch is not allowed."
 
-    # Block plain git commit / git push while on main or master. All Proli work
-    # happens on a feature branch (see CLAUDE.md and the take-issue guardrails);
-    # this closes the gap the force-push rule above leaves open for ordinary
-    # commits and non-force pushes.
-    if branch in ("main", "master") and re.search(
+    # Block plain git commit / git push while on a protected branch. All Proli
+    # work happens on a feature branch (see CLAUDE.md and the take-issue
+    # guardrails); this closes the gap the force-push rule above leaves open for
+    # ordinary commits and non-force pushes.
+    #
+    # `dev` is the integration branch (renamed from `master`) and `production`
+    # is the release branch that Railway deploys — neither takes direct commits.
+    # `master`/`main` stay listed so the guard keeps working in clones that have
+    # not yet renamed, and for any other repo this hook is copied into.
+    if branch in PROTECTED_BRANCHES and re.search(
         r"git\s+(?:-\S+\s+|-c\s+\S+\s+|-C\s+\S+\s+)*(commit|push)\b", command
     ):
         return (
             2,
             f"BLOCKED: refusing 'git commit' / 'git push' while on '{branch}'. "
-            "Create a feature branch first — never commit or push to main/master.",
+            "Create a feature branch first — never commit or push to a "
+            "protected branch.",
         )
 
     # Block mongo/mongosh dropDatabase or drop()

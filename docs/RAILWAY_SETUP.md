@@ -40,21 +40,21 @@ All 3 services point to the **same GitHub repo** and are intended to use the **s
 
 | Railway environment | tracks git branch | promotion |
 |---|---|---|
-| Staging | `master` | automatic on every merge |
+| Staging | `dev` | automatic on every merge |
 | Production | `production` | **manual fast-forward** |
 
-Staging auto-deploys reliably on every merge to `master`.
+Staging auto-deploys reliably on every merge to `dev` (the branch renamed from `master` on 2026-08-22).
 
 > ⚠️ **Production's auto-deploy is unreliable — a fast-forward is not enough.** Measured on 2026-08-22: of three pushes to `production`, only the first triggered a deployment. The GitHub ref advanced correctly all three times (verified via the API), and Railway simply did not pick up the last two — the services stayed on the older commit for 15+ minutes with no queued build. **Never assume a promotion deployed.** Always finish with the verification step below, and trigger the deploy from the dashboard if it did not start on its own. This matters more than it sounds: the whole PRO-128 incident was a production that looked promoted and wasn't.
 
-**The decision (2026-08-22, PRO-128): keep the manual promotion gate.** Production should not ship every merge to `master` unreviewed, particularly before the pilot. What is *not* acceptable is the gate rotting silently, which is exactly what happened: `production` sat on a 2026-07-08 commit for six weeks while `master` moved 132 commits ahead, and nobody noticed because a stale branch looks identical to a quiet one. The stale revision still declared the removed WhatsApp vendor's settings fields, so production crash-looped the entire time.
+**The decision (2026-08-22, PRO-128): keep the manual promotion gate.** Production should not ship every merge to `dev` unreviewed, particularly before the pilot. What is *not* acceptable is the gate rotting silently, which is exactly what happened: `production` sat on a 2026-07-08 commit for six weeks while the integration branch moved 132 commits ahead, and nobody noticed because a stale branch looks identical to a quiet one. The stale revision still declared the removed WhatsApp vendor's settings fields, so production crash-looped the entire time.
 
 Promote with a fast-forward — it is refused if it would not be one, which is the safety property worth having:
 
 ```bash
 git fetch origin
-git merge-base --is-ancestor origin/production origin/master   # must succeed
-git push origin master:production
+git merge-base --is-ancestor origin/production origin/dev   # must succeed
+git push origin dev:production
 ```
 
 Then **verify the deploy actually started** — this step is not optional, see the warning above:
@@ -69,15 +69,15 @@ railway status --environment Production
 
 If the services are still on the previous commit after a couple of minutes, Railway did not pick the push up. Trigger it by hand: **dashboard → service → Deployments → Redeploy**, for each of `api`, `worker`, `admin`.
 
-Check the gap at any time; if this is not `0`, production is behind `master`:
+Check the gap at any time; if this is not `0`, production is behind `dev`:
 
 ```bash
-git rev-list --count origin/production..origin/master
+git rev-list --count origin/production..origin/dev
 ```
 
 Note that a **variable change also redeploys**, and that path is not equivalent: it restarts the service with the existing image rather than building the new commit. Use it to apply a config change, never to promote code.
 
-If you would rather drop the gate, point the three production services at `master` in the Railway dashboard (each service → Settings → Source → Branch) and delete the `production` branch, so there is no stale ref left to mislead anyone.
+If you would rather drop the gate, point the three production services at `dev` in the Railway dashboard (each service → Settings → Source → Branch) and delete the `production` branch, so there is no stale ref left to mislead anyone.
 
 ## Step 4: Environment Variables
 

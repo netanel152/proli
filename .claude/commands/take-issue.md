@@ -18,7 +18,7 @@ Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live
 ## Guardrails (non-negotiable)
 
 - **One issue per run.** Do only $1. Do not pick up other work.
-- **Never touch main.** All work happens on a feature branch. Never commit or push to main/master.
+- **Never touch `dev`.** All work happens on a feature branch. Never commit or push to `dev` (the default branch, renamed from `master`) or to `production`.
 - **Stop if the working tree is dirty.** If `git status` above shows uncommitted changes, stop and tell me to stash or commit first — do not build on a dirty tree.
 - **Stuck > 15 min of effort or blocked on a real ambiguity → stop and ask.** Don't guess at unclear requirements; post what you need on the issue and pause.
 - **You are the implementer.** Write the production code yourself. Delegate review, tests, and docs to the subagents below — never delegate the implementation.
@@ -32,7 +32,7 @@ Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live
 
 **2. Move to In Progress.** Update the issue status to "In Progress" via Linear MCP, and assign it to me (`me`) if unassigned.
 
-**3. Create the branch.** Fetch first, then branch off the **remote** tip so you never build on a stale local main: `git fetch origin` then `git checkout -b <branch-name> origin/main` (use `origin/master` if that is the repo's default branch). If Linear gives no branch name, use `feature/$1-<short-slug>`. **De-dupe the issue id:** Linear's suggested `gitBranchName` doubles the identifier when the issue title itself starts with it — e.g. a title "PRO-75: Delete SMS…" yields `…/pro-75-pro-75-delete-sms…`. Collapse the repeated `pro-N-pro-N` to a single `pro-N` before creating the branch (`…/pro-75-delete-sms…`). **Worktree guard:** if the target branch already exists in another worktree (`git worktree list` shows it, or `git checkout` reports it is checked out elsewhere), stop and tell me — do not force or delete it.
+**3. Create the branch.** Fetch first, then branch off the **remote** tip so you never build on a stale local main: `git fetch origin` then `git checkout -b <branch-name> origin/dev`. If Linear gives no branch name, use `feature/$1-<short-slug>`. **De-dupe the issue id:** Linear's suggested `gitBranchName` doubles the identifier when the issue title itself starts with it — e.g. a title "PRO-75: Delete SMS…" yields `…/pro-75-pro-75-delete-sms…`. Collapse the repeated `pro-N-pro-N` to a single `pro-N` before creating the branch (`…/pro-75-delete-sms…`). **Worktree guard:** if the target branch already exists in another worktree (`git worktree list` shows it, or `git checkout` reports it is checked out elsewhere), stop and tell me — do not force or delete it.
 
 **4. Plan.** Restate the requirements as a short checklist of changes (files + what changes in each). Map each acceptance criterion to a change. Show me the plan and the FSM/lifecycle invariants it must preserve (context clearing, TTLs, DI pattern, text-only menus (no buttons)). Wait for nothing if the plan is obvious; pause for my confirmation only if there's a genuine design fork. Once the plan is settled, **post it as a comment on the issue** (via Linear MCP) before writing any code, so the plan is persisted even if the run is interrupted.
 

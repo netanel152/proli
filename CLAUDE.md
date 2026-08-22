@@ -14,13 +14,39 @@ A CI step fails the build on any reference to the old vendor's domain (`green` +
 
 ## Commands
 
+### Branches and how a release happens
+
+| branch | role | deploys to |
+|---|---|---|
+| `dev` | integration / default branch — every feature PR merges here | **staging**, automatically |
+| `production` | release branch — only ever fast-forwarded from `dev` | **production** |
+| `feature/*`, `fix/*`, `chore/*` | where all work happens | nothing |
+
+`dev` was named `master` until 2026-08-22. The rename is cosmetic in intent — `dev` says what the branch is for, and stops "master is production" being a reasonable guess — but it is load-bearing in one way: **a stale release branch is indistinguishable from a quiet one**, which is how production once sat six weeks and 132 commits behind while crash-looping (PRO-128).
+
+Releasing is a fast-forward, which is refused if it would not be one:
+
+```bash
+git fetch origin
+git merge-base --is-ancestor origin/production origin/dev   # must succeed
+git push origin dev:production
+```
+
+Then **verify it actually deployed** — do not skip this, production's auto-deploy has been unreliable and a promotion that silently no-ops is the exact failure PRO-128 documents. See `docs/RAILWAY_SETUP.md` ("Which branch deploys where") for the check and the dashboard fallback.
+
+How far behind production is, at any time:
+
+```bash
+git rev-list --count origin/production..origin/dev
+```
+
 ### One-time clone setup
 
 ```bash
-git config core.hooksPath .githooks   # blocks direct pushes to master (PR-only workflow)
+git config core.hooksPath .githooks   # blocks direct pushes to dev (PR-only workflow)
 ```
 
-**Never commit or push to master/main directly** — all work goes through a feature branch + PR (GitHub branch protection enforces this server-side; `.githooks/pre-push` is the local backstop).
+**Never commit or push to `dev` directly** — all work goes through a feature branch + PR (GitHub branch protection enforces this server-side; `.githooks/pre-push` is the local backstop). `production` is written to only by the fast-forward promotion above.
 
 ### Local Development (run all three in separate terminals)
 
