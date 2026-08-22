@@ -14,7 +14,9 @@ Add these plugins/add-ons to the project:
 
 ## Step 3: Create 3 Services
 
-All 3 services point to the **same GitHub repo** and use the **same Dockerfile**. They differ only in the start command.
+All 3 services point to the **same GitHub repo** and are intended to use the **same Dockerfile**. They differ only in the start command.
+
+> ⚠️ **They do not currently use it.** As of 2026-08-22 all four services in both environments report `Builder: RAILPACK`, so `Dockerfile` is never built. That is not cosmetic: the image therefore has **no `mongodb-database-tools`**, so PRO-111's nightly backup fails with `mongodump not found`, and the `RUN mongodump --version` build-time guard added specifically to catch that has never executed. `railway.json` declares the Dockerfile builder, but the service-level setting wins — fixing this is a **dashboard action** (each service → Settings → Build → Builder: Dockerfile), not a repo change. Tracked on PRO-128.
 
 ### Service 1: API (Backend)
 - **Name:** `api`
@@ -60,10 +62,12 @@ ENVIRONMENT=production   # per-environment — see below
 
 `ENVIRONMENT` accepts exactly `development | staging | production`; anything else raises at startup. It is **not** a shared project variable — set it per Railway environment so the label always matches reality:
 
-| Railway environment | Environment ID | `ENVIRONMENT` |
-|---|---|---|
-| Staging | `93e8ad7e-3582-4ab7-8f71-1775bf0bbddc` | `staging` |
-| Production | `a8c1fc4c-9434-48c4-9461-afce87651d21` | `production` |
+| Railway environment | `ENVIRONMENT` |
+|---|---|
+| Staging | `staging` |
+| Production | `production` |
+
+> Environment **ids** were listed here until PRO-128 and both had gone stale — they resolved to nothing, and `scripts/start_railway_services.sh` was passing the same dead uuids to `railway up`. Address environments by name (`--environment Production`); the CLI accepts a name anywhere it accepts an id, and names don't rot. Run `railway environment` to see the current list if you need an id for something else.
 
 Set it on all 3 services (`api`, `worker`, `admin`) in each environment:
 
@@ -141,5 +145,6 @@ https://api-production-XXXX.up.railway.app/webhook?token=YOUR_WEBHOOK_TOKEN
 ## Notes
 
 - The `start.sh` script is kept for local convenience but is NOT used by Railway or Docker Compose.
-- Each service builds from the same Dockerfile. Railway caches the build layer so only the first service triggers a full build.
+- Each service is meant to build from the same Dockerfile (Railway caches the build layer so only the first service triggers a full build) — see the Railpack warning in Step 3 for why that is not what is happening today.
+- Build config lives in **`railway.json` only**. A second `railway.toml` declaring the same builder was deleted in PRO-128: two sources of build config made it impossible to tell from the repo which one Railway was honouring, and the answer turned out to be neither.
 - To scale: only the API and Worker services can safely have `numReplicas > 1`. The Worker requires distributed locking for scheduler jobs before scaling (see `docs/SCALING_GUIDE.md`).
