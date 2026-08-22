@@ -1,4 +1,25 @@
 name: 🚀 Start Railway Proli Services
+
+# ⚠️ READ BEFORE CHANGING THIS FILE
+#
+# `railway up` uploads the *runner's working directory* as a tarball and builds
+# that — it does NOT build the commit Railway's git integration tracks. Two
+# consequences that have to be defended against:
+#
+#   1. Whatever this job checks out is what ships. Before 2026-08-22 there was no
+#      `ref:` on the checkout step, so it took the default branch (`dev`) — which
+#      meant selecting "production" here would have uploaded dev's code to
+#      production. The `ref:` below pins each environment to its own branch.
+#   2. A tarball deploy leaves the service running code that does not correspond
+#      to any commit Railway knows about, so the dashboard's commit SHA silently
+#      stops meaning anything.
+#
+# The normal way to release is NOT this workflow — it is a fast-forward of the
+# `production` branch from `dev` (see "Which branch deploys where" in
+# docs/RAILWAY_SETUP.md and the branch table in CLAUDE.md). Use this only to
+# bring an environment back up when the git integration is not doing its job,
+# and verify the deployed SHA afterwards.
+
 on:
   workflow_dispatch:
     inputs:
@@ -18,14 +39,37 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Pin the source to the branch that owns the target environment, so a
+          # tarball upload can never ship the wrong tree. See the header note.
+          ref: ${{ inputs.target_env == 'production' && 'production' || 'dev' }}
+
+      - name: Show what is about to be deployed
+        run: |
+          echo "environment : ${{ inputs.target_env }}"
+          echo "branch      : $(git rev-parse --abbrev-ref HEAD)"
+          echo "commit      : $(git rev-parse HEAD)"
+
       - name: Install Railway CLI
         run: npm install -g @railway/cli
+
       - name: Deploy Services to ${{ inputs.target_env }}
         env:
           RAILWAY_TOKEN: ${{ inputs.target_env == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
+          # Explicit rather than relying on the token's default environment —
+          # the token scoping is invisible here, and getting it wrong deploys to
+          # the other environment with no warning.
+          RAILWAY_ENV: ${{ inputs.target_env == 'production' && 'Production' || 'Staging' }}
         run: |
-          echo "Starting services in ${{ inputs.target_env }}..."
-          railway up --service api -d
-          railway up --service worker -d
-          railway up --service admin -d
+          set -euo pipefail
+          echo "Starting services in $RAILWAY_ENV..."
+          railway up --service api    --environment "$RAILWAY_ENV" -d
+          railway up --service worker --environment "$RAILWAY_ENV" -d
+          railway up --service admin  --environment "$RAILWAY_ENV" -d
           echo "All services started."
+
+      - name: Reminder — verify
+        run: |
+          echo "::notice::Deployed from a tarball, so Railway's commit SHA will not"
+          echo "::notice::match this branch. Confirm the services are actually serving"
+          echo "::notice::(GET /health) before treating this as done."
