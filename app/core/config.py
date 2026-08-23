@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     # number to route paging away from the day-to-day admin channel.
     ONCALL_PHONE: str | None = None
     WEBHOOK_TOKEN: SecretStr | None = None
+    # PRO-136: authenticates the detailed /health payload and all of
+    # /health/leads (X-Health-Token header). Unset in a prod-like environment
+    # means nothing can authenticate — the detailed views fail closed, while
+    # the minimal public /health stays up for Railway/Docker/deploy probes.
+    # In development an unset token keeps full detail available locally.
+    HEALTH_TOKEN: SecretStr | None = None
     # PRO-34: exactly one of "development" | "staging" | "production".
     # Anything else fails fast at startup (see validate_environment) rather than
     # silently falling through to the non-prod branch everywhere.

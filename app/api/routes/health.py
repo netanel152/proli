@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Response, status
+import hmac
+
+from fastapi import APIRouter, Request, Response, status
 
 from app.core.config import settings
 from app.core.constants import LeadStatus, WorkerConstants
@@ -15,10 +17,35 @@ router = APIRouter(prefix="/health", tags=["Health"])
 _start_time = time.time()
 
 
+def _detail_authorized(request: Request) -> bool:
+    """PRO-136 — may this caller see internals (checks, latencies, KPIs)?
+
+    * ``HEALTH_TOKEN`` set → only a matching ``X-Health-Token`` header
+      (constant-time compare, same posture as the webhook auth).
+    * ``HEALTH_TOKEN`` unset → fail closed in staging/production (nothing can
+      authenticate, so nothing is shown), open in development so local
+      ``curl``/the /health command keep working without ceremony.
+    """
+    token = settings.HEALTH_TOKEN
+    if token is None:
+        return not settings.is_prod_like
+    header = request.headers.get("X-Health-Token") or ""
+    return hmac.compare_digest(
+        header.encode("latin-1", "replace"), token.get_secret_value().encode()
+    )
+
+
 @router.get("")
-async def health_check(response: Response):
+async def health_check(request: Request, response: Response):
     """
     Checks the health of all external dependencies with latency measurements.
+
+    PRO-136: the unauthenticated response carries only ``status`` and
+    ``uptime_seconds`` — exactly what the Docker HEALTHCHECK and the
+    promotion workflow's deploy verifier read. The per-dependency ``checks``
+    object (latencies, provider name, transmits flag, worker heartbeat) is
+    included only for callers `_detail_authorized` accepts: it is an
+    infrastructure map, not a liveness signal.
     """
     whatsapp = get_whatsapp()
 
@@ -111,19 +138,19 @@ async def health_check(response: Response):
 
     uptime_seconds = round(time.time() - _start_time)
 
+    body = {
+        "status": "healthy" if is_critical_up else "unhealthy",
+        "uptime_seconds": uptime_seconds,
+    }
+    if _detail_authorized(request):
+        body["checks"] = checks
     if not is_critical_up:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {
-            "status": "unhealthy",
-            "checks": checks,
-            "uptime_seconds": uptime_seconds,
-        }
-
-    return {"status": "healthy", "checks": checks, "uptime_seconds": uptime_seconds}
+    return body
 
 
 @router.get("/leads")
-async def leads_health(response: Response):
+async def leads_health(request: Request, response: Response):
     """
     Business-level health signal for the lead pipeline.
 
@@ -149,6 +176,13 @@ async def leads_health(response: Response):
     contract. A DB failure returns 503 so monitors can distinguish "DB is
     down" from "backlog is high but DB is fine."
     """
+    if not _detail_authorized(request):
+        # PRO-136: business KPIs (admin backlog, stuck-lead counts) are not a
+        # public liveness signal. Wire the external poller with the
+        # X-Health-Token header.
+        response.status_code = status.HTTP_403_FORBIDDEN
+        return {"status": "forbidden"}
+
     try:
         now = datetime.now(timezone.utc)
         stuck_threshold = now - timedelta(
@@ -174,6 +208,8 @@ async def leads_health(response: Response):
             "checked_at": now.isoformat(),
         }
     except Exception as e:
+        # PRO-136: the raw exception (which can carry Mongo connection
+        # details) goes to logs/Sentry only — the HTTP body stays fixed.
         logger.error(f"Health Check: /health/leads failed: {e}")
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": "internal error"}
