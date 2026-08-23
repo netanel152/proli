@@ -6,6 +6,7 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import settings
 from app.core.constants import APIStatus
+import asyncio
 from contextlib import asynccontextmanager
 from app.api.routes import webhook, meta_webhook, health, privacy
 from app.core.redis_client import close_redis_client, get_redis_client
@@ -42,25 +43,62 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
         return response
 
 
+async def _connect_with_retry(name: str, probe, attempts: int = 6) -> None:
+    """PRO-153 — bounded-backoff startup probe for a hard dependency.
+
+    Railway does not order service restarts: an environment-wide redeploy can
+    bring the api container up seconds before redis (it did, 2026-08-22, and
+    /health answered 502 for 8 minutes while the dashboard said SUCCESS). A
+    co-restart is transient, so retry — delays 1,2,4,8,8s (~23s of waiting,
+    ~30s wall clock with probe timeouts) cover it without masking a genuinely
+    dead dependency.
+
+    Retries log at WARNING (visible under the production LOG_LEVEL=WARNING,
+    unlike the INFO success lines). Exhausting the attempts keeps the old
+    behaviour exactly: page_critical + raise — that path is proven to reach
+    Sentry (issue PYTHON-5 is this very message from real failed boots).
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            await probe()
+            logger.info(f"✅ API connected to {name}.")
+            return
+        except Exception as e:
+            if attempt == attempts:
+                page_critical(
+                    f"❌ API failed to connect to {name} on startup "
+                    f"after {attempts} attempts: {e}"
+                )
+                raise
+            delay = min(2 ** (attempt - 1), 8)
+            logger.warning(
+                f"⚠️ {name} not reachable on startup "
+                f"(attempt {attempt}/{attempts}): {e} — retrying in {delay}s"
+            )
+            await asyncio.sleep(delay)
+
+
+async def _probe_mongo() -> None:
+    await mongo_client.admin.command("ping")
+
+
+async def _probe_redis() -> None:
+    # get_redis_client only caches its singleton after a successful ping, so
+    # a failed attempt leaves no poisoned client behind for the retry.
+    redis = await get_redis_client()
+    await redis.ping()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ---- Startup ----
-    # Verify MongoDB is reachable before accepting traffic
-    try:
-        await mongo_client.admin.command("ping")
-        logger.info("✅ API connected to MongoDB.")
-    except Exception as e:
-        page_critical(f"❌ API failed to connect to MongoDB on startup: {e}")
-        raise
-
-    # Verify Redis is reachable
-    try:
-        redis = await get_redis_client()
-        await redis.ping()
-        logger.info("✅ API connected to Redis.")
-    except Exception as e:
-        page_critical(f"❌ API failed to connect to Redis on startup: {e}")
-        raise
+    # PRO-153: both probes retry with bounded backoff (see _connect_with_retry).
+    # After the retries the decision is deliberate fail-closed: this API's one
+    # job is enqueueing webhooks to Redis, so serving without it would 503
+    # every webhook while the service looked "up" — refusing to boot (with the
+    # page) is the honest failure once a co-restart window is exhausted.
+    await _connect_with_retry("MongoDB", _probe_mongo)
+    await _connect_with_retry("Redis", _probe_redis)
 
     # Ensure all MongoDB indexes exist (idempotent — safe to run on every startup)
     try:
