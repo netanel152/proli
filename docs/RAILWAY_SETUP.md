@@ -96,6 +96,7 @@ CLOUDINARY_API_KEY=...
 CLOUDINARY_API_SECRET=...
 ADMIN_PASSWORD_HASH=...  # Generate with: python scripts/generate_admin_hash.py
 ADMIN_PHONE=972501234567  # Admin WhatsApp number for SOS alerts
+HEALTH_TOKEN=...  # X-Health-Token header value for the detailed /health payload + /health/leads (PRO-136); unset = those views fail closed in staging/production
 WEBHOOK_TOKEN=...  # Random string for webhook auth — required (boot fails without it) once ENVIRONMENT is staging/production (PRO-86)
 WHATSAPP_PROVIDER=dryrun  # dryrun (default) | cloud — cloud selects the PRO-89 CloudAPIProvider (Meta Graph API)
 META_ACCESS_TOKEN=...        # secret — required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
@@ -119,6 +120,7 @@ how the two silently re-merge.
 | `MONGO_URI`, `REDIS_URL` | **always distinct** | separate datastores; see the seed-guard invariant below |
 | `ENVIRONMENT` | **always distinct** | by definition — see PRO-34 above |
 | `WEBHOOK_TOKEN` | **distinct** | a shared token means a staging leak authenticates against the production webhook |
+| `HEALTH_TOKEN` | **distinct** | authenticates the detailed `/health` payload and `/health/leads` KPIs (PRO-136); same leak logic as the webhook token |
 | `ADMIN_PASSWORD_HASH` | **distinct** | one admin credential must not open both panels |
 | `SENTRY_DSN` | **distinct** | separate Sentry project per environment, so staging noise cannot pollute production ingest and a leaked staging DSN is worthless |
 | `GEMINI_API_KEY` | **distinct** | a staging leak or quota burn must not affect production |
