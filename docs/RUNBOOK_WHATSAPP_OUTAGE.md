@@ -57,7 +57,9 @@ re-pages every **60 min** (`WA_STATE_REALERT_MINUTES`) until recovery.
 
 **Manual check:**
 ```bash
-curl -s https://<your-api-host>/health | jq '.checks.whatsapp'
+curl -s -H "X-Health-Token: $HEALTH_TOKEN" https://<your-api-host>/health | jq '.checks.whatsapp'
+# PRO-136: without the header the response carries only status + uptime —
+# the checks object (provider, transmits, state) requires HEALTH_TOKEN.
 # → { "status": "up|degraded|down", "state": "...", "provider": "dryrun|cloud", "transmits": true|false }
 ```
 Also: worker logs show `[WA Monitor]` lines.

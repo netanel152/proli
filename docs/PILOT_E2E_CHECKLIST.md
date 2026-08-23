@@ -33,7 +33,7 @@ register `הרשמה` · reset `התחלה` · rating `1`–`5` · admin wizard 
 
 ### Pre-flight (must all be green before starting)
 
-- [ ] `GET /health` → `mongodb`/`redis`/`worker` all `up`; **`whatsapp.status: "up"`, `whatsapp.state: "authorized"`**.
+- [ ] `GET /health` with `X-Health-Token: $HEALTH_TOKEN` (PRO-136; the `checks` detail is omitted without it) → `mongodb`/`redis`/`worker` all `up`; **`whatsapp.status: "up"`, `whatsapp.state: "authorized"`**.
 - [ ] Circuit breaker not engaged: `redis-cli exists wa:instance:paused wa:instance:paused:manual` → `0`.
 - [ ] Sentry paging live (PRO-18): `SENTRY_DSN` set, `fatal→email` rule exists, a test critical emails you.
 - [ ] Worker running (APScheduler jobs active) — check logs for `worker:heartbeat` and `[WA Monitor]`.

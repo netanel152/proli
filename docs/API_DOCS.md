@@ -9,46 +9,54 @@ Production: Your Railway or custom domain with HTTPS.
 ### 1. Health Check
 **GET** `/health`
 
-Checks the health of all external dependencies (MongoDB, Redis, the WhatsApp provider).
+Checks the health of all external dependencies (MongoDB, Redis, the WhatsApp provider). PRO-136: the unauthenticated response carries only `status` and `uptime_seconds` — exactly what the Docker HEALTHCHECK and the promotion workflow's deploy verifier read. The per-dependency `checks` object (latencies, provider name, transmits flag, worker heartbeat) requires an `X-Health-Token` header matching the `HEALTH_TOKEN` env var; without it (or with an unset `HEALTH_TOKEN` in a prod-like environment) `checks` is simply omitted, not an error.
 
-**Response (200 OK):**
+**Response (200 OK, unauthenticated):**
 ```json
 {
   "status": "healthy",
+  "uptime_seconds": 3600
+}
+```
+
+**Response (200 OK, with a valid `X-Health-Token` header):**
+```json
+{
+  "status": "healthy",
+  "uptime_seconds": 3600,
   "checks": {
     "mongodb": {"status": "up", "latency_ms": 4.2},
     "redis": {"status": "up", "latency_ms": 1.1},
     "worker": {"status": "up", "last_heartbeat": "1715000000.0"},
     "whatsapp": {"status": "up", "state": "authorized", "provider": "cloud", "transmits": true}
-  },
-  "uptime_seconds": 3600
+  }
 }
 ```
 
 `whatsapp.status` is `up` (provider reports `authorized`), `degraded` (either the configured provider cannot transmit at all — e.g. `dryrun` — or a transmitting provider reports `yellowCard`), or `down` (not authorized/blocked/unreachable). `whatsapp.state` is the raw value returned by the provider's `get_state()` (PRO-86; was the legacy vendor's raw `stateInstance` value). `whatsapp.provider` is the configured provider's name and `whatsapp.transmits` is whether it can reach a real handset.
 
-**Response (503 Service Unavailable):**
+**Response (503 Service Unavailable, authenticated):**
 ```json
 {
   "status": "unhealthy",
+  "uptime_seconds": 120,
   "checks": {
     "mongodb": {"status": "down", "latency_ms": null},
     "redis": {"status": "up", "latency_ms": 1.1},
     "worker": {"status": "no_heartbeat", "last_heartbeat": null},
     "whatsapp": {"status": "up"}
-  },
-  "uptime_seconds": 120
+  }
 }
 ```
 
-Critical components are MongoDB and Redis. If either is down, the endpoint returns 503.
+Critical components are MongoDB and Redis. If either is down, the endpoint returns 503 regardless of authentication.
 
 ### 3. Lead Pipeline Health
 **GET** `/health/leads`
 
-Business-level signal for the lead pipeline. Returns counts of stuck leads for monitoring.
+Business-level signal for the lead pipeline. Returns counts of stuck leads for monitoring. Token-only (PRO-136): requests without a matching `X-Health-Token` header get `403 Forbidden` with `{"status": "forbidden"}` — there is no unauthenticated payload for this endpoint.
 
-**Response (200 OK):**
+**Response (200 OK, with a valid `X-Health-Token` header):**
 ```json
 {
   "status": "ok",
@@ -60,7 +68,7 @@ Business-level signal for the lead pipeline. Returns counts of stuck leads for m
 }
 ```
 
-Returns 503 if the database is unavailable. Use this endpoint with a synthetic monitor to alert when `pending_review_count > 5` for more than 30 minutes.
+Returns 503 if the database is unavailable, with a fixed `{"status": "error", "error": "internal error"}` body — the real exception goes to logs/Sentry only, never the HTTP response. Use this endpoint with a synthetic monitor to alert when `pending_review_count > 5` for more than 30 minutes.
 
 ### 2. WhatsApp Webhook
 **POST** `/webhook`
