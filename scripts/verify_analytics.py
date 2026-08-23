@@ -1,66 +1,77 @@
-import asyncio
+"""Manual smoke-check of the analytics aggregations against a live database.
+
+PRO-140: repointed from the deleted async ``app/services/analytics_service``
+to ``admin_panel/core/analytics_queries`` — the single (sync) implementation
+the admin panel renders. Run inside the project venv, against whatever
+``MONGO_URI`` the environment provides (e.g. ``railway run`` for staging).
+"""
+
 import os
 import sys
-from datetime import datetime, timezone
 
 # Add project root to sys.path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.services.analytics_service import (
-    get_lead_funnel,
-    get_pro_performance,
-    get_overview_metrics,
-)
-from app.core.database import users_collection
+import certifi
+from pymongo import MongoClient
 
-async def verify_analytics():
-    print("🧪 Verifying Proli Analytics Systems...\n")
+from admin_panel.core import analytics_queries as aq
+from app.core.config import settings
+from app.core.database import DB_NAME
 
-    # 1. Lead Funnel
+
+def _connect():
+    mongo_uri = (
+        settings.MONGO_URI.get_secret_value()
+        if settings.MONGO_URI
+        else "mongodb://localhost:27017"
+    )
+    kwargs = {}
+    if mongo_uri.startswith("mongodb+srv://") or "mongodb.net" in mongo_uri:
+        kwargs["tlsCAFile"] = certifi.where()
+    return MongoClient(mongo_uri, **kwargs)[DB_NAME]
+
+
+def verify_analytics():
+    db = _connect()
+    print("🧪 Verifying Proli Analytics (admin_panel.core.analytics_queries)...\n")
+
     print("📊 LEAD FUNNEL (30 Days)")
     print("-" * 30)
-    funnel = await get_lead_funnel(days=30)
-    for status, count in funnel.items():
+    for status, count in aq.get_lead_funnel(db, days=30).items():
         print(f"{status:<20} | {count:>5}")
     print("-" * 30 + "\n")
 
-    # 2. Overview Metrics
-    print("📈 OVERVIEW METRICS")
+    print("💵 REVENUE / GMV (30 Days, PRO-33)")
     print("-" * 30)
-    overview = await get_overview_metrics()
-    for metric, value in overview.items():
+    for metric, value in aq.get_revenue_stats(db, days=30).items():
         print(f"{metric:<20} | {value}")
     print("-" * 30 + "\n")
 
-    # 3. FinOps: AI Token Usage per Pro
     print("💰 FINOPS: AI TOKEN USAGE")
     print("-" * 65)
-    print(f"{'Professional':<30} | {'Tokens Used':<12} | {'Role':<15}")
+    print(f"{'Professional':<30} | {'Tokens Used':<12}")
     print("-" * 65)
-    
-    cursor = users_collection.find(
-        {"role": "professional"},
-        {"business_name": 1, "total_tokens_used": 1, "role": 1}
-    ).sort("total_tokens_used", -1)
-    
-    async for pro in cursor:
-        name = pro.get("business_name", "Unknown")
-        tokens = pro.get("total_tokens_used", 0)
-        role = pro.get("role", "N/A")
-        print(f"{name[:30]:<30} | {tokens:>12,} | {role:<15}")
+    for pro in aq.get_finops_stats(db):
+        name = pro.get("name") or "Unknown"
+        print(f"{name[:30]:<30} | {pro.get('tokens', 0):>12,}")
     print("-" * 65 + "\n")
 
-    # 4. Pro Performance (Top Performers)
-    print("🏆 TOP PERFORMING PROFESSIONALS (Completed Jobs)")
+    print("🏆 TOP PERFORMING PROFESSIONALS (30 Days)")
     print("-" * 80)
-    print(f"{'Name':<25} | {'Total':<8} | {'Completed':<10} | {'Rate':<10} | {'Rating':<8}")
+    print(
+        f"{'Name':<25} | {'Total':<8} | {'Completed':<10} | {'Rate':<10} | {'Rating':<8}"
+    )
     print("-" * 80)
-    perf = await get_pro_performance(days=30)
-    for p in perf[:5]: # Top 5
-        print(f"{p['name'][:25]:<25} | {p['total_leads']:<8} | {p['completed']:<10} | {p['completion_rate']:>8.1f}% | {p['avg_rating'] or 'N/A':<8}")
+    for p in aq.get_pro_performance(db, days=30)[:5]:
+        print(
+            f"{p['name'][:25]:<25} | {p['total_leads']:<8} | {p['completed']:<10} | "
+            f"{p['completion_rate']:>8.1f}% | {p['avg_rating']}"
+        )
     print("-" * 80 + "\n")
 
+    print("✅ Analytics verification complete.")
+
+
 if __name__ == "__main__":
-    if os.name == 'nt':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(verify_analytics())
+    verify_analytics()

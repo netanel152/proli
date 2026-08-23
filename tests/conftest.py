@@ -221,14 +221,6 @@ def patch_dependencies(request, monkeypatch, mock_db):
     )
     monkeypatch.setattr(app.services.data_management_service, "slots_collection", slots)
 
-    # Patch Analytics Service Collections
-    import app.services.analytics_service
-
-    monkeypatch.setattr(app.services.analytics_service, "leads_collection", leads)
-    monkeypatch.setattr(app.services.analytics_service, "messages_collection", messages)
-    monkeypatch.setattr(app.services.analytics_service, "users_collection", users)
-    monkeypatch.setattr(app.services.analytics_service, "reviews_collection", reviews)
-
     # Patch Audit Service Collections
     import app.services.audit_service
 

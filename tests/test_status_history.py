@@ -300,18 +300,18 @@ async def test_set_lead_status_creates_history_array_for_legacy_lead_without_fie
 
 
 # ---------------------------------------------------------------------------
-# E. Analytics — _get_status_history_metrics uses a sync pymongo client, so we
-# only assert importability/callability here. The aggregation logic itself
-# needs a real Mongo instance (or a heavier pymongo-compatible in-memory
-# fixture than mongomock_motor provides) and is left to manual verification /
-# integration testing, per the task scope.
+# E. Analytics — the status-history aggregation moved to
+# admin_panel/core/analytics_queries.py (PRO-140) and is now FULLY tested with
+# a sync mongomock database in tests/test_analytics_queries.py (median,
+# conversion rate, pre-feature leads skipped). Keep only the importability
+# guard here, pointed at the new home.
 # ---------------------------------------------------------------------------
 
 
 def test_status_history_metrics_function_is_importable_and_callable():
-    from admin_panel.views import analytics
+    from admin_panel.core import analytics_queries
 
-    assert callable(analytics._get_status_history_metrics)
+    assert callable(analytics_queries.get_status_history_metrics)
 
 
 # ---------------------------------------------------------------------------

@@ -123,7 +123,6 @@ async def world(
     # a collection reference is in sys.modules before the rebinding sweep in step 5.
     import app.scheduler as scheduler_module
     import app.services.admin_flow  # noqa: F401
-    import app.services.analytics_service  # noqa: F401
     import app.services.customer_flow as customer_flow
     import app.services.data_management_service  # noqa: F401
     import app.services.lead_manager_service  # noqa: F401
