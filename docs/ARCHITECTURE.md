@@ -36,7 +36,7 @@ Customer (WhatsApp)
 - Extracts text/media from payload (text, extended text, numeric/keyword replies, location, image, audio, video)
 - Enqueues `process_message_task` to Redis via ARQ
 - Returns `200 OK` immediately (prevents webhook retries)
-- Health endpoint (`GET /health`) checks MongoDB, Redis, WhatsApp, and worker heartbeat
+- Health endpoint (`GET /health`) checks MongoDB, Redis, WhatsApp, and worker heartbeat; the detail is only in the response body with a matching `X-Health-Token` header (PRO-136) — the unauthenticated body is just `status`/`uptime_seconds`
 
 **Scaling:** Horizontally scalable behind any load balancer — no shared in-process state.
 
