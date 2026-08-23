@@ -85,7 +85,7 @@ If you would rather drop the gate, point the three production services at `dev` 
 
 ## Step 4: Environment Variables
 
-Set these as **shared variables** (project-level) so all 3 services inherit them:
+Set these as **shared variables** (project-level, *within each environment*) so all 3 services inherit them. Which values must **differ** between Staging and Production is specified in the ownership table below — do not copy them across environments:
 
 ```
 MONGO_URI=mongodb+srv://...
@@ -104,6 +104,33 @@ META_VERIFY_TOKEN=...        # secret — echoed back during the Meta subscripti
 META_PHONE_NUMBER_ID=...     # not secret — Graph node id, required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
 ENVIRONMENT=production   # per-environment — see below
 ```
+
+### Which variables are per-environment, and which are intentionally shared
+
+Staging and Production must not share credentials: a leak or compromise of the
+lower-trust environment must never authenticate against production, and staging
+traffic must never reach Meta as the production number. Decided 2026-08-23;
+when copying variables between environments, this table is the contract —
+**never copy the full set from one environment to the other**, that is exactly
+how the two silently re-merge.
+
+| variable | per-environment | reasoning |
+|---|---|---|
+| `MONGO_URI`, `REDIS_URL` | **always distinct** | separate datastores; see the seed-guard invariant below |
+| `ENVIRONMENT` | **always distinct** | by definition — see PRO-34 above |
+| `WEBHOOK_TOKEN` | **distinct** | a shared token means a staging leak authenticates against the production webhook |
+| `ADMIN_PASSWORD_HASH` | **distinct** | one admin credential must not open both panels |
+| `SENTRY_DSN` | **distinct** | separate Sentry project per environment, so staging noise cannot pollute production ingest and a leaked staging DSN is worthless |
+| `GEMINI_API_KEY` | **distinct** | a staging leak or quota burn must not affect production |
+| `META_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_PHONE_NUMBER_ID` | **distinct** | production holds the real pilot number. Staging runs `WHATSAPP_DRY_RUN=true` until it has its **own** test number / test WABA — never point staging at production's phone-number id with dry-run off, because staging sends are then production sends (same number, same Meta quality rating) |
+| `WHATSAPP_DRY_RUN` | **distinct** | Staging `true` (muted), Production `false` |
+| `CLOUDINARY_*` | shared *(pilot decision)* | media is non-sensitive and a second account is friction with little pilot-stage payoff; revisit post-pilot |
+| `GOOGLE_MAPS_API_KEY` | shared *(pilot decision)* | geocoding only; restrict by API + quota in the Google console; revisit post-pilot |
+| `ADMIN_PHONE`, `ONCALL_PHONE` | shared | not secrets — the same operator is paged from both |
+
+Railway's **Shared Variables** feature is scoped *within* one environment. It is
+the right tool for "define once, inherit in `api`/`worker`/`admin`" — it cannot
+and must not be used to share values across Staging and Production.
 
 ### `ENVIRONMENT` per Railway environment (PRO-34)
 
