@@ -106,6 +106,19 @@ def test_health_correct_token_grants_detail(client, monkeypatch):
     assert body["checks"]["mongodb"]["status"] == "up"
 
 
+def test_health_commit_field_only_in_authorized_detail(client, monkeypatch):
+    """PRO-155: the deployed-commit SHA rides in the authenticated detail
+    (read by the verify-staging-deploy workflow), never in the public body.
+    Locally RAILWAY_GIT_COMMIT_SHA is unset -> the field is present but None.
+    """
+    _prod_like(monkeypatch, TOKEN)
+    monkeypatch.setenv("RAILWAY_GIT_COMMIT_SHA", "abc123def456")
+    anon = client.get("/health").json()
+    assert "commit" not in anon
+    body = client.get("/health", headers={"X-Health-Token": TOKEN}).json()
+    assert body["commit"] == "abc123def456"
+
+
 # ---------------------------------------------------------- /health/leads
 
 

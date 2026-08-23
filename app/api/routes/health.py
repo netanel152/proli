@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import hmac
+import os
 
 from fastapi import APIRouter, Request, Response, status
 
@@ -144,6 +145,11 @@ async def health_check(request: Request, response: Response):
     }
     if _detail_authorized(request):
         body["checks"] = checks
+        # PRO-155: the commit this container was built from (injected by
+        # Railway; None elsewhere). The verify-staging-deploy workflow compares
+        # it against the pushed SHA so a silently dead deploy trigger — the
+        # PRO-128/PRO-155 failure mode — turns into a red X on the merge.
+        body["commit"] = os.environ.get("RAILWAY_GIT_COMMIT_SHA")
     if not is_critical_up:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     return body

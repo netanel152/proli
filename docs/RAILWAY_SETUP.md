@@ -79,6 +79,8 @@ Check the gap at any time; if this is not `0`, production is behind `dev`:
 git rev-list --count origin/production..origin/dev
 ```
 
+**The deploy trigger itself is monitored (PRO-155).** The Railway↔GitHub trigger has silently died twice (PRO-128: production; PRO-155: staging — all three services sat a day behind `dev` while variable-triggered restarts kept the dashboard green). The `🔎 Verify staging deployed this commit` workflow now runs on every push to `dev` and fails unless staging's authenticated `/health` reports `commit` equal to the pushed SHA within 12 minutes — so a dead trigger is a red X on the merge, not a later surprise. It needs the `STAGING_HEALTH_TOKEN` repo secret (staging's `HEALTH_TOKEN`). The fix, when it fires: reconnect the service source (`connect_service_source` → `netanel152/proli@dev`) for api/worker/admin. Production's equivalent is the promotion workflow's mandatory verify step.
+
 Note that a **variable change also redeploys**, and that path is not equivalent: it restarts the service with the existing image rather than building the new commit. Use it to apply a config change, never to promote code.
 
 If you would rather drop the gate, point the three production services at `dev` in the Railway dashboard (each service → Settings → Source → Branch) and delete the `production` branch, so there is no stale ref left to mislead anyone.

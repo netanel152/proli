@@ -1,0 +1,63 @@
+# PRO-155 — staging staleness detector.
+#
+# Twice now (PRO-128 for production, PRO-155 for staging) an environment sat
+# silently behind its branch because the Railway<->GitHub deploy trigger died
+# without any signal: the dashboard kept showing SUCCESS deployments (variable-
+# triggered restarts of a stale image), so "a stale environment is
+# indistinguishable from a quiet one".
+#
+# This workflow makes that failure loud: after every push to dev it polls
+# staging's authenticated /health until the `commit` field (the SHA Railway
+# built the running container from, PRO-136-gated detail) equals the pushed
+# SHA. If staging has not built this commit within the window, the run fails —
+# a red X on the merge instead of a discovery weeks later.
+#
+# Secrets/vars:
+#   STAGING_HEALTH_TOKEN (secret) — the X-Health-Token value for staging.
+#   STAGING_HEALTH_URL   (var, optional) — defaults to the staging api URL.
+
+name: 🔎 Verify staging deployed this commit
+
+on:
+  push:
+    branches: [dev]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HEALTH_URL: ${{ vars.STAGING_HEALTH_URL || 'https://api-staging-e66f.up.railway.app/health' }}
+    steps:
+      - name: Wait for staging to serve this commit
+        run: |
+          set -uo pipefail
+          if [ -z "${{ secrets.STAGING_HEALTH_TOKEN }}" ]; then
+            echo "::error::STAGING_HEALTH_TOKEN secret is not set — the detector cannot read /health's commit field."
+            exit 1
+          fi
+          WANT="${GITHUB_SHA}"
+          DEADLINE=$(( SECONDS + 720 ))
+          echo "Waiting for staging to build+serve ${WANT} (up to 12 min)..."
+          LAST=""
+          while [ "$SECONDS" -lt "$DEADLINE" ]; do
+            BODY=$(curl -fsS --max-time 15 -H "X-Health-Token: ${{ secrets.STAGING_HEALTH_TOKEN }}" "$HEALTH_URL" 2>/dev/null || echo '')
+            if [ -n "$BODY" ]; then
+              GOT=$(echo "$BODY" | jq -r '.commit // "none"')
+              STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
+              if [ "$GOT" = "$WANT" ] && [ "$STATUS" = "healthy" ]; then
+                echo "::notice::Staging is serving ${WANT} and healthy — deploy trigger alive."
+                exit 0
+              fi
+              # Only log on change to keep the output readable.
+              if [ "$GOT $STATUS" != "$LAST" ]; then
+                echo "  staging serves commit=$GOT status=$STATUS — still waiting"
+                LAST="$GOT $STATUS"
+              fi
+            else
+              echo "  health endpoint not responding — still waiting"
+            fi
+            sleep 20
+          done
+          echo "::error::Staging never served ${WANT}. The Railway deploy trigger is likely dead again (PRO-155) — reconnect the service source (connect_service_source -> netanel152/proli@dev for api/worker/admin) and see docs/RAILWAY_SETUP.md."
+          exit 1
