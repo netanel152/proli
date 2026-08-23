@@ -22,7 +22,7 @@ A CI step fails the build on any reference to the old vendor's domain (`green` +
 | `production` | release branch — only ever fast-forwarded from `dev` | **production** |
 | `feature/*`, `fix/*`, `chore/*` | where all work happens | nothing |
 
-`dev` was named `master` until 2026-08-22. The rename is cosmetic in intent — `dev` says what the branch is for, and stops "master is production" being a reasonable guess — but it is load-bearing in one way: **a stale release branch is indistinguishable from a quiet one**, which is how production once sat six weeks and 132 commits behind while crash-looping (PRO-128).
+`dev` was named `master` until 2026-08-22. The rename is cosmetic in intent — `dev` says what the branch is for, and stops "master is production" being a reasonable guess — but it is load-bearing in one way: **a stale release branch is indistinguishable from a quiet one**, which is how production once sat six weeks and 132 commits behind while crash-looping (PRO-128). Staging has the same failure mode and its own detector: the `🔎 Verify staging deployed this commit` workflow fails any push to `dev` that staging does not build and serve within 12 minutes (PRO-155 — it compares the pushed SHA against authenticated `/health`'s `commit` field; needs the `STAGING_HEALTH_TOKEN` repo secret).
 
 **Release by running the `🚢 Promote dev → production` workflow** (Actions tab → Run workflow). It is the supported path and does the whole thing: refuses a non-fast-forward, refuses a `dev` whose CI is not green, moves the ref, then **waits for production to restart and report healthy** and fails the build if it does not. Tick `dry_run` to see the commit range without changing anything.
 
