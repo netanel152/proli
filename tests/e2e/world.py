@@ -197,8 +197,13 @@ class World:
         """Free hourly slots starting an hour out.
 
         ``book_slot_for_lead`` searches ±2h around the hour after the lead was
-        created, so the first slot must be inside that window for approval to
-        actually reserve one.
+        created — but that's only the ASAP-lead fallback (PRO-120): a lead
+        carrying a concrete ``appointment_datetime`` centers the window on
+        that time instead. The e2e lead fixtures all set
+        ``appointment_datetime: null``, so every lead here takes the ASAP
+        branch and the first slot must be inside that created_at-anchored
+        window for approval to actually reserve one — which is why anchoring
+        this helper on ``self.anchor`` still works.
         """
         base = self.anchor.replace(minute=0, second=0, microsecond=0)
         slots = []

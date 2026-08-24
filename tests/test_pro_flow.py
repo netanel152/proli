@@ -90,6 +90,93 @@ async def test_approve_with_pending_lead(pro_setup, mock_wa, mock_lm, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_approve_forwards_appointment_datetime_to_book_slot_for_lead(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """
+    PRO-120: the approve path must pass the lead's appointment_datetime
+    through to book_slot_for_lead so the slot search centers on the
+    customer's requested time rather than always falling back to created_at.
+    """
+    pro_doc, db = pro_setup
+
+    lead_id = ObjectId()
+    appointment_dt = datetime(2026, 8, 25, 15, 0, tzinfo=timezone.utc)
+    created_at = datetime.now(timezone.utc)
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "appointment_datetime": appointment_dt,
+            "created_at": created_at,
+        }
+    )
+
+    mock_book_slot = AsyncMock(return_value=ObjectId())
+    monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", mock_book_slot)
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert Messages.Pro.APPROVE_SUCCESS in result
+    mock_book_slot.assert_awaited_once()
+
+    # Compare against what the DB actually stored/round-tripped for this
+    # lead (Mongo truncates datetime precision and drops tzinfo on
+    # naive-write/read), not the original python object.
+    stored_lead = await db.leads.find_one({"_id": lead_id})
+
+    call_args, call_kwargs = mock_book_slot.call_args
+    assert call_args[0] == pro_doc["_id"]
+    assert call_args[1] == stored_lead["created_at"]
+    assert call_kwargs["appointment_datetime"] == stored_lead["appointment_datetime"]
+
+
+@pytest.mark.asyncio
+async def test_approve_without_appointment_datetime_forwards_none_to_book_slot_for_lead(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """
+    Legacy/ASAP branch: a lead with no appointment_datetime field at all
+    must still reach book_slot_for_lead — with the kwarg explicitly None —
+    so it falls back to the created_at-based estimate rather than being
+    skipped or crashing on a missing key.
+    """
+    pro_doc, db = pro_setup
+
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            # No appointment_datetime key at all — ASAP/legacy lead.
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    mock_book_slot = AsyncMock(return_value=ObjectId())
+    monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", mock_book_slot)
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert Messages.Pro.APPROVE_SUCCESS in result
+    mock_book_slot.assert_awaited_once()
+
+    _, call_kwargs = mock_book_slot.call_args
+    assert "appointment_datetime" in call_kwargs
+    assert call_kwargs["appointment_datetime"] is None
+
+
+@pytest.mark.asyncio
 async def test_approve_with_quoted_price_shows_price_to_customer(
     mock_db, mock_wa, mock_lm, monkeypatch
 ):
