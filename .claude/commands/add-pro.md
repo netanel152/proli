@@ -1,3 +1,8 @@
+---
+description: Help the user add a new professional to the database
+argument-hint: [business name, phone, type, cities...]
+---
+
 Help the user add a new professional to the database.
 
 Ask for (or parse from $ARGUMENTS):
@@ -7,7 +12,7 @@ Ask for (or parse from $ARGUMENTS):
 - Service areas (comma-separated cities)
 - Prices (optional)
 
-Then generate a MongoDB insert command using `python -c "..."` that:
+Then generate a MongoDB insert command using the project venv interpreter (`venv/Scripts/python.exe` on Windows, `venv/bin/python` on POSIX) with `-c "..."` that:
 1. Connects to the configured MONGO_URI
 2. Inserts the professional document with all required fields (role, is_active, social_proof, plan, location from ISRAEL_CITIES_COORDS if available)
 3. Confirms the insert was successful

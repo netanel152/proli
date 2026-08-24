@@ -40,17 +40,51 @@
       "mcp__mongodb__find",
       "mcp__mongodb__aggregate",
       "mcp__mongodb__explain",
-      "mcp__mongodb__db-stats"
+      "mcp__mongodb__db-stats",
+      "mcp__plugin_mongodb_mongodb__connect",
+      "mcp__plugin_mongodb_mongodb__list-databases",
+      "mcp__plugin_mongodb_mongodb__list-collections",
+      "mcp__plugin_mongodb_mongodb__collection-schema",
+      "mcp__plugin_mongodb_mongodb__collection-indexes",
+      "mcp__plugin_mongodb_mongodb__count",
+      "mcp__plugin_mongodb_mongodb__find",
+      "mcp__plugin_mongodb_mongodb__aggregate",
+      "mcp__plugin_mongodb_mongodb__explain",
+      "mcp__plugin_mongodb_mongodb__db-stats",
+      "mcp__claude_ai_Linear__get_issue",
+      "mcp__claude_ai_Linear__list_issues",
+      "Bash(railway status *)",
+      "Bash(railway logs *)",
+      "Bash(railway variables *)",
+      "Bash(railway whoami)",
+      "PowerShell(railway status *)",
+      "PowerShell(railway logs *)",
+      "PowerShell(railway variables *)",
+      "PowerShell(railway whoami)",
+      "Bash(venv/Scripts/python.exe -m pytest *)",
+      "Bash(./venv/Scripts/python.exe -m pytest *)"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start-context.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/venv/Scripts/python.exe\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-bash-guard.py\"",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/run-hook.sh\" pre-bash-guard.py",
             "timeout": 10
           }
         ]
@@ -60,7 +94,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/venv/Scripts/python.exe\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-edit-protect.py\"",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/run-hook.sh\" pre-edit-protect.py",
             "timeout": 10
           }
         ]
@@ -72,7 +106,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/venv/Scripts/python.exe\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit-format.py\"",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/run-hook.sh\" post-edit-format.py",
             "timeout": 30
           }
         ]

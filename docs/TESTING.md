@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 1143 passed, 97 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 91 skips are cells of the PRO-83 state × input matrix — but not all of them are deliberate `N/A`: 15 (`defect-finish`, `defect-cancel`, `defect-price`) are dark because of the same tracked product defects the strict xfails document below, not by design. The xfails are four product defects the harness documents — see below).
+**Current status: 1167 passed, 97 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 91 skips are cells of the PRO-83 state × input matrix — but not all of them are deliberate `N/A`: 15 (`defect-finish`, `defect-cancel`, `defect-price`) are dark because of the same tracked product defects the strict xfails document below, not by design. The xfails are four product defects the harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR. CI enforces it exactly (the "Guard — test baseline" step in `.github/workflows/tests.yml` fails the build when the passed count is below **or** above this line), so a regression and a stale baseline are both unmergeable.
 
@@ -81,6 +81,7 @@ pytest -m integration
 | `test_ai_parsing.py` | Prompt template formatting (no live API calls) |
 | `test_edge_cases.py` | Bad inputs: Gemini failure, WhatsApp down, unsupported file types |
 | `test_agent_pack_drift.py` | Anti-drift guard for `.claude/agents/`: `UserStates`/`LeadStatus`/TTL embeds and the flow-tracer dispatch-order section stay in sync with `constants.py` / `workflow_service.py` |
+| `test_claude_config.py` | Shared Claude Code project config (`.claude/settings.json`, `.mcp.json`): both parse; every MCP server declares the fields its transport needs and keeps env values as `${VAR}` placeholders; every hook command is portable (`CLAUDE_PROJECT_DIR`) and points at a script that exists — including the one `run-hook.sh` dispatches to; no hook script is orphaned; every `.claude/commands/*.md` carries a `description` frontmatter; no duplicate allowlist entries |
 | `test_pre_bash_guard.py` | Bash pre-tool guard `evaluate()`: blocks `git commit`/`push` on main/master, force-push, `rm -rf` on protected paths, `.env` redirects, mongo `drop()`; allows feature-branch work |
 | `test_whatsapp_facade.py` | PRO-86 single outbound egress + PRO-82 fail-closed breaker: every outbound method gated, the boot-window regression (absent `wa:instance:state` blocks sending), auto/manual pause keys, Redis-error fail-open, `record_account_state` TTL/write rules, provider selection (`WHATSAPP_DRY_RUN` override, `dryrun`/`cloud`, unknown-name fallback), `DryRunProvider`/`CloudAPIProvider` behavior, and the admin panel's `send_text_sync` bridge |
 | `test_health_whatsapp_status.py` | `/health` WhatsApp state mapping: `authorized`→up, `yellowCard`→degraded, else down; a non-transmitting provider→degraded; raw `state`, `provider`, `transmits` surfaced |
