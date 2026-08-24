@@ -1,3 +1,7 @@
+---
+description: Code-first full-codebase documentation audit — extract ground truth from live code and fix every stale .md claim
+---
+
 # /full-sync-docs
 
 Perform a **code-first, full-codebase documentation audit**. Unlike the **docs-syncer** subagent's incremental mode (which only patches what the latest diff broke), this reads the *live* source code, extracts ground truth, then cross-checks every section of every `.md` file in the project. It finds stale content that accumulated over many commits — not just content broken by the latest one. The **docs-syncer** agent's full-audit mode delegates here, so this file is the single authoritative checklist.

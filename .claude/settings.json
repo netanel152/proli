@@ -43,14 +43,26 @@
       "mcp__mongodb__db-stats"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start-context.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/venv/Scripts/python.exe\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-bash-guard.py\"",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/run-hook.sh\" pre-bash-guard.py",
             "timeout": 10
           }
         ]
@@ -60,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/venv/Scripts/python.exe\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre-edit-protect.py\"",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/run-hook.sh\" pre-edit-protect.py",
             "timeout": 10
           }
         ]
@@ -72,7 +84,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR/venv/Scripts/python.exe\" \"$CLAUDE_PROJECT_DIR/.claude/hooks/post-edit-format.py\"",
+            "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/run-hook.sh\" post-edit-format.py",
             "timeout": 30
           }
         ]

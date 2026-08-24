@@ -50,6 +50,29 @@ git config core.hooksPath .githooks   # blocks direct pushes to dev (PR-only wor
 
 **Never commit or push to `dev` directly** — all work goes through a feature branch + PR (GitHub branch protection enforces this server-side; `.githooks/pre-push` is the local backstop). `production` is written to only by the fast-forward promotion above.
 
+### Claude Code project config (shared via git)
+
+Everything under `.claude/` (except `settings.local.json`, which is gitignored) plus `.mcp.json` is checked in and applies to every clone.
+
+**MCP servers (`.mcp.json`)** — auto-approved for teammates by `enableAllProjectMcpServers: true` in `.claude/settings.json`:
+
+| server | transport | one-time setup per machine |
+|---|---|---|
+| `linear` | HTTP `mcp.linear.app` | OAuth browser sign-in on first use |
+| `sentry` | HTTP `mcp.sentry.dev` | OAuth browser sign-in on first use |
+| `railway` | stdio `railway mcp` (bundled in Railway CLI ≥ ~5.x) | install Railway CLI + `railway login` |
+| `redis` | stdio `uvx redis-mcp-server` | install [`uv`](https://docs.astral.sh/uv/); reads `REDIS_URL` (defaults to `redis://localhost:6379/0`) |
+| `mongodb` | via the `mongodb@claude-plugins-official` plugin (enabled in `settings.json`) | set `MDB_MCP_CONNECTION_STRING` env var, or it connects per-call arguments |
+
+GitHub is deliberately **not** an MCP server here — the `gh` CLI covers PRs/CI and is already allowlisted; a GitHub MCP would only duplicate it and bloat context.
+
+**Hooks (`.claude/settings.json` → `.claude/hooks/`)** — run through the cross-platform launcher `run-hook.sh`, which finds the project venv interpreter (Windows or POSIX layout) and degrades to a no-op on machines without Python:
+
+- `SessionStart` → `session-start-context.sh`: injects real branch/commit/dirty-tree state into each new session (the shared-worktree trap below is why).
+- `PreToolUse(Bash)` → `pre-bash-guard.py`: blocks `rm -rf` on dangerous targets, redirects into `.env`, force-pushes to protected branches, commit/push while on `dev`/`production`, and mongo `dropDatabase`/`drop()`. Decision logic is pinned by `tests/test_pre_bash_guard.py`.
+- `PreToolUse(Edit|Write)` → `pre-edit-protect.py`: blocks edits to `.env` and anything under `.git/`.
+- `PostToolUse(Edit|Write)` → `post-edit-format.py`: auto-runs `black` and reports `flake8` findings on touched `.py` files.
+
 ### Two shell traps on Windows, both of which fail *silently*
 
 **`git show <rev>:<path>` is mangled by Git Bash.** MSYS path conversion rewrites the argument, and the error names a path you never typed:

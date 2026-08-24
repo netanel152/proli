@@ -1,7 +1,12 @@
+---
+description: Simulate an SLA deflection (15-minute silence) for a customer
+argument-hint: <phone_number_or_chat_id>
+---
+
 Simulate an SLA deflection (15-minute silence) for a customer.
 
-Usage:
-`python scripts/simulate_sla_deflection.py <phone_number_or_chat_id>`
+Usage (run with the project venv interpreter — `venv/Scripts/python.exe` on Windows, `venv/bin/python` on POSIX):
+`venv/Scripts/python.exe scripts/simulate_sla_deflection.py <phone_number_or_chat_id>`
 
 This command will:
 1. Update/create a lead in MongoDB with a `paused_at` timestamp 16 minutes in the past.

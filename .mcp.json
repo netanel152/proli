@@ -3,6 +3,23 @@
     "linear": {
       "type": "http",
       "url": "https://mcp.linear.app/mcp"
+    },
+    "sentry": {
+      "type": "http",
+      "url": "https://mcp.sentry.dev/mcp"
+    },
+    "railway": {
+      "type": "stdio",
+      "command": "railway",
+      "args": ["mcp"]
+    },
+    "redis": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "redis-mcp-server@latest", "redis-mcp-server"],
+      "env": {
+        "REDIS_URL": "${REDIS_URL:-redis://localhost:6379/0}"
+      }
     }
   }
 }
