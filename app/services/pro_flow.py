@@ -281,7 +281,14 @@ async def _handle_approve(pro, lead_manager, whatsapp):
     await lead_manager.update_lead_status(
         str(lead["_id"]), LeadStatus.BOOKED, pro["_id"], actor=Actor.PRO
     )
-    booked_slot_id = await book_slot_for_lead(pro["_id"], lead["created_at"])
+    # PRO-120: center the slot search on the customer's requested time; the
+    # created_at fallback (inside book_slot_for_lead) only applies to ASAP
+    # leads that carry no concrete appointment_datetime.
+    booked_slot_id = await book_slot_for_lead(
+        pro["_id"],
+        lead["created_at"],
+        appointment_datetime=lead.get("appointment_datetime"),
+    )
     booking_success = booked_slot_id is not None
 
     if booked_slot_id is not None:

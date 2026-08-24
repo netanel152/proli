@@ -213,10 +213,17 @@ async def determine_best_pro(
 
 
 async def book_slot_for_lead(
-    pro_id: str, lead_created_at: datetime
+    pro_id: str,
+    lead_created_at: datetime,
+    appointment_datetime: Optional[datetime] = None,
 ) -> Optional[ObjectId]:
     """
-    Attempts to book a slot for the pro around the lead creation time.
+    Attempts to book a slot for the pro around the customer's requested
+    appointment time (PRO-120), falling back to the lead creation time only
+    when the customer gave no concrete time (ASAP/emergency leads, where
+    ``appointment_datetime`` is None). Within the ±2h window, a slot at or
+    after the target time is preferred over an earlier one, and slots in
+    the past are never reserved.
 
     Returns the booked slot's ``_id`` on success, or ``None`` when no slot
     was available (or on error). Callers persist this id as the lead's
@@ -224,33 +231,90 @@ async def book_slot_for_lead(
     slot — never a sibling slot from another active job.
     """
     try:
-        if not lead_created_at:
+        if appointment_datetime is not None and not isinstance(
+            appointment_datetime, datetime
+        ):
+            # Legacy / hand-edited lead doc — fall back to ASAP behaviour
+            # loudly instead of letting .tzinfo raise into the broad except.
+            logger.warning(
+                f"book_slot_for_lead: ignoring non-datetime appointment_datetime "
+                f"({type(appointment_datetime).__name__}) for Pro {pro_id}"
+            )
+            appointment_datetime = None
+
+        if not lead_created_at and not appointment_datetime:
             return None
 
-        # Ensure UTC
-        if lead_created_at.tzinfo is None:
-            lead_created_at = lead_created_at.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
 
-        # 1. Calculate Estimated Slot Time (Round up to next hour)
-        # e.g., 14:15 -> 15:00
-        estimated_time = lead_created_at.replace(
-            minute=0, second=0, microsecond=0
-        ) + timedelta(hours=1)
+        if appointment_datetime:
+            # The customer's requested time is the target itself — center the
+            # search window on it as-is, no round-up. Mongo returns naive UTC
+            # datetimes, so normalise before arithmetic.
+            if appointment_datetime.tzinfo is None:
+                appointment_datetime = appointment_datetime.replace(tzinfo=timezone.utc)
+            estimated_time = appointment_datetime
+        else:
+            # ASAP lead — estimate "soonest visit" from creation time, never
+            # behind the clock: a lead approved hours after creation still
+            # wants the soonest slot from *now*.
+            # Ensure UTC
+            if lead_created_at.tzinfo is None:
+                lead_created_at = lead_created_at.replace(tzinfo=timezone.utc)
 
-        # 2. Define Search Window (+/- 2 hours)
-        start_window = estimated_time - timedelta(hours=2)
+            # 1. Calculate Estimated Slot Time (Round up to next hour)
+            # e.g., 14:15 -> 15:00
+            estimated_time = max(
+                lead_created_at.replace(minute=0, second=0, microsecond=0)
+                + timedelta(hours=1),
+                now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1),
+            )
+
+        # 2. Define Search Window (+/- 2 hours), never reaching behind the
+        # clock — a stale requested time degrades to "no slot booked", not
+        # to a reservation in the past.
         end_window = estimated_time + timedelta(hours=2)
+        if end_window <= now:
+            logger.info(
+                f"⚠️ Requested window already past for Pro {pro_id} "
+                f"(target {estimated_time}); no slot booked"
+            )
+            return None
+        floor_time = max(estimated_time - timedelta(hours=2), now)
+        # An ASAP lead means "soonest" — its whole window is the preferred
+        # phase, so the earliest free future slot still wins. Only a lead
+        # with a concrete requested time prefers slots at/after that time.
+        preferred_from = (
+            max(estimated_time, floor_time) if appointment_datetime else floor_time
+        )
 
-        # 3. Find and Book Slot (Atomic)
+        base_query = {
+            "pro_id": ObjectId(pro_id) if isinstance(pro_id, str) else pro_id,
+            "is_taken": False,
+        }
+
+        # 3. Find and Book Slot (atomic, two-phase): prefer the requested
+        # time itself or the next slot after it; fall back to the closest
+        # earlier in-window slot only when nothing at/after is free. Each
+        # claim is a single atomic find_one_and_update and the second runs
+        # only if the first matched nothing, so no double-claim window.
         slot = await slots_collection.find_one_and_update(
             {
-                "pro_id": ObjectId(pro_id) if isinstance(pro_id, str) else pro_id,
-                "is_taken": False,
-                "start_time": {"$gte": start_window, "$lte": end_window},
+                **base_query,
+                "start_time": {"$gte": preferred_from, "$lte": end_window},
             },
             {"$set": {"is_taken": True}},
             sort=[("start_time", 1)],
         )
+        if slot is None and preferred_from > floor_time:
+            slot = await slots_collection.find_one_and_update(
+                {
+                    **base_query,
+                    "start_time": {"$gte": floor_time, "$lt": preferred_from},
+                },
+                {"$set": {"is_taken": True}},
+                sort=[("start_time", -1)],
+            )
 
         if slot:
             logger.info(
