@@ -1,3 +1,7 @@
+---
+description: Pre-deployment checklist for Proli (tests, env vars, provider config, Docker build)
+---
+
 Pre-deployment checklist for Proli. Run through these checks:
 
 1. Run `pytest --tb=short` — all tests must pass; compare against the "Current status" baseline in `docs/TESTING.md`. There is no known-failing whitelist.

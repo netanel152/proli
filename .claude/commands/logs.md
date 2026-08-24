@@ -1,3 +1,8 @@
+---
+description: Show recent Proli logs (Docker or local), filtered for errors and warnings
+allowed-tools: Bash(docker-compose:*), Bash(docker:*), Read, Grep
+---
+
 Show recent Proli logs, filtered by importance.
 
 If running in Docker:
