@@ -60,11 +60,20 @@ Everything under `.claude/` (except `settings.local.json`, which is gitignored) 
 |---|---|---|
 | `linear` | HTTP `mcp.linear.app` | OAuth browser sign-in on first use |
 | `sentry` | HTTP `mcp.sentry.dev` | OAuth browser sign-in on first use |
+| `context7` | HTTP `mcp.context7.com` | none (rate-limited without an API key) |
 | `railway` | stdio `railway mcp` (bundled in Railway CLI ≥ ~5.x) | install Railway CLI + `railway login` |
 | `redis` | stdio `uvx redis-mcp-server` | install [`uv`](https://docs.astral.sh/uv/); reads `REDIS_URL` (defaults to `redis://localhost:6379/0`) |
 | `mongodb` | via the `mongodb@claude-plugins-official` plugin (enabled in `settings.json`) | set `MDB_MCP_CONNECTION_STRING` env var, or it connects per-call arguments |
 
-GitHub is deliberately **not** an MCP server here — the `gh` CLI covers PRs/CI and is already allowlisted; a GitHub MCP would only duplicate it and bloat context.
+**Use them only when the task actually needs the external system:**
+
+- `linear` — issue-driven work (`/take-issue`, status moves, comments). Not for reading code.
+- `sentry` — triaging a production error / paging trail. Logs-first for local issues (`/logs`).
+- `context7` — current library docs (FastAPI, pydantic v2, ARQ, Streamlit, Motor) when the answer may postdate training. Not for questions the codebase itself answers.
+- `railway` — deploy state, service logs, env inspection. Read-only tools are allowlisted; mutating ones prompt.
+- `redis` / `mongodb` — live FSM/context/lead debugging (`/user-debug`, `/db-status`). Unit tests never need them (mongomock/fakeredis).
+
+Deliberately excluded: **GitHub** (the `gh` CLI covers PRs/CI and is allowlisted — an MCP would duplicate it and bloat context), **Cloudinary** (rarely needed; opt in per-machine with `claude mcp add --transport sse cloudinary https://asset-management.mcp.cloudinary.com/sse`). A server you personally never use can be turned off per-machine via `"disabledMcpjsonServers": ["<name>"]` in `.claude/settings.local.json` (gitignored) — don't remove it from `.mcp.json` for everyone.
 
 **Hooks (`.claude/settings.json` → `.claude/hooks/`)** — run through the cross-platform launcher `run-hook.sh`, which finds the project venv interpreter (Windows or POSIX layout) and degrades to a no-op on machines without Python:
 
