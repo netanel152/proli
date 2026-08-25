@@ -132,7 +132,7 @@ docker-compose up --build -d
 
 ```bash
 python scripts/seed_db.py          # Seed initial data
-python scripts/create_indexes.py   # Create MongoDB indexes
+python scripts/create_indexes.py   # Create MongoDB indexes (runs automatically on every API boot; indexes are declared in its INDEX_SPECS table — manual run only primes a fresh DB)
 python scripts/clear_history.py    # Clear chat history
 ```
 
