@@ -89,10 +89,12 @@ enough to dispatch). Copy reads as urgent, not the normal slow intake.
 **Expected:** at ~10 min (`APPROVAL_NUDGE_MINUTES`) P receives an approval nudge; at ~25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`), during business hours (08:00–21:00 IL), C receives a reassignment offer (half the thresholds for emergency leads). The **SOS Healer** still reassigns a stale `new`/`contacted` lead after 60 min (`SOS_TIMEOUT_MINUTES`) as a backstop if this scenario is somehow missed — note both the reassignment offer and the SOS Healer are business-hours-gated, and the SOS Healer's `sos_healer_active` toggle defaults OFF (PRO-73), so confirm it's enabled before running this test.
 - [ ] Pass  ·  [ ] File: ______
 
-### 4. Customer cancels a BOOKED lead  ·  regresses PRO-32 / PRO-43
-**Steps (C):** with a **BOOKED** lead, send **`בטל`**.
-**Expected:** lead → `cancelled`; **the reserved slot is released** (becomes bookable again);
-**the assigned pro is notified** of the cancellation. Verify the freed slot in the admin panel.
+### 4. Customer cancels a BOOKED lead  ·  regresses PRO-32 / PRO-43, PRO-118
+**Steps (C):** with a **BOOKED** lead, send **`בטל`**, then reply **`1`** to the confirmation prompt.
+**Expected:** the first message only asks for confirmation (`CANCEL_CONFIRM_PROMPT`) — the lead
+stays `booked` and the slot stays taken until confirmed. After `1`: lead → `cancelled`; **the
+reserved slot is released** (becomes bookable again); **the assigned pro is notified** of the
+cancellation. Verify the freed slot in the admin panel.
 - [ ] Pass  · [ ] File: ______
 
 ### 5. Reschedule flow

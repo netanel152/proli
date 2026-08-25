@@ -260,6 +260,7 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |
 | `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro |
 | `AWAITING_NEW_OR_EXISTING` | A customer with a confirmed BOOKED job messages about something else; asked whether it's a new request or about the existing job |
+| `AWAITING_CANCEL_CONFIRMATION` | A cancel keyword on a confirmed BOOKED job; waiting for an explicit '1'/'2' before acting (5m TTL, PRO-118) |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
 | `ADMIN_MODE_IDLE` / `ADMIN_SELECTING_LEAD` / `ADMIN_SELECTING_ACTION` / `ADMIN_SELECTING_PRO` | Admin routing wizard steps (`ניהול` keyword, 15m TTL) |
 
@@ -284,7 +285,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | `completed` | Work done, awaiting customer rating |
 | `rejected` | Pro declined — a way-station, not terminal: `reassign_lead` immediately either reopens the lead as `new` under the next pro or escalates to `pending_admin_review` (PRO-117) |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h |
-| `cancelled` | Customer cancelled |
+| `cancelled` | Customer cancelled — a cancel keyword on a BOOKED job first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit |
 | `pending_admin_review` | No pro found after all radius/fallback attempts, or max reassignments exhausted (a human takes over, PRO-63) |
 
 Every transition is recorded as a `{status, at, by}` entry in the lead's `status_history` array, written by the single `set_lead_status()` writer in `lead_manager_service.py`.

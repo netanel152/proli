@@ -212,6 +212,9 @@ _DISPATCH_SEQUENCE = [
     ("SOS / human handoff", "BOT_PAUSED_BY_CUSTOMER"),
     ("AWAITING_PRO_APPROVAL soft hold", "STILL_WAITING"),
     ("PAUSED_FOR_HUMAN", "current_state == UserStates.PAUSED_FOR_HUMAN"),
+    # PRO-118's AWAITING_CANCEL_CONFIRMATION handler sits between these two;
+    # like PRO-116's 13a it is documented as a sub-lettered line (11a) which
+    # this guard's `^\d+\.` label regex deliberately does not read.
     (
         "AWAITING_RESCHEDULE_TIME",
         "current_state == UserStates.AWAITING_RESCHEDULE_TIME",
@@ -220,7 +223,10 @@ _DISPATCH_SEQUENCE = [
         "AWAITING_LOYALTY_CONFIRMATION",
         "current_state == UserStates.AWAITING_LOYALTY_CONFIRMATION",
     ),
-    ("BOOKED cancel / reschedule interceptor", "CANCELLED_ACTIVE_LEAD"),
+    # PRO-118 re-anchored: the cancel execution (with CANCELLED_ACTIVE_LEAD)
+    # moved into the module-level _execute_customer_cancel helper; the prompt
+    # send is what remains unique to the interceptor branch itself.
+    ("BOOKED cancel / reschedule interceptor", "Customer.CANCEL_CONFIRM_PROMPT"),
     ("Explicit customer-mode switch", "CUSTOMER_MODE_COMMANDS"),
     ("Pro safety-bypass", "normalized_text in PRO_BUSINESS_KEYWORDS"),
     ("PRO_MODE", "current_state == UserStates.PRO_MODE:"),

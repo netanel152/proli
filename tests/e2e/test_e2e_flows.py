@@ -556,8 +556,14 @@ async def test_quiet_hours_suppress_the_cold_sos_healer(world):
 
 @pytest.mark.asyncio
 async def test_customer_cancellation_releases_the_right_slot(world):
-    """PRO-32 + PRO-43: with two active jobs, cancelling one must free that job's
-    slot and leave the other reservation untouched."""
+    """PRO-32 + PRO-43 + PRO-118: with two active jobs, cancelling one must
+    free that job's slot and leave the other reservation untouched.
+
+    PRO-118: a cancel keyword no longer cancels on the first hit — it asks
+    for explicit confirmation first, so this drives both steps. Phrasing is
+    the imperative "בטל את העבודה"; the infinitive "אני רוצה לבטל את העבודה"
+    from the original PRO-32/PRO-43 wording has its own regression test,
+    test_infinitive_cancel_phrasing_triggers_confirmation, below."""
     await world.standard_cast()
     pro = world.pros[R.PRO_PRIMARY]
     other_customer = R.chat(R.CUSTOMER_B)
@@ -567,7 +573,18 @@ async def test_customer_cancellation_releases_the_right_slot(world):
     assert mine["booked_slot_id"] != theirs["booked_slot_id"]
     world.recorder.clear()
 
-    await world.send("אני רוצה לבטל את העבודה")
+    await world.send("בטל את העבודה")
+
+    # Step 1: nothing destructive yet — the confirmation prompt went out and
+    # the lead/slot are untouched.
+    still_booked = await world.lead_by_id(mine["_id"])
+    assert still_booked["status"] == LeadStatus.BOOKED
+    assert (await world.slot(mine["booked_slot_id"]))["is_taken"] is True
+    world.recorder.assert_text_to(world.customer, "לבטל את העבודה")
+    await world.assert_state(UserStates.AWAITING_CANCEL_CONFIRMATION)
+
+    world.recorder.clear()
+    await world.send("1")
 
     updated = await world.lead_by_id(mine["_id"])
     assert updated["status"] == LeadStatus.CANCELLED
@@ -579,6 +596,109 @@ async def test_customer_cancellation_releases_the_right_slot(world):
         world.pro_chat(R.PRO_PRIMARY), "ביטל/ה את העבודה", "דיזנגוף 50"
     )
     await world.assert_state(UserStates.IDLE)
+
+
+@pytest.mark.asyncio
+async def test_infinitive_cancel_phrasing_triggers_confirmation(world):
+    """Regression: the natural Hebrew phrase 'אני רוצה לבטל את העבודה' (the
+    infinitive 'לבטל', with the Hebrew ל- prefix) must trigger the same
+    cancel-confirmation flow as the imperative 'בטל'. Before PRO-118,
+    substring matching caught this by accident ('בטל' ⊂ 'לבטל'); whole-token
+    matching initially broke it until 'לבטל' was added to CANCEL_KEYWORDS
+    explicitly (the fix for the bug this test used to pin as xfail). The
+    job must stay BOOKED — untouched — until the customer explicitly
+    confirms with '1'."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    booked = await world.booked_job(pro)
+    world.recorder.clear()
+
+    await world.send("אני רוצה לבטל את העבודה")
+
+    await world.assert_state(UserStates.AWAITING_CANCEL_CONFIRMATION)
+    world.recorder.assert_text_to(world.customer, "לבטל את העבודה")
+    still_booked = await world.lead_by_id(booked["_id"])
+    assert still_booked["status"] == LeadStatus.BOOKED
+    assert (await world.slot(booked["booked_slot_id"]))["is_taken"] is True
+
+    world.recorder.clear()
+    await world.send("1")
+
+    updated = await world.lead_by_id(booked["_id"])
+    assert updated["status"] == LeadStatus.CANCELLED
+    assert (await world.slot(booked["booked_slot_id"]))["is_taken"] is False
+    world.recorder.assert_text_to(world.customer, "ביטלתי את העבודה כבקשתך")
+    await world.assert_state(UserStates.IDLE)
+
+
+@pytest.mark.asyncio
+async def test_cancel_confirmation_abort_restores_prior_flow_state(world):
+    """A customer mid-AWAITING_ADDRESS on a second, in-flight lead who asks to
+    cancel their older BOOKED job gets the confirmation prompt (the
+    interceptor stashes 'AWAITING_ADDRESS' as the resume state). Declining
+    ('2') must restore AWAITING_ADDRESS rather than dumping them to IDLE, and
+    the older BOOKED job must stay untouched throughout."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    older_booked = await world.booked_job(pro)
+
+    # A second, in-flight request — the customer is mid address-collection.
+    await world.booked_job(pro, status="new", booked_slot_id=None)
+    await world.set_state(UserStates.AWAITING_ADDRESS)
+    world.recorder.clear()
+
+    await world.send("לבטל")
+
+    await world.assert_state(UserStates.AWAITING_CANCEL_CONFIRMATION)
+    meta = await world.metadata()
+    assert meta["cancel_confirm_lead_id"] == str(older_booked["_id"])
+    assert meta.get("cancel_confirm_resume_state")
+    # Nothing destructive happened yet
+    still_booked = await world.lead_by_id(older_booked["_id"])
+    assert still_booked["status"] == LeadStatus.BOOKED
+
+    world.recorder.clear()
+    await world.send("2")
+
+    await world.assert_state(UserStates.AWAITING_ADDRESS)
+    unchanged = await world.lead_by_id(older_booked["_id"])
+    assert unchanged["status"] == LeadStatus.BOOKED
+
+
+@pytest.mark.asyncio
+async def test_cancel_confirmation_abort_restores_idle_default_state(world):
+    """Same resume-state guarantee, for the most common case: a customer with
+    no explicit prior state declines the cancel and must land back in a
+    *working* IDLE.
+
+    Regression guard for the stash's value normalization. ``get_state``
+    returns a plain Redis string on every real path but the enum member
+    ``UserStates.IDLE`` as its default, and ``str()`` on that member yields
+    the display form ``"UserStates.IDLE"`` — which, persisted verbatim,
+    matches no state downstream. The interceptor stores
+    ``getattr(current_state, "value", current_state)`` for that reason; the
+    final exchange below proves the restored state still behaves like IDLE
+    rather than merely comparing equal to it."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    booked = await world.booked_job(pro)
+    world.recorder.clear()
+
+    await world.send("בטל")
+    await world.assert_state(UserStates.AWAITING_CANCEL_CONFIRMATION)
+
+    world.recorder.clear()
+    await world.send("2")
+
+    await world.assert_state(UserStates.IDLE)
+    unchanged = await world.lead_by_id(booked["_id"])
+    assert unchanged["status"] == LeadStatus.BOOKED
+
+    # The restored state must actually behave like IDLE for the next
+    # message, not merely compare equal to it.
+    world.recorder.clear()
+    await world.send("תודה")
+    world.recorder.assert_text_to(world.customer, "בכיף")
 
 
 @pytest.mark.asyncio

@@ -36,6 +36,14 @@ class Messages:
             "👍 הבקשה בוטלה. אם תרצה/י לפתוח פנייה חדשה, פשוט שלח/י הודעה."
         )
         CANCELLED_ACTIVE_LEAD = "✅ ביטלתי את העבודה כבקשתך. עדכנתי את איש המקצוע."
+        # PRO-118: a cancel keyword on a BOOKED job asks before acting —
+        # text-only menu, destructive action only on an explicit '1'.
+        CANCEL_CONFIRM_PROMPT = (
+            "רק לוודא — לבטל את העבודה שנקבעה? ⚠️\n"
+            "השב '1' לביטול העבודה, או '2' כדי להשאיר אותה."
+        )
+        CANCEL_ABORTED = "👍 העבודה נשארת כמתוכנן."
+        CANCEL_NO_ACTIVE = "לא מצאתי עבודה פעילה לביטול — ייתכן שהיא כבר עודכנה."
         RESCHEDULE_OFFER = (
             "אין בעיה! בוא נתאם מועד חדש. הנה הזמנים הפנויים של איש המקצוע:\n"
             "{slots}\n\n"
@@ -597,14 +605,49 @@ class Messages:
         RESET_COMMANDS = ["reset", "התחלה"]
         MENU_COMMANDS = ["תפריט", "menu"]
         HELP_COMMANDS = ["עזרה", "help"]
-        SOS_COMMANDS = ["נציג", "אנושי", "מנהל", "admin", "sos"]
+        # PRO-118: whole-token matched, so inflected/prefixed forms substring
+        # matching caught by accident are listed explicitly — "לנציג"/"למנהל"
+        # ("תעבירו אותי לנציג"), definite "הנציג", and the feminine forms.
+        # A missed SOS means a customer asking for a human gets the AI instead,
+        # so this list errs generous; "מנהל עבודה" stays excluded.
+        SOS_COMMANDS = [
+            "נציג",
+            "לנציג",
+            "הנציג",
+            "נציגה",
+            "אנושי",
+            "מנהל",
+            "למנהל",
+            "מנהלת",
+            "למנהלת",
+            "admin",
+            "sos",
+        ]
+        # PRO-118: word sequences that contain an SOS token but are not a
+        # request for a human — "מנהל עבודה" is a construction foreman, a
+        # profession a customer plausibly mentions when describing the job.
+        SOS_EXCLUDE_PHRASES = ["מנהל עבודה"]
+        # PRO-118: matched as whole tokens/phrases only (app/core/text_matching).
+        # The bare "טעות" was dropped — it cancelled BOOKED jobs from innocent
+        # sentences like "שלחתי בטעות את הכתובת הלא נכונה". Because whole-token
+        # matching no longer catches inflections by substring accident, the
+        # common inflected forms are listed explicitly: "לבטל" ("אני רוצה
+        # לבטל"), "מבטל"/"מבטלת" ("אני מבטל"), and "ביטול" — the reply the
+        # RESCHEDULE_OFFER menu itself advertises. A false hit is cheap now:
+        # a BOOKED cancel only asks for confirmation, never acts directly.
         CANCEL_KEYWORDS = [
             "בטל",
             "בטלי",
+            "לבטל",
+            "ביטול",
+            "מבטל",
+            "מבטלת",
+            "אבטל",
+            "תבטל",
+            "בטלו",
             "עזוב",
             "עזבי",
             "לא משנה",
-            "טעות",
             "cancel",
             "nevermind",
         ]

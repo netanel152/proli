@@ -18,7 +18,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 | `booked` | Pro approves via text ("אשר"/"1") | `_handle_approve` in `pro_flow.py` |
 | `completed` | Pro or customer confirms work done | `customer_flow.py` |
 | `rejected` | Pro rejects via text ("דחה"/"2") — a way-station, not terminal: `_handle_reject` claims it then hands off to `monitor_service.reassign_lead`, which reopens the lead as `new` under the next pro or escalates it (PRO-117) | `_handle_reject` in `pro_flow.py` |
-| `cancelled` | Customer cancels | `pro_flow.py` |
+| `cancelled` | Customer cancels — a cancel keyword on a BOOKED job first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit | `workflow_service.py` |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h | `admin_flow.py` / `monitor_service.py` |
 | `pending_admin_review` | No replacement pro found at any radius, `MAX_REASSIGNMENTS` exhausted, or a rejected lead's rematch itself fails | `monitor_service.py` / `workflow_service.py` / `pro_flow.py` |
 

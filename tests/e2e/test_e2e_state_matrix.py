@@ -35,6 +35,7 @@ Input classes
 | `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | TTL ≤ 14400s | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
 | `awaiting_loyalty_confirmation` | → idle, "בודק מולו ומעדכן" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | TTL ≤ 14400s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
 | `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | TTL ≤ 14400s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
+| `awaiting_cancel_confirmation` | → idle, "ביטלתי את העבודה" | → idle, "העבודה נשארת כמתוכנן" | → idle, "העבודה נשארת כמתוכנן" | → idle, "העבודה נשארת כמתוכנן" | → idle, "העבודה נשארת כמתוכנן" | TTL ≤ 300s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
 | `pro_mode` | "פקודות המערכת" | "פקודות המערכת" | "פקודות המערכת" | N/A[pro-text-only] | "פקודות המערכת" | TTL ≤ 14400s | "פקודות המערכת" | N/A[race] |
 | `awaiting_intent_confirmation` | → customer_mode, "עברת למצב לקוח" | "בוא ננסה שוב" | "בוא ננסה שוב" | N/A[pro-text-only] | "בוא ננסה שוב" | TTL ≤ 300s | → idle, "ממשיכים כרגיל" | N/A[race] |
 | `pro_selecting_job_to_finish` | N/A[defect-finish] | N/A[defect-finish] | N/A[defect-finish] | N/A[pro-text-only] | N/A[defect-finish] | TTL ≤ 14400s | N/A[defect-finish] | N/A[race] |
@@ -77,7 +78,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from app.core.constants import UserStates
+from app.core.constants import UserStates, WorkerConstants
 from tests.e2e import reserved_numbers as R
 from tests.e2e.ai_replay import reply
 
@@ -238,6 +239,20 @@ async def arrange_awaiting_new_or_existing(world):
     )
     await world.set_state(UserStates.AWAITING_NEW_OR_EXISTING)
     await world.set_metadata({"booked_lead_id": str(booked["_id"])})
+    return world.customer
+
+
+async def arrange_awaiting_cancel_confirmation(world):
+    # PRO-118: a cancel keyword on a BOOKED job no longer cancels on the first
+    # hit — it parks here awaiting an explicit '1', with the lead id stashed
+    # in state metadata the way the orchestrator leaves it.
+    await world.standard_cast()
+    booked = await world.booked_job(world.pros[R.PRO_PRIMARY])
+    await world.set_state(
+        UserStates.AWAITING_CANCEL_CONFIRMATION,
+        ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
+    )
+    await world.set_metadata({"cancel_confirm_lead_id": str(booked["_id"])})
     return world.customer
 
 
@@ -542,6 +557,47 @@ MATRIX: dict[str, dict] = {
         ),
         "race": Cell(na=RACE_NA),
     },
+    UserStates.AWAITING_CANCEL_CONFIRMATION: {
+        # The dispatcher clears the transient state unconditionally before
+        # reading the reply, so every non-race, non-silence input class lands
+        # back in IDLE — either via a real cancel ('1') or an abort (anything
+        # else).
+        "keyword": Cell(
+            send="1",
+            expect_state=UserStates.IDLE,
+            expect=("ביטלתי את העבודה",),
+        ),
+        "free": Cell(
+            send="אולי בעצם עדיף שלא",
+            expect_state=UserStates.IDLE,
+            expect=("העבודה נשארת כמתוכנן",),
+        ),
+        "offtopic": Cell(
+            send="מה השעה?",
+            expect_state=UserStates.IDLE,
+            expect=("העבודה נשארת כמתוכנן",),
+        ),
+        "wrong": Cell(
+            send="",
+            media="image",
+            expect_state=UserStates.IDLE,
+            expect=("העבודה נשארת כמתוכנן",),
+        ),
+        "emoji": Cell(
+            send="👍",
+            expect_state=UserStates.IDLE,
+            expect=("העבודה נשארת כמתוכנן",),
+        ),
+        "silence": Cell(max_ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS),
+        # SOS is checked above this state's dispatch, same as the other
+        # customer-confirmation states.
+        "interrupt": Cell(
+            send="נציג",
+            expect_state=UserStates.PAUSED_FOR_HUMAN,
+            expect=("מעביר אותך לנציג אנושי",),
+        ),
+        "race": Cell(na=RACE_NA),
+    },
     # --------------------------------------------------------------------- pro
     UserStates.PRO_MODE: {
         "keyword": Cell(send="תפריט", expect=("פקודות המערכת",)),
@@ -772,6 +828,7 @@ ARRANGERS = {
     UserStates.AWAITING_RESCHEDULE_TIME: arrange_awaiting_reschedule_time,
     UserStates.AWAITING_LOYALTY_CONFIRMATION: arrange_awaiting_loyalty_confirmation,
     UserStates.AWAITING_NEW_OR_EXISTING: arrange_awaiting_new_or_existing,
+    UserStates.AWAITING_CANCEL_CONFIRMATION: arrange_awaiting_cancel_confirmation,
     UserStates.PRO_MODE: arrange_pro_mode,
     UserStates.AWAITING_INTENT_CONFIRMATION: arrange_awaiting_intent_confirmation,
     UserStates.PRO_SELECTING_JOB_TO_FINISH: arrange_pro_selecting_finish,

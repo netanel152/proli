@@ -113,6 +113,63 @@ async def test_cancel_keyword_keeps_appointment(reschedule_env):
 
 
 @pytest.mark.asyncio
+async def test_advertised_bitul_keyword_cancels_reschedule_booking_unchanged(
+    reschedule_env,
+):
+    """Sibling regression to PRO-118's 'לבטל' gap: RESCHEDULE_OFFER literally
+    tells the customer to reply 'ביטול' to keep the current appointment.
+    Before PRO-118, substring matching caught this by accident ('בטל' ⊂
+    'ביטול'); 'ביטול' is now an explicit CANCEL_KEYWORDS entry. The existing
+    booking (lead + slot) must be untouched — this only aborts the
+    reschedule flow, it never cancels the job itself."""
+    db, mock_state, mock_wa = reschedule_env
+    await db.leads.delete_many({})
+    await db.slots.delete_many({})
+
+    pro_id = ObjectId()
+    await db.users.insert_one(
+        {"_id": pro_id, "phone_number": "972501234567", "business_name": "יוסי"}
+    )
+    old_slot_id = ObjectId()
+    await db.slots.insert_one({"_id": old_slot_id, "is_taken": True})
+    lead_id = await _seed_booked_lead(db, pro_id=pro_id, old_slot_id=old_slot_id)
+    mock_state.get_metadata.return_value = {
+        "reschedule_slots_context": {"1": str(ObjectId())}
+    }
+
+    await handle_reschedule_selection("customer@c.us", "ביטול", mock_wa)
+
+    mock_state.clear_state.assert_awaited_once_with("customer@c.us")
+    assert _sent_text(mock_wa) == Messages.Customer.RESCHEDULE_CANCELLED
+
+    # Booking (lead + its slot) is untouched — only the reschedule flow aborted
+    lead = await db.leads.find_one({"_id": lead_id})
+    slot = await db.slots.find_one({"_id": old_slot_id})
+    assert lead["status"] == LeadStatus.BOOKED
+    assert lead["booked_slot_id"] == old_slot_id
+    assert slot["is_taken"] is True
+
+
+@pytest.mark.asyncio
+async def test_innocent_beteut_sentence_does_not_cancel_reschedule(reschedule_env):
+    """PRO-118: 'בטעות' only contains 'טעות' as a substring — since the bare
+    'טעות' keyword was dropped from CANCEL_KEYWORDS entirely, and
+    contains_keyword only matches whole tokens, this sentence must fall
+    through to the normal slot-selection path instead of cancelling."""
+    db, mock_state, mock_wa = reschedule_env
+    mock_state.get_metadata.return_value = {
+        "reschedule_slots_context": {"1": str(ObjectId())}
+    }
+
+    await handle_reschedule_selection(
+        "customer@c.us", "בטעות בחרתי את הזמן הלא נכון", mock_wa
+    )
+
+    mock_state.clear_state.assert_not_called()
+    assert _sent_text(mock_wa) != Messages.Customer.RESCHEDULE_CANCELLED
+
+
+@pytest.mark.asyncio
 async def test_invalid_choice_preserves_state(reschedule_env):
     db, mock_state, mock_wa = reschedule_env
     mock_state.get_metadata.return_value = {

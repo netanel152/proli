@@ -6,7 +6,7 @@ Covers: reset, pro auto-detect, address collection, onboarding, deal finalizatio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
-from app.core.constants import UserStates, LeadStatus, WorkerConstants
+from app.core.constants import UserStates, LeadStatus, WorkerConstants, Actor
 from app.core.messages import Messages
 from app.services.workflow_service import (
     process_incoming_message,
@@ -251,7 +251,7 @@ async def test_awaiting_address_too_short(wf_mocks):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "idx,cancel_text",
-    list(enumerate(["בטל", "עזוב לא משנה", "טעות", "cancel", "nevermind"])),
+    list(enumerate(["בטל", "עזוב לא משנה", "בטלי", "cancel", "nevermind"])),
 )
 async def test_awaiting_address_cancel_bailout(wf_mocks, mock_db, idx, cancel_text):
     """
@@ -319,18 +319,53 @@ async def test_awaiting_address_cancel_without_active_lead(wf_mocks, mock_db):
     mock_ai.analyze_conversation.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_awaiting_address_innocent_beteut_sentence_does_not_bail_out(
+    wf_mocks, mock_db
+):
+    """PRO-118 regression: 'עשיתי טעות, הרחוב הוא הרצל 5' contains 'טעות' only
+    as a substring of 'בטעות' — must NOT trip the cancel bailout. The lead
+    stays open and normal address re-extraction (AI) runs instead."""
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    mock_state.get_state.return_value = UserStates.AWAITING_ADDRESS
+
+    chat_id = "972509977777@c.us"
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.NEW,
+            "street": "הרצל",
+            "created_at": "2026-01-01",
+        }
+    )
+
+    await process_incoming_message(chat_id, "עשיתי טעות, הרחוב הוא הרצל 5")
+
+    # Bailout never fired: no REQUEST_CANCELLED, no state/context clear for
+    # that reason, and the lead was never cancelled.
+    sent_texts = [c.args[1] for c in mock_wa.send_message.call_args_list]
+    assert Messages.Customer.REQUEST_CANCELLED not in sent_texts
+    mock_ai.analyze_conversation.assert_called_once()
+
+    updated = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated["status"] == LeadStatus.NEW
+
+
 # --- PRO-32: customer cancel of a BOOKED lead must release the reserved slot ---
 
 
 @pytest.mark.asyncio
-async def test_customer_cancel_booked_lead_releases_slot(
+async def test_customer_cancel_booked_lead_prompts_for_confirmation(
     wf_mocks, mock_db, monkeypatch
 ):
     """
-    Regression PRO-32: a customer with a confirmed BOOKED lead sends a cancel
-    keyword. The lead must flip to CANCELLED AND the slot it held must be
-    freed (is_taken -> False) so the pro regains that hour. Previously the
-    slot release was missing, orphaning the slot as permanently taken.
+    PRO-118: a cancel keyword on a confirmed BOOKED lead no longer cancels on
+    the first hit — it must ask for explicit confirmation. The lead stays
+    BOOKED, the slot stays taken, the pro is NOT notified yet, and the
+    customer lands in AWAITING_CANCEL_CONFIRMATION with CANCEL_CONFIRM_PROMPT
+    and the lead id stashed in state metadata.
 
     workflow_service imports slots_collection at module level but conftest
     only patches its users/leads/reviews (see test_reschedule_flow.py docstring
@@ -366,12 +401,90 @@ async def test_customer_cancel_booked_lead_releases_slot(
         }
     )
 
-    await process_incoming_message(chat_id, "בטל")
+    await process_incoming_message(chat_id, "בטל את העבודה")
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    updated_slot = await mock_db.slots.find_one({"_id": slot_id})
+    # Nothing destructive happened yet
+    assert updated_lead["status"] == LeadStatus.BOOKED
+    assert updated_slot["is_taken"] is True
+
+    mock_state.set_state.assert_called_once_with(
+        chat_id,
+        UserStates.AWAITING_CANCEL_CONFIRMATION,
+        ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
+    )
+    # Metadata carries the lead id and the resume state (whatever flow the
+    # customer was in — IDLE here) so an aborted cancel can restore it.
+    set_meta_call = mock_state.set_metadata.call_args_list
+    assert len(set_meta_call) == 1
+    meta_chat_id, meta_payload = set_meta_call[0].args
+    assert meta_chat_id == chat_id
+    assert meta_payload["cancel_confirm_lead_id"] == str(lead_id)
+    assert "cancel_confirm_resume_state" in meta_payload
+    mock_wa.send_message.assert_called_once_with(
+        chat_id, Messages.Customer.CANCEL_CONFIRM_PROMPT
+    )
+    # Pro never notified — no cancellation has actually happened
+    pro_calls = [
+        c
+        for c in mock_wa.send_message.call_args_list
+        if c.args[0] == "972505551234@c.us"
+    ]
+    assert pro_calls == []
+
+    # Text-only menu rule (CLAUDE.md): buttons are never used
+    mock_wa.send_interactive_buttons.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_customer_cancel_confirmation_yes_executes_cancel_and_releases_slot(
+    wf_mocks, mock_db, monkeypatch
+):
+    """
+    Regression PRO-32, now on the second step of the PRO-118 flow: customer
+    replies '1' to CANCEL_CONFIRM_PROMPT. The lead must flip to CANCELLED AND
+    the slot it held must be freed (is_taken -> False) so the pro regains
+    that hour, state+context cleared, and the pro notified.
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    monkeypatch.setattr(
+        app.services.workflow_service, "slots_collection", mock_db.slots
+    )
+    mock_state.get_state.return_value = UserStates.AWAITING_CANCEL_CONFIRMATION
+
+    chat_id = "972509977001@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {"_id": pro_id, "phone_number": "972505551234", "business_name": "יוסי"}
+    )
+
+    slot_id = ObjectId()
+    await mock_db.slots.insert_one({"_id": slot_id, "is_taken": True})
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "booked_slot_id": slot_id,
+            "customer_name": "דנה",
+            "full_address": "הרצל 1, תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+    mock_state.get_metadata.return_value = {"cancel_confirm_lead_id": str(lead_id)}
+
+    await process_incoming_message(chat_id, "1")
 
     updated_lead = await mock_db.leads.find_one({"_id": lead_id})
     updated_slot = await mock_db.slots.find_one({"_id": slot_id})
     assert updated_lead["status"] == LeadStatus.CANCELLED
     assert updated_slot["is_taken"] is False
+    history = [entry.get("by") for entry in updated_lead.get("status_history", [])]
+    assert Actor.CUSTOMER in history
 
     mock_wa.send_message.assert_any_call(
         chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD
@@ -392,19 +505,111 @@ async def test_customer_cancel_booked_lead_releases_slot(
 
 
 @pytest.mark.asyncio
-async def test_customer_cancel_booked_lead_without_slot_id_is_noop_safe(
+async def test_customer_cancel_confirmation_no_keeps_job_booked(
     wf_mocks, mock_db, monkeypatch
 ):
     """
-    Acceptance criterion: legacy/emergency BOOKED leads with no booked_slot_id
-    must never raise when cancelled. The slot-release branch must be skipped
-    entirely (guarded), and the lead must still flip to CANCELLED normally.
+    Any reply other than '1' to CANCEL_CONFIRM_PROMPT aborts the destructive
+    action (safe default): the job stays BOOKED, the slot stays taken, and the
+    customer gets CANCEL_ABORTED. The transient state is still cleared.
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    monkeypatch.setattr(
+        app.services.workflow_service, "slots_collection", mock_db.slots
+    )
+    mock_state.get_state.return_value = UserStates.AWAITING_CANCEL_CONFIRMATION
+
+    chat_id = "972509977003@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {"_id": pro_id, "phone_number": "972505551235", "business_name": "יוסי"}
+    )
+    slot_id = ObjectId()
+    await mock_db.slots.insert_one({"_id": slot_id, "is_taken": True})
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "booked_slot_id": slot_id,
+            "customer_name": "דנה",
+            "full_address": "הרצל 1, תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+    mock_state.get_metadata.return_value = {"cancel_confirm_lead_id": str(lead_id)}
+
+    await process_incoming_message(chat_id, "2")
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    updated_slot = await mock_db.slots.find_one({"_id": slot_id})
+    assert updated_lead["status"] == LeadStatus.BOOKED
+    assert updated_slot["is_taken"] is True
+
+    mock_wa.send_message.assert_called_once_with(
+        chat_id, Messages.Customer.CANCEL_ABORTED
+    )
+    mock_state.clear_state.assert_called_with(chat_id)
+    mock_wa.send_interactive_buttons.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_customer_cancel_confirmation_lead_already_resolved(
+    wf_mocks, mock_db, monkeypatch
+):
+    """
+    '1' arrives but the lead was already resolved (COMPLETED/CANCELLED)
+    elsewhere while the confirmation prompt was open — CANCEL_NO_ACTIVE, and
+    no slot write is attempted.
     """
     mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
     mock_slots = MagicMock()
     mock_slots.update_one = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "slots_collection", mock_slots)
-    mock_state.get_state.return_value = UserStates.IDLE
+    mock_state.get_state.return_value = UserStates.AWAITING_CANCEL_CONFIRMATION
+
+    chat_id = "972509977004@c.us"
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.COMPLETED,  # resolved elsewhere meanwhile
+            "customer_name": "דנה",
+            "full_address": "הרצל 1, תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+    mock_state.get_metadata.return_value = {"cancel_confirm_lead_id": str(lead_id)}
+
+    await process_incoming_message(chat_id, "1")
+
+    mock_wa.send_message.assert_called_once_with(
+        chat_id, Messages.Customer.CANCEL_NO_ACTIVE
+    )
+    mock_slots.update_one.assert_not_called()
+    mock_state.clear_state.assert_called_with(chat_id)
+    mock_wa.send_interactive_buttons.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_customer_cancel_confirmation_without_slot_id_is_noop_safe(
+    wf_mocks, mock_db, monkeypatch
+):
+    """
+    Re-added PRO-32 guard, now exercised through the confirm step of the
+    PRO-118 two-step flow: a legacy/emergency BOOKED lead with no
+    booked_slot_id must never raise when confirmed-cancelled. The
+    slot-release branch must be skipped entirely (guarded), and the lead
+    must still flip to CANCELLED normally.
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    mock_slots = MagicMock()
+    mock_slots.update_one = AsyncMock()
+    monkeypatch.setattr(app.services.workflow_service, "slots_collection", mock_slots)
+    mock_state.get_state.return_value = UserStates.AWAITING_CANCEL_CONFIRMATION
 
     chat_id = "972509977002@c.us"
     pro_id = ObjectId()
@@ -425,8 +630,9 @@ async def test_customer_cancel_booked_lead_without_slot_id_is_noop_safe(
             "created_at": "2026-01-01",
         }
     )
+    mock_state.get_metadata.return_value = {"cancel_confirm_lead_id": str(lead_id)}
 
-    await process_incoming_message(chat_id, "בטל")
+    await process_incoming_message(chat_id, "1")
 
     updated_lead = await mock_db.leads.find_one({"_id": lead_id})
     assert updated_lead["status"] == LeadStatus.CANCELLED
@@ -438,8 +644,146 @@ async def test_customer_cancel_booked_lead_without_slot_id_is_noop_safe(
         chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD
     )
     mock_state.clear_state.assert_called_with(chat_id)
-    mock_ctx.clear_context.assert_called_with(chat_id)
-    mock_wa.send_interactive_buttons.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_customer_cancel_confirmation_status_race_loses_no_slot_freed(
+    wf_mocks, mock_db, monkeypatch
+):
+    """
+    Race guard inside _execute_customer_cancel: the lead is still BOOKED when
+    fetched, but the guarded set_lead_status(expected_status=BOOKED) loses the
+    race (e.g. the pro finished the job a moment earlier) and returns None.
+    The customer must get CANCEL_NO_ACTIVE and the slot must NOT be freed —
+    the write never happened, so nothing should be undone.
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    monkeypatch.setattr(
+        app.services.workflow_service, "slots_collection", mock_db.slots
+    )
+    # Simulate the guarded status write losing the race.
+    mock_set_status = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        app.services.workflow_service, "set_lead_status", mock_set_status
+    )
+    mock_state.get_state.return_value = UserStates.AWAITING_CANCEL_CONFIRMATION
+
+    chat_id = "972509977005@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {"_id": pro_id, "phone_number": "972505551236", "business_name": "יוסי"}
+    )
+    slot_id = ObjectId()
+    await mock_db.slots.insert_one({"_id": slot_id, "is_taken": True})
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,  # still BOOKED at find_one time
+            "pro_id": pro_id,
+            "booked_slot_id": slot_id,
+            "customer_name": "דנה",
+            "full_address": "הרצל 1, תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+    mock_state.get_metadata.return_value = {"cancel_confirm_lead_id": str(lead_id)}
+
+    await process_incoming_message(chat_id, "1")
+
+    mock_set_status.assert_awaited_once()
+    updated_slot = await mock_db.slots.find_one({"_id": slot_id})
+    assert updated_slot["is_taken"] is True  # untouched — the write never happened
+
+    mock_wa.send_message.assert_called_once_with(
+        chat_id, Messages.Customer.CANCEL_NO_ACTIVE
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reply_text,should_confirm",
+    [
+        ("כן", True),
+        ("כן, בטל", True),
+        ("2", False),
+        ("לא תודה", False),
+    ],
+)
+async def test_customer_cancel_confirmation_reply_variants(
+    wf_mocks, mock_db, monkeypatch, reply_text, should_confirm
+):
+    """
+    Confirmation accepts '1', a bare 'כן', or any restated cancel keyword
+    ("כן, בטל") — not just the literal '1'. Anything else (a plain '2' or
+    unrelated text) aborts, keeping the job BOOKED.
+    """
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    monkeypatch.setattr(
+        app.services.workflow_service, "slots_collection", mock_db.slots
+    )
+    mock_state.get_state.return_value = UserStates.AWAITING_CANCEL_CONFIRMATION
+
+    chat_id = f"97250997{abs(hash(reply_text)) % 10000:04d}@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {"_id": pro_id, "phone_number": "972505551237", "business_name": "יוסי"}
+    )
+    slot_id = ObjectId()
+    await mock_db.slots.insert_one({"_id": slot_id, "is_taken": True})
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "booked_slot_id": slot_id,
+            "customer_name": "דנה",
+            "full_address": "הרצל 1, תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+    mock_state.get_metadata.return_value = {"cancel_confirm_lead_id": str(lead_id)}
+
+    await process_incoming_message(chat_id, reply_text)
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    if should_confirm:
+        assert updated_lead["status"] == LeadStatus.CANCELLED
+        mock_wa.send_message.assert_any_call(
+            chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD
+        )
+    else:
+        assert updated_lead["status"] == LeadStatus.BOOKED
+        mock_wa.send_message.assert_called_once_with(
+            chat_id, Messages.Customer.CANCEL_ABORTED
+        )
+
+
+@pytest.mark.asyncio
+async def test_customer_cancel_confirmation_corrupt_lead_id_no_exception(
+    wf_mocks, mock_db, monkeypatch
+):
+    """Corrupt metadata (cancel_confirm_lead_id isn't a valid ObjectId) must
+    be handled gracefully — CANCEL_NO_ACTIVE, no exception raised."""
+    mock_wa, mock_state, mock_ctx, mock_ai, _ = wf_mocks
+    mock_slots = MagicMock()
+    mock_slots.update_one = AsyncMock()
+    monkeypatch.setattr(app.services.workflow_service, "slots_collection", mock_slots)
+    mock_state.get_state.return_value = UserStates.AWAITING_CANCEL_CONFIRMATION
+    mock_state.get_metadata.return_value = {"cancel_confirm_lead_id": "not-an-oid"}
+
+    chat_id = "972509977006@c.us"
+
+    await process_incoming_message(chat_id, "1")
+
+    mock_wa.send_message.assert_called_once_with(
+        chat_id, Messages.Customer.CANCEL_NO_ACTIVE
+    )
+    mock_slots.update_one.assert_not_called()
+    mock_state.clear_state.assert_called_with(chat_id)
 
 
 # --- Register / Onboarding ---
@@ -869,6 +1213,72 @@ async def test_sos_sets_paused_state_with_custom_ttl(wf_mocks):
     mock_wa.send_message.assert_any_call(
         "972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_CUSTOMER
     )
+
+
+@pytest.mark.asyncio
+async def test_sos_construction_foreman_phrase_does_not_pause(wf_mocks):
+    """PRO-118: 'אני צריך מנהל עבודה' (a construction foreman, a profession a
+    customer plausibly mentions) must NOT trigger the SOS handoff — the
+    SOS_EXCLUDE_PHRASES entry strips it before matching 'מנהל'."""
+    mock_wa, mock_state, _, mock_ai, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
+
+    await process_incoming_message("972501111112@c.us", "אני צריך מנהל עבודה")
+
+    # Never routed into the SOS pause — not the state, not the message
+    paused_calls = [
+        c
+        for c in mock_state.set_state.call_args_list
+        if len(c.args) > 1 and c.args[1] == UserStates.PAUSED_FOR_HUMAN
+    ]
+    assert paused_calls == []
+    sent_texts = [c.args[1] for c in mock_wa.send_message.call_args_list]
+    assert Messages.Customer.BOT_PAUSED_BY_CUSTOMER not in sent_texts
+
+
+@pytest.mark.asyncio
+async def test_sos_bare_representative_keyword_still_pauses(wf_mocks):
+    """A bare SOS keyword ('נציג') must still pause the bot — the exclude
+    phrase is scoped narrowly to 'מנהל עבודה', not to every SOS word."""
+    mock_wa, mock_state, _, _, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
+
+    await process_incoming_message("972501111113@c.us", "נציג")
+
+    mock_state.set_state.assert_called_once_with(
+        "972501111113@c.us",
+        UserStates.PAUSED_FOR_HUMAN,
+        ttl=WorkerConstants.PAUSE_TTL_SECONDS,
+    )
+    mock_wa.send_message.assert_any_call(
+        "972501111113@c.us", Messages.Customer.BOT_PAUSED_BY_CUSTOMER
+    )
+
+
+@pytest.mark.asyncio
+async def test_sos_handoff_phrasing_pauses_and_alerts(wf_mocks, monkeypatch):
+    """PRO-118 sibling fix: 'תעבירו אותי לנציג' (natural handoff phrasing)
+    must pause the bot and fire the SOS alert — 'לנציג' is now a whole-token
+    SOS_COMMANDS entry, which substring matching used to catch by accident."""
+    mock_wa, mock_state, _, _, _ = wf_mocks
+    mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
+
+    mock_page = MagicMock()
+    monkeypatch.setattr("app.services.notification_service.page_operator", mock_page)
+
+    await process_incoming_message("972501111114@c.us", "תעבירו אותי לנציג")
+
+    mock_state.set_state.assert_called_once_with(
+        "972501111114@c.us",
+        UserStates.PAUSED_FOR_HUMAN,
+        ttl=WorkerConstants.PAUSE_TTL_SECONDS,
+    )
+    mock_wa.send_message.assert_any_call(
+        "972501111114@c.us", Messages.Customer.BOT_PAUSED_BY_CUSTOMER
+    )
+    # The SOS alert (paged to the operator) actually fired.
+    mock_page.assert_called_once()
+    assert "SOS from customer" in mock_page.call_args.args[0]
 
 
 # --- Zero-Touch Intent Confirmation Tests ---
