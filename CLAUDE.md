@@ -215,6 +215,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 - `WorkerConstants.GEO_RADIUS_STEPS = [10000, 20000, 30000]`: progressive geo search radii
 - `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state
 - `WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS = 300`: 5-minute window for a customer to confirm a cancel keyword on a BOOKED job (`AWAITING_CANCEL_CONFIRMATION`, PRO-118); expiry leaves the job booked
+- `WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS = 300`: 5-minute window for a customer to answer the "want your previous pro?" offer (`AWAITING_LOYALTY_CONFIRMATION`, PRO-119); expiry releases to normal routing instead of the old unbounded 4h default
 - `WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS = 600`: 10-minute per-pro cool-down on the `מצא` proactive stuck-lead search
 - `WorkerConstants.COMMISSION_RATE = 0.10`: platform take-rate applied to a recorded `final_price` → `commission_amount` (PRO-33; GMV/commission surfaced in the admin analytics Revenue tab)
 - `WorkerConstants.FINAL_PRICE_TTL_SECONDS = 600`: 10-minute window for the pro to answer the post-completion "how much did you charge?" prompt (skippable, never gates COMPLETED)
