@@ -102,6 +102,10 @@ class UserStates(str, Enum):
     # else — ask whether it's a new request or about the existing job, instead
     # of silently spawning a second parallel lead.
     AWAITING_NEW_OR_EXISTING = "awaiting_new_or_existing"
+    # PRO-118: a cancel keyword on a confirmed BOOKED job asks for explicit
+    # confirmation ('1'/'2') instead of cancelling on the first keyword hit —
+    # the destructive action never fires off a possibly-misread word.
+    AWAITING_CANCEL_CONFIRMATION = "awaiting_cancel_confirmation"
 
 
 class WorkerConstants:
@@ -143,6 +147,9 @@ class WorkerConstants:
         30000,
     ]  # Progressive search radius in meters (10km, 20km, 30km)
     PAUSE_TTL_SECONDS = 900  # 15 minutes — auto-expiry for PAUSED_FOR_HUMAN state
+    # PRO-118: window for the customer to answer the "really cancel?" prompt
+    # (AWAITING_CANCEL_CONFIRMATION). Expiry = the job silently stays booked.
+    CANCEL_CONFIRM_TTL_SECONDS = 300
     PRO_APPROVAL_TTL_SECONDS = (
         3600  # 60 min — pro must approve a finalized deal within this window
     )

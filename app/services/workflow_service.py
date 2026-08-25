@@ -21,6 +21,7 @@ from app.core.redis_client import (
     release_chat_lock,
     ChatLockBusyError,
 )
+from app.core.text_matching import contains_keyword
 from app.services.matching_service import determine_best_pro
 from app.services.notification_service import send_sos_alert
 from app.services import notification_service
@@ -45,6 +46,7 @@ from app.services.media_handler import detect_and_fetch_media
 from app.services.security_service import SecurityService
 from app.core.config import settings
 from bson import ObjectId
+from bson.errors import InvalidId
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -126,6 +128,7 @@ CUSTOMER_PROMPT_STATES = (
     UserStates.AWAITING_RESCHEDULE_TIME,
     UserStates.AWAITING_LOYALTY_CONFIRMATION,
     UserStates.AWAITING_NEW_OR_EXISTING,
+    UserStates.AWAITING_CANCEL_CONFIRMATION,
 )
 
 # Lead statuses that mean the pro-as-customer still has a live request of their
@@ -232,6 +235,55 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         await release_chat_lock(chat_id)
 
 
+async def _execute_customer_cancel(booked_lead, chat_id: str) -> None:
+    """Execute a customer-confirmed cancel of a BOOKED lead (PRO-118 step 2).
+
+    Runs only after the customer answered '1' to CANCEL_CONFIRM_PROMPT. The
+    status write is guarded on BOOKED so a concurrent transition (pro finished
+    or cancelled meanwhile) turns this into an honest "already updated" reply
+    instead of a double-fire.
+    """
+    pro_id = booked_lead.get("pro_id")
+    cancelled = await set_lead_status(
+        booked_lead["_id"],
+        LeadStatus.CANCELLED,
+        Actor.CUSTOMER,
+        extra_set={
+            "cancelled_at": datetime.now(timezone.utc),
+            "cancel_reason": "customer_requested",
+        },
+        expected_status=LeadStatus.BOOKED,
+    )
+    if cancelled is None:
+        await whatsapp.send_message(chat_id, Messages.Customer.CANCEL_NO_ACTIVE)
+        return
+    # Free the reserved slot so the pro regains that hour.
+    # Mirrors the release in pro_flow._execute_cancel; guarded so
+    # legacy/emergency leads with no booked_slot_id are a no-op.
+    if booked_lead.get("booked_slot_id"):
+        await slots_collection.update_one(
+            {"_id": booked_lead["booked_slot_id"]},
+            {"$set": {"is_taken": False}},
+        )
+    await StateManager.clear_state(chat_id)
+    await ContextManager.clear_context(chat_id)
+    await whatsapp.send_message(chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD)
+    logger.info(
+        f"Customer ...{chat_id[-8:]} cancelled BOOKED lead {booked_lead['_id']}"
+    )
+    if pro_id:
+        pro = await users_collection.find_one({"_id": pro_id})
+        if pro and pro.get("phone_number"):
+            pro_phone = to_chat_id(pro["phone_number"])
+            await whatsapp.send_message(
+                pro_phone,
+                Messages.Pro.CUSTOMER_CANCELLED.format(
+                    customer_name=booked_lead.get("customer_name") or "הלקוח",
+                    address=booked_lead.get("full_address") or "לא ידועה",
+                ),
+            )
+
+
 async def _process_incoming_message_inner(
     chat_id: str, user_text: str, media_url: str = None
 ):
@@ -335,8 +387,10 @@ async def _process_incoming_message_inner(
         # read as the bot ignoring them. A cry for a human still gets out on the
         # first try — the SOS handler runs further down the dispatch.
         meta = await StateManager.get_metadata(chat_id) or {}
-        asking_for_human = any(
-            k in normalized_text for k in Messages.Keywords.SOS_COMMANDS
+        asking_for_human = contains_keyword(
+            normalized_text,
+            Messages.Keywords.SOS_COMMANDS,
+            Messages.Keywords.SOS_EXCLUDE_PHRASES,
         )
         if not asking_for_human and not meta.get("intent_reprompted"):
             meta["intent_reprompted"] = True
@@ -417,12 +471,17 @@ async def _process_incoming_message_inner(
             await lead_manager.log_message(chat_id, "model", reply)
             return
 
-    # SOS / Human Handoff Check (customers only — pros have their own help menu)
-    sos_keywords = Messages.Keywords.SOS_COMMANDS
+    # SOS / Human Handoff Check (customers only — pros have their own help menu).
+    # PRO-118: whole-token matching — "admin"/"מנהל" inside a longer word (or
+    # inside "מנהל עבודה", the profession) no longer pauses the bot.
     if (
         user_text
         and current_state != UserStates.PRO_MODE
-        and any(k in normalized_text for k in sos_keywords)
+        and contains_keyword(
+            normalized_text,
+            Messages.Keywords.SOS_COMMANDS,
+            Messages.Keywords.SOS_EXCLUDE_PHRASES,
+        )
     ):
         # Pause bot with 15-minute auto-expiry (Task 1 updated constants)
         await StateManager.set_state(
@@ -535,6 +594,45 @@ async def _process_incoming_message_inner(
         )
         return
 
+    # PRO-118: customer answering the "really cancel?" prompt for a BOOKED job.
+    # '1', 'כן' or a restated cancel keyword ("כן, בטל") confirms; anything
+    # else keeps the job (safe default for a destructive action) and restores
+    # whatever flow state the interceptor overwrote (e.g. AWAITING_ADDRESS on
+    # a second, in-flight lead) instead of dumping the customer to IDLE.
+    if current_state == UserStates.AWAITING_CANCEL_CONFIRMATION:
+        meta = await StateManager.get_metadata(chat_id) or {}
+        cancel_lead_id = meta.get("cancel_confirm_lead_id")
+        resume_state = meta.get("cancel_confirm_resume_state")
+        await StateManager.clear_state(chat_id)
+        confirmed = (
+            normalized_text == "1"
+            or normalized_text == "כן"
+            or (contains_keyword(normalized_text, Messages.Keywords.CANCEL_KEYWORDS))
+        )
+        if confirmed and cancel_lead_id:
+            try:
+                cancel_oid = ObjectId(cancel_lead_id)
+            except InvalidId:
+                cancel_oid = None
+            booked_lead = (
+                await leads_collection.find_one(
+                    {"_id": cancel_oid, "status": LeadStatus.BOOKED}
+                )
+                if cancel_oid
+                else None
+            )
+            if booked_lead:
+                await _execute_customer_cancel(booked_lead, chat_id)
+            else:
+                # The job moved on (finished / cancelled elsewhere) while the
+                # confirmation prompt was open.
+                await whatsapp.send_message(chat_id, Messages.Customer.CANCEL_NO_ACTIVE)
+        else:
+            if resume_state:
+                await StateManager.set_state(chat_id, resume_state)
+            await whatsapp.send_message(chat_id, Messages.Customer.CANCEL_ABORTED)
+        return
+
     # Reschedule selection — customer has been shown the slot menu and is picking
     if current_state == UserStates.AWAITING_RESCHEDULE_TIME:
         await _handle_reschedule_selection(chat_id, user_text or "", whatsapp)
@@ -638,8 +736,8 @@ async def _process_incoming_message_inner(
         current_state != UserStates.PRO_MODE
         and user_text
         and (
-            any(kw in normalized_text for kw in Messages.Keywords.RESCHEDULE_KEYWORDS)
-            or any(kw in normalized_text for kw in Messages.Keywords.CANCEL_KEYWORDS)
+            contains_keyword(normalized_text, Messages.Keywords.RESCHEDULE_KEYWORDS)
+            or contains_keyword(normalized_text, Messages.Keywords.CANCEL_KEYWORDS)
         )
     ):
         booked_lead = await leads_collection.find_one(
@@ -649,45 +747,37 @@ async def _process_incoming_message_inner(
         if booked_lead:
             pro_id = booked_lead.get("pro_id")
 
-            if any(kw in normalized_text for kw in Messages.Keywords.CANCEL_KEYWORDS):
-                await set_lead_status(
-                    booked_lead["_id"],
-                    LeadStatus.CANCELLED,
-                    Actor.CUSTOMER,
-                    extra_set={
-                        "cancelled_at": datetime.now(timezone.utc),
-                        "cancel_reason": "customer_requested",
-                    },
+            if contains_keyword(normalized_text, Messages.Keywords.CANCEL_KEYWORDS):
+                # PRO-118: cancelling a confirmed BOOKED job is destructive —
+                # ask for an explicit confirmation instead of acting on the
+                # first keyword hit. Expiry of the TTL = the job silently
+                # stays. The customer's current flow state (e.g.
+                # AWAITING_ADDRESS on a second in-flight lead) is stashed so
+                # an aborted cancel restores it rather than dropping to IDLE.
+                meta = await StateManager.get_metadata(chat_id) or {}
+                meta["cancel_confirm_lead_id"] = str(booked_lead["_id"])
+                # getattr(.value) — get_state returns a plain Redis string on
+                # every real path but the *enum member* UserStates.IDLE as its
+                # default; str() on the member yields "UserStates.IDLE", which
+                # would be persisted verbatim and match no state downstream.
+                meta["cancel_confirm_resume_state"] = (
+                    getattr(current_state, "value", current_state)
+                    if current_state
+                    else None
                 )
-                # Free the reserved slot so the pro regains that hour.
-                # Mirrors the release in pro_flow._execute_cancel; guarded so
-                # legacy/emergency leads with no booked_slot_id are a no-op.
-                if booked_lead.get("booked_slot_id"):
-                    await slots_collection.update_one(
-                        {"_id": booked_lead["booked_slot_id"]},
-                        {"$set": {"is_taken": False}},
-                    )
-                await StateManager.clear_state(chat_id)
-                await ContextManager.clear_context(chat_id)
+                await StateManager.set_state(
+                    chat_id,
+                    UserStates.AWAITING_CANCEL_CONFIRMATION,
+                    ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
+                )
+                await StateManager.set_metadata(chat_id, meta)
                 await whatsapp.send_message(
-                    chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD
+                    chat_id, Messages.Customer.CANCEL_CONFIRM_PROMPT
                 )
                 logger.info(
-                    f"Customer {chat_id} cancelled BOOKED lead {booked_lead['_id']}"
+                    f"Customer ...{chat_id[-8:]} asked to cancel BOOKED lead "
+                    f"{booked_lead['_id']} — awaiting confirmation"
                 )
-                if pro_id:
-                    pro = await users_collection.find_one({"_id": pro_id})
-                    if pro and pro.get("phone_number"):
-                        pro_phone = pro["phone_number"]
-                        pro_phone = to_chat_id(pro_phone)
-                        await whatsapp.send_message(
-                            pro_phone,
-                            Messages.Pro.CUSTOMER_CANCELLED.format(
-                                customer_name=booked_lead.get("customer_name")
-                                or "הלקוח",
-                                address=booked_lead.get("full_address") or "לא ידועה",
-                            ),
-                        )
                 return
 
             # Reschedule keyword
@@ -781,8 +871,8 @@ async def _process_incoming_message_inner(
         # Nevermind/cancel bailout: user wants out of the flow instead of fighting
         # the address gate. Match cancellation keywords BEFORE is_address_complete
         # so we never loop the user back through "אני צריך רחוב ומספר בית".
-        if user_text and any(
-            kw in normalized_text for kw in Messages.Keywords.CANCEL_KEYWORDS
+        if user_text and contains_keyword(
+            normalized_text, Messages.Keywords.CANCEL_KEYWORDS
         ):
             cancelled_lead = await leads_collection.find_one(
                 {

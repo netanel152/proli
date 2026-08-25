@@ -172,7 +172,7 @@ Reset keywords are `"reset"` and `"התחלה"`. The `"תפריט"` keyword send
 
 **Pre-condition:** Customer has active lead
 
-SOS keywords: `"נציג"`, `"אנושי"`, `"מנהל"`, `"admin"`, `"sos"`. Note: `"עזרה"` is a help keyword — it sends an info message, not an SOS alert.
+SOS keywords: `"נציג"`, `"לנציג"`, `"הנציג"`, `"נציגה"`, `"אנושי"`, `"מנהל"`, `"למנהל"`, `"מנהלת"`, `"למנהלת"`, `"admin"`, `"sos"` — matched as whole words, so "מנהל עבודה" (foreman) does not trigger SOS (PRO-118). Note: `"עזרה"` is a help keyword — it sends an info message, not an SOS alert.
 
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
