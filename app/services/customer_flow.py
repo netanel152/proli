@@ -6,6 +6,7 @@ from app.core.database import (
 )
 from app.core.logger import logger
 from app.core.messages import Messages
+from app.core.text_matching import contains_keyword
 from app.core.constants import LeadStatus, Defaults, Actor, WorkerConstants
 from app.core.phone import to_chat_id
 from app.services.lead_manager_service import set_lead_status
@@ -308,7 +309,7 @@ async def handle_customer_review_comment(chat_id: str, text: str):
 async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) -> None:
     normalized = user_text.strip().lower()
 
-    if any(kw in normalized for kw in Messages.Keywords.CANCEL_KEYWORDS):
+    if contains_keyword(normalized, Messages.Keywords.CANCEL_KEYWORDS):
         await StateManager.clear_state(chat_id)
         await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_CANCELLED)
         return

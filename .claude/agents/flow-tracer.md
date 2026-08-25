@@ -30,10 +30,11 @@ Every incoming message is evaluated top-down; the **first** branch whose conditi
 9. **SOS / human handoff** — `SOS_COMMANDS` and not `PRO_MODE` → set `PAUSED_FOR_HUMAN` (15-min TTL), fire SOS alert, notify the assigned pro.
 10. **AWAITING_PRO_APPROVAL soft hold** — customer parked waiting for pro approval; a non-pro-escaping reply → "still waiting", drop. Runs **before** the paused check (a pro who ordered for themselves can still escape via pro-only keywords).
 11. **PAUSED_FOR_HUMAN** — human takeover active → log the message, refresh the 15-min rolling TTL, drop.
+11a. **AWAITING_CANCEL_CONFIRMATION** (PRO-118) — reply to the "really cancel the booked job?" prompt: `1` → `_execute_customer_cancel` (guarded on BOOKED — a concurrent transition gets an honest "already updated" reply); anything else → job kept, `CANCEL_ABORTED`. Both clear the transient state.
 12. **AWAITING_RESCHEDULE_TIME** — customer was shown the slot menu and is picking → `_handle_reschedule_selection`.
 13. **AWAITING_LOYALTY_CONFIRMATION** — reply to the "want your previous pro?" offer: `1`/`כן` reattaches the past pro, `2`/`לא` opens the search; both → IDLE.
 13a. **AWAITING_NEW_OR_EXISTING** (PRO-116) — reply to the "new request or about the existing booked job?" gate: `1`/`כן` → IDLE (next message runs normal intake), `2`/`לא` → hand off to the assigned pro + `PAUSED_FOR_HUMAN`. The gate that *enters* this state fires when a customer with a `BOOKED` lead (and no active NEW/CONTACTED lead) sends a non-cancel/reschedule message, once per booked lead (`new_request_prompted`).
-14. **BOOKED cancel / reschedule interceptor** _(conditional)_ — non-`PRO_MODE` customer sends a cancel/reschedule keyword AND has a BOOKED lead → cancel (free the slot, notify pro) or offer reschedule slots. No BOOKED lead → fall through.
+14. **BOOKED cancel / reschedule interceptor** _(conditional)_ — non-`PRO_MODE` customer sends a whole-token cancel/reschedule keyword (PRO-118: `contains_keyword`, never substring) AND has a BOOKED lead → cancel keyword asks for confirmation (`AWAITING_CANCEL_CONFIRMATION`, 300s TTL — branch 11a executes it) or offer reschedule slots. No BOOKED lead → fall through.
 15. **Explicit customer-mode switch** — registered pro types a `CUSTOMER_MODE_COMMANDS` keyword from `PRO_MODE`/`IDLE` → `CUSTOMER_MODE`, clear context.
 16. **Pro safety-bypass** _(↩ falls through)_ — registered pro types a `PRO_BUSINESS_KEYWORDS` keyword while not in `PRO_MODE` → snap state to `PRO_MODE` (unless an ambiguous keyword defers to an open customer prompt); then falls into branch 17.
 17. **PRO_MODE** — identified professional → `pro_flow` (`_handle_pro_cmd`).
@@ -45,13 +46,13 @@ Every incoming message is evaluated top-down; the **first** branch whose conditi
 
 ## UserStates
 
-`IDLE` · `PRO_MODE` · `CUSTOMER_MODE` · `AWAITING_INTENT_CONFIRMATION` · `CUSTOMER_FLOW` · `AWAITING_ADDRESS` · `AWAITING_MEDIA` · `AWAITING_TIME` · `AWAITING_CONSENT` · `SOS` · `AWAITING_PRO_APPROVAL` · `PAUSED_FOR_HUMAN` · `AWAITING_RESCHEDULE_TIME` · `AWAITING_LOYALTY_CONFIRMATION` · `AWAITING_NEW_OR_EXISTING` · `PRO_SELECTING_JOB_TO_FINISH` · `PRO_SELECTING_JOB_TO_CANCEL` · `PRO_AWAITING_FINAL_PRICE` · `ONBOARDING_*` (multi-step) · `ADMIN_MODE_IDLE` · `ADMIN_SELECTING_LEAD` · `ADMIN_SELECTING_ACTION` · `ADMIN_SELECTING_PRO`
+`IDLE` · `PRO_MODE` · `CUSTOMER_MODE` · `AWAITING_INTENT_CONFIRMATION` · `CUSTOMER_FLOW` · `AWAITING_ADDRESS` · `AWAITING_MEDIA` · `AWAITING_TIME` · `AWAITING_CONSENT` · `SOS` · `AWAITING_PRO_APPROVAL` · `PAUSED_FOR_HUMAN` · `AWAITING_RESCHEDULE_TIME` · `AWAITING_LOYALTY_CONFIRMATION` · `AWAITING_NEW_OR_EXISTING` · `AWAITING_CANCEL_CONFIRMATION` · `PRO_SELECTING_JOB_TO_FINISH` · `PRO_SELECTING_JOB_TO_CANCEL` · `PRO_AWAITING_FINAL_PRICE` · `ONBOARDING_*` (multi-step) · `ADMIN_MODE_IDLE` · `ADMIN_SELECTING_LEAD` · `ADMIN_SELECTING_ACTION` · `ADMIN_SELECTING_PRO`
 
 ## LeadStatus Lifecycle
 
 `contacted → new → booked → completed / rejected / closed / cancelled / pending_admin_review`
 
-No backward transitions. `pending_admin_review` is a holding state, not terminal.
+`pending_admin_review` is a holding state, not terminal. Since PRO-117, `rejected` is a way-station, not terminal either: a pro's reject immediately hands the lead to `reassign_lead`, which reopens it as `new` under the next pro or escalates it to `pending_admin_review` — the one sanctioned backward transition. Otherwise no backward transitions.
 
 ## Context-Clearing Triggers
 
@@ -67,6 +68,7 @@ Failure to clear context causes the AI to hallucinate from a previous conversati
 ## TTL Constants (WorkerConstants)
 
 - `PAUSE_TTL_SECONDS = 900` (15 min) — PAUSED_FOR_HUMAN
+- `CANCEL_CONFIRM_TTL_SECONDS = 300` (5 min) — AWAITING_CANCEL_CONFIRMATION; expiry = job stays booked
 - `PRO_SEARCH_RATE_LIMIT_SECONDS = 600` (10 min) — מצא cool-down
 - `SOS_TIMEOUT_MINUTES = 60` — reassignment trigger
 - `STALE_BOOKED_LEAD_HOURS = 24` — stale job reminder threshold
