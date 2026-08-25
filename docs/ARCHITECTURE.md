@@ -258,7 +258,7 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `PRO_AWAITING_FINAL_PRICE` | Post-completion prompt asking the pro what they charged (skippable, never gates COMPLETED) |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
 | `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |
-| `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro |
+| `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro (5m TTL, PRO-119); accept dispatches to the pro and parks the customer in `AWAITING_PRO_APPROVAL` if the address is complete, otherwise saves the pro as a preference and continues via `AWAITING_ADDRESS` |
 | `AWAITING_NEW_OR_EXISTING` | A customer with a confirmed BOOKED job messages about something else; asked whether it's a new request or about the existing job |
 | `AWAITING_CANCEL_CONFIRMATION` | A cancel keyword on a confirmed BOOKED job; waiting for an explicit '1'/'2' before acting (5m TTL, PRO-118) |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |

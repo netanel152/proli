@@ -32,7 +32,7 @@ Every incoming message is evaluated top-down; the **first** branch whose conditi
 11. **PAUSED_FOR_HUMAN** — human takeover active → log the message, refresh the 15-min rolling TTL, drop.
 11a. **AWAITING_CANCEL_CONFIRMATION** (PRO-118) — reply to the "really cancel the booked job?" prompt: `1` → `_execute_customer_cancel` (guarded on BOOKED — a concurrent transition gets an honest "already updated" reply); anything else → job kept, `CANCEL_ABORTED`. Both clear the transient state.
 12. **AWAITING_RESCHEDULE_TIME** — customer was shown the slot menu and is picking → `_handle_reschedule_selection`.
-13. **AWAITING_LOYALTY_CONFIRMATION** — reply to the "want your previous pro?" offer: `1`/`כן` reattaches the past pro, `2`/`לא` opens the search; both → IDLE.
+13. **AWAITING_LOYALTY_CONFIRMATION** — reply to the "want your previous pro?" offer (PRO-119: bounded 300s TTL, natural yes/no via whole-token matching, re-prompt once then fall through to normal routing). Accept → `_accept_loyalty_offer`: if the lead's address is dispatchable, the lead goes `NEW` under that pro, the pro is notified via `notify_pro_new_lead` and the customer parks in `AWAITING_PRO_APPROVAL` (SLA armed); if not, the pro is saved as a preference and intake continues from IDLE. Decline (or an unavailable past pro) → IDLE + normal matching.
 13a. **AWAITING_NEW_OR_EXISTING** (PRO-116) — reply to the "new request or about the existing booked job?" gate: `1`/`כן` → IDLE (next message runs normal intake), `2`/`לא` → hand off to the assigned pro + `PAUSED_FOR_HUMAN`. The gate that *enters* this state fires when a customer with a `BOOKED` lead (and no active NEW/CONTACTED lead) sends a non-cancel/reschedule message, once per booked lead (`new_request_prompted`).
 14. **BOOKED cancel / reschedule interceptor** _(conditional)_ — non-`PRO_MODE` customer sends a whole-token cancel/reschedule keyword (PRO-118: `contains_keyword`, never substring) AND has a BOOKED lead → cancel keyword asks for confirmation (`AWAITING_CANCEL_CONFIRMATION`, 300s TTL — branch 11a executes it) or offer reschedule slots. No BOOKED lead → fall through.
 15. **Explicit customer-mode switch** — registered pro types a `CUSTOMER_MODE_COMMANDS` keyword from `PRO_MODE`/`IDLE` → `CUSTOMER_MODE`, clear context.
@@ -69,6 +69,7 @@ Failure to clear context causes the AI to hallucinate from a previous conversati
 
 - `PAUSE_TTL_SECONDS = 900` (15 min) — PAUSED_FOR_HUMAN
 - `CANCEL_CONFIRM_TTL_SECONDS = 300` (5 min) — AWAITING_CANCEL_CONFIRMATION; expiry = job stays booked
+- `LOYALTY_CONFIRM_TTL_SECONDS = 300` (5 min) — AWAITING_LOYALTY_CONFIRMATION; expiry = normal matching resumes
 - `PRO_SEARCH_RATE_LIMIT_SECONDS = 600` (10 min) — מצא cool-down
 - `SOS_TIMEOUT_MINUTES = 60` — reassignment trigger
 - `STALE_BOOKED_LEAD_HOURS = 24` — stale job reminder threshold
