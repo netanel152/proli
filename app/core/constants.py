@@ -150,6 +150,10 @@ class WorkerConstants:
     # PRO-118: window for the customer to answer the "really cancel?" prompt
     # (AWAITING_CANCEL_CONFIRMATION). Expiry = the job silently stays booked.
     CANCEL_CONFIRM_TTL_SECONDS = 300
+    # PRO-119: window for the customer to answer the loyalty offer ("want your
+    # previous pro?"). Without it the state inherited the 4h default TTL and a
+    # customer whose reply we failed to parse was trapped for hours.
+    LOYALTY_CONFIRM_TTL_SECONDS = 300
     PRO_APPROVAL_TTL_SECONDS = (
         3600  # 60 min — pro must approve a finalized deal within this window
     )

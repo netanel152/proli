@@ -33,7 +33,7 @@ Input classes
 | `awaiting_pro_approval` | → awaiting_pro_approval, "מאתרים עבורך איש מקצוע זמין" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | TTL ≤ 3600s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
 | `paused_for_human` | silent | silent | silent | silent | silent | TTL ≤ 900s | "מעביר אותך לנציג אנושי" | N/A[race] |
 | `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | TTL ≤ 14400s | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
-| `awaiting_loyalty_confirmation` | → idle, "בודק מולו ומעדכן" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | TTL ≤ 14400s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
+| `awaiting_loyalty_confirmation` | → awaiting_pro_approval, "עם הפרטים, ואעדכן אותך ברגע שיאשר" | → idle, "אחפש עבורך את איש המקצוע הפנוי" | "לא בטוח שהבנתי" | "לא בטוח שהבנתי" | "לא בטוח שהבנתי" | TTL ≤ 300s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
 | `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | TTL ≤ 14400s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
 | `awaiting_cancel_confirmation` | → idle, "ביטלתי את העבודה" | → idle, "העבודה נשארת כמתוכנן" | → idle, "העבודה נשארת כמתוכנן" | → idle, "העבודה נשארת כמתוכנן" | → idle, "העבודה נשארת כמתוכנן" | TTL ≤ 300s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
 | `pro_mode` | "פקודות המערכת" | "פקודות המערכת" | "פקודות המערכת" | N/A[pro-text-only] | "פקודות המערכת" | TTL ≤ 14400s | "פקודות המערכת" | N/A[race] |
@@ -223,9 +223,38 @@ async def arrange_awaiting_reschedule_time(world):
 
 
 async def arrange_awaiting_loyalty_confirmation(world):
+    # PRO-119: production sets this state with a bounded TTL (the unclear-reply
+    # trap this fixed), so the arrangement must match — not the 4h default —
+    # or the `silence` cell would pin the pre-fix behavior right back.
+    #
+    # Post-review: `_accept_loyalty_offer` judges dispatchability only on the
+    # five persisted address parts, never on `full_address` (an intake lead's
+    # `full_address` is a bare city, and treating that as "complete" would
+    # dispatch a pro to a city with no street — the regression the review
+    # caught). `booked_job` only seeds `full_address`/`city` by default, so
+    # the parts are seeded explicitly here to keep the `keyword` cell
+    # exercising a real dispatch (AWAITING_PRO_APPROVAL) rather than the
+    # NEED_DETAILS/AWAITING_ADDRESS branch.
+    #
+    # status="contacted", not "new": the dispatch write now guards on
+    # `expected_status=LeadStatus.CONTACTED` specifically (a lead that already
+    # reached NEW is assigned/notified elsewhere, and yanking it here would
+    # skip the old-pro notice `reassign_lead` sends) — seeding "new" would
+    # make this cell silently take the lost-race path instead of dispatching.
     await world.standard_cast()
-    await world.booked_job(world.pros[R.PRO_PRIMARY], status="new", booked_slot_id=None)
-    await world.set_state(UserStates.AWAITING_LOYALTY_CONFIRMATION)
+    await world.booked_job(
+        world.pros[R.PRO_PRIMARY],
+        status="contacted",
+        booked_slot_id=None,
+        street="דיזנגוף",
+        street_number="50",
+        floor="3",
+        apartment="12",
+    )
+    await world.set_state(
+        UserStates.AWAITING_LOYALTY_CONFIRMATION,
+        ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
+    )
     await world.set_metadata({"past_pro_id": str(world.pros[R.PRO_PRIMARY]["_id"])})
     return world.customer
 
@@ -526,14 +555,31 @@ MATRIX: dict[str, dict] = {
         "race": Cell(na=RACE_NA),
     },
     UserStates.AWAITING_LOYALTY_CONFIRMATION: {
+        # PRO-119: whole-token natural-language yes/no (not just literal "1"/
+        # "2"), a bounded TTL, and a real dispatch on accept. Dispatchability
+        # is judged only on the five persisted address parts — never on
+        # `full_address` (an intake lead's is a bare city, and the fallback
+        # that once treated any `full_address` as "complete" was removed as a
+        # regression risk) — so the arranger seeds the parts explicitly to
+        # keep this cell exercising a real dispatch (notifies the pro, parks
+        # the customer in AWAITING_PRO_APPROVAL) instead of the old
+        # unconditional "בודק מולו ומעדכן" that contacted nobody.
         "keyword": Cell(
-            send="1", expect_state=UserStates.IDLE, expect=("בודק מולו ומעדכן",)
+            send="1",
+            expect_state=UserStates.AWAITING_PRO_APPROVAL,
+            expect=("עם הפרטים, ואעדכן אותך ברגע שיאשר",),
         ),
-        "free": Cell(send="כן בבקשה אותו", expect=("אנא השב 1 (כן) או 2 (לא)",)),
-        "offtopic": Cell(send="מה השעה?", expect=("אנא השב 1 (כן) או 2 (לא)",)),
-        "wrong": Cell(send="", media="image", expect=("אנא השב 1 (כן) או 2 (לא)",)),
-        "emoji": Cell(send="👍", expect=("אנא השב 1 (כן) או 2 (לא)",)),
-        "silence": Cell(max_ttl=14400),
+        # Natural-language decline (not the literal "2") — PRO-119's whole-token
+        # NEGATIVE_KEYWORDS match, exercising the other half of the new parser.
+        "free": Cell(
+            send="לא תודה, תמצא לי מישהו אחר",
+            expect_state=UserStates.IDLE,
+            expect=("אחפש עבורך את איש המקצוע הפנוי",),
+        ),
+        "offtopic": Cell(send="מה השעה?", expect=("לא בטוח שהבנתי",)),
+        "wrong": Cell(send="", media="image", expect=("לא בטוח שהבנתי",)),
+        "emoji": Cell(send="👍", expect=("לא בטוח שהבנתי",)),
+        "silence": Cell(max_ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS),
         "interrupt": Cell(
             send="נציג",
             expect_state=UserStates.PAUSED_FOR_HUMAN,

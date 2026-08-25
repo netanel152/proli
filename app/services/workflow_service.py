@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 from app.providers.whatsapp import get_whatsapp
 from app.services.ai_engine_service import AIEngine, AIResponse
 from app.services.lead_manager_service import (
@@ -233,6 +234,164 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         await _process_incoming_message_inner(chat_id, user_text, media_url)
     finally:
         await release_chat_lock(chat_id)
+
+
+async def _decline_loyalty_offer(chat_id) -> None:
+    """Customer declined the loyalty offer, or it could not be honoured —
+    release the state and fall back to normal matching (PRO-119).
+
+    ``clear_state`` (not ``set_state(IDLE)``) so the transient
+    ``loyalty_reprompted`` / ``past_pro_id`` metadata goes with it rather than
+    lingering on its own 4h TTL.
+    """
+    await StateManager.clear_state(chat_id)
+    await whatsapp.send_message(chat_id, Messages.Customer.LOYALTY_DECLINED)
+    await lead_manager.log_message(chat_id, "model", Messages.Customer.LOYALTY_DECLINED)
+
+
+async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool:
+    """Customer accepted the loyalty offer (PRO-119). Returns False when the
+    offer can't be honoured, so the caller falls back to the decline copy.
+
+    The old handler always answered "אני בודק מולו ומעדכן" and went IDLE
+    without contacting anyone — the pro only heard about it if the customer
+    happened to write again. The promise is now only made when it is true:
+    the offer fires mid-intake, and the PRO-43 hard address gate forbids
+    dispatching a pro without a complete address, so a lead that isn't ready
+    gets an honest "saved your preference, here's what's still missing"
+    instead.
+    """
+    if not past_pro_id or not active_lead:
+        return False
+    try:
+        past_pro = await users_collection.find_one(
+            {"_id": ObjectId(past_pro_id), "is_active": True}
+        )
+    except InvalidId:
+        past_pro = None
+    if not past_pro:
+        # Offered while active, deactivated since (or corrupt metadata).
+        logger.info(
+            f"Loyalty offer accepted by ...{chat_id[-8:]} but pro {past_pro_id} is "
+            "no longer available — falling back to normal matching"
+        )
+        return False
+
+    pro_name = past_pro.get("business_name", Defaults.EXPERT_NAME)
+    meta.pop("loyalty_reprompted", None)
+    await StateManager.set_metadata(chat_id, meta)
+
+    # Does the lead already carry a dispatchable address? Judged on the five
+    # persisted parts only — deliberately NOT on `full_address`, which an
+    # intake lead carries as the bare city (`full_address=extracted_city` at
+    # lead creation) and which would wave a city-only dispatch straight past
+    # the PRO-43 gate. Every route that composes a real `full_address` writes
+    # the parts first (the AWAITING_ADDRESS merge persists `non_empty` before
+    # composing), so nothing legitimate is lost by ignoring it here.
+    probe = SimpleNamespace(
+        **{
+            field: active_lead.get(field)
+            for field in ("street", "street_number", "city", "floor", "apartment")
+        }
+    )
+    ok, reason = is_address_complete(probe)
+    if not ok and active_lead.get("is_emergency") and active_lead.get("city"):
+        # Same bypass _finalize_deal grants an emergency: a known city is
+        # enough when someone's home is flooding.
+        ok, reason = True, ""
+
+    if not ok:
+        await leads_collection.update_one(
+            {"_id": active_lead["_id"]}, {"$set": {"pro_id": past_pro["_id"]}}
+        )
+        # AWAITING_ADDRESS, not IDLE: the ack below *is* the address gate's own
+        # missing-parts question, and that state owns the re-extract/merge/
+        # compose answer path. Routed through IDLE the reply would land on the
+        # generic persona turn instead.
+        await StateManager.set_state(chat_id, UserStates.AWAITING_ADDRESS)
+        ack = Messages.Customer.LOYALTY_ACCEPTED_NEED_DETAILS.format(
+            pro_name=pro_name, missing=reason
+        )
+        await whatsapp.send_message(chat_id, ack)
+        await lead_manager.log_message(chat_id, "model", ack)
+        logger.info(
+            f"Loyalty accepted by ...{chat_id[-8:]} — pro {past_pro['_id']} saved, "
+            "address incomplete so intake continues"
+        )
+        return True
+
+    # Dispatchable: hand the lead to the chosen pro for real, arming the PRO-56
+    # approval SLA (and therefore PRO-117's rematch) exactly like the initial
+    # assignment path does. Actor.CUSTOMER (not SYSTEM, as _finalize_deal uses
+    # for the same edge) because this transition is the customer's own choice
+    # of pro, and the funnel history should say so.
+    dispatch_fields = {
+        "pro_id": past_pro["_id"],
+        "pro_notified_at": datetime.now(timezone.utc),
+        "approval_nudged": False,
+        "reassign_offered": False,
+    }
+    # The offer builder reads these straight off the lead: an intake lead's
+    # `full_address` is the bare city and its `appointment_time` is the English
+    # "Pending" sentinel, both of which would land verbatim in a Hebrew offer.
+    if active_lead.get("street") and active_lead.get("street_number"):
+        dispatch_fields["full_address"] = compose_full_address(probe)
+    elif not active_lead.get("full_address") and active_lead.get("city"):
+        # Emergency bypass: no composable parts (or a street with no number,
+        # which would render "הרצל None, תל אביב"). Same fallback
+        # _finalize_deal uses there, so an emergency offer never prints
+        # "לא ידוע" for a lead whose city we do know.
+        dispatch_fields["full_address"] = active_lead["city"]
+    if (active_lead.get("appointment_time") or Defaults.PENDING_TIME) in (
+        Defaults.PENDING_TIME,
+        Defaults.ASAP_TIME,
+    ):
+        dispatch_fields["appointment_time"] = Messages.Fallbacks.TIME_ASAP
+    # expected_status guards the read-then-write gap: a monitor escalation or a
+    # concurrent assignment must not be silently resurrected under this pro.
+    # CONTACTED specifically — a lead that reached NEW is already assigned to and
+    # notified at some pro, and yanking it here would skip the old-pro notice
+    # that monitor_service.reassign_lead sends.
+    updated = await set_lead_status(
+        active_lead["_id"],
+        LeadStatus.NEW,
+        Actor.CUSTOMER,
+        extra_set=dispatch_fields,
+        expected_status=LeadStatus.CONTACTED,
+    )
+    if updated is None:
+        logger.info(
+            f"Loyalty dispatch for ...{chat_id[-8:]} lost the status race on lead "
+            f"{active_lead['_id']} — leaving it to the current owner"
+        )
+        # None (not False) so the caller can tell "the lead moved under you"
+        # from "this offer can't be honoured" — answering a *yes* with "I'll go
+        # find you someone" would be a promise the winner already invalidated.
+        return None
+    notified = await notification_service.notify_pro_new_lead(
+        updated, past_pro, whatsapp
+    )
+    if not notified:
+        # Fail-open, same contract as the reassignment path: the lead is NEW
+        # with the SLA clock armed, so the approval monitor nudges and then
+        # re-routes rather than the customer waiting on a silent failure.
+        logger.error(
+            f"Loyalty dispatch to pro {past_pro['_id']} failed to send for "
+            f"...{chat_id[-8:]} — SLA monitor will recover the lead"
+        )
+    await StateManager.set_state(
+        chat_id,
+        UserStates.AWAITING_PRO_APPROVAL,
+        ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
+    )
+    ack = Messages.Customer.LOYALTY_ACCEPTED_NOTIFYING.format(pro_name=pro_name)
+    await whatsapp.send_message(chat_id, ack)
+    await lead_manager.log_message(chat_id, "model", ack)
+    logger.info(
+        f"Loyalty accepted by ...{chat_id[-8:]} — lead {active_lead['_id']} "
+        f"dispatched to pro {past_pro['_id']}"
+    )
+    return True
 
 
 async def _execute_customer_cancel(booked_lead, chat_id: str) -> None:
@@ -640,7 +799,7 @@ async def _process_incoming_message_inner(
 
     # Loyalty confirmation — customer replied to the "do you want your previous pro?" offer
     if current_state == UserStates.AWAITING_LOYALTY_CONFIRMATION:
-        meta = await StateManager.get_metadata(chat_id)
+        meta = await StateManager.get_metadata(chat_id) or {}
         past_pro_id = meta.get("past_pro_id")
         active_lead = await leads_collection.find_one(
             {
@@ -649,27 +808,69 @@ async def _process_incoming_message_inner(
             },
             sort=[("created_at", -1)],
         )
-        reply = (user_text or "").strip()
-        if reply in ("1", "כן"):
-            if past_pro_id and active_lead:
-                await leads_collection.update_one(
-                    {"_id": active_lead["_id"]},
-                    {"$set": {"pro_id": ObjectId(past_pro_id)}},
+        # PRO-119: accept natural language, not just the literal menu digits.
+        # Whole-token matching (PRO-118) makes "כן בבקשה" / "לא תודה" work
+        # while "בסדר גמור לא" — matching both sides — is treated as unclear.
+        says_yes = normalized_text == "1" or contains_keyword(
+            normalized_text, Messages.Keywords.AFFIRMATIVE_KEYWORDS
+        )
+        says_no = normalized_text == "2" or contains_keyword(
+            normalized_text, Messages.Keywords.NEGATIVE_KEYWORDS
+        )
+
+        if says_yes and not says_no:
+            handled = await _accept_loyalty_offer(
+                chat_id, past_pro_id, active_lead, meta
+            )
+            if handled:
+                return
+            if handled is None:
+                # The lead moved under us mid-answer (a monitor escalation, most
+                # likely). Don't answer a *yes* with "I'll go find you someone" —
+                # a promise the race winner has already invalidated.
+                await StateManager.clear_state(chat_id)
+                await whatsapp.send_message(
+                    chat_id, Messages.Customer.LOYALTY_ALREADY_UPDATED
                 )
-            await StateManager.set_state(chat_id, UserStates.IDLE)
-            ack = "מעולה, אני בודק מולו ומעדכן!"
-            await whatsapp.send_message(chat_id, ack)
-            await lead_manager.log_message(chat_id, "model", ack)
+                await lead_manager.log_message(
+                    chat_id, "model", Messages.Customer.LOYALTY_ALREADY_UPDATED
+                )
+                return
+            # The past pro is gone or there is no live lead to attach them to —
+            # answer with the decline copy rather than promising a check
+            # against somebody we cannot reach.
+            await _decline_loyalty_offer(chat_id)
             return
-        elif reply in ("2", "לא"):
-            await StateManager.set_state(chat_id, UserStates.IDLE)
-            ack = "בסדר גמור, אני אחפש עבורך את איש המקצוע הפנוי והמתאים ביותר."
-            await whatsapp.send_message(chat_id, ack)
-            await lead_manager.log_message(chat_id, "model", ack)
+
+        # A reply carrying *both* sides ("כן אבל בעצם לא") is unclear, not a
+        # decline — it must reach the re-prompt below, so guard on `not
+        # says_yes` here rather than letting says_no win by position.
+        if says_no and not says_yes:
+            await _decline_loyalty_offer(chat_id)
             return
-        else:
-            await whatsapp.send_message(chat_id, "אנא השב 1 (כן) או 2 (לא).")
+
+        # Unclear reply: re-prompt once, then let the message through to normal
+        # routing. The old handler re-prompted forever with no budget and no
+        # fall-through, so anything the parser missed trapped the customer.
+        if not meta.get("loyalty_reprompted"):
+            meta["loyalty_reprompted"] = True
+            await StateManager.set_metadata(chat_id, meta)
+            await StateManager.set_state(
+                chat_id,
+                UserStates.AWAITING_LOYALTY_CONFIRMATION,
+                ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
+            )
+            await whatsapp.send_message(chat_id, Messages.Customer.LOYALTY_REPROMPT)
+            await lead_manager.log_message(
+                chat_id, "model", Messages.Customer.LOYALTY_REPROMPT
+            )
             return
+        logger.info(
+            f"Loyalty offer unanswered twice by ...{chat_id[-8:]} — releasing to "
+            "normal routing"
+        )
+        await StateManager.clear_state(chat_id)
+        current_state = await StateManager.get_state(chat_id)
 
     # PRO-116: customer replied to the "new request or about the existing job?"
     # prompt (sent when they have a confirmed BOOKED job — see the Q3 gate below).
@@ -1369,6 +1570,13 @@ async def _process_incoming_message_inner(
     # Create or update a "contacted" lead as soon as we have ANY info.
     # This ensures that if the AI forgets to repeat a field in the next turn,
     # it's still preserved in the DB and injected as a 'sticky' fact.
+    #
+    # Bound before the gate, not only inside it: every *later* reader used to
+    # be nested under `if extracted_city and extracted_issue...`, which implied
+    # the gate had run, but that is a fragile guarantee — a reader outside that
+    # nesting (PRO-119's parts persistence below) would otherwise hit an
+    # UnboundLocalError on any turn the gate skips.
+    current_lead_id = active_lead["_id"] if active_lead else None
     if extracted_city or extracted_issue or media_url or is_emergency_detected:
         if not active_lead:
             active_lead = await lead_manager.create_lead_from_dict(
@@ -1421,6 +1629,23 @@ async def _process_incoming_message_inner(
                 extracted_city = ai_city or extracted_city
                 extracted_issue = ai_issue or extracted_issue
 
+    # PRO-119: persist whatever address parts this turn's extraction produced.
+    # The sticky gate above keeps only city/issue/name, so a customer who
+    # front-loads their whole address ("נזילה ברחוב הרצל 10 קומה 2 דירה 5 בתל
+    # אביב") had the parts dropped and got asked for them again — including
+    # immediately after accepting the loyalty offer, which can only dispatch
+    # when the parts are on the lead.
+    if current_lead_id:
+        extracted_parts = {
+            field: getattr(dispatcher_response.extracted_data, field, None)
+            for field in ("street", "street_number", "floor", "apartment")
+        }
+        extracted_parts = {k: v for k, v in extracted_parts.items() if v}
+        if extracted_parts:
+            await leads_collection.update_one(
+                {"_id": current_lead_id}, {"$set": extracted_parts}
+            )
+
     # Loyalty Check: offer returning customers their previous pro before running normal matching
     if (
         extracted_city
@@ -1446,8 +1671,13 @@ async def _process_incoming_message_inner(
                     await StateManager.set_metadata(
                         chat_id, {"past_pro_id": str(past_pro["_id"])}
                     )
+                    # PRO-119: bounded TTL — without one this inherited the 4h
+                    # default and a customer whose reply we failed to parse
+                    # was trapped with no way out but a reset keyword.
                     await StateManager.set_state(
-                        chat_id, UserStates.AWAITING_LOYALTY_CONFIRMATION
+                        chat_id,
+                        UserStates.AWAITING_LOYALTY_CONFIRMATION,
+                        ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
                     )
                     loyalty_msg = Messages.Customer.LOYALTY_OFFER.format(
                         pro_name=past_pro.get("business_name", "איש המקצוע")

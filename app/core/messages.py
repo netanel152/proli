@@ -106,6 +106,30 @@ class Messages:
             "השב *1* - כן, אשמח שזה יהיה הוא.\n"
             "השב *2* - לא, חפש לי מישהו אחר."
         )
+        # PRO-119: the accept ack must match what actually happened. Sent only
+        # when the lead was complete enough to dispatch and the pro really was
+        # contacted this turn.
+        LOYALTY_ACCEPTED_NOTIFYING = (
+            "מעולה! 🙌 פניתי ל{pro_name} עם הפרטים, ואעדכן אותך ברגע שיאשר."
+        )
+        # Sent when the address gate is not satisfied yet: the preference is
+        # saved, but no pro was contacted — so the copy promises nothing and
+        # asks for what is still missing ({missing} is the gate's own reason).
+        LOYALTY_ACCEPTED_NEED_DETAILS = (
+            "מעולה, רשמתי ש{pro_name} יטפל בעבודה הזו. 👌\n" "{missing}"
+        )
+        # PRO-119: the lead changed hands while the loyalty prompt was open —
+        # neutral, promises nothing, since the race winner owns it now.
+        LOYALTY_ALREADY_UPDATED = (
+            "הפנייה שלך כבר עודכנה במערכת — נמשיך לטפל בה ואעדכן אותך. 🙏"
+        )
+        LOYALTY_DECLINED = (
+            "בסדר גמור, אני אחפש עבורך את איש המקצוע הפנוי והמתאים ביותר."
+        )
+        LOYALTY_REPROMPT = (
+            "לא בטוח שהבנתי 🙂\n"
+            "השב *1* אם תרצה שאבדוק מול איש המקצוע הקודם, או *2* כדי שאחפש מישהו אחר."
+        )
         PRO_CANCELLED_BOOKING = (
             "⚠️ *עדכון:* איש המקצוע ביטל את העבודה שנקבעה.\n"
             "אנו נחפש לך איש מקצוע אחר בהקדם. 🙏"
@@ -627,6 +651,28 @@ class Messages:
         # request for a human — "מנהל עבודה" is a construction foreman, a
         # profession a customer plausibly mentions when describing the job.
         SOS_EXCLUDE_PHRASES = ["מנהל עבודה"]
+        # PRO-119: natural yes/no for the loyalty confirmation, matched as
+        # whole tokens (app/core/text_matching), so "כן בבקשה" / "לא תודה"
+        # work instead of being rejected into an unbounded re-prompt loop.
+        AFFIRMATIVE_KEYWORDS = [
+            "כן",
+            "בטח",
+            "אשמח",
+            "סבבה",
+            "מעולה",
+            "בהחלט",
+            "yes",
+            "ok",
+            "אוקי",
+        ]
+        NEGATIVE_KEYWORDS = [
+            "לא",
+            "לאו",
+            "no",
+            "nope",
+            "אחר",
+            "מישהו אחר",
+        ]
         # PRO-118: matched as whole tokens/phrases only (app/core/text_matching).
         # The bare "טעות" was dropped — it cancelled BOOKED jobs from innocent
         # sentences like "שלחתי בטעות את הכתובת הלא נכונה". Because whole-token
