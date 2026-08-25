@@ -1,8 +1,6 @@
 ---
 name: code-reviewer
 description: Senior read-only code reviewer. Run on changed files to get severity-grouped findings with fix snippets. Covers async safety, FSM invariants, text-only menu rules, PII, secrets, and test coverage.
-model: opus
-effort: 3
 color: yellow
 tools:
   - Read
