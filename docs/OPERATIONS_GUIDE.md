@@ -131,7 +131,7 @@ When a deal is finalized by the AI:
 2. Pro receives a text-based approval request (reply "אשר" or "1"):
    - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared. System enforces strict scoping (pro must have a pending lead assigned).
    - **Pause Bot** (reply "השהה") → customer enters `PAUSED_FOR_HUMAN` (15m rolling), direct chat begins
-   - **Reject** (reply "2" or "דחה") → lead becomes `REJECTED`, system may re-route
+   - **Reject** (reply "2" or "דחה") → lead becomes `REJECTED` then immediately handed to `reassign_lead`: reassigned → `NEW` under the next pro (customer told, approval SLA re-armed); no replacement → `PENDING_ADMIN_REVIEW` (admin paged, customer told)
 3. Pro can manage availability:
    - **Vacation Mode** (reply "חופשה" or "הפסקה") → sets `is_active: False`, pro stops receiving new leads.
    - **Resume** (reply "זמין") → sets `is_active: True`.

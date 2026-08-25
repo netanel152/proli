@@ -16,12 +16,14 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 from bson import ObjectId
 
-from app.core.constants import LeadStatus, WorkerConstants
+from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
 from app.core.config import settings
 from app.core.phone import to_chat_id, to_local_phone
+from app.core.redis_client import get_redis_client
 from app.services import monitor_service
 from app.services.monitor_service import reassign_lead
+from app.services.state_manager_service import StateManager
 
 
 @pytest.fixture
@@ -365,3 +367,277 @@ async def test_below_max_reassignments_attempts_normal_reassignment(
 
     # Text-only menu rule (CLAUDE.md) — no interactive buttons anywhere in this flow.
     mock_whatsapp.send_interactive_buttons.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# PRO-117 — notify_old_pro param and the no-usable-location escalation branch
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reassign_lead_default_notifies_old_pro_of_lost_lead(
+    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context
+):
+    """Default (notify_old_pro=True, the SOS Healer / PRO-56 offer path) must
+    keep telling the old pro their lead was reassigned."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    await mock_db.users.delete_many({})
+
+    old_pro_id = ObjectId()
+    await mock_db.users.insert_one({"_id": old_pro_id, "phone_number": "972500000003"})
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי",
+        "phone_number": "972500000002",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
+    )
+    monkeypatch.setattr(
+        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=True)
+    )
+    lead = await _insert_exhausted_lead(
+        mock_db, reassignment_count=0, pro_id=old_pro_id
+    )
+
+    result = await reassign_lead(lead)
+
+    assert result is True
+    from app.core.phone import to_chat_id
+
+    mock_whatsapp.send_message.assert_any_call(
+        to_chat_id("972500000003"), Messages.SOS.PRO_LOST_LEAD
+    )
+
+
+@pytest.mark.asyncio
+async def test_reassign_lead_notify_old_pro_false_skips_lost_lead_message(
+    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context
+):
+    """PRO-117 — a pro who explicitly rejected already got the reject
+    acknowledgement; they must NOT also get PRO_LOST_LEAD ("הועברה עקב חוסר
+    מענה"), which is the wrong message for an explicit action."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    await mock_db.users.delete_many({})
+
+    old_pro_id = ObjectId()
+    await mock_db.users.insert_one({"_id": old_pro_id, "phone_number": "972500000003"})
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי",
+        "phone_number": "972500000002",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
+    )
+    monkeypatch.setattr(
+        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=True)
+    )
+    lead = await _insert_exhausted_lead(
+        mock_db, reassignment_count=0, pro_id=old_pro_id
+    )
+
+    result = await reassign_lead(lead, notify_old_pro=False)
+
+    assert result is True
+    for call in mock_whatsapp.send_message.await_args_list:
+        assert call.args[1] != Messages.SOS.PRO_LOST_LEAD
+
+
+@pytest.mark.asyncio
+async def test_reassign_lead_no_usable_location_notifies_customer(
+    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_matching
+):
+    """PRO-117 — this branch used to escalate silently (state cleared, no
+    message at all). It must now fail-open like the other two escalation
+    branches: tell the customer, then clear state and context."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    await mock_db.leads.delete_many({})
+    lead = await _insert_exhausted_lead(
+        mock_db, reassignment_count=0, full_address=None
+    )
+
+    result = await reassign_lead(lead)
+
+    assert result is False
+    updated = await mock_db.leads.find_one({"_id": lead["_id"]})
+    assert updated["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert updated["escalation_reason"] == "no_usable_location"
+
+    mock_whatsapp.send_message.assert_any_call(
+        lead["chat_id"], Messages.Customer.PENDING_REVIEW
+    )
+    mock_matching.assert_not_awaited()
+
+    state_mgr, context_mgr = mock_state_and_context
+    state_mgr.clear_state.assert_awaited_once_with(lead["chat_id"])
+    context_mgr.clear_context.assert_awaited_once_with(lead["chat_id"])
+
+
+@pytest.mark.asyncio
+async def test_reassign_lead_new_write_guard_skips_on_concurrent_status_change(
+    mock_db, monkeypatch, mock_whatsapp
+):
+    """PRO-117 gap 6 — the success-path NEW write is itself guarded with
+    ``expected_status=lead.get('status')`` now (a pro's reject and the
+    Healer's tick can race in different processes). If the DB doc has already
+    moved by the time this caller tries to write NEW, the guard must fail
+    closed: no pro notified, no NEW write, no "found you someone" message —
+    only the unconditional CUSTOMER_REASSIGNING notice that fires before the
+    matching round."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    await mock_db.leads.delete_many({})
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי",
+        "phone_number": "972500000002",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
+    )
+    notify_pro = AsyncMock(return_value=True)
+    monkeypatch.setattr(monitor_service, "notify_pro_new_lead", notify_pro)
+
+    lead = await _insert_exhausted_lead(
+        mock_db, status=LeadStatus.PENDING_ADMIN_REVIEW, reassignment_count=0
+    )
+    # Stale read: a concurrent caller already moved the DB doc, but this
+    # caller's in-memory copy still says NEW.
+    stale_lead = dict(lead)
+    stale_lead["status"] = LeadStatus.NEW
+
+    result = await reassign_lead(stale_lead)
+
+    assert result is False
+    notify_pro.assert_not_awaited()
+
+    updated = await mock_db.leads.find_one({"_id": lead["_id"]})
+    assert updated["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert updated["pro_id"] == "old_pro"
+    assert "reassignment_count" not in updated or updated["reassignment_count"] == 0
+
+    mock_whatsapp.send_message.assert_any_call(
+        lead["chat_id"], Messages.SOS.CUSTOMER_REASSIGNING
+    )
+    transparent_msg = Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
+        pro_name=new_pro["business_name"]
+    )
+    for call in mock_whatsapp.send_message.await_args_list:
+        assert call.args[1] != transparent_msg
+
+
+@pytest.mark.asyncio
+async def test_reassign_lead_no_usable_location_survives_notify_failure(
+    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_matching
+):
+    """The customer notify on this branch is best-effort -- a failed send
+    must not stop the escalation or the state/context cleanup."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    await mock_db.leads.delete_many({})
+    mock_whatsapp.send_message.side_effect = RuntimeError("wa down")
+    lead = await _insert_exhausted_lead(
+        mock_db, reassignment_count=0, full_address=None
+    )
+
+    result = await reassign_lead(lead)
+
+    assert result is False
+    updated = await mock_db.leads.find_one({"_id": lead["_id"]})
+    assert updated["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert updated["escalation_reason"] == "no_usable_location"
+
+    state_mgr, context_mgr = mock_state_and_context
+    state_mgr.clear_state.assert_awaited_once_with(lead["chat_id"])
+    context_mgr.clear_context.assert_awaited_once_with(lead["chat_id"])
+
+
+# ---------------------------------------------------------------------------
+# PRO-117 (re-review) — conditional re-arm on the success path: a CONTACTED
+# lead the Healer swept was never finalized and keeps the old clear-state
+# semantics; every other status (NEW from the PRO-56 "1" reply, REJECTED from
+# a pro reject) re-arms the approval SLA instead. Real (fakeredis-backed)
+# StateManager, not a mock, so both the value and the TTL are observable.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reassign_lead_contacted_lead_clears_state_instead_of_rearming(
+    mock_db, monkeypatch, mock_whatsapp
+):
+    """A CONTACTED lead may still be mid-conversation (AWAITING_ADDRESS/MEDIA/
+    TIME/CONSENT) -- re-arming AWAITING_PRO_APPROVAL would soft-hold every
+    message the customer sends for PRO_APPROVAL_TTL_SECONDS. This branch keeps
+    the old clear-state behaviour so the next message reaches the AI."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי",
+        "phone_number": "972500000002",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
+    )
+    monkeypatch.setattr(
+        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=True)
+    )
+    lead = await _insert_exhausted_lead(
+        mock_db, status=LeadStatus.CONTACTED, reassignment_count=0
+    )
+    # Pre-set a mid-conversation state so a passing assertion proves it was
+    # actually cleared, not just never written.
+    await StateManager.set_state(lead["chat_id"], UserStates.AWAITING_ADDRESS)
+
+    result = await reassign_lead(lead)
+
+    assert result is True
+    assert await StateManager.get_state(lead["chat_id"]) == UserStates.IDLE
+
+
+@pytest.mark.asyncio
+async def test_reassign_lead_non_contacted_lead_rearms_approval_sla(
+    mock_db, monkeypatch, mock_whatsapp
+):
+    """NEW (PRO-56 "1" reply) and REJECTED (pro reject) leads are already in
+    the approval funnel -- the success path must re-arm AWAITING_PRO_APPROVAL
+    with PRO_APPROVAL_TTL_SECONDS so the nudge/reassign-offer stays live for
+    the new pro, rather than clearing state."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי",
+        "phone_number": "972500000002",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
+    )
+    monkeypatch.setattr(
+        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=True)
+    )
+    lead = await _insert_exhausted_lead(
+        mock_db, status=LeadStatus.NEW, reassignment_count=0
+    )
+
+    result = await reassign_lead(lead)
+
+    assert result is True
+    assert (
+        await StateManager.get_state(lead["chat_id"])
+        == UserStates.AWAITING_PRO_APPROVAL
+    )
+
+    redis = await get_redis_client()
+    ttl = await redis.ttl(f"state:{lead['chat_id']}")
+    assert 0 < ttl <= WorkerConstants.PRO_APPROVAL_TTL_SECONDS
