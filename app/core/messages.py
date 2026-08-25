@@ -165,7 +165,14 @@ class Messages:
         CALENDAR_UPDATE_SUCCESS = "\n📅 היומן עודכן בהצלחה!"
         NO_PENDING_APPROVE = "לא מצאתי עבודה חדשה לאישור."
         ALREADY_RESPONDED = "כבר הגבת לקריאה זו. לא ניתן לשנות את בחירתך כעת."
-        REJECT_SUCCESS = "העבודה נדחתה. נחפש איש מקצוע אחר."
+        # PRO-117: sent only after the rematch actually happened, so the copy
+        # states a done fact rather than promising a future search.
+        REJECT_SUCCESS = "העבודה נדחתה. הפנייה הועברה לאיש מקצוע אחר."
+        # PRO-117: sent when reject → rematch found no replacement and the lead
+        # was escalated to admin review — no "we'll find someone else" promise.
+        REJECT_SUCCESS_ESCALATED = (
+            "העבודה נדחתה. הפנייה הועברה לצוות Proli לשיבוץ ידני."
+        )
         NO_PENDING_REJECT = "לא מצאתי עבודה חדשה לדחייה."
         FINISH_SUCCESS = "✅ עודכן שהעבודה הסתיימה. תודה!"
         # PRO-33: the job is already COMPLETED when this is sent — the price is a

@@ -30,7 +30,7 @@ Input classes
 | `awaiting_consent` | → idle, "אפשר להתחיל" | "ברוכים הבאים ל-Proli" | "ברוכים הבאים ל-Proli" | "ברוכים הבאים ל-Proli" | "ברוכים הבאים ל-Proli" | TTL ≤ 14400s | → idle, "לא נשמור מידע עליך" | N/A[race] |
 | `customer_mode` | "מה הכתובת" | "מאיפה בדיוק" | "במה אפשר לעזור" | "ראיתי את התמונה" | "לעזור" | TTL ≤ 14400s | → pro_mode | N/A[race] |
 | `awaiting_address` | → idle, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "עוד פרטים לכתובת" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
-| `awaiting_pro_approval` | → idle, "מאתרים עבורך איש מקצוע זמין" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | TTL ≤ 3600s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
+| `awaiting_pro_approval` | → awaiting_pro_approval, "מאתרים עבורך איש מקצוע זמין" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | TTL ≤ 3600s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
 | `paused_for_human` | silent | silent | silent | silent | silent | TTL ≤ 900s | "מעביר אותך לנציג אנושי" | N/A[race] |
 | `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | TTL ≤ 14400s | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
 | `awaiting_loyalty_confirmation` | → idle, "בודק מולו ומעדכן" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | "אנא השב 1 (כן) או 2 (לא)" | TTL ≤ 14400s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
@@ -462,10 +462,14 @@ MATRIX: dict[str, dict] = {
         "race": Cell(na=RACE_NA),
     },
     UserStates.AWAITING_PRO_APPROVAL: {
-        # "1" accepts the SLA's reassignment offer, which re-routes and clears state.
+        # "1" accepts the SLA's reassignment offer, which re-routes to the next
+        # pro via reassign_lead. PRO-117: a lead already in the approval funnel
+        # (this one is NEW, not CONTACTED) re-arms the SLA — set_state back to
+        # AWAITING_PRO_APPROVAL with PRO_APPROVAL_TTL_SECONDS — rather than
+        # clearing state, so the nudge/reassign-offer stays live for the new pro.
         "keyword": Cell(
             send="1",
-            expect_state=UserStates.IDLE,
+            expect_state=UserStates.AWAITING_PRO_APPROVAL,
             expect=("מאתרים עבורך איש מקצוע זמין",),
         ),
         "free": Cell(send="מתי הוא מגיע?", expect=("אצל איש המקצוע לאישור",)),

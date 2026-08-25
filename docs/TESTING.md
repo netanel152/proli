@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 1167 passed, 97 skipped, 4 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 91 skips are cells of the PRO-83 state × input matrix — but not all of them are deliberate `N/A`: 15 (`defect-finish`, `defect-cancel`, `defect-price`) are dark because of the same tracked product defects the strict xfails document below, not by design. The xfails are four product defects the harness documents — see below).
+**Current status: 1185 passed, 97 skipped, 3 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 91 skips are cells of the PRO-83 state × input matrix — but not all of them are deliberate `N/A`: 15 (`defect-finish`, `defect-cancel`, `defect-price`) are dark because of the same tracked product defects the strict xfails document below, not by design. The xfails are three product defects the harness documents — see below).
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here — when you add tests, update this line in the same PR. CI enforces it exactly (the "Guard — test baseline" step in `.github/workflows/tests.yml` fails the build when the passed count is below **or** above this line), so a regression and a stale baseline are both unmergeable.
 
@@ -44,7 +44,8 @@ pytest -m integration
 |------|---------------|
 | `test_workflow_orchestrator.py` | Central routing: reset commands, pro auto-detect, AWAITING_ADDRESS, AWAITING_PRO_APPROVAL, PAUSED_FOR_HUMAN, SOS→TTL, deal finalization, no-pro fallback, PRO-63 `PENDING_REVIEW_SHORTCIRCUIT_HOURS` recency-bounded short-circuit |
 | `test_smart_dispatcher_logic.py` | Dispatcher AI: missing info → clarify, city+issue → handoff to pro, audio transcription flow |
-| `test_pro_flow.py` | Pro commands: approve, reject, finish (multi-job selection), pause bot, resume, dashboard fallback, vacation mode, PRO-63 `מצא` reassignment-lifecycle reset after escalation |
+| `test_pro_flow.py` | Pro commands: approve, reject (PRO-117 rematch handoff), finish (multi-job selection), pause bot, resume, dashboard fallback, vacation mode, PRO-63 `מצא` reassignment-lifecycle reset after escalation |
+| `test_pro_flow_reject_rematch.py` | PRO-117 pro-reject → rematch: atomic claim (`expected_status=NEW`), handoff to `monitor_service.reassign_lead(notify_old_pro=False)`, `rejected_by` exclusion accumulating across reject hops, double-tap fat-finger guard, no-replacement/`reassign_lead`-raises/`reassign_lead`-returns-False fallback to `_escalate_rejected_lead` (PENDING_ADMIN_REVIEW + admin page + customer message), approval-SLA re-arm on success, context not cleared on success |
 | `test_customer_flow.py` | Post-job: completion checks, rating prompts, review collection |
 | `test_dual_role_routing.py` | Pro-as-customer routing: `לקוח` mode switch, sticky CUSTOMER_MODE while their own lead is open, context-aware keyword bypass, soft-hold escape |
 
@@ -56,7 +57,7 @@ pytest -m integration
 | `test_geocoding_service.py` | Static dict lookup, Redis cache hits/misses, Google Maps API calls with bounding-box validation, fallback chain, PRO-19 definitive-vs-transient miss split (`GeocodingUnavailable`, TTL choice) and the `geo:unavailable` circuit breaker |   
 | `test_stale_nudger.py` | Periodic reminders for booked leads > 24h old |
 | `test_approval_sla.py` | PRO-56 approval SLA: T+10 pro nudge, T+25 customer reassignment offer, emergency-halved thresholds, idempotency, business-hours gate, and the customer 1/2 reply handling |
-| `test_reassign_escalation.py` | PRO-63 `reassign_lead`: exhausted `MAX_REASSIGNMENTS` escalates to `PENDING_ADMIN_REVIEW` (never `CLOSED`), immediate admin alert (and best-effort survival if it fails), customer notification, state/context clear, idempotency guard, race-safe `expected_status` write, and that exhaustion is checked before matching/reassigning |
+| `test_reassign_escalation.py` | PRO-63/PRO-117 `reassign_lead`: exhausted `MAX_REASSIGNMENTS` escalates to `PENDING_ADMIN_REVIEW` (never `CLOSED`), immediate admin alert (and best-effort survival if it fails), customer notification including the no-usable-location branch, `notify_old_pro` toggle, PRO-56 SLA re-arm on success (state/context clear only for CONTACTED leads), idempotency guard, race-safe `expected_status` write, and that exhaustion is checked before matching/reassigning |
 | `test_scheduler_gating.py` | PRO-73 gating primitives: `within_business_hours` (Israel 08–21) and the `_customer_cold_job_allowed` toggle+hours gate (default OFF) for cold customer-facing jobs |
 | `test_seed_coverage_matrix.py` | PRO-84 staging coverage matrix: the 27-professional seed's shape, reserved phone block, determinism and `--purge` scoping — plus the **real `determine_best_pro` run against the seeded matrix**, asserting each of the ten routing scenarios' winner by name (rating sort, load balancing, 10→20→30 km expansion, coverage gap, geocoding, text fallback, reverse match, ineligibility filter) |
 ### Infrastructure
@@ -279,12 +280,11 @@ python -m tests.e2e.test_e2e_state_matrix
 
 ### Defects it found
 
-Four `xfail(strict=True)` tests document behaviour the system should have and does
+Three `xfail(strict=True)` tests document behaviour the system should have and does
 not. Strict mode turns each into a hard failure the moment it is fixed.
 
 | Test | Defect |
 |---|---|
-| `test_pro_rejection_reassigns_to_the_next_pro` | A pro rejection is a silent dead end: the lead goes `REJECTED`, the customer's state is cleared, and nothing notifies them or re-routes — no scheduler job queries `REJECTED`. |
 | `test_pro_can_select_which_job_to_finish` | `PRO_SELECTING_JOB_TO_FINISH` is unreachable through the orchestrator — the `PRO_BUSINESS_KEYWORDS` bypass overwrites the state to `PRO_MODE` before `pro_flow` reads it, so "1" runs approve instead of picking job 1. |
 | `test_pro_final_price_is_recorded` | `PRO_AWAITING_FINAL_PRICE` is absent from the dispatch, so PRO-33's `final_price` / `commission_amount` can never be captured in production. |
 | `test_text_fallback_routing_still_honours_exclusions` | `determine_best_pro`'s reverse-match fallback drops `excluded_pro_ids` and the `pending_approval` guard. |

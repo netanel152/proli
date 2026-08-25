@@ -412,23 +412,51 @@ async def test_approve_persists_correct_slot_id_with_multiple_active_jobs(
 
 
 # --- Reject ---
+#
+# PRO-117: reject no longer dead-ends the lead — it hands off to
+# monitor_service.reassign_lead(lead, notify_old_pro=False). _handle_reject
+# no longer takes/uses lead_manager at all (it claims the rejection itself via
+# set_lead_status), so these assert against the DB doc directly rather than a
+# mock lead_manager call. These two tests mock matching_service.determine_best_pro
+# to land on the "replacement found" branch (REJECT_SUCCESS); see
+# tests/test_pro_flow_reject_rematch.py and tests/test_reassign_escalation.py
+# for the full PRO-117 branch coverage (no-replacement escalation,
+# reassign_lead-raises fallback, notify_old_pro, status_history, SLA re-arm,
+# and context-not-cleared-on-success).
 
 
 @pytest.mark.asyncio
-async def test_reject_lead(pro_setup, mock_wa, mock_lm):
+async def test_reject_lead(pro_setup, mock_wa, mock_lm, monkeypatch):
     pro_doc, db = pro_setup
+    lead_id = ObjectId()
     await db.leads.insert_one(
         {
+            "_id": lead_id,
             "pro_id": pro_doc["_id"],
             "status": LeadStatus.NEW,
             "chat_id": "972501111111@c.us",
+            "full_address": "הרצל 1, תל אביב",
             "created_at": datetime.now(timezone.utc),
         }
+    )
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי אינסטלציה",
+        "phone_number": "972559444143",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
     )
 
     result = await handle_pro_text_command("972500000000@c.us", "דחה", mock_wa, mock_lm)
     assert result == Messages.Pro.REJECT_SUCCESS
-    mock_lm.update_lead_status.assert_called_once()
+    mock_lm.update_lead_status.assert_not_called()
+
+    updated = await db.leads.find_one({"_id": lead_id})
+    assert updated["status"] == LeadStatus.NEW
+    assert updated["pro_id"] == new_pro["_id"]
+    assert pro_doc["_id"] in updated["rejected_by"]
 
 
 @pytest.mark.asyncio
@@ -867,21 +895,36 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reject_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
-    """Pro types 'דחה' -> lead rejected, customer state cleared."""
+    """Pro types 'דחה' -> lead rejected and reassigned, customer SLA re-armed.
+
+    PRO-117: a successful reassignment re-arms the PRO-56 approval SLA —
+    StateManager.set_state(..., AWAITING_PRO_APPROVAL) — rather than clearing
+    state, so the customer stays covered by the nudge/reassign-offer for the
+    new pro. This is real (fakeredis-backed) StateManager, not a mock, so the
+    assertion reads the actual FSM state back.
+    """
     pro_doc, db = pro_setup
 
-    mock_state = MagicMock()
-    mock_state.get_state = AsyncMock(return_value=None)
-    mock_state.clear_state = AsyncMock()
-    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+    from app.services.state_manager_service import StateManager
+
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי אינסטלציה",
+        "phone_number": "972559444143",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
+    )
 
     lead_id = ObjectId()
+    chat_id = "972501111111@c.us"
     await db.leads.insert_one(
         {
             "_id": lead_id,
             "pro_id": pro_doc["_id"],
             "status": LeadStatus.NEW,
-            "chat_id": "972501111111@c.us",
+            "chat_id": chat_id,
             "issue_type": "נזילה",
             "full_address": "רחוב הרצל 5",
             "appointment_time": "10:00",
@@ -892,8 +935,11 @@ async def test_reject_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch)
     result = await handle_pro_text_command(f"{PRO_PHONE}@c.us", "דחה", mock_wa, mock_lm)
 
     assert result == Messages.Pro.REJECT_SUCCESS
-    mock_lm.update_lead_status.assert_called_once()
-    mock_state.clear_state.assert_called_with("972501111111@c.us")
+    mock_lm.update_lead_status.assert_not_called()
+
+    updated = await db.leads.find_one({"_id": lead_id})
+    assert updated["pro_id"] == new_pro["_id"]
+    assert await StateManager.get_state(chat_id) == UserStates.AWAITING_PRO_APPROVAL
 
 
 @pytest.mark.asyncio

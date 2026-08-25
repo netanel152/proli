@@ -6,7 +6,8 @@
 CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
               ↓       ↓
           REJECTED  CANCELLED
-              ↓
+            ↓  ↑
+            │  └── reassigned to a new pro → NEW
     PENDING_ADMIN_REVIEW
 ```
 
@@ -16,10 +17,10 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 | `new` | Pro matched and approval message sent | `_finalize_deal` |
 | `booked` | Pro approves via text ("אשר"/"1") | `_handle_approve` in `pro_flow.py` |
 | `completed` | Pro or customer confirms work done | `customer_flow.py` |
-| `rejected` | Pro rejects via text ("דחה"/"2") | `_handle_reject` in `pro_flow.py` |
+| `rejected` | Pro rejects via text ("דחה"/"2") — a way-station, not terminal: `_handle_reject` claims it then hands off to `monitor_service.reassign_lead`, which reopens the lead as `new` under the next pro or escalates it (PRO-117) | `_handle_reject` in `pro_flow.py` |
 | `cancelled` | Customer cancels | `pro_flow.py` |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h | `admin_flow.py` / `monitor_service.py` |
-| `pending_admin_review` | No replacement pro found at any radius | `monitor_service.py` / `workflow_service.py` |
+| `pending_admin_review` | No replacement pro found at any radius, `MAX_REASSIGNMENTS` exhausted, or a rejected lead's rematch itself fails | `monitor_service.py` / `workflow_service.py` / `pro_flow.py` |
 
 Each transition is appended to the lead's `status_history` array (`{status, at, by}`) via `set_lead_status()`, the single writer for lead status in `lead_manager_service.py`.
 
@@ -163,7 +164,8 @@ Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "
 - Chat history stored in Redis per `chat_id` (last 20 messages, 4 h TTL)
 - AI calls receive the last **5 turns** (10 messages) after trimming — centralized in `ai_engine_service.analyze_conversation`
 - Context is cleared (`ContextManager.clear_context`) when:
-  - Lead is completed or rejected
+  - Lead is completed
+  - A pro's reject fails to find a replacement and the lead is escalated to `PENDING_ADMIN_REVIEW` (PRO-117); a *successful* reject → rematch deliberately keeps context — the conversation continues with the new pro
   - Max reassignments reached (lead escalated to `PENDING_ADMIN_REVIEW`)
   - Lead escalated to `PENDING_ADMIN_REVIEW` (healer path)
   - Customer resets with "התחלה" / "reset"

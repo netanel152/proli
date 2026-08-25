@@ -36,11 +36,11 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 | **P2** | Navigation link (`NAVIGATE_TO`) | `workflow_service.py:1660`, `notification_service.py:159` | Always paired with P1 | A separate message. Under templates that is a second approval **and** a second billable send — strong candidate to fold into P1's body. |
 | **P3** | Lead offer, reassignment + admin-assignment path | `notification_service.py:157` (`notify_pro_new_lead`) | `monitor_service.reassign_lead`, `admin_flow` assignment | Shares the builder with P1 but uses the leaner `NEW_LEAD_*` templates. Same variable set. |
 | **P4** | Early-lead notification (`EARLY_LEAD_*`) | `workflow_service.py:1319–1325` | Customer mid-intake | **Sends media** via `send_file_by_url` when a photo exists, text otherwise. A media-header template is a different structure from a text template — this needs two templates or a policy change. |
-| **P5** | Approval nudge (`APPROVAL_NUDGE`) | `monitor_service.py:622` | Scheduler, T+10 min of pro silence | Sent precisely because the pro is *not* engaging, so assuming an open window is exactly backwards. |
+| **P5** | Approval nudge (`APPROVAL_NUDGE`) | `monitor_service.py:688` | Scheduler, T+10 min of pro silence | Sent precisely because the pro is *not* engaging, so assuming an open window is exactly backwards. |
 | **P6** | Daily agenda | `scheduler.py:76` | Cron 08:00 Israel time | Per-pro job list. Classic UTILITY-category daily digest. |
-| **P7** | Stale booked-lead reminder (`STALE_LEAD_REMINDER`) | `monitor_service.py:766` | Scheduler, every 4h, lead ≥24h old | The 24h staleness threshold guarantees the window is closed. |
+| **P7** | Stale booked-lead reminder (`STALE_LEAD_REMINDER`) | `monitor_service.py:825` | Scheduler, every 4h, lead ≥24h old | The 24h staleness threshold guarantees the window is closed. |
 | **P8** | Finish reminder (`Pro.REMINDER`) | `notification_service.send_pro_reminder` | Stale-job monitor | Capped at `MAX_PRO_REMINDERS`. |
-| **P9** | Lead lost on reassignment (`PRO_LOST_LEAD`) | `monitor_service.py:196` | Reassignment | |
+| **P9** | Lead lost on reassignment (`PRO_LOST_LEAD`) | `monitor_service.py:248` | Reassignment | Skipped when the reassignment came from a pro's own reject (PRO-117 `notify_old_pro=False`) — that pro already got the reject acknowledgement. |
 | **P10** | Bot paused (`PAUSE_NOTIFICATION`) | `workflow_service.py:460` | Customer triggered SOS | |
 | **P11** | SOS alert (`SOS.PRO_ALERT`) | `notification_service.send_sos_alert` | Customer distress | Time-critical; a rejected template here is a safety regression. |
 | **P12** | Customer cancelled (`CUSTOMER_CANCELLED`) | `workflow_service` | Customer cancels | |
@@ -50,9 +50,9 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 
 | # | Send | Call site | Trigger | Notes |
 |---|---|---|---|---|
-| **C1** | No pro available (`NO_PRO_AVAILABLE`) | `monitor_service.py:307` | Lead janitor, every 6h | Lead can be arbitrarily old. Assume closed. |
+| **C1** | No pro available (`NO_PRO_AVAILABLE`) | `monitor_service.py:378` | Lead janitor, every 6h | Lead can be arbitrarily old. Assume closed. |
 | **C2** | Completion check | `admin_panel/core/utils.py:190` (operator) · `customer_flow.py:send_customer_completion_check` (scheduler) | **Operator clicks a button**, or stale-job monitor Tier 2 | Arbitrary timing by construction. Capped at `MAX_CUSTOMER_COMPLETION_CHECKS` per lead with a `CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS` gap; an operator send bypasses the cap but still restarts the cooldown. |
-| **C3** | Reassignment notices (`CUSTOMER_REASSIGNING`, `MAX_REASSIGNMENTS_REACHED`, `PENDING_REVIEW`) | `monitor_service.py:116, 157, 213` | `SOS_TIMEOUT_MINUTES=60` path → in-window; `STALE_BOOKED_LEAD_HOURS=24` path → **on the boundary** | Same code, two triggers, two different answers. Must be treated as template-required. |
+| **C3** | Reassignment notices (`CUSTOMER_REASSIGNING`, `MAX_REASSIGNMENTS_REACHED`, `PENDING_REVIEW`) | `monitor_service.py:180, 129, 284` | `SOS_TIMEOUT_MINUTES=60` path → in-window; `STALE_BOOKED_LEAD_HOURS=24` path → **on the boundary**; PRO-117 pro-reject rematch failure → also in-window | Same code, multiple triggers (including the PRO-117 reject-rematch fallback), different window answers. Must be treated as template-required. |
 
 ### Operator-facing — ✅ **resolved, no templates needed**
 

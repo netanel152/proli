@@ -116,9 +116,9 @@ redis-cli DEL "state:972523651414@c.us"
 
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
-| 1 | 972524828796 | "דחה" | "העבודה נדחתה" | Lead status = REJECTED |
+| 1 | 972524828796 | "דחה" | "העבודה נדחתה. הפנייה הועברה לאיש מקצוע אחר." | Lead reassigned to the next pro |
 
-**DB check:** Lead status = "rejected"
+**DB check:** `status_history` shows `rejected` (actor=pro) then `new` (actor=system); lead status = "new" under the new pro (or "pending_admin_review" if no replacement was found — customer is messaged either way)
 
 ---
 

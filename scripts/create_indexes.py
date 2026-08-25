@@ -58,6 +58,12 @@ async def create_all_indexes(silent: bool = False):
         await leads_collection.create_index(
             [("chat_id", ASCENDING), ("status", ASCENDING)]
         )
+        # PRO-117: second clause of the fat-finger guard's $or in
+        # _recently_responded_lead — every clause of an $or must be indexed
+        # or the whole query degrades to a collection scan.
+        await leads_collection.create_index(
+            [("rejected_by", ASCENDING), ("last_rejected_at", ASCENDING)]
+        )
         log("  Leads: done")
     except Exception as e:
         log(f"  Error indexing Leads: {e}")

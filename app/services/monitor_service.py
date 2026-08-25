@@ -62,7 +62,7 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
         )
 
 
-async def reassign_lead(lead) -> bool:
+async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
     """Reassign one lead to the next-best pro, excluding its current pro.
 
     Notifies the customer, the new pro, and the old pro; escalates to
@@ -72,8 +72,11 @@ async def reassign_lead(lead) -> bool:
     flags) for the new pro so PRO-56 re-arms. Returns True iff a new pro was
     assigned.
 
-    Shared by the SOS Healer (60-min stale sweep) and the PRO-56 approval-SLA
-    reassignment offer (customer chose "find someone else").
+    Shared by the SOS Healer (60-min stale sweep), the PRO-56 approval-SLA
+    reassignment offer (customer chose "find someone else"), and the PRO-117
+    pro-reject handoff. ``notify_old_pro=False`` skips the ``PRO_LOST_LEAD``
+    message ("הועברה עקב חוסר מענה") — wrong for a pro who explicitly rejected
+    and already got the reject acknowledgement.
     """
     lead_id = lead["_id"]
     chat_id = lead["chat_id"]
@@ -159,7 +162,17 @@ async def reassign_lead(lead) -> bool:
             Actor.SYSTEM,
             extra_set={"escalation_reason": "no_usable_location"},
         )
+        # PRO-117: this branch used to escalate silently — the customer's state
+        # was cleared with no message, the exact "ghosting" the other two
+        # escalation branches already avoid. Fail-open like them.
+        try:
+            await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+        except Exception as e:
+            logger.error(
+                f"Failed to notify customer ...{chat_id[-8:]} of pending review: {e}"
+            )
         await StateManager.clear_state(chat_id)
+        await ContextManager.clear_context(chat_id)
         return False
 
     # 1. Notify customer
@@ -168,8 +181,12 @@ async def reassign_lead(lead) -> bool:
     except Exception as e:
         logger.error(f"Failed to notify customer ...{chat_id[-8:]}: {e}")
 
-    # 2. Find replacement (excluding current pro)
-    excluded_ids = [current_pro_id] if current_pro_id else []
+    # 2. Find replacement — exclude the current pro AND everyone who already
+    # explicitly rejected this lead (PRO-117: excluding only the current pro
+    # lets the reject chain ping-pong A→B→A within MAX_REASSIGNMENTS).
+    excluded_ids = list(lead.get("rejected_by") or [])
+    if current_pro_id and current_pro_id not in excluded_ids:
+        excluded_ids.append(current_pro_id)
     new_pro = await matching_service.determine_best_pro(
         issue_type=lead.get("issue_type"),
         location=raw_location,
@@ -179,8 +196,11 @@ async def reassign_lead(lead) -> bool:
     if new_pro:
         new_pro_id = new_pro["_id"]
 
-        # 3. Update lead — increment counter, reset timers + PRO-56 SLA clock
-        await set_lead_status(
+        # 3. Update lead — increment counter, reset timers + PRO-56 SLA clock.
+        # expected_status guards against a concurrent reassignment (PRO-117:
+        # a pro's דחה and the Healer's 60-min tick can race in different
+        # processes) — the loser aborts before notifying a second pro.
+        updated = await set_lead_status(
             lead_id,
             LeadStatus.NEW,
             Actor.SYSTEM,
@@ -193,7 +213,14 @@ async def reassign_lead(lead) -> bool:
                 "reassigned_from": current_pro_id,
                 "reassignment_count": reassignment_count + 1,
             },
+            expected_status=lead.get("status"),
         )
+        if updated is None:
+            logger.info(
+                f"⏭️ [Reassign] Lead {lead_id} changed status under a concurrent "
+                "caller — aborting this reassignment."
+            )
+            return False
 
         # 4. Notify new pro
         await notify_pro_new_lead(lead, new_pro, whatsapp)
@@ -214,14 +241,33 @@ async def reassign_lead(lead) -> bool:
             )
 
         # 5. Notify old pro
-        if current_pro_id:
+        if notify_old_pro and current_pro_id:
             old_pro = await users_collection.find_one({"_id": current_pro_id})
             if old_pro and old_pro.get("phone_number"):
                 old_phone = to_chat_id(old_pro["phone_number"])
                 await whatsapp.send_message(old_phone, Messages.SOS.PRO_LOST_LEAD)
 
-        # Clear any stuck customer state (e.g. AWAITING_PRO_APPROVAL)
-        await StateManager.clear_state(chat_id)
+        # Re-arm the PRO-56 approval SLA for the NEW pro (PRO-117): the SLA
+        # monitor and the 1/2 reassign-offer reply both require the customer to
+        # be in AWAITING_PRO_APPROVAL. Clearing state here (the old behavior)
+        # silently disarmed the nudge/offer for every reassigned lead, leaving
+        # only the 60-min Healer. Mirrors the initial-assignment path in
+        # workflow_service, bounded TTL included.
+        #
+        # Only for leads genuinely in the approval funnel, though: a CONTACTED
+        # lead the Healer swept was never finalized — its customer may be
+        # mid-conversation (AWAITING_ADDRESS/MEDIA/TIME/CONSENT), and
+        # AWAITING_PRO_APPROVAL soft-holds every message they send
+        # (STILL_WAITING, before the AI) for PRO_APPROVAL_TTL_SECONDS. Those
+        # keep the old clear-state semantics and degrade gracefully to the AI.
+        if lead.get("status") == LeadStatus.CONTACTED:
+            await StateManager.clear_state(chat_id)
+        else:
+            await StateManager.set_state(
+                chat_id,
+                UserStates.AWAITING_PRO_APPROVAL,
+                ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
+            )
         logger.info(
             f"✅ [Reassign] Lead {lead_id} reassigned from {current_pro_id} to "
             f"{new_pro_id} (attempt {reassignment_count + 1})"
