@@ -132,7 +132,9 @@ process_incoming_message(chat_id, text, media_url)
         │      └─ handle_pro_text_command(pro, text)
         │            ├─ "אשר" / "1" → lead BOOKED, clear customer state (strict scope check)
         │            ├─ "השהה" / "pause" → customer PAUSED_FOR_HUMAN (TTL 900 s)
-        │            ├─ "דחה" / "2" → lead REJECTED, clear customer state (strict scope check)
+        │            ├─ "דחה" / "2" → lead REJECTED (way-station) then handed to reassign_lead:
+        │            │      reassigned → lead NEW under the next pro, customer told, SLA re-armed;
+        │            │      no replacement → PENDING_ADMIN_REVIEW, admin paged, customer told (strict scope check)
         │            ├─ "סיימתי" / "3" → finish job (multi-job selection if needed)
         │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN
         │            ├─ "הפסקה" / "חופשה" → set pro is_active=False
@@ -269,8 +271,9 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
                 ↓                ↓
             REJECTED       CANCELLED
-                ↓
-       PENDING_ADMIN_REVIEW  (no replacement pro found)
+              ↓  ↑
+              │  └── reassigned to a new pro → NEW
+       PENDING_ADMIN_REVIEW  (no replacement pro found, or the reassign itself failed)
 ```
 
 | Status | Meaning |
@@ -279,7 +282,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | `new` | Pro matched and sent approval request |
 | `booked` | Pro approved, appointment slot locked |
 | `completed` | Work done, awaiting customer rating |
-| `rejected` | Pro declined |
+| `rejected` | Pro declined — a way-station, not terminal: `reassign_lead` immediately either reopens the lead as `new` under the next pro or escalates to `pending_admin_review` (PRO-117) |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h |
 | `cancelled` | Customer cancelled |
 | `pending_admin_review` | No pro found after all radius/fallback attempts, or max reassignments exhausted (a human takes over, PRO-63) |

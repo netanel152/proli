@@ -97,7 +97,7 @@ async def handle_pro_text_command(
         return await _handle_approve(pro, lead_manager, whatsapp)
 
     if text in Messages.Keywords.REJECT_COMMANDS:
-        return await _handle_reject(pro, lead_manager)
+        return await _handle_reject(pro, whatsapp)
 
     if text in Messages.Keywords.FINISH_COMMANDS:
         return await _handle_finish(pro, whatsapp, chat_id)
@@ -259,9 +259,17 @@ async def _recently_responded_lead(pro_id) -> bool:
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=_RESPONSE_WINDOW_SECONDS)
     recent = await leads_collection.find_one(
         {
-            "pro_id": pro_id,
-            "status": {"$in": [LeadStatus.BOOKED, LeadStatus.REJECTED]},
-            "created_at": {"$gte": cutoff},
+            "$or": [
+                {
+                    "pro_id": pro_id,
+                    "status": {"$in": [LeadStatus.BOOKED, LeadStatus.REJECTED]},
+                    "created_at": {"$gte": cutoff},
+                },
+                # PRO-117: after reject → rematch the lead's pro_id, status and
+                # created_at are all rewritten for the new pro — this pro's
+                # trace survives only in rejected_by/last_rejected_at.
+                {"rejected_by": pro_id, "last_rejected_at": {"$gte": cutoff}},
+            ]
         },
         sort=[("created_at", -1)],
     )
@@ -345,7 +353,7 @@ async def _handle_approve(pro, lead_manager, whatsapp):
     return response_text
 
 
-async def _handle_reject(pro, lead_manager):
+async def _handle_reject(pro, whatsapp):
     lead = await leads_collection.find_one(
         {"pro_id": pro["_id"], "status": LeadStatus.NEW}, sort=[("created_at", -1)]
     )
@@ -354,14 +362,103 @@ async def _handle_reject(pro, lead_manager):
             return Messages.Pro.ALREADY_RESPONDED
         return Messages.Pro.NO_PENDING_APPROVALS
 
-    await lead_manager.update_lead_status(
-        str(lead["_id"]), LeadStatus.REJECTED, actor=Actor.PRO
+    # PRO-117: claim the rejection atomically. expected_status=NEW makes a
+    # concurrent writer (the Healer's own reassignment tick, or a double-tapped
+    # דחה) lose cleanly instead of double-assigning the lead. rejected_by
+    # accumulates every pro who explicitly declined, so the rematch below (and
+    # any later Healer pass) never re-offers the lead to one of them —
+    # excluding only the current pro would ping-pong A→B→A within
+    # MAX_REASSIGNMENTS. last_rejected_at keeps the fat-finger guard working
+    # after the rematch rewrites pro_id/status/created_at for the new pro.
+    #
+    # Known-accepted race: the guard covers status, not pro_id — a Healer
+    # reassignment landing between the find_one above and this claim leaves
+    # status at NEW, so this pro can "reject" a lead that just moved to a
+    # third pro. Millisecond window; the SLA monitor self-heals it, and an
+    # expected_pro_id guard on set_lead_status is not worth the churn today.
+    rejected_by = list(lead.get("rejected_by") or []) + [pro["_id"]]
+    claimed = await set_lead_status(
+        lead["_id"],
+        LeadStatus.REJECTED,
+        Actor.PRO,
+        extra_set={
+            "rejected_by": rejected_by,
+            "last_rejected_at": datetime.now(timezone.utc),
+        },
+        expected_status=LeadStatus.NEW,
     )
-    # Clear cached context and customer state so next conversation starts fresh
-    if lead.get("chat_id"):
-        await ContextManager.clear_context(lead["chat_id"])
-        await StateManager.clear_state(lead["chat_id"])
-    return Messages.Pro.REJECT_SUCCESS
+    if claimed is None:
+        return Messages.Pro.ALREADY_RESPONDED
+    lead = claimed
+
+    # A rejected lead must never dead-end. Hand it straight to the shared
+    # reassignment path — it excludes everyone in rejected_by, messages the
+    # customer (CUSTOMER_REASSIGNING → AWAITING_APPROVAL_TRANSPARENT, or
+    # PENDING_REVIEW on escalation to admin review) and counts the attempt
+    # toward MAX_REASSIGNMENTS. Customer context is deliberately NOT cleared
+    # here: the conversation continues with the next pro, and the escalation
+    # branches inside reassign_lead clear state/context themselves — always
+    # with a message, never a silent wipe.
+    from app.services import monitor_service
+
+    try:
+        reassigned = await monitor_service.reassign_lead(lead, notify_old_pro=False)
+    except Exception as e:
+        logger.error(
+            f"Reject rematch failed for lead {lead['_id']}: {e} — "
+            "escalating to PENDING_ADMIN_REVIEW."
+        )
+        return await _escalate_rejected_lead(lead, whatsapp)
+
+    if reassigned:
+        return Messages.Pro.REJECT_SUCCESS
+
+    # reassign_lead returned False: usually it escalated (with a customer
+    # message) itself, but its idempotency/concurrency guards return False
+    # without writing anything — verify the lead did not stay in terminal
+    # REJECTED before telling the pro it was handed off.
+    fresh = await leads_collection.find_one({"_id": lead["_id"]}, {"status": 1})
+    fresh_status = (fresh or {}).get("status")
+    if fresh_status == LeadStatus.REJECTED:
+        return await _escalate_rejected_lead(lead, whatsapp)
+    if fresh_status == LeadStatus.NEW:
+        # A concurrent reassignment already moved it to the next pro.
+        return Messages.Pro.REJECT_SUCCESS
+    return Messages.Pro.REJECT_SUCCESS_ESCALATED
+
+
+async def _escalate_rejected_lead(lead, whatsapp):
+    """PRO-117 fallback: the rematch failed or no-opped — never leave the lead
+    in terminal REJECTED. Escalates to admin review, pages the admin (the
+    4-hourly Reporter is too slow for a branch that means something already
+    broke), and releases the customer with a message. The expected_status
+    guard keeps a concurrent writer from being clobbered; if it fails, the
+    lead is already alive under someone else's transition."""
+    from app.services import monitor_service
+
+    escalated = await set_lead_status(
+        lead["_id"],
+        LeadStatus.PENDING_ADMIN_REVIEW,
+        Actor.SYSTEM,
+        extra_set={"escalation_reason": "reject_rematch_failed"},
+        expected_status=LeadStatus.REJECTED,
+    )
+    if escalated:
+        await monitor_service._alert_admin_lead_escalated(
+            lead, lead.get("reassignment_count", 0)
+        )
+        chat_id = lead.get("chat_id")
+        if chat_id:
+            try:
+                await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+            except Exception as notify_err:
+                logger.error(
+                    f"Failed to notify customer of pending review after reject "
+                    f"rematch failure (lead {lead['_id']}): {notify_err}"
+                )
+            await StateManager.clear_state(chat_id)
+            await ContextManager.clear_context(chat_id)
+    return Messages.Pro.REJECT_SUCCESS_ESCALATED
 
 
 async def _handle_pause_bot(pro, whatsapp):

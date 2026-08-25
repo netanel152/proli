@@ -154,30 +154,36 @@ async def test_happy_path_inbound_to_rating(world):
 
 
 @pytest.mark.asyncio
-async def test_pro_rejection_marks_the_lead_rejected(world):
-    """Current behaviour, asserted honestly — see the xfail below for the gap."""
+async def test_pro_rejection_records_rejected_then_reassigns(world):
+    """PRO-117: a reject is no longer a terminal write. _handle_reject still
+    marks the lead REJECTED (actor=pro) first — the rejecting pro's own
+    acknowledgement text and the status_history entry both reflect that — but
+    then hands off to monitor_service.reassign_lead, which immediately
+    re-opens the lead as NEW under the next pro. See the companion test below
+    for the reassignment's own effects (new pro notified, customer told)."""
     await world.standard_cast()
     pro = world.pros[R.PRO_PRIMARY]
     lead = await world.awaiting_approval_job(pro)
 
     await world.send("דחה", chat_id=world.pro_chat(R.PRO_PRIMARY))
 
-    assert (await world.lead_by_id(lead["_id"]))["status"] == LeadStatus.REJECTED
     world.recorder.assert_text_to(world.pro_chat(R.PRO_PRIMARY), "העבודה נדחתה")
+    assert (await world.status_history(lead["_id"]))[-2:] == [
+        LeadStatus.REJECTED,
+        LeadStatus.NEW,
+    ]
+    # Terminal REJECTED was only a way-station — a replacement was found, so
+    # the lead is alive again, not dead-ended.
+    assert (await world.lead_by_id(lead["_id"]))["status"] == LeadStatus.NEW
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT found by this harness: a pro rejection is a silent dead end. "
-        "pro_flow._handle_reject sets the lead to REJECTED and clears the customer's "
-        "state and context, but never notifies the customer and never re-routes. No "
-        "scheduler job queries REJECTED (the SOS healer only looks at NEW/CONTACTED), "
-        "so the customer is dropped without a word and the lead is never reassigned."
-    ),
-)
 @pytest.mark.asyncio
 async def test_pro_rejection_reassigns_to_the_next_pro(world):
+    """The DEFECT this test used to document (xfail, strict) is fixed by
+    PRO-117: a pro rejection is no longer a silent dead end. reassign_lead —
+    the same helper the SOS Healer and the PRO-56 approval-SLA offer use —
+    now re-opens the lead under the next-best pro and keeps the customer in
+    the loop, instead of leaving REJECTED unqueried by any scheduler job."""
     await world.standard_cast()
     lead = await world.awaiting_approval_job(world.pros[R.PRO_PRIMARY])
 
@@ -186,7 +192,23 @@ async def test_pro_rejection_reassigns_to_the_next_pro(world):
     updated = await world.lead_by_id(lead["_id"])
     assert updated["status"] == LeadStatus.NEW
     assert updated["pro_id"] == world.pros[R.PRO_SECONDARY]["_id"]
+    assert updated["reassignment_count"] == 1
     world.recorder.assert_text_to(world.pro_chat(R.PRO_SECONDARY), "הצעת עבודה חדשה")
+    # The customer is told who was found — the thread doesn't go silent.
+    world.recorder.assert_text_to(
+        world.customer, world.pros[R.PRO_SECONDARY]["business_name"]
+    )
+    # The rejecting pro must not also get the "lost lead" copy — that message
+    # is for pros who went silent, not ones who explicitly rejected.
+    lost_lead_sends = [
+        s
+        for s in world.recorder.to(world.pro_chat(R.PRO_PRIMARY))
+        if "הועברה עקב חוסר מענה" in s.body
+    ]
+    assert not lost_lead_sends, (
+        "rejecting pro must not receive PRO_LOST_LEAD "
+        f"(that copy is for silent pros): {lost_lead_sends}"
+    )
 
 
 @pytest.mark.asyncio
