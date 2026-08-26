@@ -5,8 +5,6 @@ allowed-tools: Bash(git:*), Bash(gh:*), Bash(venv/Scripts/pytest:*), Bash(python
 model: opus
 ---
 
-You are running the Proli Linear-driven development loop for issue **$1**.
-
 Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live in CLAUDE.md — read it first if it isn't already in context.
 
 ## Current repo state (injected)
