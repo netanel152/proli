@@ -63,7 +63,7 @@ Hard rules: **never** paste secrets/tokens into tickets; keep phone numbers mask
 
 ## 5. Update the living system-audit artifact
 
-(Skip in `report` mode.) Republish the "Proli System Audit" artifact via the Artifact tool with `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7` — the `url` parameter updates it in place; omitting it forks a new artifact. Re-read it first (`action: "read"`) in case another session republished. Add a Fix-log row (date, "Sentry triage", outcome: tickets opened/resolved counts with links) and update any item status cards the triage changed. Keep the title ("Proli System Audit") and 🩺 favicon unchanged.
+(Skip in `report` mode.) Republish the "Proli System Audit" artifact via the Artifact tool with `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7` — the `url` parameter updates it in place; omitting it forks a new artifact. Re-read it first (`action: "read"`) in case another session republished. Add a Fix-log row (date, "Sentry triage", outcome: tickets opened/resolved counts with links) — into the top table of the split fix log, keeping only the five newest rows there and moving the overflow into the collapsed `details.loghist` history (bump its count/date-range summary). Update any item status cards the triage changed, **refresh the "Needs attention" section** (`id="attention"`) so it always shows the current short list and nothing stale, and keep the top-nav environment pills (`production · …` / `staging · …`) truthful. Keep the title ("Proli System Audit") and 🩺 favicon unchanged.
 
 ## 6. Final report
 
