@@ -1,0 +1,67 @@
+---
+description: Ops triage cockpit — sweep Sentry, cluster errors by root cause, cross-reference Linear, open/annotate tickets, resolve stale issues, report project status, and update the living system-audit artifact.
+argument-hint: "[report] — pass 'report' for read-only mode (no tickets opened, nothing resolved)"
+allowed-tools: Bash(git:*), Bash(gh:*), Read, Grep, Glob
+---
+
+You are running the Proli ops-triage loop. Mode: **$1** (empty = full triage with actions; `report` = read-only, findings only — take NO mutating action in Sentry, Linear, or the artifact).
+
+Stack context lives in CLAUDE.md — read it first if not already in context. Sentry org is `proli-kb`, project `python`. Linear team is `Proli`.
+
+## Current repo state (injected)
+
+- Branch: !`git branch --show-current`
+- Last commit: !`git log -1 --oneline`
+- Working tree: !`git status --short`
+
+## 1. Project status snapshot
+
+Gather, in parallel where possible:
+
+- **Deploy lag:** `git fetch origin` then `git rev-list --count origin/production..origin/dev` — how many commits production is behind. >0 for more than a few days deserves a callout (PRO-128 is the cautionary tale).
+- **CI on dev:** `gh run list --branch dev --limit 3` — is the latest run green? A red `🔎 Verify staging deployed this commit` run means staging is stale (PRO-155).
+- **Linear pulse:** via Linear MCP, list issues in `started` state and any `Urgent`/`High` priority issues in `Triage`/`Backlog` updated in the last 7 days.
+
+## 2. Sentry sweep
+
+Via the Sentry MCP (`mcp__sentry__*` — load with ToolSearch if deferred):
+
+1. `search_issues` on project `python`, `is:unresolved`, sort `recommended`, period `14d`, limit 25.
+2. For every issue that is **new, regressed, or last-seen within 48h**, fetch details with `get_sentry_resource` — you need the **environment tag** (production vs staging), `handled` flag, culprit frame, and occurrence trend. Batch these calls.
+3. If anything production-tagged appears, run `search_events` (dataset `errors`, `environment:production`, last 3d, sorted `-timestamp`) to establish whether it is *ongoing* or a *finished burst*.
+
+## 3. Cluster by root cause, not by title
+
+Sentry fragments one root cause into many issues (different culprits/messages). Group them. Known recurring clusters to recognize:
+
+- **Window-closed family** (`ServiceWindowClosedError` / "no fallback template" / "24h service window closed"): external blocker — Meta template approval (PRO-87/PRO-88/PRO-150). Repo-side siblings: PRO-125 (pro-facing silent drop), PRO-159 (unhandled crash on customer-facing path).
+- **Mongo auth / AutoReconnect bursts**: usually credential rotation or Atlas blips. Check whether the burst *ended* — a 20-minute burst that stopped days ago is stale, not active.
+- **Stuck-lead healer pages** (`lead(s) stuck for more than 60 minutes`): a symptom, not a cause — find *why* the lead is stuck (window-closed offer? no matching pro? unknown city?) before treating it as its own bug.
+
+## 4. Cross-reference Linear before opening anything
+
+For each cluster, search Linear (`list_issues` with `query`) for an existing ticket. Then classify:
+
+| Finding | Action (full mode) |
+|---|---|
+| Covered by an existing open ticket | `save_comment` on that ticket with the new Sentry evidence (links + last-seen). Never open a duplicate. |
+| New repo-side bug with clear evidence | Open a ticket via `save_issue` (team `Proli`): Sentry links, stack frames, environment, "why it matters", suggested direction, `relatedTo` the sibling tickets, label `Bug` (+ `launch-readiness` if it gates the pilot). Priority: Urgent only if production-user-facing *now*, else High. |
+| Stale — burst ended, cause known/fixed | Resolve in Sentry via `update_issue` with a `reason` naming the cause and the covering PRO-xxx, so a recurrence re-alerts as a regression. |
+| Known noise blocked on an external event | Leave unresolved (or `ignored`/`untilEscalating` if it's drowning the feed) and note the blocking ticket. Do **not** resolve — it will genuinely recur. |
+| Ambiguous — can't tell if it's a bug | Report it as an open question. Do not open a speculative ticket. |
+
+Hard rules: **never** paste secrets/tokens into tickets; keep phone numbers masked as Sentry gives them; one ticket per root cause, not per Sentry issue; the issue key in a PR title/branch/body auto-closes on merge (see CLAUDE.md) — tickets you open here are for *tracking*, so no PR references unless a PR exists.
+
+## 5. Update the living system-audit artifact
+
+(Skip in `report` mode.) Republish the "Proli System Audit" artifact via the Artifact tool with `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7` — the `url` parameter updates it in place; omitting it forks a new artifact. Re-read it first (`action: "read"`) in case another session republished. Add a Fix-log row (date, "Sentry triage", outcome: tickets opened/resolved counts with links) and update any item status cards the triage changed. Keep the title ("Proli System Audit") and 🩺 favicon unchanged.
+
+## 6. Final report
+
+End with a compact, plain-language block:
+
+- **Production:** healthy / degraded — with the one-line reason and deploy lag.
+- **Staging:** same.
+- **Clusters found:** one line each — root cause, env, trend, covering ticket.
+- **Actions taken:** tickets opened (keys + links), comments added, Sentry issues resolved/ignored.
+- **Needs a human:** anything ambiguous, external blockers, or decisions (e.g. template approval progress) that no ticket can fix.
