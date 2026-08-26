@@ -21,7 +21,12 @@ import app.providers.whatsapp as provider_pkg
 import app.providers.whatsapp.facade as facade_module
 from app.core.config import settings
 from app.core.constants import WorkerConstants
-from app.providers.whatsapp.base import NormalizedMessage, WhatsAppProvider
+from app.providers.whatsapp.base import (
+    NormalizedMessage,
+    ServiceWindowClosedError,
+    TemplateNotRegisteredError,
+    WhatsAppProvider,
+)
 from app.providers.whatsapp.cloud_api import CloudAPIProvider
 from app.providers.whatsapp.dry_run import DryRunProvider
 from app.providers.whatsapp.facade import WhatsAppFacade, record_account_state
@@ -195,6 +200,147 @@ async def test_every_outbound_method_is_gated(transmitting, fake_redis):
     await facade.send_interactive("972500000001@c.us", "body", ["a", "b"])
 
     assert transmitting.sent == []
+
+
+# ===========================================================================
+# PRO-159 — a closed 24h service window must not crash the caller
+#
+# Sentry PYTHON-1A: ServiceWindowClosedError used to propagate straight out of
+# the facade, so process_message_task died unhandled mid-flow (after side
+# effects — DB writes, state transitions — had already landed) and ARQ retried
+# the whole handler, re-running them. The fix: the facade catches the error and
+# answers the same "not sent" None a breaker-blocked send already gives.
+# ===========================================================================
+
+
+# Both causes the facade must swallow into a plain None: a closed 24h window
+# (ServiceWindowClosedError) and, since the same PRO-159 fix, an unapproved
+# fallback template (TemplateNotRegisteredError) reached through the same
+# free-form sends when a closed window routes through send_template().
+_POLICY_BLOCK_ERRORS = [ServiceWindowClosedError, TemplateNotRegisteredError]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy_error", _POLICY_BLOCK_ERRORS)
+async def test_send_message_returns_none_when_blocked_by_policy(
+    transmitting, fake_redis, policy_error
+):
+    async def _raise(chat_id, text):
+        raise policy_error("blocked")
+
+    transmitting.send_text = _raise
+    await fake_redis.set(_STATE_KEY, "authorized")
+    facade = WhatsAppFacade(transmitting)
+
+    assert await facade.send_message("972500000001@c.us", "hi") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy_error", _POLICY_BLOCK_ERRORS)
+async def test_send_file_by_url_returns_none_when_blocked_by_policy(
+    transmitting, fake_redis, policy_error
+):
+    async def _raise(chat_id, url, caption="", file_name="media.jpg"):
+        raise policy_error("blocked")
+
+    transmitting.send_file = _raise
+    await fake_redis.set(_STATE_KEY, "authorized")
+    facade = WhatsAppFacade(transmitting)
+
+    result = await facade.send_file_by_url("972500000001@c.us", "http://x/y.jpg")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("policy_error", _POLICY_BLOCK_ERRORS)
+async def test_send_interactive_returns_none_when_blocked_by_policy(
+    transmitting, fake_redis, policy_error
+):
+    async def _raise(chat_id, body, options):
+        raise policy_error("blocked")
+
+    transmitting.send_interactive = _raise
+    await fake_redis.set(_STATE_KEY, "authorized")
+    facade = WhatsAppFacade(transmitting)
+
+    result = await facade.send_interactive("972500000001@c.us", "body", ["a", "b"])
+
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_send_message_still_raises_on_a_non_window_provider_error(
+    transmitting, fake_redis
+):
+    """The yellowCard invariant this ticket must not weaken: ONLY
+    ServiceWindowClosedError is a known, already-paged degraded mode. Any other
+    provider failure (a Graph 4xx, standing in here as RuntimeError) is a
+    vendor rejection and must still propagate rather than be waved through as
+    a quiet None."""
+
+    async def _raise(chat_id, text):
+        raise RuntimeError("simulated Graph 4xx")
+
+    transmitting.send_text = _raise
+    await fake_redis.set(_STATE_KEY, "authorized")
+    facade = WhatsAppFacade(transmitting)
+
+    with pytest.raises(RuntimeError):
+        await facade.send_message("972500000001@c.us", "hi")
+
+
+@pytest.mark.parametrize(
+    "exc_name", ["ServiceWindowClosedError", "TemplateNotRegisteredError"]
+)
+def test_policy_block_errors_are_one_class_across_import_paths(exc_name):
+    """Both classes moved off cloud_api.py onto base.py (PRO-159); cloud_api.py
+    re-exports each via a plain import, and the package __init__ imports both
+    from base too, so an ``except <ThisError>`` written against any historical
+    import path still catches what the facade catches."""
+    import app.providers.whatsapp as pkg_module
+    import app.providers.whatsapp.base as base_module
+    import app.providers.whatsapp.cloud_api as cloud_api_module
+
+    base_cls = getattr(base_module, exc_name)
+    assert base_cls is getattr(cloud_api_module, exc_name)
+    assert base_cls is getattr(pkg_module, exc_name)
+
+
+@pytest.mark.asyncio
+async def test_window_closed_drop_logs_warning_not_error(transmitting, fake_redis):
+    """`_note_blocked` must log at WARNING, not ERROR. The provider has
+    already paged the operator via `page_critical` before raising; an ERROR
+    line here would push the same drop through the throttled loguru-ERROR ->
+    Sentry bridge a second time and double-report one drop as two."""
+    from app.core.logger import logger as app_logger
+
+    async def _raise(chat_id, text):
+        raise ServiceWindowClosedError("closed")
+
+    transmitting.send_text = _raise
+    await fake_redis.set(_STATE_KEY, "authorized")
+    facade = WhatsAppFacade(transmitting)
+
+    warning_lines: list[str] = []
+    error_lines: list[str] = []
+    warn_sink = app_logger.add(lambda m: warning_lines.append(str(m)), level="WARNING")
+    error_sink = app_logger.add(lambda m: error_lines.append(str(m)), level="ERROR")
+    try:
+        result = await facade.send_message("972500000001@c.us", "hi")
+    finally:
+        app_logger.remove(warn_sink)
+        app_logger.remove(error_sink)
+
+    assert result is None
+    assert any(
+        "service window closed" in line.lower() for line in warning_lines
+    ), "expected the PRO-159 breadcrumb at WARNING"
+    # Scoped to the facade module rather than "no ERROR at all" — an unrelated
+    # ERROR logged by anything else running during this await must not fail
+    # a test about _note_blocked's own log level.
+    facade_error_lines = [ln for ln in error_lines if "facade" in ln]
+    assert facade_error_lines == [], "a closed-window drop must not also log at ERROR"
 
 
 # ===========================================================================
