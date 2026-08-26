@@ -275,6 +275,89 @@ async def test_handle_completion_confirms(flow_db, mock_whatsapp):
 
 
 @pytest.mark.asyncio
+async def test_handle_completion_survives_pro_notification_window_closed(
+    flow_db, fake_redis
+):
+    """PRO-159 regression (Sentry PYTHON-1A): a closed 24h service window on the
+    PRO's completion notification must not crash the customer flow. Before the
+    facade translated ServiceWindowClosedError into None, this exception
+    propagated straight out of handle_customer_completion_text — AFTER the lead
+    had already been set COMPLETED and the context cleared — and ARQ retried the
+    whole process_message_task handler, re-running those side effects.
+
+    Uses a real WhatsAppFacade wrapping a stub provider (rather than a bare
+    AsyncMock standing in for the facade) so the facade's actual
+    exception-to-None translation is what's under test, not a double that was
+    made unrealistically forgiving.
+    """
+    from app.core.phone import to_chat_id
+    from app.providers.whatsapp.base import ServiceWindowClosedError, WhatsAppProvider
+    from app.providers.whatsapp.facade import WhatsAppFacade
+
+    await fake_redis.set("wa:instance:state", "authorized")
+
+    pro_id = ObjectId()
+    pro_phone = "972500000099"
+    await flow_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "יוסי",
+            "phone_number": pro_phone,
+        }
+    )
+    pro_chat_id = to_chat_id(pro_phone)
+
+    lead_id = ObjectId()
+    chat_id = "972501111199@c.us"
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    attempted: list[str] = []
+
+    class _WindowClosedForPro(WhatsAppProvider):
+        name = "fake-window-closed-for-pro"
+        transmits = True
+
+        async def send_text(self, chat_id, text):
+            attempted.append(chat_id)
+            if chat_id == pro_chat_id:
+                raise ServiceWindowClosedError("closed for this recipient")
+            return {"id": "ok"}
+
+        async def send_file(self, chat_id, url, caption="", file_name="media.jpg"):
+            return {"id": "ok"}
+
+        async def send_template(self, chat_id, template_name, params=None):
+            return {"id": "ok"}
+
+        async def send_interactive(self, chat_id, body, options):
+            return {"id": "ok"}
+
+        async def get_state(self):
+            return "authorized"
+
+        def parse_webhook(self, payload):
+            return None
+
+    whatsapp = WhatsAppFacade(_WindowClosedForPro())
+
+    result = await handle_customer_completion_text(chat_id, "כן, הסתיים", whatsapp)
+
+    assert pro_chat_id in attempted, "the pro notification must actually be attempted"
+    assert result == Messages.Customer.COMPLETION_ACK.format(pro_name="יוסי")
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["status"] == LeadStatus.COMPLETED
+    assert lead["waiting_for_rating"] is True
+
+
+@pytest.mark.asyncio
 async def test_handle_completion_numeric_yes(flow_db, mock_whatsapp):
     """Reply '1' triggers completion."""
     pro_id = ObjectId()

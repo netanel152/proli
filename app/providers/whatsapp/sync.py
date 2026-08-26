@@ -62,9 +62,10 @@ def send_text_sync(chat_id: str, text: str) -> bool:
     """Send one text message from sync code.
 
     Returns True only when the facade actually handed the message to a provider.
-    A suppressed send — breaker engaged, kill switch set — returns False, so the
-    admin panel can tell the operator "not sent" instead of showing a success
-    toast for a message nobody received.
+    A suppressed send — breaker engaged, kill switch set, or (PRO-159) a closed
+    24h service window with no approved fallback template — returns False, so
+    the admin panel can tell the operator "not sent" instead of showing a
+    success toast for a message nobody received.
 
     Never raises: every caller is a best-effort notification hanging off a UI
     action, and a failed courtesy message must not abort the database mutation

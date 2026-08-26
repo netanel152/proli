@@ -5,12 +5,19 @@ point of the ticket: the yellowCard incident was caused by traffic that went
 around the guarded client (raw ``httpx`` in the admin panel), which made the
 circuit breaker decoration rather than protection.
 
-Two guarantees live here, deliberately above the provider so they hold for any
+Three guarantees live here, deliberately above the provider so they hold for any
 transport:
 
 * **Circuit breaker / kill switch** — PRO-71, now fail-closed (PRO-82).
 * **Dry-run** — expressed as provider *selection* rather than a transport swap;
   see :class:`~app.providers.whatsapp.dry_run.DryRunProvider`.
+* **One "not sent" answer** — every send that was blocked rather than attempted
+  returns ``None``, whatever blocked it. PRO-159: a closed 24h service window
+  with no approved fallback template used to be the exception to that, and the
+  raise crashed ``process_message_task`` mid-flow. An unregistered fallback
+  template is translated the same way, since it reaches callers through the
+  same free-form sends. A vendor *rejection* still propagates — that
+  distinction is the yellowCard lesson.
 
 Method names match the client this replaces so the ~177 existing call sites and
 their test doubles keep working unchanged.
@@ -21,8 +28,20 @@ from typing import Any
 
 from app.core.constants import WorkerConstants
 from app.core.logger import logger
+from app.core.phone import mask_chat_id as _mask
 from app.core.redis_client import get_redis_client
-from app.providers.whatsapp.base import NormalizedMessage, WhatsAppProvider
+from app.providers.whatsapp.base import (
+    NormalizedMessage,
+    ServiceWindowClosedError,
+    TemplateNotRegisteredError,
+    WhatsAppProvider,
+)
+
+# The two ways a send can be *blocked* by policy rather than fail in transit.
+# Both are already reported by the provider before they are raised, and both
+# must end as a ``None`` return rather than an exception — see PRO-159 and
+# ``_note_blocked`` below.
+_BLOCKED_BY_POLICY = (ServiceWindowClosedError, TemplateNotRegisteredError)
 
 # PRO-71: presence of EITHER key halts all outbound.
 #   * wa:instance:paused        — auto, set by the deauth monitor while the
@@ -104,6 +123,46 @@ class WhatsAppFacade:
         return False
 
     # ------------------------------------------------------------------
+    # Blocked by policy → the same "not sent" answer the breaker already gives
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _note_blocked(what: str, chat_id: str, error: Exception) -> None:
+        """PRO-159: report a policy-blocked send without re-reporting it.
+
+        The provider always logs *before* raising, so this line is a breadcrumb
+        naming the send that was lost, not the alert. WARNING rather than ERROR
+        because an ERROR here would open a second Sentry issue for a single
+        drop the provider has already reported.
+
+        Know what that provider-side report actually is, because it is thinner
+        than "already paged" suggests: only the **first** window block per
+        recipient per day is a ``page_critical``. Every later one is a lone
+        ``logger.error``, and the loguru→Sentry bridge throttles per
+        ``module:function:line`` — so all subsequent window drops, for all
+        recipients, collapse into roughly one Sentry event per hour per
+        replica. Before PRO-159 each one also surfaced as an ArqIntegration
+        crash event; removing that crash was the point, but it means
+        closed-window *volume* has to be read from the logs rather than counted
+        from Sentry issues (SANDBOX_E2E_RUNSHEET.md step 4.6).
+
+        The two causes are logged distinctly because they need different
+        remedies: a closed window waits for an approved re-engagement template
+        (PRO-87/PRO-150), while an unregistered template is a registry or
+        rollout mistake that an operator can fix directly.
+        """
+        if isinstance(error, TemplateNotRegisteredError):
+            reason = "fallback template is not registered as approved"
+            hint = "Check the PRO-88 registry — an entry is still DRAFT."
+        else:
+            reason = "24h service window closed, no approved fallback template"
+            hint = "Reported by the provider; see PRO-87/PRO-150 for templates."
+        logger.warning(
+            f"⛔ Outbound dropped ({reason}) — {what} to {_mask(chat_id)} "
+            f"not sent. {hint}"
+        )
+
+    # ------------------------------------------------------------------
     # Outbound — legacy names, unchanged signatures
     # ------------------------------------------------------------------
 
@@ -114,6 +173,9 @@ class WhatsAppFacade:
             result = await self._provider.send_text(chat_id, text)
             logger.info(f"Message sent to ...{chat_id[-4:]}")
             return result
+        except _BLOCKED_BY_POLICY as e:
+            self._note_blocked("message", chat_id, e)
+            return None
         except Exception as e:
             logger.error(f"Failed to send message to ...{chat_id[-4:]}: {e}")
             raise
@@ -131,6 +193,9 @@ class WhatsAppFacade:
             result = await self._provider.send_file(chat_id, url, caption, file_name)
             logger.info(f"File sent to ...{chat_id[-4:]}")
             return result
+        except _BLOCKED_BY_POLICY as e:
+            self._note_blocked("file", chat_id, e)
+            return None
         except Exception as e:
             logger.error(f"Failed to send file to ...{chat_id[-4:]}: {e}")
             raise
@@ -176,7 +241,11 @@ class WhatsAppFacade:
     async def send_interactive(self, chat_id: str, body: str, options: list[str]):
         if not await self._guard("interactive message", chat_id):
             return None
-        return await self._provider.send_interactive(chat_id, body, options)
+        try:
+            return await self._provider.send_interactive(chat_id, body, options)
+        except _BLOCKED_BY_POLICY as e:
+            self._note_blocked("interactive message", chat_id, e)
+            return None
 
     # ------------------------------------------------------------------
     # State + inbound

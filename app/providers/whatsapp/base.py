@@ -17,6 +17,38 @@ from dataclasses import dataclass
 from typing import Any
 
 
+class ServiceWindowClosedError(Exception):
+    """A free-form send was attempted outside the recipient's 24h service
+    window and no approved fallback template exists. Raised *after* the
+    operator page — the raise is for the caller's error handling, the page is
+    the guarantee the drop was not silent.
+
+    Part of the provider **contract** rather than of any one provider, so the
+    facade above can name it without importing a transport (PRO-159). The
+    facade translates it into the same ``None`` return a breaker-blocked send
+    already produces: a closed window is a known, already-paged degraded mode,
+    and letting it propagate crashed ``process_message_task`` mid-flow — after
+    state transitions and DB writes had landed — then had ARQ retry the whole
+    handler and re-execute them.
+    """
+
+
+class TemplateNotRegisteredError(Exception):
+    """``send_template`` was asked for a template the registry does not list as
+    approved. Nothing is transmitted.
+
+    On the contract for the same reason as :class:`ServiceWindowClosedError`,
+    and translated by the facade the same way (PRO-159). It is the other door
+    into that bug: a closed window sends ``send_text``/``send_file``/
+    ``send_interactive`` through ``send_template(fallback.key)``, so an
+    unapproved fallback raises from inside an ordinary free-form send and would
+    kill ``process_message_task`` mid-flow exactly as the window error did.
+    Unreachable today only because ``freeform_fallback()`` returns ``None`` for
+    every kind — PRO-87 arming it is what removes that accident, and a template
+    left ``DRAFT`` during the flip triggers this immediately.
+    """
+
+
 @dataclass(frozen=True)
 class NormalizedMessage:
     """Provider-agnostic inbound message.
@@ -53,7 +85,14 @@ class WhatsAppProvider(ABC):
 
     @abstractmethod
     async def send_text(self, chat_id: str, text: str) -> dict[str, Any] | None:
-        """Deliver a plain text message."""
+        """Deliver a plain text message.
+
+        Raises :class:`ServiceWindowClosedError` when a free-form send is
+        blocked by a closed 24h window with no approved fallback template. The
+        provider must report that to the operator *before* raising: the facade
+        turns the exception into a ``None`` return (PRO-159), so the provider's
+        log line is the only record that the message existed.
+        """
 
     @abstractmethod
     async def send_file(
@@ -63,7 +102,10 @@ class WhatsAppProvider(ABC):
         caption: str = "",
         file_name: str = "media.jpg",
     ) -> dict[str, Any] | None:
-        """Deliver a media file addressed by URL."""
+        """Deliver a media file addressed by URL.
+
+        Same window contract as :meth:`send_text` — report, then raise.
+        """
 
     @abstractmethod
     async def send_template(
@@ -91,6 +133,8 @@ class WhatsAppProvider(ABC):
         calls this yet: adopting buttons over numeric menus is an explicit
         product decision still to be made (see CLAUDE.md and the PRO-88
         catalog §"numbered-reply menus"), not a door PRO-89 opened by default.
+
+        Same window contract as :meth:`send_text` — report, then raise.
         """
 
     async def send_typing(self, chat_id: str) -> None:

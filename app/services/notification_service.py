@@ -3,6 +3,7 @@ from app.core.database import leads_collection, users_collection
 from app.core.logger import logger, page_critical
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, WorkerConstants
+from app.core.phone import mask_chat_id as _mask
 from app.core.phone import to_chat_id, to_local_phone
 from app.core.config import settings
 from bson import ObjectId
@@ -12,13 +13,23 @@ whatsapp = get_whatsapp()
 
 async def _send_best_effort(chat_id: str, message: str) -> bool:
     """Send a WhatsApp message, swallowing failures so one bad send doesn't
-    abort a batch (e.g. SOS to pro then admin). Returns True on success."""
+    abort a batch (e.g. SOS to pro then admin). Returns True on success.
+
+    A ``None`` from the facade means the send was *blocked* rather than
+    attempted — breaker engaged, kill switch set, or a closed 24h window with
+    no approved fallback template (PRO-159). That is a failure to deliver, so
+    it must not be reported as success: before PRO-159 the window case arrived
+    here as an exception and returned False, and preserving that answer is what
+    stops this refactor from quietly flipping a caller's compensation logic.
+    """
     try:
-        await whatsapp.send_message(chat_id, message)
-        return True
+        result = await whatsapp.send_message(chat_id, message)
     except Exception as e:
-        logger.error(f"WhatsApp send failed for {chat_id}: {e}; message not delivered.")
+        logger.error(
+            f"WhatsApp send failed for {_mask(chat_id)}: {e}; " "message not delivered."
+        )
         return False
+    return result is not None
 
 
 def page_operator(summary: str) -> None:
@@ -167,6 +178,17 @@ async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
     with no offer *and* no error path. The False return lets a caller decide
     whether to compensate.
 
+    "Failed" covers a send the facade *blocked* as well as one that raised: a
+    ``None`` from ``send_message`` means breaker, kill switch, or a closed 24h
+    window with no approved fallback template (PRO-159), and the pro did not
+    get the offer in any of those cases. Only the offer itself gates the
+    return — a missing navigation link is a degraded offer, not a lost one.
+
+    What this does **not** do is tell the pro or the customer that the offer
+    never arrived; PRO-125 owns that. This only keeps the return value honest
+    so ``workflow_service``'s "SLA monitor will recover the lead" path still
+    fires.
+
     ``whatsapp`` is injected (not the module-level facade) so flow callers pass
     the instance they already hold and tests pass a mock, per the DI convention.
     """
@@ -179,7 +201,19 @@ async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
 
     pro_chat_id = to_chat_id(phone)
     try:
-        await whatsapp.send_message(pro_chat_id, build_new_lead_message(lead))
+        offer = await whatsapp.send_message(pro_chat_id, build_new_lead_message(lead))
+        if offer is None:
+            # WARNING, not ERROR: the facade and provider have already reported
+            # this drop, and workflow_service logs ERROR for the one caller
+            # that acts on the False. A third fingerprint for one drop is the
+            # alert volume PRO-159 set out to reduce — and with every registry
+            # entry still DRAFT, a closed window is the *expected* state for
+            # business-initiated sends the moment WHATSAPP_PROVIDER=cloud flips.
+            logger.warning(
+                f"Lead offer for {lead.get('_id')} to {_mask(pro_chat_id)} was "
+                "blocked, not sent — the pro has no offer to answer."
+            )
+            return False
         if lead.get("full_address"):
             await whatsapp.send_location_link(
                 pro_chat_id, lead["full_address"], Messages.Pro.NAVIGATE_TO

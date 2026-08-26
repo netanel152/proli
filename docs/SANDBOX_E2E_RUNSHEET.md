@@ -88,12 +88,13 @@ signed-off copy to PRO-101. Sandbox deltas to expect:
 
 | # | Check | How | Evidence | Pass |
 |---|---|---|---|---|
-| 4.1 | Window expiry blocks free-form | Target pro stays silent >24h (or `redis-cli DEL "wa:window:<chat-id>"`), then trigger a business-initiated send to them (e.g. admin-assign a lead) | `ServiceWindowClosedError` raised; message NOT delivered | ☐ |
+| 4.1 | Window expiry blocks free-form | Target pro stays silent >24h (or `redis-cli DEL "wa:window:<chat-id>"`), then trigger a business-initiated send to them (e.g. admin-assign a lead) | Message NOT delivered, and the worker **does not crash**: the provider reports the block, then the facade logs `⛔ Outbound dropped (24h service window closed…)` at WARNING and returns `None` (PRO-159). A raised `ServiceWindowClosedError` escaping to the ARQ task is a **FAIL** — that was the bug. Two things this step does *not* prove: the admin still sees `✅ הליד הועבר` either way, because `admin_flow` discards `notify_pro_new_lead`'s return (PRO-125 owns surfacing it), so judge from the worker log and not the admin reply; and calling `CloudAPIProvider.send_text` directly still raises, which is the provider contract rather than the app-level behaviour under test here. | ☐ |
 | 4.2 | Operator page fires, deduped | Same event ×2 | First page CRITICAL (Sentry email arrives), second only ERROR in logs | ☐ |
 | 4.3 | Template approved → armed | First Meta approval lands → flip the registry entry to `APPROVED` **and** map it in `freeform_fallback()` — which returns `None` for every kind until then (small PR; note the fallback must be a **parameterless** re-engagement template) | PR link: ______ | ☐ |
 | 4.4a | Proactive re-route delivers | Repeat 4.1 with the fallback armed | Target device receives the template; log shows `Service window closed … re-routing text via template`; `wa_delivery` doc has `kind: "template"` | ☐ |
 | 4.4b | 131047 backstop delivers | Force the pre-send window check to pass on a truly-closed window (`redis-cli SET "wa:window:<chat-id>" forced EX 600` for a recipient Meta considers closed), then send | Meta returns a `failed` status with error 131047; `wa_delivery` doc shows `retried_with_template` | ☐ |
 | 4.5 | `send_template` refuses drafts | Attempt a template send with an unapproved key (staging shell) | `TemplateNotRegisteredError` + CRITICAL log; nothing transmitted | ☐ |
+| 4.6 | Closed-window volume is read from logs, not Sentry | Grep the worker logs for `⛔ Outbound dropped` over the pilot window and count by recipient | A count that matches what the logs show. **Do not measure this from Sentry issue counts**: only the first block per recipient per day pages CRITICAL, later ones are a single `logger.error` throttled per source line (~1 event/hour/replica), and since PRO-159 removed the crash there is no ArqIntegration event per drop either. Sentry will under-report closed-window volume by design. | ☐ |
 
 ---
 

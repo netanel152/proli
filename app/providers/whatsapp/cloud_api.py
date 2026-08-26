@@ -34,7 +34,12 @@ from app.core.logger import logger, page_critical
 from app.core.phone import mask_chat_id as _mask
 from app.core.phone import strip_suffix, to_chat_id
 from app.providers.whatsapp import template_registry
-from app.providers.whatsapp.base import NormalizedMessage, WhatsAppProvider
+from app.providers.whatsapp.base import (
+    NormalizedMessage,
+    ServiceWindowClosedError,
+    TemplateNotRegisteredError,
+    WhatsAppProvider,
+)
 from app.providers.whatsapp.window import is_service_window_open
 
 _GRAPH_ROOT = "https://graph.facebook.com"
@@ -85,16 +90,12 @@ def _split_text(text: str, limit: int = _TEXT_BODY_LIMIT) -> list[str]:
     return chunks
 
 
-class ServiceWindowClosedError(Exception):
-    """A free-form send was attempted outside the recipient's 24h service
-    window and no approved fallback template exists. Raised *after* the
-    operator page — the raise is for the caller's error handling, the page is
-    the guarantee the drop was not silent."""
-
-
-class TemplateNotRegisteredError(Exception):
-    """``send_template`` was asked for a template the registry does not list
-    as approved. Nothing is transmitted."""
+# ``ServiceWindowClosedError`` and ``TemplateNotRegisteredError`` are imported
+# from ``base`` above rather than defined here: PRO-159 moved them onto the
+# provider contract so the facade can catch them without importing a transport.
+# The imports keep every historical
+# ``from app.providers.whatsapp.cloud_api import ServiceWindowClosedError``
+# working, and both are still raised below by this module.
 
 
 class CloudAPIProvider(WhatsAppProvider):
@@ -239,6 +240,11 @@ class CloudAPIProvider(WhatsAppProvider):
         fallback = await self._window_fallback(chat_id, "text")
         if fallback is not None:
             return await self.send_template(chat_id, fallback.key)
+        # This sentinel must never survive the loop. ``_split_text`` is total —
+        # it returns at least one chunk for any input, ``[""]`` included — and
+        # PRO-159 made that load-bearing: the facade and its callers now read a
+        # ``None`` return as "blocked, not sent". Give ``_split_text`` an empty
+        # -input shortcut and a successful send starts reporting itself failed.
         result = None
         for chunk in _split_text(text):
             result = await self._post_message(

@@ -19,6 +19,7 @@ from app.services.notification_service import (
     format_media_links,
     notify_pro_new_lead,
 )
+import app.services.notification_service as notification_service
 
 
 def _full_lead(**overrides):
@@ -168,3 +169,69 @@ async def test_notify_fails_open_on_send_error():
         _full_lead(), {"phone_number": "0501234567"}, whatsapp
     )
     assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# PRO-159 — a blocked send (facade returns None) must not be reported as a
+# delivered offer.
+#
+# Before the facade translated a closed 24h service window (and the breaker /
+# kill switch cases it already covered) into a plain `None` return instead of
+# raising, `notify_pro_new_lead` relied entirely on its `except` clause to turn
+# a failed send into `False`. After that change a blocked send no longer
+# raises, so the `None` has to be checked explicitly — otherwise the pro gets
+# no offer at all and the caller is told it went out.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_notify_returns_false_when_offer_send_is_blocked():
+    whatsapp = _mock_whatsapp()
+    whatsapp.send_message = AsyncMock(return_value=None)
+    ok = await notify_pro_new_lead(
+        _full_lead(), {"phone_number": "0501234567"}, whatsapp
+    )
+    assert ok is False
+    whatsapp.send_location_link.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_notify_still_true_when_only_the_nav_link_is_blocked():
+    """Only the offer send gates the return — a missing navigation link is a
+    degraded offer, not a lost one."""
+    whatsapp = _mock_whatsapp()
+    whatsapp.send_location_link = AsyncMock(return_value=None)
+    ok = await notify_pro_new_lead(
+        _full_lead(), {"phone_number": "0501234567"}, whatsapp
+    )
+    assert ok is True
+    whatsapp.send_location_link.assert_awaited_once()
+
+
+# ---------------------------------------------------------------------------
+# _send_best_effort — same blocked-send-is-not-success contract, pinned
+# directly since it is the other caller-facing entry point (SOS-style
+# best-effort notices) that shares the same failure mode.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_send_best_effort_returns_false_on_blocked_send(monkeypatch):
+    fake_wa = MagicMock()
+    fake_wa.send_message = AsyncMock(return_value=None)
+    monkeypatch.setattr(notification_service, "whatsapp", fake_wa)
+
+    ok = await notification_service._send_best_effort("972500000001@c.us", "hi")
+
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_send_best_effort_returns_true_on_delivered_send(monkeypatch):
+    fake_wa = MagicMock()
+    fake_wa.send_message = AsyncMock(return_value={"id": "1"})
+    monkeypatch.setattr(notification_service, "whatsapp", fake_wa)
+
+    ok = await notification_service._send_best_effort("972500000001@c.us", "hi")
+
+    assert ok is True
