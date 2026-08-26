@@ -14,13 +14,20 @@ Stack context lives in CLAUDE.md — read it first if not already in context. Se
 - Last commit: !`git log -1 --oneline`
 - Working tree: !`git status --short`
 
+## 0. Continuity — what did the last triage already do?
+
+Read the Fix log of the living audit artifact (Artifact tool, `action: "read"`, `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7`) and find the most recent "Sentry triage" row. That gives you the last-run date and what was already ticketed/resolved. Never re-comment evidence a previous triage already posted on a Linear ticket (check the ticket's comments first), and treat Sentry issues resolved by a previous run that are back as **regressions** — that's a stronger signal than a new issue, say so explicitly.
+
 ## 1. Project status snapshot
 
 Gather, in parallel where possible:
 
 - **Deploy lag:** `git fetch origin` then `git rev-list --count origin/production..origin/dev` — how many commits production is behind. >0 for more than a few days deserves a callout (PRO-128 is the cautionary tale).
 - **CI on dev:** `gh run list --branch dev --limit 3` — is the latest run green? A red `🔎 Verify staging deployed this commit` run means staging is stale (PRO-155).
+- **Runtime health (Railway MCP, read-only tools only):** `list_deployments` for the latest deploy status per service in both environments, and `get_logs` filtered to error lines for anything Sentry can't see (boot loops, OOM kills, and crashes *before* Sentry initializes never produce a Sentry event). `http_error_rate` on the api service catches webhook 5xx spikes. Never call mutating Railway tools from this skill.
 - **Linear pulse:** via Linear MCP, list issues in `started` state and any `Urgent`/`High` priority issues in `Triage`/`Backlog` updated in the last 7 days.
+
+Do **not** use the `redis`/`mongodb` MCP servers here: they connect to whatever `REDIS_URL`/`MDB_MCP_CONNECTION_STRING` is set locally (usually the dev instance), so "findings" from them would describe the wrong environment. Live prod/staging data questions go through `/user-debug`, `/db-status`, or the token-gated `/health` — not this skill.
 
 ## 2. Sentry sweep
 
@@ -48,7 +55,9 @@ For each cluster, search Linear (`list_issues` with `query`) for an existing tic
 | New repo-side bug with clear evidence | Open a ticket via `save_issue` (team `Proli`): Sentry links, stack frames, environment, "why it matters", suggested direction, `relatedTo` the sibling tickets, label `Bug` (+ `launch-readiness` if it gates the pilot). Priority: Urgent only if production-user-facing *now*, else High. |
 | Stale — burst ended, cause known/fixed | Resolve in Sentry via `update_issue` with a `reason` naming the cause and the covering PRO-xxx, so a recurrence re-alerts as a regression. |
 | Known noise blocked on an external event | Leave unresolved (or `ignored`/`untilEscalating` if it's drowning the feed) and note the blocking ticket. Do **not** resolve — it will genuinely recur. |
-| Ambiguous — can't tell if it's a bug | Report it as an open question. Do not open a speculative ticket. |
+| Ambiguous — can't tell if it's a bug | First try `analyze_issue_with_seer` on the Sentry issue and, if the culprit file is known, read the actual code — a stack frame plus 30 lines of source usually settles it. Only if it's still ambiguous, report it as an open question. Do not open a speculative ticket. |
+
+Verification bar for a new ticket: **read the culprit code before filing.** A ticket that says "line 77 does X on an empty frame, here's the failing path and the one-line fix direction" gets fixed; a pasted stack trace gets ignored.
 
 Hard rules: **never** paste secrets/tokens into tickets; keep phone numbers masked as Sentry gives them; one ticket per root cause, not per Sentry issue; the issue key in a PR title/branch/body auto-closes on merge (see CLAUDE.md) — tickets you open here are for *tracking*, so no PR references unless a PR exists.
 
@@ -65,3 +74,8 @@ End with a compact, plain-language block:
 - **Clusters found:** one line each — root cause, env, trend, covering ticket.
 - **Actions taken:** tickets opened (keys + links), comments added, Sentry issues resolved/ignored.
 - **Needs a human:** anything ambiguous, external blockers, or decisions (e.g. template approval progress) that no ticket can fix.
+- **Config drift:** anything observed at runtime that contradicts the recorded environment state (e.g. Sentry events tagged `provider: cloud` while the audit says staging is dry-run) — flag it, never silently rewrite the record.
+
+## Cadence
+
+This skill is designed to be run manually (`/triage`) or on a schedule with `/loop 1d /triage report`. Note that scheduled *cloud* runs may lack the OAuth'd Sentry/Linear MCP sessions — prefer a local loop or a manual weekly run. Full mode (with ticket-opening) should stay manual: a human reads the report before the backlog grows.
