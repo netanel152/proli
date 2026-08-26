@@ -1,10 +1,6 @@
 {
   "permissions": {
     "allow": [
-      "mcp__railway__set_variables",
-      "mcp__railway__update_service",
-      "mcp__railway__generate_domain",
-      "mcp__railway__connect_service_source",
       "mcp__railway__list_projects",
       "mcp__railway__list_services",
       "mcp__railway__list_deployments",
@@ -55,14 +51,17 @@
       "mcp__claude_ai_Linear__list_issues",
       "Bash(railway status *)",
       "Bash(railway logs *)",
-      "Bash(railway variables *)",
       "Bash(railway whoami)",
       "PowerShell(railway status *)",
       "PowerShell(railway logs *)",
-      "PowerShell(railway variables *)",
       "PowerShell(railway whoami)",
       "Bash(venv/Scripts/python.exe -m pytest *)",
       "Bash(./venv/Scripts/python.exe -m pytest *)"
+    ],
+    "deny": [
+      "Bash(railway variables set:*)",
+      "PowerShell(railway variables set:*)",
+      "mcp__railway__set_variables"
     ]
   },
   "enableAllProjectMcpServers": true,
@@ -116,6 +115,6 @@
   "enabledPlugins": {
     "last30days@last30days-skill": true,
     "pyright-lsp@claude-plugins-official": true,
-    "redis-development@claude-plugins-official": true
+    "mongodb@claude-plugins-official": true
   }
 }
