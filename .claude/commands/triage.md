@@ -74,7 +74,7 @@ End with a compact, plain-language block:
 - **Clusters found:** one line each — root cause, env, trend, covering ticket.
 - **Actions taken:** tickets opened (keys + links), comments added, Sentry issues resolved/ignored.
 - **Needs a human:** anything ambiguous, external blockers, or decisions (e.g. template approval progress) that no ticket can fix.
-- **Config drift:** anything observed at runtime that contradicts the recorded environment state (e.g. Sentry events tagged `provider: cloud` while the audit says staging is dry-run) — flag it, never silently rewrite the record.
+- **Config drift:** anything observed at runtime that contradicts the recorded environment state — flag it, never silently rewrite the record. **Prove drift from the stack trace, not from tags:** the Sentry `provider` tag reports `settings.WHATSAPP_PROVIDER`, which `WHATSAPP_DRY_RUN=true` silently overrides, so `provider: cloud` alone proves nothing. A frame inside `app/providers/whatsapp/cloud_api.py` does prove it — `DryRunProvider` can never execute that file.
 
 ## Cadence
 
