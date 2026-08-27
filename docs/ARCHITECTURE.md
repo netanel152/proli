@@ -99,7 +99,7 @@ process_incoming_message(chat_id, text, media_url)
         │            list PENDING_ADMIN_REVIEW leads → select lead
         │            → self-assign OR list candidate pros → assign
         │
-        ├─ Reset keyword? → clear state + context → RESET_SUCCESS
+        ├─ Reset keyword? → clear state + context, silently (no confirmation message)
         │
         ├─ Help keyword ("תפריט"/"עזרה", non-pro)? → send HELP_INFO, leave state intact
         │
