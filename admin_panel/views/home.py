@@ -15,6 +15,13 @@ from admin_panel.ui.components import (
     STATUS_COLORS,
 )
 from admin_panel.core.auth import log_audit, get_current_role
+from admin_panel.core.lead_queries import (
+    EDITOR_COLUMNS,
+    SKIP_LEAD_GONE,
+    SKIP_NO_CHANGE,
+    SKIP_UNRESOLVED,
+    save_lead_edits,
+)
 from admin_panel.core.rbac import can_edit, has_permission
 import pytz
 import os
@@ -44,9 +51,102 @@ KANBAN_STATUSES = [
 ALL_STATUSES = [s.value for s in LeadStatus]
 
 
+#: Why a row was skipped -> the T key explaining it to the operator.
+_SKIP_REASON_KEYS = {
+    SKIP_LEAD_GONE: "leads_skip_lead_gone",
+    SKIP_UNRESOLVED: "leads_skip_unresolved",
+    SKIP_NO_CHANGE: "leads_skip_no_change",
+}
+
+
+def _t(T, key, fallback, **subs):
+    """Localized string with `{placeholder}` substitution that cannot raise.
+
+    `str.format` on translator-supplied text turns one mistyped placeholder
+    into a red traceback rendered on top of the success message. `.replace`
+    degrades to leaving the placeholder visible instead — the panel already
+    does this in views/settings.py.
+    """
+    text = T.get(key, fallback)
+    for name, value in subs.items():
+        text = text.replace("{" + name + "}", str(value))
+    return text
+
+
+def _render_leads_flash(T):
+    """Render the confirmation stashed by the previous run's mutation."""
+    flash = st.session_state.pop("leads_flash", None)
+    if not flash:
+        return
+
+    if flash.get("deleted"):
+        msg = T.get("success_delete", "Lead deleted.")
+    else:
+        msg = _t(T, "leads_msg_saved", "{n} changes saved.", n=flash.get("updated", 0))
+
+    st.toast(msg, icon="✅")
+    st.success(msg)
+
+    _render_skipped(T, flash.get("skipped_rows") or [])
+
+
+def _render_skipped(T, skipped_rows):
+    """Name the rows that were not written, and why."""
+    if not skipped_rows:
+        return
+
+    st.warning(
+        _t(
+            T,
+            "leads_msg_skipped",
+            "Rows not saved: {n}. Their edits were discarded — re-enter them.",
+            n=len(skipped_rows),
+        )
+    )
+    # Built with explicit `columns=` rather than from dict keys: the two
+    # headers are localized strings, and if a translation ever made them equal
+    # the dict would collapse to one key and the Reason column would silently
+    # vanish — the wrong failure mode for a table whose whole job is explaining
+    # a failure.
+    st.dataframe(
+        pd.DataFrame(
+            [
+                (
+                    row.get("client") or "—",
+                    T.get(
+                        _SKIP_REASON_KEYS.get(row.get("reason"), ""),
+                        row.get("reason", ""),
+                    ),
+                )
+                for row in skipped_rows
+            ],
+            columns=[
+                T.get("col_client", "Client"),
+                T.get("leads_col_reason", "Reason"),
+            ],
+        ),
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
 def view_leads_dashboard(T):
     st.title(T["title_dashboard"])
     st.caption(T.get("page_desc_dashboard", "View and manage incoming leads."))
+
+    # PRO-161: every mutation in this view reruns to refresh the table, which
+    # throws away the element tree — so a confirmation rendered after the write
+    # was never actually readable. Stash it and render it on the next run
+    # (same pattern as `sch_flash` in views/schedule.py, PRO-158).
+    #
+    # Popped here, above the tabs, on purpose. Rendering it inside the Table
+    # tab's non-empty branch would strand the flash whenever the post-save
+    # re-query came back empty, to resurface at some unrelated later moment;
+    # and delete/edit can both be triggered from the Kanban tab, whose
+    # confirmation would then never appear. The toast is what the admin
+    # actually sees: the Save button sits under a ~400px scroll region, so an
+    # inline alert at the top of the page renders off-screen.
+    _render_leads_flash(T)
 
     # Tabs: Kanban | Table | Create
     tab_kanban, tab_table, tab_create = st.tabs(
@@ -72,7 +172,11 @@ def view_leads_dashboard(T):
     def get_leads_data():
         leads = list(leads_collection.find().sort("created_at", -1).limit(100))
         if not leads:
-            return pd.DataFrame()
+            # PRO-161/PRO-158: a bare `pd.DataFrame()` has zero columns, which
+            # is what made the schedule editor crash on an empty day.
+            # `EDITOR_COLUMNS` is the schema the save routine reads from, so
+            # the frame carries it even when there is nothing to show.
+            return pd.DataFrame(columns=EDITOR_COLUMNS)
 
         data = []
         for l in leads:
@@ -114,7 +218,18 @@ def view_leads_dashboard(T):
                     "_chat_id": l["chat_id"],
                 }
             )
-        return pd.DataFrame(data)
+
+        # `pd.DataFrame(rows, columns=...)` is a *reindex*, not a validation: a
+        # renamed producer key yields a silent all-NaN column. That degrades
+        # safely on the save path (every row skips, visibly) but NOT on the
+        # delete path — a NaN `id` collapses every `lead_labels` key to "nan",
+        # the lookup below then matches every row, and `.iloc[0]` hands the
+        # delete button row 0. That is this ticket's own bug, in the one
+        # section that deletes. So assert rather than reindex-and-hope.
+        missing = set(EDITOR_COLUMNS) - set(data[0])
+        if missing:
+            raise KeyError(f"leads editor frame is missing {sorted(missing)}")
+        return pd.DataFrame(data, columns=EDITOR_COLUMNS)
 
     leads_df = get_leads_data()
 
@@ -208,9 +323,6 @@ def view_leads_dashboard(T):
 
             status_options = ALL_STATUSES
 
-            if "original_leads_df" not in st.session_state:
-                st.session_state.original_leads_df = leads_df.copy()
-
             edited_df = st.data_editor(
                 leads_df,
                 key="leads_editor",
@@ -241,7 +353,23 @@ def view_leads_dashboard(T):
                 },
                 use_container_width=True,
                 hide_index=True,
-                num_rows="dynamic",
+                # PRO-161: "dynamic" let the admin add and delete rows here,
+                # but Save only ever read `edited_rows` — added and deleted
+                # rows were discarded while the save still reported success.
+                # Leads arrive from the bot; the supported hand-made path is
+                # the Create tab in this same view, which validates the phone
+                # and writes a whole document.
+                num_rows="fixed",
+            )
+
+            # The "+" row is gone; both replacements live in this same view but
+            # nothing on screen pointed at them.
+            st.caption(
+                T.get(
+                    "leads_editor_hint",
+                    "To add a lead use the Create tab; to delete one use the "
+                    "lead details below the table.",
+                )
             )
 
             # Save changes button
@@ -254,54 +382,55 @@ def view_leads_dashboard(T):
                     changes = st.session_state.leads_editor.get("edited_rows", {})
                     if not changes:
                         st.toast(T.get("no_changes", "No changes."))
-                    else:
-                        updated_count = 0
-                        for row_idx, changed_data in changes.items():
-                            lead_id = st.session_state.original_leads_df.iloc[row_idx][
-                                "id"
-                            ]
-                            update_payload = {}
-
-                            if "status" in changed_data:
-                                update_payload["status"] = changed_data["status"]
-                            if "details_summary" in changed_data:
-                                update_payload["details"] = changed_data[
-                                    "details_summary"
-                                ]
-                                update_payload["issue_type"] = changed_data[
-                                    "details_summary"
-                                ]
-                            if "professional" in changed_data:
-                                new_pro_name = changed_data["professional"]
-                                if new_pro_name == T["unknown_pro"]:
-                                    update_payload["pro_id"] = None
-                                else:
-                                    update_payload["pro_id"] = pro_map_name_to_id.get(
-                                        new_pro_name
-                                    )
-
-                            if update_payload:
-                                update_op = {"$set": update_payload}
-                                if "status" in update_payload:
-                                    update_op["$push"] = {
-                                        "status_history": status_history_entry(
-                                            update_payload["status"], Actor.ADMIN
-                                        )
-                                    }
-                                leads_collection.update_one(
-                                    {"_id": ObjectId(lead_id)}, update_op
-                                )
-                                log_audit(
-                                    "edit_lead",
-                                    {"lead_id": lead_id, "changes": update_payload},
-                                )
-                                updated_count += 1
-
-                        st.success(
-                            f"{updated_count} {T.get('msg_changes', 'changes saved')}!"
+                        # The data editor's widget id hashes the frame itself,
+                        # so a new inbound lead (or the 30s cache expiring)
+                        # between typing and clicking Save builds a *new*
+                        # widget with empty `edited_rows` — the admin's work is
+                        # gone and "No changes" is a lie by omission. Same
+                        # class as the bug this ticket fixes, so say it.
+                        st.caption(
+                            T.get(
+                                "leads_msg_refresh_discarded",
+                                "If you had unsaved edits, the table refreshed "
+                                "underneath them and they were discarded — "
+                                "re-apply them and save again.",
+                            )
                         )
-                        st.cache_data.clear()
-                        st.rerun()
+                    else:
+                        # PRO-161: `edited_df` is the frame the editor returned
+                        # *this run*, and `changes` keys are positions into that
+                        # same frame — so the id read out of it is always the row
+                        # the admin actually edited. The old code resolved it
+                        # against a session snapshot taken once, hours earlier.
+                        result = save_lead_edits(
+                            edited_df,
+                            changes,
+                            leads_collection=leads_collection,
+                            pro_map_name_to_id=pro_map_name_to_id,
+                            unknown_pro_label=T["unknown_pro"],
+                            audit=log_audit,
+                        )
+
+                        if result["updated"]:
+                            st.session_state["leads_flash"] = result
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            # Nothing was written — a success here would be the
+                            # exact lie this ticket exists to kill. No rerun, so
+                            # the admin's edits stay on screen for a second try.
+                            st.warning(
+                                T.get(
+                                    "leads_msg_nothing_saved",
+                                    "Nothing was saved. The leads you edited "
+                                    "may no longer exist — refresh the table "
+                                    "and try again.",
+                                )
+                            )
+                            # The skipped rows carry the *reason* nothing
+                            # landed; dropping them here would leave the admin
+                            # with a warning and no diagnosis.
+                            _render_skipped(T, result.get("skipped_rows") or [])
 
             st.markdown("")
 
@@ -401,22 +530,55 @@ def _render_lead_detail_section(
     st.markdown("---")
     st.subheader(T.get("lead_quick_actions", "Lead Details"))
 
-    lead_options = [
-        f"{row['client']} — {row['status']} — {str(row.get('details_summary',''))[:40]}"
+    # PRO-161: options are lead ids, resolved by an explicit lookup rather than
+    # `.iloc` on a row position.
+    #
+    # To be accurate about what this does and does not fix: `st.selectbox`
+    # hashes its *formatted labels* into the widget id, so changing the lead
+    # list already rebuilt the widget and reset the selection — the old
+    # `range(len(...))` form was therefore not reachable as a wrong-row bug.
+    # This is not a live-bug fix. It is here because this section owns the
+    # delete button, and identity-by-id removes the whole question instead of
+    # leaving it resting on an undocumented Streamlit implementation detail.
+    #
+    # The status is localized: it renders as a Hebrew pill everywhere else in
+    # this view, and a raw `pending_admin_review` here read as a different
+    # system. The RLM pins the base direction so the Latin phone number and
+    # the direction-neutral separators can't reorder under bidi.
+    lead_labels = {
+        str(row["id"]): (
+            f"‏{T.get(row['status'], str(row['status']).capitalize())} · "
+            f"{row['client']} · {str(row.get('details_summary', ''))[:40]}"
+        )
         for _, row in leads_df.iterrows()
-    ]
-    selected_idx = st.selectbox(
+    }
+    if not lead_labels:
+        st.info(T.get("no_leads_found", "No leads found."))
+        return
+
+    no_longer_listed = T.get("lead_no_longer_listed", "That lead is no longer listed.")
+    selected_id = st.selectbox(
         T.get("select_lead", "Select Lead"),
-        range(len(lead_options)),
-        format_func=lambda i: lead_options[i],
+        list(lead_labels.keys()),
+        # Never fall through to the raw id: a 24-char ObjectId hex is not a
+        # thing to show an operator.
+        format_func=lambda lid: lead_labels.get(lid, no_longer_listed),
         key=f"{tab_key}_lead_select",
     )
 
-    if selected_idx is not None:
-        selected_lead = leads_df.iloc[selected_idx]
-        _render_selected_lead_actions(
-            selected_lead, T, pro_map_name_to_id, tab_key=tab_key
-        )
+    matches = leads_df[leads_df["id"].astype(str) == str(selected_id)]
+    if matches.empty:
+        # Defence in depth, not a live path: `selected_id` is drawn from
+        # `lead_labels`, which was built from `leads_df` in this same run, so
+        # the lookup should always match. Kept because the alternative on a
+        # miss is acting on whatever now sits at that position — and this
+        # section deletes leads.
+        st.info(no_longer_listed)
+        return
+
+    _render_selected_lead_actions(
+        matches.iloc[0], T, pro_map_name_to_id, tab_key=tab_key
+    )
 
 
 def _render_selected_lead_actions(
@@ -482,13 +644,20 @@ def _render_selected_lead_actions(
                         index=status_options.index(current_status),
                         format_func=lambda x: T.get(x, x.capitalize()),
                     )
-                    new_client = st.text_input(
+                    # Shown for context, not editable: the customer's identity
+                    # is their `chat_id`, and this form never wrote either
+                    # field to the lead (see the payload below). Leaving them
+                    # editable meant typing into them and being told it saved.
+                    # Making them do something real is PRO-163.
+                    st.text_input(
                         T.get("client_name_label", "Client Name"),
                         value=selected_lead.get("client", ""),
+                        disabled=True,
                     )
-                    new_phone = st.text_input(
+                    st.text_input(
                         T.get("phone_number_label", "Phone Number"),
-                        value=selected_lead.get("phone_number", ""),
+                        value=selected_lead.get("_chat_id", ""),
+                        disabled=True,
                     )
                     new_details = st.text_area(
                         T.get("details_label", "Details"),
@@ -509,12 +678,20 @@ def _render_selected_lead_actions(
                     )
 
                     if st.form_submit_button(T.get("save_changes_btn", "Save Changes")):
+                        # PRO-161: these used to be the *editor's column names*
+                        # — `client`, `phone_number`, `details_summary`,
+                        # `professional` — none of which any reader looks for
+                        # on a lead (`phone_number` is a pros field). Only
+                        # `status` and `pro_id` ever took effect, so an admin
+                        # retyping the details got a success and no change.
+                        # Harmless while the confirmation was being discarded
+                        # by the rerun; this PR makes it a toast, so it gets
+                        # fixed rather than amplified. Writes the same pair the
+                        # table editor writes (`lead_queries._build_update_payload`).
                         update_data = {
                             "status": new_status,
-                            "client": new_client,
-                            "phone_number": new_phone,
-                            "details_summary": new_details,
-                            "professional": new_pro,
+                            "details": new_details,
+                            "issue_type": new_details,
                         }
                         if new_pro == unassigned_label:
                             # Explicitly unassigning must actually release ownership
@@ -538,7 +715,16 @@ def _render_selected_lead_actions(
                             }
                         leads_collection.update_one({"_id": ObjectId(lid)}, update_op)
                         log_audit("edit_lead", {"lead_id": lid})
-                        st.success(T.get("lead_updated", "Lead updated successfully!"))
+                        # PRO-161: the st.success here was discarded by the
+                        # rerun below — the admin saw a flicker and nothing
+                        # else. Route it through the same flash the table Save
+                        # uses so one lead-editing path isn't silently worse
+                        # than the other.
+                        st.session_state["leads_flash"] = {
+                            "updated": 1,
+                            "skipped": 0,
+                            "skipped_rows": [],
+                        }
                         st.cache_data.clear()
                         st.rerun()
 
@@ -550,7 +736,11 @@ def _render_selected_lead_actions(
                 leads_collection.delete_one({"_id": ObjectId(lid)})
                 log_audit("delete_lead", {"lead_id": lid})
                 logger.info(f"Admin deleted lead {lid}")
-                st.success(T["success_delete"])
+                # PRO-161: an irreversible delete whose only confirmation was
+                # thrown away by the rerun — the admin's sole evidence was a
+                # row vanishing from a 100-row table. Same flash as everything
+                # else that mutates here.
+                st.session_state["leads_flash"] = {"deleted": lid}
                 del st.session_state[f"confirm_delete_{k}"]
                 st.cache_data.clear()
                 st.rerun()
