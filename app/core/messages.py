@@ -668,7 +668,8 @@ class Messages:
         CONFIRM_REPROMPT = "השב *אשר* לשליחה או *ביטול* להתחלה מחדש."
 
     class System:
-        RESET_SUCCESS = "🔄 השיחה אופסה בהצלחה. איך אפשר לעזור?"
+        # RESET_SUCCESS was removed 2026-08-27 (operator decision): a global
+        # reset clears state/context silently, with no confirmation message.
         # PRO-166: the textual rendering of an inbound location message, shared
         # by app/api/routes/webhook.py and the Cloud API inbound parser so the
         # two cannot drift.

@@ -1139,7 +1139,9 @@ async def test_reset_mid_flow_clears_state_and_context(world):
 
     await world.send("התחלה")
 
-    world.recorder.assert_text_to(world.customer, "השיחה אופסה בהצלחה")
+    # The reset is deliberately silent (operator decision, 2026-08-27):
+    # state and context are cleared with no confirmation message.
+    world.recorder.assert_silent(world.customer, "reset sends no confirmation")
     await world.assert_state(UserStates.IDLE)
     assert await world.redis.llen(f"context:{world.customer}") == 0
 
