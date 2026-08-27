@@ -2039,6 +2039,52 @@ async def test_pro_persona_prompt_falls_back_to_price_list(monkeypatch):
     assert "החלפת ברז: 250-400₪" in prompt
 
 
+@pytest.mark.asyncio
+async def test_pro_persona_empty_system_prompt_falls_back_to_default_role(monkeypatch):
+    """PRO-170 regression: WhatsApp-onboarded pros store ``system_prompt: ""``
+    (pro_onboarding_service), and an empty string used to win over the ``.get``
+    default — so every onboarded pro ran the scheduler with an EMPTY persona
+    block. Empty or missing must fall back to PROLI_SCHEDULER_ROLE."""
+    default_role = Messages.AISystemPrompts.PROLI_SCHEDULER_ROLE.format(
+        pro_name="אבי אינסטלציה"
+    )
+    for stored in ({"system_prompt": ""}, {}):
+        pro = {
+            "_id": ObjectId(),
+            "business_name": "אבי אינסטלציה",
+            "social_proof": {"rating": 5.0, "review_count": 3},
+            **stored,
+        }
+        await _build_pro_response(pro, [], "היי", "רמת גן", "נזילה", None)
+
+        prompt = app.services.workflow_service.ai.analyze_conversation.call_args.kwargs[
+            "custom_system_prompt"
+        ]
+        assert default_role in prompt, f"stored={stored!r}"
+
+
+@pytest.mark.asyncio
+async def test_pro_persona_custom_system_prompt_still_wins(monkeypatch):
+    """The PRO-170 fix must not flatten admin-generated personas: a non-empty
+    stored system_prompt reaches the prompt and the default role does not."""
+    pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי אינסטלציה",
+        "system_prompt": "אתה 'פרולי', העוזר האישי של 'אבי אינסטלציה'.",
+        "social_proof": {"rating": 5.0, "review_count": 3},
+    }
+    await _build_pro_response(pro, [], "היי", "רמת גן", "נזילה", None)
+
+    prompt = app.services.workflow_service.ai.analyze_conversation.call_args.kwargs[
+        "custom_system_prompt"
+    ]
+    assert "העוזר האישי של 'אבי אינסטלציה'" in prompt
+    assert (
+        Messages.AISystemPrompts.PROLI_SCHEDULER_ROLE.format(pro_name="אבי אינסטלציה")
+        not in prompt
+    )
+
+
 # --- PRO-116: booked-customer gate, single logging, name persistence ---
 # NOTE: mock_db is module-scoped (shared across this file), so each test below
 # uses a UNIQUE chat_id to stay isolated from the others' leads/users.
