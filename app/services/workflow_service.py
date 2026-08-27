@@ -484,9 +484,11 @@ async def _process_incoming_message_inner(
         normalized_text in Messages.Keywords.RESET_COMMANDS
         and current_state != UserStates.PRO_MODE
     ):
+        # Deliberately silent (operator decision, 2026-08-27): no confirmation
+        # message — the customer's next message simply starts a fresh
+        # conversation. The old RESET_SUCCESS confirmation was removed with it.
         await StateManager.clear_state(chat_id)
         await ContextManager.clear_context(chat_id)
-        await whatsapp.send_message(chat_id, Messages.System.RESET_SUCCESS)
         return
 
     # Help / menu — send info without touching state or context
@@ -929,7 +931,7 @@ async def _process_incoming_message_inner(
             return
         else:
             await whatsapp.send_message(
-                chat_id, "אנא השב 1 (בעיה חדשה) או 2 (לגבי העבודה הקיימת)."
+                chat_id, Messages.Customer.NEW_OR_EXISTING_REPROMPT
             )
             return
 

@@ -85,9 +85,9 @@ async def test_reset_command_clears_state(wf_mocks):
 
     mock_state.clear_state.assert_called_with("972501111111@c.us")
     mock_ctx.clear_context.assert_called_with("972501111111@c.us")
-    mock_wa.send_message.assert_called_once_with(
-        "972501111111@c.us", Messages.System.RESET_SUCCESS
-    )
+    # The reset is deliberately silent (operator decision, 2026-08-27):
+    # no confirmation message is sent.
+    mock_wa.send_message.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -125,14 +125,14 @@ async def test_politeness_interceptor_thanks_keyword(wf_mocks):
 @pytest.mark.asyncio
 async def test_reset_skipped_for_pro_mode(wf_mocks):
     """Pro in PRO_MODE sends reset keyword -> goes to pro handler, not reset."""
-    mock_wa, mock_state, _, _, _ = wf_mocks
+    mock_wa, mock_state, mock_ctx, _, _ = wf_mocks
     mock_state.get_state.return_value = UserStates.PRO_MODE
 
     await process_incoming_message("972524828796@c.us", "עזרה")
 
-    # Should NOT send RESET_SUCCESS
-    for call in mock_wa.send_message.call_args_list:
-        assert call.args[1] != Messages.System.RESET_SUCCESS
+    # The global-reset branch (now silent) clears context; taking the pro
+    # path instead must leave it untouched.
+    mock_ctx.clear_context.assert_not_called()
 
 
 # --- Pro Auto-Detect ---

@@ -2,6 +2,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 from app.core.database import users_collection, leads_collection, settings_collection
+from app.core.messages import Messages
 from app.services.workflow_service import (
     send_pro_reminder,
     send_customer_completion_check,
@@ -60,7 +61,9 @@ async def send_daily_reminders():
         booked_jobs = await booked_jobs_cursor.to_list(length=50)
 
         if booked_jobs:
-            msg = f"☀️ *בוקר טוב {pro['business_name']}!* \nהנה העבודות שלך להיום ({today_start.strftime('%d/%m')}):"
+            msg = Messages.Pro.DAILY_AGENDA_HEADER.format(
+                pro_name=pro["business_name"], date=today_start.strftime("%d/%m")
+            )
             for job in booked_jobs:
                 job_time = (
                     job["appointment_datetime"]
@@ -70,9 +73,11 @@ async def send_daily_reminders():
                 time_str = job_time.strftime("%H:%M")
                 client_phone = strip_suffix(job["chat_id"])
                 details = job.get("details", "פרטים חסרים")
-                msg += f"\n🛠️ *{time_str}* - {details}\n   📞 {client_phone}\n"
+                msg += Messages.Pro.DAILY_AGENDA_ROW.format(
+                    time=time_str, details=details, phone=client_phone
+                )
 
-            msg += "\nשיהיה יום מוצלח! 💪"
+            msg += Messages.Pro.DAILY_AGENDA_FOOTER
 
             chat_id = pro.get("phone_number")
             if chat_id:

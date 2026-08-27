@@ -187,6 +187,27 @@ class Messages:
             "ℹ️ *סטטוס הפנייה שלך*\n\nהפנייה נסגרה. תוכל/י לפתוח פנייה חדשה בכל עת."
         )
 
+        # --- PRO-166: migrated verbatim from call sites ---
+        # Optional lines composed into PRO_FOUND (built in pro_flow.py).
+        PROFESSION_LINE = "🔧 *מקצוע:* {label}\n"
+        QUOTED_PRICE_LINE = "\n💰 *הערכת המחיר שקיבלת:* {quoted_price}₪\n"
+        PRO_RATING_LINE = "\n⭐ דירוג: {rating:.1f} ({review_count} ביקורות)"
+        # workflow_service's AWAITING_NEW_OR_EXISTING re-prompt.
+        NEW_OR_EXISTING_REPROMPT = "אנא השב 1 (בעיה חדשה) או 2 (לגבי העבודה הקיימת)."
+        # lead_manager_service's address gate: the sentence plus the field
+        # vocabulary it lists (attribute name -> Hebrew label, in gate order).
+        ADDRESS_MISSING_PARTS = (
+            "כדי שבעל המקצוע יגיע למקום המדויק אני צריך/ה עוד פרטים לכתובת: "
+            "{missing_fields}"
+        )
+        ADDRESS_FIELD_LABELS = {
+            "street": "רחוב",
+            "street_number": "מספר בית",
+            "city": "עיר",
+            "floor": "קומה",
+            "apartment": "מספר דירה",
+        }
+
     class Pro:
         # Messages sent to professionals
         REMINDER = """👋 היי, רק מוודא לגבי העבודה האחרונה. האם סיימת? 
@@ -414,6 +435,71 @@ class Messages:
             "\n💡 טיפ: כדי לראות את רשימת הפקודות המלאה של המערכת, הקלד 'עזרה'."
         )
 
+        # --- PRO-166: migrated verbatim from app/services/pro_flow.py ---
+        # Status vocabulary rendered into ACTIVE_JOB_ROW and the dashboard.
+        STATUS_LABELS = {
+            "new": "ממתין",
+            "contacted": "ממתין",
+            "booked": "מאושר",
+            "completed": "הושלם",
+            "rejected": "נדחה",
+            "cancelled": "בוטל",
+            "closed": "סגור",
+            "pending_admin_review": "ממתין לבדיקת מנהל",
+        }
+        STATUS_AVAILABLE = "זמין"
+        STATUS_ON_BREAK = "בהפסקה"
+        ACTION_CANCELLED = "הפעולה בוטלה."
+        INVALID_JOB_SELECTION = "בחירה לא תקינה. אנא בחר מספר מהרשימה או כתוב 'ביטול'."
+        NO_PAUSED_CONVERSATION = "אין שיחה מושהית כרגע."
+        BOT_RESUMED = "✅ הבוט חזר לפעולה."
+        BOT_ALREADY_ACTIVE = "הבוט כבר פעיל."
+        JOB_SELECT_ROW = "{num}. {name} - {city} ({issue})"
+        ACTIVE_JOBS_HEADER = "🔄 *עבודות פעילות:*\n"
+        ACTIVE_JOBS_TOTAL = '\n*סה"כ: {count} עבודות*'
+        HISTORY_HEADER = "📋 *10 עבודות אחרונות שהושלמו:*\n"
+        RATING_NONE = "אין עדיין"
+
+        # --- PRO-166: migrated verbatim from app/scheduler.py (daily agenda) ---
+        DAILY_AGENDA_HEADER = (
+            "☀️ *בוקר טוב {pro_name}!* \nהנה העבודות שלך להיום ({date}):"
+        )
+        DAILY_AGENDA_ROW = "\n🛠️ *{time}* - {details}\n   📞 {phone}\n"
+        DAILY_AGENDA_FOOTER = "\nשיהיה יום מוצלח! 💪"
+
+    class Admin:
+        # PRO-166: the ניהול wizard's copy, migrated verbatim from
+        # app/services/admin_flow.py so the PRO-168 rewrite touches one file.
+        # Sent to the ADMIN's own WhatsApp chat, never to customers or pros.
+        NO_STUCK_LEADS = "✅ אין לידים תקועים כרגע"
+        STUCK_LEADS_HEADER = "📋 *לידים הממתינים לטיפול:*\n"
+        WAIT_MINUTES = "{wait_minutes}ד'"
+        STUCK_LEAD_ROW = "{num}. {city} — {issue} (ממתין {wait})"
+        SELECT_PROMPT = "\nהשב/י מספר לבחירה או 'ביטול' ליציאה."
+        CANCELLED = "בוטל."
+        INVALID_NUMBER = "❌ מספר לא חוקי. נסה שוב או שלח 'ביטול'."
+        ACTION_MENU = (
+            "בחרת בליד. למי להעביר?\n"
+            "1. קח את הליד לעצמך\n"
+            "2. הצג רשימת אנשי מקצוע פנויים"
+        )
+        NO_ADMIN_PRO_PROFILE = "❌ לא נמצא פרופיל פרופסיונלי למנהל. נסה אפשרות 2."
+        LEAD_NOT_FOUND = "❌ הליד לא נמצא. אפס עם 'ניהול'."
+        NO_AVAILABLE_PROS = "❌ לא נמצאו אנשי מקצוע פנויים לליד זה."
+        AVAILABLE_PROS_HEADER = "👷 *אנשי מקצוע פנויים:*\n"
+        PRO_ROW = "{num}. {name} (דירוג: {rating})"
+        INVALID_OPTION = "❌ אפשרות לא חוקית. השב 1 או 2."
+        PRO_NOT_FOUND = "❌ איש המקצוע לא נמצא. אפס עם 'ניהול'."
+        ASSIGN_SUCCESS = "✅ הליד הועבר ל-{pro_name}."
+        ASSIGN_LEAD_LOOKUP_MISSED = (
+            "⚠️ הליד לא נמצא לאחר העדכון — יש לבדוק בפאנל הניהול וליצור "
+            "קשר ידני עם {pro_name} ועם הלקוח."
+        )
+        ASSIGN_OFFER_FAILED = (
+            "⚠️ הליד שויך ל-{pro_name}, אבל שליחת ההצעה אליו נכשלה "
+            "(ייתכן שחלון 24 השעות שלו סגור). יש ליצור איתו קשר ידנית."
+        )
+
     class SOS:
         CUSTOMER_REASSIGNING = (
             "מתנצלים על ההמתנה, אנו מאתרים עבורך איש מקצוע זמין יותר כעת... ⏳"
@@ -433,36 +519,13 @@ class Messages:
             "לא הצלחתי למצוא זמינות מיידית, מעביר אותך לנציג — "
             "נחזור אליך תוך שעה בשעות הפעילות."
         )
-        # ---------------------------------------------------------------
-        # RETIRED by PRO-88 — no longer sent, kept only as a record.
-        #
-        # ADMIN_MAX_REASSIGNMENTS, ADMIN_REPORT_* and ADMIN_ALERT below were
-        # the operator's WhatsApp alerts. The admin never messages the bot, so
-        # under Meta Cloud API their 24-hour service window is permanently
-        # closed and each would have needed its own approved template plus
-        # per-message fees, forever. They now page via
-        # notification_service.page_operator() → Sentry → email, the channel
-        # PRO-75 already made the guaranteed one.
-        #
-        # Nothing formats these strings. Do not reintroduce a caller — see
+        # The operator's WhatsApp alerts (ADMIN_MAX_REASSIGNMENTS,
+        # ADMIN_REPORT_*, ADMIN_ALERT) were retired by PRO-88 and deleted by
+        # PRO-166 — the admin never messages the bot, so under Meta Cloud API
+        # their 24h window is permanently closed. Operator alerts page via
+        # notification_service.page_operator() → Sentry → email (PRO-75). See
         # docs/WHATSAPP_TEMPLATE_CATALOG.md before adding any operator alert.
-        # ---------------------------------------------------------------
-        ADMIN_MAX_REASSIGNMENTS = (
-            "🚨 *ליד הועבר לטיפול ידני — Proli*\n\n"
-            "📞 *טלפון:* {phone}\n"
-            "🛠️ *בעיה:* {issue}\n"
-            "📍 *כתובת:* {address}\n"
-            "🔁 *ניסיונות שיבוץ:* {attempts}\n\n"
-            "הלקוח קיבל הבטחה לחזרה *תוך שעה*.\n"
-            "💡 לשיבוץ איש מקצוע, השב את המילה: ניהול"
-        )
         PRO_LOST_LEAD = "העבודה הועברה לאיש מקצוע אחר עקב חוסר מענה."
-        ADMIN_REPORT_HEADER = '🚨 *דו"ח לידים תקועים (Proli)*'
-        ADMIN_REPORT_BODY = "נמצאו {count} לידים ללא מענה (> {timeout} דק'):\n"
-        ADMIN_REPORT_FOOTER = (
-            "\nהמערכת ניסתה להעביר אותם אך ללא הצלחה. נדרשת התערבות ידנית."
-            "\n💡 לטיפול בלידים והעברה לאיש מקצוע, השב את המילה: ניהול"
-        )
 
         TO_USER_WITH_PRO = (
             "✅ קיבלתי! העברתי את בקשתך לאיש המקצוע שלך.\n"
@@ -479,12 +542,6 @@ class Messages:
             "📞 *טלפון:* {phone}\n"
             "💬 *הודעה:* {last_message}\n\n"
             "פנה/י אליו בהקדם האפשרי."
-        )
-        ADMIN_ALERT = (
-            "🚨 *קריאת SOS מלקוח — Proli*\n\n"
-            "📞 *טלפון:* {phone}\n"
-            '💬 *הודעה:* "{last_message}"\n\n'
-            "{lead_details}"
         )
 
     class Alerts:
@@ -605,8 +662,21 @@ class Messages:
             "general": "כללי",
         }
 
+        # --- PRO-166: migrated verbatim from app/services/pro_onboarding_service.py ---
+        NAME_LENGTH_ERROR = "שם העסק חייב להיות בין 2 ל-100 תווים. נסה שוב:"
+        CITIES_PARSE_ERROR = "לא זיהיתי ערים. שלח רשימת ערים מופרדות בפסיקים:"
+        CONFIRM_REPROMPT = "השב *אשר* לשליחה או *ביטול* להתחלה מחדש."
+
     class System:
-        RESET_SUCCESS = "🔄 השיחה אופסה בהצלחה. איך אפשר לעזור?"
+        # RESET_SUCCESS was removed 2026-08-27 (operator decision): a global
+        # reset clears state/context silently, with no confirmation message.
+        # PRO-166: the textual rendering of an inbound location message, shared
+        # by app/api/routes/webhook.py and the Cloud API inbound parser so the
+        # two cannot drift.
+        LOCATION_AS_TEXT = "מיקום: {latitude}, {longitude}"
+        # PRO-166: the list-picker button label on the (unused — see CLAUDE.md)
+        # interactive-list transport path in cloud_api.py.
+        LIST_PICKER_BUTTON = "בחירה"
 
     class Keywords:
         # Logic commands used in 'if' statements

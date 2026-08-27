@@ -26,7 +26,7 @@ Input classes
 
 | state | keyword | free | offtopic | wrong | emoji | silence | interrupt | race |
 |---|---|---|---|---|---|---|---|---|
-| `idle` | "אני המערכת החכמה של Proli" | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | "השיחה אופסה בהצלחה" | N/A[race] |
+| `idle` | "אני המערכת החכמה של Proli" | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | silent | N/A[race] |
 | `awaiting_consent` | → idle, "אפשר להתחיל" | "ברוכים הבאים ל-Proli" | "ברוכים הבאים ל-Proli" | "ברוכים הבאים ל-Proli" | "ברוכים הבאים ל-Proli" | TTL ≤ 14400s | → idle, "לא נשמור מידע עליך" | N/A[race] |
 | `customer_mode` | "מה הכתובת" | "מאיפה בדיוק" | "במה אפשר לעזור" | "ראיתי את התמונה" | "לעזור" | TTL ≤ 14400s | → pro_mode | N/A[race] |
 | `awaiting_address` | → idle, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "עוד פרטים לכתובת" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
@@ -406,7 +406,7 @@ MATRIX: dict[str, dict] = {
             expect=("במה אפשר לעזור",),
         ),
         "silence": Cell(na="resting"),
-        "interrupt": Cell(send="התחלה", expect=("השיחה אופסה בהצלחה",)),
+        "interrupt": Cell(send="התחלה", silent=True),
         "race": Cell(na=RACE_NA),
     },
     UserStates.AWAITING_CONSENT: {

@@ -202,7 +202,7 @@ _WORKFLOW_SERVICE = _REPO_ROOT / "app" / "services" / "workflow_service.py"
 # (a trailing *(conditional)* / *(↩ falls through)* marker is not part of it).
 _DISPATCH_SEQUENCE = [
     ("Admin routing wizard", "handle_admin_message"),
-    ("Global reset", "RESET_SUCCESS"),
+    ("Global reset", "RESET_COMMANDS"),
     ("Help / menu", "HELP_INFO"),
     ("Inbound rate-limit gate", "check_sliding_window"),
     ("AWAITING_INTENT_CONFIRMATION", "INTENT_REPROMPT"),
