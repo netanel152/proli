@@ -251,16 +251,29 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
     pro_name = pro.get("business_name") or "איש המקצוע"
 
+    # Tri-state: None = the offer was never *attempted* (lead lookup failed),
+    # False = attempted and did not reach the pro. Conflating them would blame
+    # the pro's 24h window for a lookup failure and send the operator hunting
+    # the wrong problem.
+    offer_sent: bool | None = None
     if lead:
-        await notify_pro_new_lead(lead, pro, whatsapp)
+        # PRO-159 made this return honest: False means the offer never reached
+        # the pro (closed 24h window with no approved template, breaker, or a
+        # raised send). No auto-escalation here — the admin IS the review, so
+        # escalating back to PENDING_ADMIN_REVIEW would be circular. The
+        # assignment stands; the admin is told the truth below and contacts
+        # the pro by phone.
+        offer_sent = await notify_pro_new_lead(lead, pro, whatsapp)
         # Tell the CUSTOMER a pro was found — mirrors the auto-match path in
         # workflow_service. Without this the customer sat in silence after the
         # PENDING_REVIEW message ("צוות Proli יחזור אליך") until they proactively
         # asked; this path notified only the pro and the admin. Send to the
         # lead's chat_id, never `chat_id` (that is the ADMIN running the wizard).
         # Fail-open: a customer-notify hiccup must not abort the assignment.
+        # Only when the pro actually got the offer, though — "X יטפל בך"
+        # while X has no idea is the exact false-success this branch removes.
         customer_chat_id = lead.get("chat_id")
-        if customer_chat_id:
+        if customer_chat_id and offer_sent:
             try:
                 await whatsapp.send_message(
                     customer_chat_id,
@@ -275,7 +288,20 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
                 )
 
     await state_manager.clear_state(chat_id)
-    await whatsapp.send_message(chat_id, f"✅ הליד הועבר ל-{pro_name}.")
+    if offer_sent:
+        await whatsapp.send_message(chat_id, f"✅ הליד הועבר ל-{pro_name}.")
+    elif offer_sent is None:
+        await whatsapp.send_message(
+            chat_id,
+            "⚠️ הליד לא נמצא לאחר העדכון — יש לבדוק בפאנל הניהול וליצור "
+            f"קשר ידני עם {pro_name} ועם הלקוח.",
+        )
+    else:
+        await whatsapp.send_message(
+            chat_id,
+            f"⚠️ הליד שויך ל-{pro_name}, אבל שליחת ההצעה אליו נכשלה "
+            "(ייתכן שחלון 24 השעות שלו סגור). יש ליצור איתו קשר ידנית.",
+        )
     logger.info(
         f"[admin_flow] Lead {lead_id} assigned to pro {pro.get('_id')} by admin {chat_id}"
     )

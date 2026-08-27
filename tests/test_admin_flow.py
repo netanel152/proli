@@ -33,6 +33,13 @@ def patch_admin_collections(monkeypatch, mock_db):
 def mock_whatsapp():
     wa = MagicMock()
     wa.send_message = AsyncMock()
+    # notify_pro_new_lead (notification_service.py) awaits this too whenever
+    # the lead carries a full_address — leaving it a plain MagicMock makes
+    # every such await raise (unawaitable MagicMock), which notify_pro_new_lead
+    # catches and turns into a False return. That silently flipped every
+    # offer-succeeds fixture in this file onto the offer-FAILS branch once
+    # admin_flow started acting on the return value (PRO-125 follow-up).
+    wa.send_location_link = AsyncMock()
     return wa
 
 
@@ -513,6 +520,300 @@ async def test_pro_selection_invalid_preserves_state(
 
     assert "לא חוקי" in _sent_text(mock_whatsapp)
     mock_state.clear_state.assert_not_called()
+
+
+# --- PRO-125 (code half) — offer-send failure on admin assignment ----------
+#
+# notify_pro_new_lead now returns an honest False when the offer never
+# reached the pro (closed 24h window / breaker / raised send). Unlike
+# monitor_service.reassign_lead, the admin path must NOT escalate back to
+# PENDING_ADMIN_REVIEW (the admin running the wizard IS the review) — the
+# assignment stands, but the admin must be told the truth instead of the old
+# unconditional "✅ הליד הועבר", and the customer must not be told a pro is
+# on the way when that pro never saw the offer.
+
+
+@pytest.mark.asyncio
+async def test_action_self_assign_offer_send_failed_admin_gets_warning_not_success(
+    patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
+):
+    db = patch_admin_collections
+    await db.users.delete_many({})
+    await db.leads.delete_many({})
+    monkeypatch.setattr(settings, "ADMIN_PHONE", "972524828796")
+    monkeypatch.setattr(
+        admin_flow, "notify_pro_new_lead", AsyncMock(return_value=False)
+    )
+
+    admin_pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": admin_pro_id,
+            "phone_number": "972524828796",
+            "role": "professional",
+            "business_name": "מנהל המערכת",
+        }
+    )
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+    mock_state.get_metadata.return_value = {"selected_lead_id": str(lead_id)}
+
+    await admin_flow.handle_admin_message(
+        "admin@c.us",
+        "1",
+        UserStates.ADMIN_SELECTING_ACTION,
+        mock_state,
+        None,
+        mock_whatsapp,
+        None,
+    )
+
+    admin_msgs = [
+        c.args[1]
+        for c in mock_whatsapp.send_message.call_args_list
+        if c.args[0] == "admin@c.us"
+    ]
+    assert any("שליחת ההצעה" in m for m in admin_msgs)
+    assert not any("✅ הליד הועבר" in m for m in admin_msgs)
+
+
+@pytest.mark.asyncio
+async def test_action_self_assign_offer_send_failed_assignment_still_stands(
+    patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
+):
+    """The admin IS the review — a failed offer must not undo or re-escalate
+    the assignment. The lead stays NEW with the chosen pro."""
+    db = patch_admin_collections
+    await db.users.delete_many({})
+    await db.leads.delete_many({})
+    monkeypatch.setattr(settings, "ADMIN_PHONE", "972524828796")
+    monkeypatch.setattr(
+        admin_flow, "notify_pro_new_lead", AsyncMock(return_value=False)
+    )
+
+    admin_pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": admin_pro_id,
+            "phone_number": "972524828796",
+            "role": "professional",
+            "business_name": "מנהל המערכת",
+        }
+    )
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+    mock_state.get_metadata.return_value = {"selected_lead_id": str(lead_id)}
+
+    await admin_flow.handle_admin_message(
+        "admin@c.us",
+        "1",
+        UserStates.ADMIN_SELECTING_ACTION,
+        mock_state,
+        None,
+        mock_whatsapp,
+        None,
+    )
+
+    updated = await db.leads.find_one({"_id": lead_id})
+    assert updated["status"] == LeadStatus.NEW
+    assert updated["status"] != LeadStatus.PENDING_ADMIN_REVIEW
+    assert updated["pro_id"] == admin_pro_id
+    mock_state.clear_state.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_action_self_assign_offer_send_failed_customer_not_told_pro_found(
+    patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
+):
+    """A customer must never be told 'X will take care of you' when X never
+    received the offer — that's the false success this branch removes."""
+    db = patch_admin_collections
+    await db.users.delete_many({})
+    await db.leads.delete_many({})
+    monkeypatch.setattr(settings, "ADMIN_PHONE", "972524828796")
+    monkeypatch.setattr(
+        admin_flow, "notify_pro_new_lead", AsyncMock(return_value=False)
+    )
+
+    admin_pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": admin_pro_id,
+            "phone_number": "972524828796",
+            "role": "professional",
+            "business_name": "מנהל המערכת",
+        }
+    )
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+    mock_state.get_metadata.return_value = {"selected_lead_id": str(lead_id)}
+
+    await admin_flow.handle_admin_message(
+        "admin@c.us",
+        "1",
+        UserStates.ADMIN_SELECTING_ACTION,
+        mock_state,
+        None,
+        mock_whatsapp,
+        None,
+    )
+
+    customer_msgs = [
+        c.args[1]
+        for c in mock_whatsapp.send_message.call_args_list
+        if c.args[0] == "customer@c.us"
+    ]
+    assert customer_msgs == [], "customer must not be told a pro was found"
+
+
+@pytest.mark.asyncio
+async def test_pro_selection_offer_send_succeeds_admin_gets_success_message(
+    patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
+):
+    """Sanity check for the happy path under the new offer_sent branching —
+    when the offer genuinely reaches the pro, the admin still gets the
+    original ✅ message, not the ⚠️ one."""
+    db = patch_admin_collections
+    monkeypatch.setattr(admin_flow, "notify_pro_new_lead", AsyncMock(return_value=True))
+    pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": pro_id,
+            "phone_number": "972501234567",
+            "role": "professional",
+            "business_name": "יוסי",
+        }
+    )
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+    mock_state.get_metadata.return_value = {
+        "selected_lead_id": str(lead_id),
+        "admin_pros_context": {"1": str(pro_id)},
+    }
+
+    await admin_flow.handle_admin_message(
+        "admin@c.us",
+        "1",
+        UserStates.ADMIN_SELECTING_PRO,
+        mock_state,
+        None,
+        mock_whatsapp,
+        None,
+    )
+
+    admin_msgs = [
+        c.args[1]
+        for c in mock_whatsapp.send_message.call_args_list
+        if c.args[0] == "admin@c.us"
+    ]
+    assert any("✅" in m and "הועבר" in m for m in admin_msgs)
+    assert not any("שליחת ההצעה" in m for m in admin_msgs)
+    customer_msgs = [
+        c.args[1]
+        for c in mock_whatsapp.send_message.call_args_list
+        if c.args[0] == "customer@c.us"
+    ]
+    assert any("יוסי" in m for m in customer_msgs)
+
+
+@pytest.mark.asyncio
+async def test_action_self_assign_lead_lookup_missing_after_write_distinct_message(
+    patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
+):
+    """Tri-state offer_sent (production review, PRO-125 follow-up): None means
+    the post-write lookup itself missed the lead — a distinct failure mode
+    from an offer that was attempted and blocked (False). Conflating the two
+    would blame the pro's 24h window for what is actually a lookup problem.
+    The admin must get the "הליד לא נמצא" message, never the offer-failed
+    or success message, and notify_pro_new_lead must never be called (there
+    is no lead to build an offer from)."""
+    db = patch_admin_collections
+    await db.users.delete_many({})
+    await db.leads.delete_many({})
+    monkeypatch.setattr(settings, "ADMIN_PHONE", "972524828796")
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(admin_flow, "notify_pro_new_lead", notify)
+
+    admin_pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": admin_pro_id,
+            "phone_number": "972524828796",
+            "role": "professional",
+            "business_name": "מנהל המערכת",
+        }
+    )
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+    mock_state.get_metadata.return_value = {"selected_lead_id": str(lead_id)}
+
+    # Simulate the post-write lookup missing without disturbing
+    # set_lead_status's own write path (lead_manager_service imports
+    # leads_collection separately, so this only affects the find_one at the
+    # top of _assign_lead_to_pro).
+    monkeypatch.setattr(
+        admin_flow, "leads_collection", MagicMock(find_one=AsyncMock(return_value=None))
+    )
+
+    await admin_flow.handle_admin_message(
+        "admin@c.us",
+        "1",
+        UserStates.ADMIN_SELECTING_ACTION,
+        mock_state,
+        None,
+        mock_whatsapp,
+        None,
+    )
+
+    admin_msgs = [
+        c.args[1]
+        for c in mock_whatsapp.send_message.call_args_list
+        if c.args[0] == "admin@c.us"
+    ]
+    assert any("הליד לא נמצא" in m for m in admin_msgs)
+    assert not any("שליחת ההצעה" in m for m in admin_msgs)
+    assert not any("✅" in m for m in admin_msgs)
+    notify.assert_not_awaited()
 
 
 @pytest.mark.asyncio

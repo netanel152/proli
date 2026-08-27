@@ -93,7 +93,7 @@ The **SOS Healer** (every 10 min; PRO-73: business hours + `sos_healer_active` t
 1. If max reassignments (3) already reached → escalates the lead to `PENDING_ADMIN_REVIEW`, alerts the admin immediately, and notifies the customer a human will call back within the hour (PRO-63 — a human takes over, the lead is never closed by this)
 2. Notifies customer of the delay
 3. Searches for a replacement pro (excluding the current one)
-4. If found → reassigns the lead, notifies both pros, clears customer state
+4. If found → reassigns the lead, notifies both pros, clears customer state (a failed offer to the new pro escalates the lead to `PENDING_ADMIN_REVIEW` and pages the operator instead of reporting success)
 5. If not found → sets lead to `PENDING_ADMIN_REVIEW`, sends customer a `PENDING_REVIEW` message, clears context
 
 The **Stale Lead Nudger** (every 4 h) finds leads in `BOOKED` status older than 24 hours:
@@ -131,7 +131,7 @@ When a deal is finalized by the AI:
 2. Pro receives a text-based approval request (reply "אשר" or "1"):
    - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared. System enforces strict scoping (pro must have a pending lead assigned).
    - **Pause Bot** (reply "השהה") → customer enters `PAUSED_FOR_HUMAN` (15m rolling), direct chat begins
-   - **Reject** (reply "2" or "דחה") → lead becomes `REJECTED` then immediately handed to `reassign_lead`: reassigned → `NEW` under the next pro (customer told, approval SLA re-armed); no replacement → `PENDING_ADMIN_REVIEW` (admin paged, customer told)
+   - **Reject** (reply "2" or "דחה") → lead becomes `REJECTED` then immediately handed to `reassign_lead`: reassigned → `NEW` under the next pro (customer told, approval SLA re-armed); no replacement, or a found pro whose offer fails to send → `PENDING_ADMIN_REVIEW` (admin paged, customer told)
 3. Pro can manage availability:
    - **Vacation Mode** (reply "חופשה" or "הפסקה") → sets `is_active: False`, pro stops receiving new leads.
    - **Resume** (reply "זמין") → sets `is_active: True`.
