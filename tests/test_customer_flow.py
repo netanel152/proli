@@ -8,6 +8,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 from app.core.constants import LeadStatus, Defaults, WorkerConstants
 from app.core.messages import Messages
+from tests.copy_util import static_prefix, longest_static_chunk
 from app.services.customer_flow import (
     send_customer_completion_check,
     handle_customer_completion_text,
@@ -53,7 +54,7 @@ async def test_completion_check_sends_text_message(flow_db, mock_whatsapp):
     mock_whatsapp.send_message.assert_called_once()
     call_args = mock_whatsapp.send_message.call_args
     # Message should contain the numeric reply instructions
-    assert "השב *1*" in str(call_args)
+    assert longest_static_chunk(Messages.Customer.COMPLETION_CHECK) in call_args.args[1]
 
 
 @pytest.mark.asyncio
@@ -537,7 +538,7 @@ async def test_handle_status_query_new_lead(flow_db):
     assert result is not None
     assert "נזילה" in result
     # NEW status template contains "מאתרים"
-    assert "מאתרים" in result
+    assert static_prefix(Messages.Customer.STATUS_NEW) in result
 
 
 @pytest.mark.asyncio
@@ -557,7 +558,7 @@ async def test_handle_status_query_contacted_lead(flow_db):
     assert result is not None
     assert "תקלת חשמל" in result
     # CONTACTED template mentions waiting for pro
-    assert "ממתינים" in result
+    assert static_prefix(Messages.Customer.STATUS_CONTACTED) in result
 
 
 @pytest.mark.asyncio
@@ -608,4 +609,4 @@ async def test_handle_status_query_falls_back_to_recent_completed_lead(flow_db):
 
     assert result is not None
     # COMPLETED template mentions the work ended
-    assert "הסתיימה" in result
+    assert result == Messages.Customer.STATUS_COMPLETED

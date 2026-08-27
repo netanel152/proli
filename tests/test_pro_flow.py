@@ -10,6 +10,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
+from tests.copy_util import static_prefix
 from app.services.pro_flow import handle_pro_text_command, _handle_search
 import app.services.pro_flow
 
@@ -226,7 +227,10 @@ async def test_approve_with_quoted_price_shows_price_to_customer(
     mock_wa.send_message.assert_called_once()
     customer_msg = mock_wa.send_message.call_args.args[1]
     assert "400-600" in customer_msg
-    assert "הערכת המחיר" in customer_msg
+    assert (
+        Messages.Customer.QUOTED_PRICE_LINE.format(quoted_price="400-600")
+        in customer_msg
+    )
 
 
 @pytest.mark.asyncio
@@ -273,7 +277,8 @@ async def test_approve_without_quoted_price_omits_price_for_customer(
     assert Messages.Pro.APPROVE_SUCCESS in result
     mock_wa.send_message.assert_called_once()
     customer_msg = mock_wa.send_message.call_args.args[1]
-    assert "הערכת המחיר" not in customer_msg
+    price_prefix = static_prefix(Messages.Customer.QUOTED_PRICE_LINE)
+    assert price_prefix not in customer_msg
     assert "₪" not in customer_msg
 
 
@@ -546,7 +551,7 @@ async def test_finish_multiple_jobs_selection(pro_setup, mock_wa, mock_lm, monke
 
     result = await handle_pro_text_command(chat_id, "סיימתי", mock_wa, mock_lm)
 
-    assert "איזו עבודה סיימת?" in result
+    assert static_prefix(Messages.Pro.SELECT_JOB_TO_FINISH) in result
     mock_state.set_state.assert_called_with(
         chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH
     )
@@ -742,7 +747,7 @@ async def test_history(pro_setup, mock_wa, mock_lm):
     result = await handle_pro_text_command(
         "972500000000@c.us", "היסטוריה", mock_wa, mock_lm
     )
-    assert "עבודות אחרונות" in result
+    assert Messages.Pro.HISTORY_HEADER in result
     assert "חשמל" in result
 
 
@@ -778,7 +783,7 @@ async def test_stats(pro_setup, mock_wa, mock_lm):
     )
 
     result = await handle_pro_text_command("972500000000@c.us", "דוח", mock_wa, mock_lm)
-    assert "סטטיסטיקות" in result
+    assert Messages.Pro.STATS_HEADER in result
     assert "4.5" in result  # rating
 
 
@@ -802,7 +807,7 @@ async def test_unknown_command_returns_dashboard(
     result = await handle_pro_text_command(
         "972500000000@c.us", "שלום", mock_wa, mock_lm
     )
-    assert "סטטוס: זמין" in result
+    assert f"סטטוס: {Messages.Pro.STATUS_AVAILABLE}" in result
     assert "יוסי אינסטלציה" in result
 
 
@@ -970,7 +975,7 @@ async def test_resume_clears_pause(pro_setup, mock_wa, mock_lm, monkeypatch):
         f"{PRO_PHONE}@c.us", "המשך", mock_wa, mock_lm
     )
 
-    assert "חזר לפעולה" in result
+    assert Messages.Pro.BOT_RESUMED in result
     mock_state.clear_state.assert_called_with("972501111111@c.us")
 
 
@@ -1129,8 +1134,8 @@ async def test_search_rate_limited_sends_wait_message(pro_setup, mock_wa):
     assert result == ""  # sentinel: handler sent message itself
     mock_wa.send_message.assert_called_once()
     sent_text = mock_wa.send_message.call_args.args[1]
-    assert "6" in sent_text  # math.ceil(360 / 60) == 6
-    assert "דקות" in sent_text
+    # math.ceil(360 / 60) == 6
+    assert sent_text == Messages.Pro.SEARCH_RATE_LIMITED.format(minutes=6)
     # setex must NOT be refreshed when already rate-limited
     redis.setex.assert_not_called()
 
@@ -1596,7 +1601,7 @@ async def test_cancel_selection_abort(pro_setup, mock_wa, mock_lm, monkeypatch):
 
     result = await handle_pro_text_command(chat_id, "ביטול", mock_wa, mock_lm)
 
-    assert result == "הפעולה בוטלה."
+    assert result == Messages.Pro.ACTION_CANCELLED
     unchanged = await db.leads.find_one({"_id": lead_id})
     assert unchanged["status"] == LeadStatus.BOOKED
 
@@ -1642,7 +1647,7 @@ async def test_menu_returns_dashboard_not_help_menu(
 
     assert result != Messages.Pro.HELP_MENU
     assert "יוסי אינסטלציה" in result
-    assert "💡 טיפ" in result  # discovery tip
+    assert Messages.Pro.DASHBOARD_TIP.strip() in result  # discovery tip
 
 
 # --- Dashboard discovery tip ---
@@ -1740,7 +1745,7 @@ async def test_summary_command(pro_setup, mock_wa, mock_lm, monkeypatch):
 
     result = await handle_pro_text_command(chat_id, "סיכום", mock_wa, mock_lm)
 
-    assert "סיכום ביצועים" in result
+    assert static_prefix(Messages.Pro.SUMMARY_BODY) in result
     assert "4.5" in result  # rating from pro_setup fixture
 
 
@@ -1757,7 +1762,7 @@ async def test_summary_via_statistics_keyword(pro_setup, mock_wa, mock_lm, monke
 
     result = await handle_pro_text_command(chat_id, "סטטיסטיקה", mock_wa, mock_lm)
 
-    assert "סיכום ביצועים" in result
+    assert static_prefix(Messages.Pro.SUMMARY_BODY) in result
 
 
 # --- Enhanced ביקורות ---

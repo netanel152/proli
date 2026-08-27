@@ -47,7 +47,7 @@ def test_offer_contains_all_lead_fields():
     msg = build_new_lead_message(_full_lead())
     assert "דנה לוי" in msg
     assert "הרצל 12, תל אביב" in msg
-    assert "קומה 3, דירה 7" in msg
+    assert Messages.Pro.EXTRA_INFO_LINE.format(floor="3", apartment="7") in msg
     assert "נזילה" in msg
     assert "מחר 10:00" in msg
     assert msg.startswith(Messages.Pro.NEW_LEAD_HEADER)
@@ -77,7 +77,7 @@ def test_missing_fields_fall_back_in_hebrew_only():
     assert Messages.Fallbacks.CUSTOMER_NAME in msg
     assert Messages.Fallbacks.UNKNOWN in msg
     assert Messages.Fallbacks.TIME_ASAP in msg
-    assert "קומה -, דירה -" in msg
+    assert Messages.Pro.EXTRA_INFO_LINE.format(floor="-", apartment="-") in msg
     assert "Unknown" not in msg
     assert "Pending" not in msg
 
@@ -110,8 +110,12 @@ def test_format_media_links_matches_approval_request_shape():
 
 
 def test_extra_info_placeholders_keep_line_shape():
-    assert format_lead_extra_info({}) == "קומה -, דירה -"
-    assert format_lead_extra_info({"floor": 2, "apartment": 5}) == "קומה 2, דירה 5"
+    assert format_lead_extra_info({}) == Messages.Pro.EXTRA_INFO_LINE.format(
+        floor="-", apartment="-"
+    )
+    assert format_lead_extra_info(
+        {"floor": 2, "apartment": 5}
+    ) == Messages.Pro.EXTRA_INFO_LINE.format(floor=2, apartment=5)
 
 
 # ---------------------------------------------------------------------------
