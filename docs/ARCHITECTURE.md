@@ -134,7 +134,8 @@ process_incoming_message(chat_id, text, media_url)
         │            ├─ "השהה" / "pause" → customer PAUSED_FOR_HUMAN (TTL 900 s)
         │            ├─ "דחה" / "2" → lead REJECTED (way-station) then handed to reassign_lead:
         │            │      reassigned → lead NEW under the next pro, customer told, SLA re-armed;
-        │            │      no replacement → PENDING_ADMIN_REVIEW, admin paged, customer told (strict scope check)
+        │            │      no replacement, or a found pro whose offer send fails → PENDING_ADMIN_REVIEW,
+        │            │      admin paged, customer told (strict scope check)
         │            ├─ "סיימתי" / "3" → finish job (multi-job selection if needed)
         │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN
         │            ├─ "הפסקה" / "חופשה" → set pro is_active=False
