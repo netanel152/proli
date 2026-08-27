@@ -28,6 +28,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from app.core.config import settings
+from app.core.messages import Messages
 from app.core.constants import WorkerConstants
 from app.core.http_client import get_http_client
 from app.core.logger import logger, page_critical
@@ -387,7 +388,7 @@ class CloudAPIProvider(WhatsAppProvider):
                 "type": "list",
                 "body": {"text": body},
                 "action": {
-                    "button": "בחירה",
+                    "button": Messages.System.LIST_PICKER_BUTTON,
                     "sections": [
                         {
                             "rows": [
@@ -522,7 +523,9 @@ def normalize_meta_message(
         text = (
             " ".join(parts)
             if parts
-            else f"מיקום: {location.get('latitude')}, {location.get('longitude')}"
+            else Messages.System.LOCATION_AS_TEXT.format(
+                latitude=location.get("latitude"), longitude=location.get("longitude")
+            )
         )
     elif message_type in ("image", "audio", "video", "document"):
         media = message.get(message_type) or {}

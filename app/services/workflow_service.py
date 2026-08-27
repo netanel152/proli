@@ -929,7 +929,7 @@ async def _process_incoming_message_inner(
             return
         else:
             await whatsapp.send_message(
-                chat_id, "אנא השב 1 (בעיה חדשה) או 2 (לגבי העבודה הקיימת)."
+                chat_id, Messages.Customer.NEW_OR_EXISTING_REPROMPT
             )
             return
 

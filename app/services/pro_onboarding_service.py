@@ -72,9 +72,7 @@ async def handle_onboarding_step(chat_id: str, text: str, state: str, whatsapp):
 
 async def _handle_name(chat_id: str, text: str, whatsapp):
     if len(text) < 2 or len(text) > 100:
-        await whatsapp.send_message(
-            chat_id, "שם העסק חייב להיות בין 2 ל-100 תווים. נסה שוב:"
-        )
+        await whatsapp.send_message(chat_id, Messages.Onboarding.NAME_LENGTH_ERROR)
         return
 
     meta = await StateManager.get_metadata(chat_id)
@@ -104,9 +102,7 @@ async def _handle_type(chat_id: str, text: str, whatsapp):
 async def _handle_areas(chat_id: str, text: str, whatsapp):
     areas = [a.strip() for a in text.replace("،", ",").split(",") if a.strip()]
     if not areas:
-        await whatsapp.send_message(
-            chat_id, "לא זיהיתי ערים. שלח רשימת ערים מופרדות בפסיקים:"
-        )
+        await whatsapp.send_message(chat_id, Messages.Onboarding.CITIES_PARSE_ERROR)
         return
 
     meta = await StateManager.get_metadata(chat_id)
@@ -155,7 +151,7 @@ async def _handle_confirm(chat_id: str, text: str, whatsapp):
         await StateManager.clear_state(chat_id)
         await whatsapp.send_message(chat_id, Messages.Onboarding.CANCELLED)
     else:
-        await whatsapp.send_message(chat_id, "השב *אשר* לשליחה או *ביטול* להתחלה מחדש.")
+        await whatsapp.send_message(chat_id, Messages.Onboarding.CONFIRM_REPROMPT)
 
 
 async def _create_pending_pro(chat_id: str, data: dict):

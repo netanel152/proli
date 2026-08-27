@@ -4,6 +4,7 @@ from app.schemas.whatsapp import WebhookPayload
 from app.core.logger import logger
 from app.core.config import settings
 from app.core.constants import APIStatus
+from app.core.messages import Messages
 from app.core.redis_client import get_redis_client, get_arq_pool
 from app.services.security_service import SecurityService
 
@@ -83,7 +84,9 @@ async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=N
                     user_text = (
                         " ".join(parts)
                         if parts
-                        else f"מיקום: {loc.latitude}, {loc.longitude}"
+                        else Messages.System.LOCATION_AS_TEXT.format(
+                            latitude=loc.latitude, longitude=loc.longitude
+                        )
                     )
                     logger.info(f"Location message from {chat_id}: {user_text}")
             elif msg_data.typeMessage in [
