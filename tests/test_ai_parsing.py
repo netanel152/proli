@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from pydantic import SecretStr
 import json
+from app.core.messages import Messages
 from app.services.ai_engine_service import AIEngine, AIResponse, ExtractedData
 
 
@@ -42,7 +43,7 @@ async def test_malformed_json_raw_text(ai_engine):
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
 
     assert isinstance(result, AIResponse)
-    assert result.reply_to_user == "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."
+    assert result.reply_to_user == Messages.Errors.AI_OVERLOAD
 
     assert result.extracted_data.city is None
 
@@ -117,7 +118,7 @@ async def test_sdk_failure_exception(ai_engine):
     result = await ai_engine.analyze_conversation([], "Hi", custom_system_prompt="")
 
     assert isinstance(result, AIResponse)
-    assert "עומס" in result.reply_to_user
+    assert Messages.Errors.AI_OVERLOAD in result.reply_to_user
     assert result.extracted_data.city is None
 
 

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
 from app.core.constants import UserStates, LeadStatus, WorkerConstants, Actor
 from app.core.messages import Messages
+from tests.copy_util import static_prefix
 from app.services.workflow_service import (
     process_incoming_message,
     _strip_deal_marker,
@@ -990,7 +991,7 @@ async def test_deal_with_quoted_price_shown_to_pro(wf_mocks, monkeypatch, mock_d
     assert len(approval_calls) == 1
     approval_msg = approval_calls[0].args[1]
     assert "400-600" in approval_msg
-    assert "הערכת מחיר" in approval_msg
+    assert static_prefix(Messages.Pro.APPROVAL_PRICE_LINE) in approval_msg
 
     updated_lead = await mock_db.leads.find_one({"_id": lead_id})
     assert updated_lead["quoted_price"] == "400-600"
@@ -1065,11 +1066,12 @@ async def test_deal_without_quoted_price_omits_price_line(
     approval_calls = [
         c
         for c in mock_wa.send_message.call_args_list
-        if c.args[0] == "972500000002@c.us" and "פרטי עבודה חדשה לאישורך" in c.args[1]
+        if c.args[0] == "972500000002@c.us"
+        and static_prefix(Messages.Pro.APPROVAL_REQUEST) in c.args[1]
     ]
     assert len(approval_calls) == 1
     approval_msg = approval_calls[0].args[1]
-    assert "הערכת מחיר" not in approval_msg
+    assert static_prefix(Messages.Pro.APPROVAL_PRICE_LINE) not in approval_msg
     assert "₪" not in approval_msg
     # No leftover blank-line artifact from an empty {price_line} slot
     assert "\n\n\n" not in approval_msg
@@ -1147,7 +1149,8 @@ async def test_estimate_turn_persists_quoted_price_sticky_without_deal(
     approval_calls = [
         c
         for c in mock_wa.send_message.call_args_list
-        if c.args[0] == "972500000003@c.us" and "פרטי עבודה חדשה לאישורך" in c.args[1]
+        if c.args[0] == "972500000003@c.us"
+        and static_prefix(Messages.Pro.APPROVAL_REQUEST) in c.args[1]
     ]
     assert len(approval_calls) == 0
 
@@ -2125,7 +2128,9 @@ async def test_booked_customer_new_message_asks_new_or_existing(wf_mocks, mock_d
 
     mock_state.set_state.assert_any_call(chat, UserStates.AWAITING_NEW_OR_EXISTING)
     sent = " ".join(str(c.args[1]) for c in mock_wa.send_message.call_args_list)
-    assert "פנייה" in sent  # the new-or-existing prompt was shown
+    assert (
+        static_prefix(Messages.Customer.EXISTING_JOB_PROMPT) in sent
+    )  # the new-or-existing prompt was shown
     mock_lm.create_lead_from_dict.assert_not_called()  # no second lead
     mock_ai.analyze_conversation.assert_not_called()  # dispatcher never ran
 

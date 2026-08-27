@@ -15,7 +15,9 @@ to be updated rather than quietly drifting.
 import pytest
 
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
+from app.core.messages import Messages
 from app.core.phone import to_local_phone
+from tests.copy_util import longest_static_chunk, static_prefix
 from tests.e2e import reserved_numbers as R
 from tests.e2e.ai_replay import deal, reply
 from tests.e2e.world import media_url_for
@@ -68,9 +70,9 @@ async def test_happy_path_inbound_to_rating(world):
     assert lead["pro_id"] == pro["_id"]
     assert media_url_for("image") in lead["media_urls"]
     early = world.recorder.assert_text_to(
-        pro_chat, "שיחה בתהליך", "נזילה מתחת לכיור", "תל אביב"
+        pro_chat, Messages.Pro.EARLY_LEAD_HEADER, "נזילה מתחת לכיור", "תל אביב"
     )
-    assert "אין צורך לפעול עכשיו" in early.body
+    assert Messages.Pro.EARLY_LEAD_FOOTER in early.body
 
     # --- the close: address gate passes, both sides notified
     world.recorder.clear()
@@ -83,19 +85,21 @@ async def test_happy_path_inbound_to_rating(world):
     assert await world.state_ttl() <= WorkerConstants.PRO_APPROVAL_TTL_SECONDS
 
     world.recorder.assert_text_to(
-        world.customer, "העברתי את הפנייה שלך", pro["business_name"]
+        world.customer,
+        static_prefix(Messages.Customer.AWAITING_APPROVAL_TRANSPARENT),
+        pro["business_name"],
     )
     approval = world.recorder.assert_text_to(
         pro_chat,
-        "פרטי עבודה חדשה לאישורך",
+        static_prefix(Messages.Pro.APPROVAL_REQUEST),
         "דנה",
         "דיזנגוף 50, תל אביב",
-        "קומה 3, דירה 12",
+        Messages.Pro.EXTRA_INFO_LINE.format(floor="3", apartment="12"),
         "מחר ב-10:00",
         "450₪",
     )
     assert media_url_for("image") in approval.body, "media links belong in the approval"
-    world.recorder.assert_text_to(pro_chat, "נווט לכתובת", "waze.com")
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.NAVIGATE_TO, "waze.com")
 
     # --- approval: BOOKED, the exact slot is reserved, customer told
     world.recorder.clear()
@@ -107,13 +111,13 @@ async def test_happy_path_inbound_to_rating(world):
     await world.assert_state(UserStates.IDLE)
     world.recorder.assert_text_to(
         world.customer,
-        "נמצא לך איש מקצוע",
+        static_prefix(Messages.Customer.PRO_FOUND),
         pro["business_name"],
         to_local_phone(R.PRO_PRIMARY),  # the customer sees the local 0… form
         "אינסטלטור",
         "450₪",
     )
-    world.recorder.assert_text_to(pro_chat, "העבודה אושרה")
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.APPROVE_SUCCESS)
 
     # --- completion: customer is asked to rate
     world.recorder.clear()
@@ -124,14 +128,14 @@ async def test_happy_path_inbound_to_rating(world):
     world.recorder.assert_text_to(
         world.customer, "איך היה השירות", pro["business_name"]
     )
-    world.recorder.assert_text_to(pro_chat, "כמה גבית על העבודה")
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.FINISH_SUCCESS_ASK_PRICE)
 
     # --- rating + free-text review
     world.recorder.clear()
     await world.send("5")
-    world.recorder.assert_text_to(world.customer, "תודה על הדירוג")
+    world.recorder.assert_text_to(world.customer, Messages.Customer.REVIEW_REQUEST)
     await world.send("הגיע בזמן, עבודה נקייה")
-    world.recorder.assert_text_to(world.customer, "הביקורת שלך נשמרה")
+    world.recorder.assert_text_to(world.customer, Messages.Customer.REVIEW_SAVED)
 
     reviews = await world.reviews()
     assert len(reviews) == 1
@@ -193,7 +197,9 @@ async def test_pro_rejection_reassigns_to_the_next_pro(world):
     assert updated["status"] == LeadStatus.NEW
     assert updated["pro_id"] == world.pros[R.PRO_SECONDARY]["_id"]
     assert updated["reassignment_count"] == 1
-    world.recorder.assert_text_to(world.pro_chat(R.PRO_SECONDARY), "הצעת עבודה חדשה")
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_SECONDARY), Messages.Pro.NEW_LEAD_HEADER
+    )
     # The customer is told who was found — the thread doesn't go silent.
     world.recorder.assert_text_to(
         world.customer, world.pros[R.PRO_SECONDARY]["business_name"]
@@ -203,7 +209,7 @@ async def test_pro_rejection_reassigns_to_the_next_pro(world):
     lost_lead_sends = [
         s
         for s in world.recorder.to(world.pro_chat(R.PRO_PRIMARY))
-        if "הועברה עקב חוסר מענה" in s.body
+        if Messages.SOS.PRO_LOST_LEAD in s.body
     ]
     assert not lost_lead_sends, (
         "rejecting pro must not receive PRO_LOST_LEAD "
@@ -229,9 +235,9 @@ async def test_stale_lead_is_reassigned_to_the_next_pro(world):
     assert updated["pro_id"] == world.pros[R.PRO_SECONDARY]["_id"]
     assert updated["reassignment_count"] == 1
     assert updated["approval_nudged"] is False
-    world.recorder.assert_text_to(world.customer, "מאתרים עבורך איש מקצוע זמין")
+    world.recorder.assert_text_to(world.customer, Messages.SOS.CUSTOMER_REASSIGNING)
     world.recorder.assert_text_to(
-        world.pro_chat(R.PRO_SECONDARY), "הצעת עבודה חדשה", "דיזנגוף 50"
+        world.pro_chat(R.PRO_SECONDARY), Messages.Pro.NEW_LEAD_HEADER, "דיזנגוף 50"
     )
     world.recorder.assert_text_to(
         world.pro_chat(R.PRO_PRIMARY), "הועברה לאיש מקצוע אחר"
@@ -258,7 +264,9 @@ async def test_exhausted_reassignments_escalate_to_admin_never_closed(world):
     assert updated["status"] == LeadStatus.PENDING_ADMIN_REVIEW
     assert updated["status"] != LeadStatus.CLOSED
     assert updated["escalation_reason"] == "max_reassignments_exhausted"
-    world.recorder.assert_text_to(world.customer, "מעביר אותך לנציג", "תוך שעה")
+    world.recorder.assert_text_to(
+        world.customer, Messages.SOS.MAX_REASSIGNMENTS_REACHED
+    )
     # PRO-88: the admin is paged out of band, never over WhatsApp.
     world.recorder.assert_silent(
         world.admin, "operator alerts moved to Sentry — no template needed"
@@ -313,7 +321,7 @@ async def test_no_pro_at_max_radius_falls_back_without_paging_the_operator(world
 
     lead = await world.lead()
     assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
-    world.recorder.assert_text_to(world.customer, "מחפשים את איש המקצוע המתאים ביותר")
+    world.recorder.assert_text_to(world.customer, Messages.Customer.PENDING_REVIEW)
     assert not paged, f"no-pro-available must never page the operator (PRO-77): {paged}"
 
 
@@ -328,7 +336,9 @@ async def test_pending_admin_review_short_circuits_then_expires(world):
     world.recorder.clear()
 
     await world.send("מה קורה עם הפנייה שלי?")
-    world.recorder.assert_text_to(world.customer, "עדיין בבדיקה אצל צוות Proli")
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.STILL_PENDING_REVIEW
+    )
     assert await world.lead(status=LeadStatus.CONTACTED) is None, "no duplicate lead"
 
     # Past the window, the next message starts a fresh request.
@@ -361,14 +371,16 @@ async def test_sos_pauses_the_bot_and_deflects_after_the_idle_window(world):
     await world.assert_state(UserStates.PAUSED_FOR_HUMAN)
     assert await world.state_ttl() <= WorkerConstants.PAUSE_TTL_SECONDS
     assert (await world.lead_by_id(lead["_id"]))["is_paused"] is True
-    world.recorder.assert_text_to(world.customer, "מעביר אותך לנציג אנושי")
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.BOT_PAUSED_BY_CUSTOMER
+    )
     # PRO-88: SOS still reaches the operator, just not over WhatsApp.
     world.recorder.assert_silent(
         world.admin, "operator alerts moved to Sentry — no template needed"
     )
     world.assert_paged("SOS from customer")
     world.recorder.assert_text_to(
-        world.pro_chat(R.PRO_PRIMARY), "הלקוח מבקש מענה אנושי"
+        world.pro_chat(R.PRO_PRIMARY), Messages.Pro.PAUSE_NOTIFICATION
     )
 
     # Each further message resets the rolling window instead of answering.
@@ -384,7 +396,9 @@ async def test_sos_pauses_the_bot_and_deflects_after_the_idle_window(world):
     await check_sla_deflection()
 
     assert (await world.lead_by_id(lead["_id"]))["sla_deflected"] is True
-    world.recorder.assert_text_to(world.customer, "באמצע עבודה מורכבת")
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.SLA_DEFLECTION_MESSAGE
+    )
     await world.assert_state(UserStates.IDLE)
 
 
@@ -409,7 +423,7 @@ async def test_approval_sla_nudges_the_pro_at_t10(world):
 
     world.recorder.assert_text_to(
         world.pro_chat(R.PRO_PRIMARY),
-        "ליד ממתין לאישורך",
+        static_prefix(Messages.Pro.APPROVAL_NUDGE),
         str(WorkerConstants.APPROVAL_NUDGE_MINUTES),
     )
     world.recorder.assert_silent(world.customer, "T+10 nudges the pro only")
@@ -452,9 +466,7 @@ async def test_approval_sla_offers_the_customer_a_reassignment_at_t25(world):
 
     await check_pro_approval_sla()
 
-    world.recorder.assert_text_to(
-        world.customer, "עדיין לא אישר את הפנייה", "לחפש לך איש מקצוע אחר"
-    )
+    world.recorder.assert_text_to(world.customer, Messages.Customer.REASSIGN_OFFER)
     assert (await world.lead_by_id(lead["_id"]))["reassign_offered"] is True
 
     # "1" → reassign to the next pro.
@@ -485,7 +497,7 @@ async def test_approval_sla_reply_two_restarts_the_window(world):
     assert updated["reassign_offered"] is False
     assert updated["approval_nudged"] is False
     assert updated["pro_id"] == world.pros[R.PRO_PRIMARY]["_id"]
-    world.recorder.assert_text_to(world.customer, "ממשיכים להמתין לאישור")
+    world.recorder.assert_text_to(world.customer, Messages.Customer.REASSIGN_WAIT_ACK)
 
 
 @pytest.mark.asyncio
@@ -505,7 +517,9 @@ async def test_emergency_leads_halve_the_sla_thresholds(world):
 
     await check_pro_approval_sla()
 
-    world.recorder.assert_text_to(world.pro_chat(R.PRO_PRIMARY), "ליד ממתין לאישורך")
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY), static_prefix(Messages.Pro.APPROVAL_NUDGE)
+    )
 
 
 @pytest.mark.asyncio
@@ -526,7 +540,9 @@ async def test_quiet_hours_suppress_the_customer_reassignment_offer(world):
     await check_pro_approval_sla()
 
     world.recorder.assert_silent(world.customer, "quiet hours gate the cold offer")
-    world.recorder.assert_text_to(world.pro_chat(R.PRO_PRIMARY), "ליד ממתין לאישורך")
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY), static_prefix(Messages.Pro.APPROVAL_NUDGE)
+    )
 
 
 @pytest.mark.asyncio
@@ -546,7 +562,7 @@ async def test_quiet_hours_suppress_the_cold_sos_healer(world):
 
     world.set_business_hours(True)
     await scheduler_module.run_sos_healer()
-    world.recorder.assert_text_to(world.customer, "מאתרים עבורך איש מקצוע זמין")
+    world.recorder.assert_text_to(world.customer, Messages.SOS.CUSTOMER_REASSIGNING)
 
 
 # ===========================================================================
@@ -591,9 +607,13 @@ async def test_customer_cancellation_releases_the_right_slot(world):
     assert updated["cancel_reason"] == "customer_requested"
     assert (await world.slot(mine["booked_slot_id"]))["is_taken"] is False
     assert (await world.slot(theirs["booked_slot_id"]))["is_taken"] is True
-    world.recorder.assert_text_to(world.customer, "ביטלתי את העבודה כבקשתך")
     world.recorder.assert_text_to(
-        world.pro_chat(R.PRO_PRIMARY), "ביטל/ה את העבודה", "דיזנגוף 50"
+        world.customer, Messages.Customer.CANCELLED_ACTIVE_LEAD
+    )
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY),
+        longest_static_chunk(Messages.Pro.CUSTOMER_CANCELLED),
+        "דיזנגוף 50",
     )
     await world.assert_state(UserStates.IDLE)
 
@@ -627,7 +647,9 @@ async def test_infinitive_cancel_phrasing_triggers_confirmation(world):
     updated = await world.lead_by_id(booked["_id"])
     assert updated["status"] == LeadStatus.CANCELLED
     assert (await world.slot(booked["booked_slot_id"]))["is_taken"] is False
-    world.recorder.assert_text_to(world.customer, "ביטלתי את העבודה כבקשתך")
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.CANCELLED_ACTIVE_LEAD
+    )
     await world.assert_state(UserStates.IDLE)
 
 
@@ -698,7 +720,7 @@ async def test_cancel_confirmation_abort_restores_idle_default_state(world):
     # message, not merely compare equal to it.
     world.recorder.clear()
     await world.send("תודה")
-    world.recorder.assert_text_to(world.customer, "בכיף")
+    world.recorder.assert_text_to(world.customer, Messages.Customer.YOU_ARE_WELCOME)
 
 
 @pytest.mark.asyncio
@@ -718,7 +740,7 @@ async def test_pro_cancellation_releases_the_right_slot(world):
     listing = await handle_pro_text_command(
         pro_chat, "ביטול", world.client, lead_manager
     )
-    assert "איזו עבודה לבטל" in listing
+    assert static_prefix(Messages.Pro.SELECT_JOB_TO_CANCEL) in listing
     await world.assert_state(UserStates.PRO_SELECTING_JOB_TO_CANCEL, chat_id=pro_chat)
 
     mapping = (await world.metadata(pro_chat))["cancelling_jobs_context"]
@@ -729,7 +751,9 @@ async def test_pro_cancellation_releases_the_right_slot(world):
     assert (await world.lead_by_id(first["_id"]))["status"] == LeadStatus.BOOKED
     assert (await world.slot(second["booked_slot_id"]))["is_taken"] is False
     assert (await world.slot(first["booked_slot_id"]))["is_taken"] is True
-    world.recorder.assert_text_to(R.chat(R.CUSTOMER_B), "איש המקצוע ביטל את העבודה")
+    world.recorder.assert_text_to(
+        R.chat(R.CUSTOMER_B), Messages.Customer.PRO_CANCELLED_BOOKING
+    )
 
 
 @pytest.mark.asyncio
@@ -742,7 +766,9 @@ async def test_reschedule_swaps_the_reservation(world):
 
     await world.send("אני צריך מועד אחר")
     await world.assert_state(UserStates.AWAITING_RESCHEDULE_TIME)
-    offer = world.recorder.assert_text_to(world.customer, "בוא נתאם מועד חדש")
+    offer = world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.RESCHEDULE_OFFER)
+    )
     assert "1." in offer.body
 
     world.recorder.clear()
@@ -754,8 +780,13 @@ async def test_reschedule_swaps_the_reservation(world):
     assert updated["status"] == LeadStatus.BOOKED
     assert (await world.slot(old_slot_id))["is_taken"] is False
     assert (await world.slot(updated["booked_slot_id"]))["is_taken"] is True
-    world.recorder.assert_text_to(world.customer, "המועד שונה בהצלחה")
-    world.recorder.assert_text_to(world.pro_chat(R.PRO_PRIMARY), "עדכון יומן")
+    world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.RESCHEDULE_SUCCESS)
+    )
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY),
+        static_prefix(Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS),
+    )
     await world.assert_state(UserStates.IDLE)
 
 
@@ -776,7 +807,7 @@ async def test_pro_as_customer_entry_and_sticky_customer_mode(world):
     # A pro who types לקוח switches deterministically — no AI, no confirmation.
     await world.send("לקוח", chat_id=pro_chat)
     await world.assert_state(UserStates.CUSTOMER_MODE, chat_id=pro_chat)
-    world.recorder.assert_text_to(pro_chat, "עברת למצב לקוח")
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.SWITCHED_TO_CUSTOMER)
 
     # Their own request is served as a customer's, and they stay on that side.
     await world.send("הדוד שלי דולף בתל אביב", chat_id=pro_chat)
@@ -829,7 +860,9 @@ async def test_ambiguous_digit_defers_to_an_open_customer_prompt(world):
 
     # It was read as a slot pick, not as "approve".
     assert (await world.lead_by_id(lead["_id"]))["rescheduled_count"] == 1
-    world.recorder.assert_text_to(pro_chat, "המועד שונה בהצלחה")
+    world.recorder.assert_text_to(
+        pro_chat, static_prefix(Messages.Customer.RESCHEDULE_SUCCESS)
+    )
 
 
 # ===========================================================================
@@ -843,19 +876,21 @@ async def test_pro_self_service_onboarding(world):
     applicant = R.chat(R.PRO_THIRD)
 
     await world.send("הרשמה", chat_id=applicant)
-    world.recorder.assert_text_to(applicant, "ברוכים הבאים להרשמה")
+    world.recorder.assert_text_to(applicant, Messages.Onboarding.WELCOME)
     await world.assert_state(UserStates.ONBOARDING_NAME, chat_id=applicant)
 
     await world.send("שרברבות הצפון", chat_id=applicant)
-    world.recorder.assert_text_to(applicant, "סוג המקצוע")
+    world.recorder.assert_text_to(applicant, Messages.Onboarding.ASK_TYPE)
     await world.send("1", chat_id=applicant)
-    world.recorder.assert_text_to(applicant, "ערים/אזורים")
+    world.recorder.assert_text_to(applicant, Messages.Onboarding.ASK_AREAS)
     await world.send("תל אביב, רמת גן", chat_id=applicant)
-    world.recorder.assert_text_to(applicant, "המחירים")
+    world.recorder.assert_text_to(applicant, Messages.Onboarding.ASK_PRICES)
     await world.send("דלג", chat_id=applicant)
-    world.recorder.assert_text_to(applicant, "סיכום הפרופיל שלך", "שרברבות הצפון")
+    world.recorder.assert_text_to(
+        applicant, static_prefix(Messages.Onboarding.CONFIRM), "שרברבות הצפון"
+    )
     await world.send("אשר", chat_id=applicant)
-    world.recorder.assert_text_to(applicant, "הפרופיל שלך נשלח לאישור")
+    world.recorder.assert_text_to(applicant, Messages.Onboarding.SUCCESS)
 
     created = await world.pro_doc(R.PRO_THIRD)
     assert created["type"] == "plumber"
@@ -877,17 +912,19 @@ async def test_admin_wizard_routes_a_stuck_lead(world):
     world.recorder.clear()
 
     await world.send("ניהול", chat_id=world.admin)
-    world.recorder.assert_text_to(world.admin, "לידים הממתינים לטיפול")
+    world.recorder.assert_text_to(world.admin, Messages.Admin.STUCK_LEADS_HEADER)
     await world.assert_state(UserStates.ADMIN_SELECTING_LEAD, chat_id=world.admin)
 
     await world.send("1", chat_id=world.admin)
-    world.recorder.assert_text_to(world.admin, "למי להעביר")
+    world.recorder.assert_text_to(world.admin, Messages.Admin.ACTION_MENU)
 
     await world.send("2", chat_id=world.admin)
     world.recorder.assert_text_to(world.admin, "אנשי מקצוע פנויים")
 
     await world.send("1", chat_id=world.admin)
-    world.recorder.assert_text_to(world.admin, "הליד הועבר")
+    world.recorder.assert_text_to(
+        world.admin, static_prefix(Messages.Admin.ASSIGN_SUCCESS)
+    )
 
     updated = await world.lead_by_id(lead["_id"])
     assert updated["status"] == LeadStatus.NEW
@@ -907,7 +944,9 @@ async def test_pro_stuck_lead_search_is_rate_limited(world):
     world.recorder.clear()
 
     await world.send("מצא", chat_id=pro_chat)
-    world.recorder.assert_text_to(pro_chat, "נמצא ליד תקוע", "נזילה במטבח")
+    world.recorder.assert_text_to(
+        pro_chat, static_prefix(Messages.Pro.STUCK_LEAD_FOUND), "נזילה במטבח"
+    )
     assert (
         await world.redis.ttl(f"rate_limit:pro_search:{pro_chat}")
         <= WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS
@@ -915,7 +954,9 @@ async def test_pro_stuck_lead_search_is_rate_limited(world):
 
     world.recorder.clear()
     await world.send("מצא", chat_id=pro_chat)
-    world.recorder.assert_text_to(pro_chat, "חיפשת לאחרונה", "המתן")
+    world.recorder.assert_text_to(
+        pro_chat, static_prefix(Messages.Pro.SEARCH_RATE_LIMITED)
+    )
 
 
 # ===========================================================================
@@ -956,11 +997,11 @@ async def test_inbound_rate_limit_throttles_gracefully(world):
 
     for _ in range(WorkerConstants.INBOUND_RATE_LIMIT_MAX):
         await world.send("תודה")
-    world.recorder.assert_text_to(world.customer, "בכיף")
+    world.recorder.assert_text_to(world.customer, Messages.Customer.YOU_ARE_WELCOME)
 
     world.recorder.clear()
     await world.send("תודה")
-    world.recorder.assert_text_to(world.customer, "קיבלנו ממך הרבה הודעות ברצף")
+    world.recorder.assert_text_to(world.customer, Messages.Errors.RATE_LIMITED)
 
 
 @pytest.mark.asyncio
@@ -978,7 +1019,7 @@ async def test_daily_ai_cap_throttles_gracefully(world):
 
     await world.send("יש לי נזילה")
 
-    world.recorder.assert_text_to(world.customer, "הגעת למכסת הפניות היומית")
+    world.recorder.assert_text_to(world.customer, Messages.Errors.DAILY_AI_CAP_REACHED)
     assert world.ai.calls == [], "the model must not be called past the cap"
 
 
@@ -991,7 +1032,7 @@ async def test_pros_are_exempt_from_the_customer_rate_limit(world):
         await world.send("תפריט", chat_id=pro_chat)
 
     world.recorder.assert_never_contains(
-        "קיבלנו ממך הרבה הודעות ברצף", "pros are exempt from the inbound limit"
+        Messages.Errors.RATE_LIMITED, "pros are exempt from the inbound limit"
     )
 
 
@@ -1000,19 +1041,19 @@ async def test_consent_is_required_on_first_contact(world):
     await world.add_pro(R.PRO_PRIMARY, name="נתנאל אינסטלציה")
 
     await world.send("היי, יש לי נזילה")
-    world.recorder.assert_text_to(world.customer, "ברוכים הבאים ל-Proli", "השב/י *כן*")
+    world.recorder.assert_text_to(world.customer, Messages.Consent.REQUEST)
     await world.assert_state(UserStates.AWAITING_CONSENT)
     assert await world.lead() is None, "no lead may be created before consent"
 
     # Unclear reply re-asks rather than proceeding.
     world.recorder.clear()
     await world.send("מה זה?")
-    world.recorder.assert_text_to(world.customer, "ברוכים הבאים ל-Proli")
+    world.recorder.assert_text_to(world.customer, Messages.Consent.REQUEST)
     await world.assert_state(UserStates.AWAITING_CONSENT)
 
     world.recorder.clear()
     await world.send("כן")
-    world.recorder.assert_text_to(world.customer, "אפשר להתחיל")
+    world.recorder.assert_text_to(world.customer, Messages.Consent.ACCEPTED)
     await world.assert_state(UserStates.IDLE)
 
 
@@ -1022,11 +1063,11 @@ async def test_declining_consent_stops_the_flow_and_re_asks_later(world):
 
     await world.send("היי")
     await world.send("לא")
-    world.recorder.assert_text_to(world.customer, "לא נשמור מידע עליך")
+    world.recorder.assert_text_to(world.customer, Messages.Consent.DECLINED)
 
     world.recorder.clear()
     await world.send("היי שוב")
-    world.recorder.assert_text_to(world.customer, "ברוכים הבאים ל-Proli")
+    world.recorder.assert_text_to(world.customer, Messages.Consent.REQUEST)
 
 
 # ===========================================================================
@@ -1066,13 +1107,16 @@ async def test_incomplete_address_parks_in_awaiting_address_and_recovers(world):
 
     await world.assert_state(UserStates.AWAITING_ADDRESS)
     world.recorder.assert_text_to(
-        world.customer, "עוד פרטים לכתובת", "קומה", "מספר דירה"
+        world.customer,
+        static_prefix(Messages.Customer.ADDRESS_MISSING_PARTS),
+        Messages.Customer.ADDRESS_FIELD_LABELS["floor"],
+        Messages.Customer.ADDRESS_FIELD_LABELS["apartment"],
     )
     assert (await world.lead())["status"] == LeadStatus.CONTACTED
 
     world.recorder.clear()
     await world.send("קומה 3 דירה 12")
-    world.recorder.assert_text_to(world.customer, "הכתובת עודכנה בהצלחה")
+    world.recorder.assert_text_to(world.customer, Messages.Customer.ADDRESS_SAVED)
     assert (await world.lead())["full_address"] == "דיזנגוף 50, תל אביב"
     await world.assert_state(UserStates.IDLE)
 
@@ -1098,7 +1142,9 @@ async def test_unknown_city_falls_back_to_service_area_matching(world):
     lead = await world.lead()
     assert lead["status"] == LeadStatus.CONTACTED
     assert lead["pro_id"] == world.pros[R.PRO_PRIMARY]["_id"]
-    world.recorder.assert_text_to(world.pro_chat(R.PRO_PRIMARY), "שיחה בתהליך")
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY), Messages.Pro.EARLY_LEAD_HEADER
+    )
 
 
 @pytest.mark.asyncio

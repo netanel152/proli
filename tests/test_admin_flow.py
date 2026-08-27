@@ -19,6 +19,8 @@ import app.services.admin_flow as admin_flow
 import app.services.matching_service as matching_service
 from app.core.config import settings
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
+from app.core.messages import Messages
+from tests.copy_util import static_prefix, longest_static_chunk
 
 
 @pytest.fixture
@@ -128,7 +130,7 @@ async def test_lead_selection_valid_moves_to_action(
     assert mock_state.set_state.call_args.args[1] == UserStates.ADMIN_SELECTING_ACTION
     saved_meta = mock_state.set_metadata.call_args.args[1]
     assert saved_meta["selected_lead_id"] == lead_id
-    assert "למי להעביר" in _sent_text(mock_whatsapp)
+    assert Messages.Admin.ACTION_MENU in _sent_text(mock_whatsapp)
 
 
 @pytest.mark.asyncio
@@ -354,7 +356,7 @@ async def test_action_self_assign_without_admin_pro_profile(
         None,
     )
 
-    assert "נסה אפשרות 2" in _sent_text(mock_whatsapp)
+    assert Messages.Admin.NO_ADMIN_PRO_PROFILE in _sent_text(mock_whatsapp)
     # Lead untouched
     assert (await db.leads.find_one({"_id": lead_id}))[
         "status"
@@ -427,7 +429,7 @@ async def test_action_show_pros_none_available(
         None,
     )
 
-    assert "לא נמצאו אנשי מקצוע" in _sent_text(mock_whatsapp)
+    assert Messages.Admin.NO_AVAILABLE_PROS in _sent_text(mock_whatsapp)
     mock_state.set_state.assert_not_called()
 
 
@@ -447,7 +449,7 @@ async def test_action_invalid_option(
         None,
     )
 
-    assert "אפשרות לא חוקית" in _sent_text(mock_whatsapp)
+    assert Messages.Admin.INVALID_OPTION in _sent_text(mock_whatsapp)
 
 
 # --- ADMIN_SELECTING_PRO ---------------------------------------------------
@@ -581,8 +583,13 @@ async def test_action_self_assign_offer_send_failed_admin_gets_warning_not_succe
         for c in mock_whatsapp.send_message.call_args_list
         if c.args[0] == "admin@c.us"
     ]
-    assert any("שליחת ההצעה" in m for m in admin_msgs)
-    assert not any("✅ הליד הועבר" in m for m in admin_msgs)
+    assert any(
+        longest_static_chunk(Messages.Admin.ASSIGN_OFFER_FAILED) in m
+        for m in admin_msgs
+    )
+    assert not any(
+        static_prefix(Messages.Admin.ASSIGN_SUCCESS) in m for m in admin_msgs
+    )
 
 
 @pytest.mark.asyncio
@@ -739,7 +746,10 @@ async def test_pro_selection_offer_send_succeeds_admin_gets_success_message(
         if c.args[0] == "admin@c.us"
     ]
     assert any("✅" in m and "הועבר" in m for m in admin_msgs)
-    assert not any("שליחת ההצעה" in m for m in admin_msgs)
+    assert not any(
+        longest_static_chunk(Messages.Admin.ASSIGN_OFFER_FAILED) in m
+        for m in admin_msgs
+    )
     customer_msgs = [
         c.args[1]
         for c in mock_whatsapp.send_message.call_args_list
@@ -811,7 +821,10 @@ async def test_action_self_assign_lead_lookup_missing_after_write_distinct_messa
         if c.args[0] == "admin@c.us"
     ]
     assert any("הליד לא נמצא" in m for m in admin_msgs)
-    assert not any("שליחת ההצעה" in m for m in admin_msgs)
+    assert not any(
+        longest_static_chunk(Messages.Admin.ASSIGN_OFFER_FAILED) in m
+        for m in admin_msgs
+    )
     assert not any("✅" in m for m in admin_msgs)
     notify.assert_not_awaited()
 
