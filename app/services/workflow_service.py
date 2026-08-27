@@ -1876,10 +1876,14 @@ async def _build_pro_response(
         price_list = ", ".join(f"{k}: {v} ILS" for k, v in raw_price_list.items())
     else:
         price_list = str(raw_price_list) if raw_price_list else ""
+    # PRO-170: `or`, not a .get default — WhatsApp-onboarded pros store
+    # system_prompt as "" (pro_onboarding_service), and an empty string wins
+    # over a .get default, which left every onboarded pro running the
+    # scheduler with an EMPTY persona block. Admin-created pros keep their
+    # generated persona; empty/missing falls back to the default role.
     base_system_prompt = best_pro.get(
-        "system_prompt",
-        Messages.AISystemPrompts.PROLI_SCHEDULER_ROLE.format(pro_name=pro_name),
-    )
+        "system_prompt"
+    ) or Messages.AISystemPrompts.PROLI_SCHEDULER_ROLE.format(pro_name=pro_name)
 
     rating = best_pro.get("social_proof", {}).get("rating", 5.0)
     count = best_pro.get("social_proof", {}).get("review_count", 0)
