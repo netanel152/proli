@@ -486,6 +486,11 @@ await whatsapp.send_message(chat_id, Messages.Customer.PRO_ASSIGNED)
   and new ones join the right group rather than a new top-level.
 - RTL and emoji conventions follow the surrounding catalog; a message that
   looks different from its neighbours is a review comment.
+- **How the copy itself reads** — voice, neutral-first gender, the one canonical
+  menu format, emoji budget, bidi safety, and the "copy is an API" truthfulness
+  rule — is specified in [`docs/COPY_STYLE_GUIDE.md`](COPY_STYLE_GUIDE.md)
+  (PRO-164/PRO-165). This section governs *where* strings live; that guide
+  governs *what they say*.
 
 ## 11. Configuration and Constants
 
