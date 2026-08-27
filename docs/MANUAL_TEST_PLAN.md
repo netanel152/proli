@@ -163,8 +163,8 @@ Reset keywords are `"reset"` and `"התחלה"`. The `"תפריט"` keyword send
 
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
-| 1 | 972523651414 | "reset" | "🔄 השיחה אופסה בהצלחה" | State cleared to idle |
-| 2 | 972524828796 | "reset" | "🔄 השיחה אופסה בהצלחה" | State cleared (will re-detect as pro on next message) |
+| 1 | 972523651414 | "reset" | *(nothing — the reset is deliberately silent)* | State cleared to idle |
+| 2 | 972524828796 | "reset" | *(nothing — the reset is deliberately silent)* | State cleared (will re-detect as pro on next message) |
 
 ---
 

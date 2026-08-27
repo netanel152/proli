@@ -54,11 +54,11 @@ async def _start_wizard(chat_id, state_manager, whatsapp):
 
     if not stuck_leads:
         await state_manager.clear_state(chat_id)
-        await whatsapp.send_message(chat_id, "✅ אין לידים תקועים כרגע")
+        await whatsapp.send_message(chat_id, Messages.Admin.NO_STUCK_LEADS)
         return
 
     now = datetime.now(timezone.utc)
-    lines = ["📋 *לידים הממתינים לטיפול:*\n"]
+    lines = [Messages.Admin.STUCK_LEADS_HEADER]
     leads_map = {}
 
     for i, lead in enumerate(stuck_leads, 1):
@@ -69,13 +69,17 @@ async def _start_wizard(chat_id, state_manager, whatsapp):
             if created_at.tzinfo is None:
                 created_at = created_at.replace(tzinfo=timezone.utc)
             wait_minutes = int((now - created_at).total_seconds() / 60)
-            wait_str = f"{wait_minutes}ד'"
+            wait_str = Messages.Admin.WAIT_MINUTES.format(wait_minutes=wait_minutes)
         else:
             wait_str = "?"
-        lines.append(f"{i}. {city} — {issue} (ממתין {wait_str})")
+        lines.append(
+            Messages.Admin.STUCK_LEAD_ROW.format(
+                num=i, city=city, issue=issue, wait=wait_str
+            )
+        )
         leads_map[str(i)] = str(lead["_id"])
 
-    lines.append("\nהשב/י מספר לבחירה או 'ביטול' ליציאה.")
+    lines.append(Messages.Admin.SELECT_PROMPT)
 
     await state_manager.set_metadata(chat_id, {"admin_leads_context": leads_map})
     await state_manager.set_state(
@@ -88,14 +92,14 @@ async def _handle_lead_selection(chat_id, text, state_manager, whatsapp):
     """Validate the admin's numeric lead choice and ask what to do with it."""
     if text in Messages.Keywords.CANCEL_KEYWORDS:
         await state_manager.clear_state(chat_id)
-        await whatsapp.send_message(chat_id, "בוטל.")
+        await whatsapp.send_message(chat_id, Messages.Admin.CANCELLED)
         return
 
     meta = await state_manager.get_metadata(chat_id)
     leads_map = meta.get("admin_leads_context", {})
 
     if not text.isdigit() or text not in leads_map:
-        await whatsapp.send_message(chat_id, "❌ מספר לא חוקי. נסה שוב או שלח 'ביטול'.")
+        await whatsapp.send_message(chat_id, Messages.Admin.INVALID_NUMBER)
         return
 
     meta["selected_lead_id"] = leads_map[text]
@@ -103,17 +107,14 @@ async def _handle_lead_selection(chat_id, text, state_manager, whatsapp):
     await state_manager.set_state(
         chat_id, UserStates.ADMIN_SELECTING_ACTION, ttl=ADMIN_TTL
     )
-    await whatsapp.send_message(
-        chat_id,
-        "בחרת בליד. למי להעביר?\n1. קח את הליד לעצמך\n2. הצג רשימת אנשי מקצוע פנויים",
-    )
+    await whatsapp.send_message(chat_id, Messages.Admin.ACTION_MENU)
 
 
 async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
     """Handle self-assign (1) or show available pros (2)."""
     if text in Messages.Keywords.CANCEL_KEYWORDS:
         await state_manager.clear_state(chat_id)
-        await whatsapp.send_message(chat_id, "בוטל.")
+        await whatsapp.send_message(chat_id, Messages.Admin.CANCELLED)
         return
 
     meta = await state_manager.get_metadata(chat_id)
@@ -129,10 +130,7 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
             }
         )
         if not admin_pro:
-            await whatsapp.send_message(
-                chat_id,
-                "❌ לא נמצא פרופיל פרופסיונלי למנהל. נסה אפשרות 2.",
-            )
+            await whatsapp.send_message(chat_id, Messages.Admin.NO_ADMIN_PRO_PROFILE)
             return
         await _assign_lead_to_pro(chat_id, lead_id, admin_pro, state_manager, whatsapp)
 
@@ -140,7 +138,7 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
         lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
         if not lead:
             await state_manager.clear_state(chat_id)
-            await whatsapp.send_message(chat_id, "❌ הליד לא נמצא. אפס עם 'ניהול'.")
+            await whatsapp.send_message(chat_id, Messages.Admin.LEAD_NOT_FOUND)
             return
 
         issue = lead.get("issue_type")
@@ -163,20 +161,18 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
             excluded.append(str(pro["_id"]))
 
         if not pros:
-            await whatsapp.send_message(
-                chat_id, "❌ לא נמצאו אנשי מקצוע פנויים לליד זה."
-            )
+            await whatsapp.send_message(chat_id, Messages.Admin.NO_AVAILABLE_PROS)
             return
 
-        lines = ["👷 *אנשי מקצוע פנויים:*\n"]
+        lines = [Messages.Admin.AVAILABLE_PROS_HEADER]
         pros_map = {}
         for i, p in enumerate(pros, 1):
             name = p.get("business_name", "ללא שם")
             rating = p.get("social_proof", {}).get("rating", "-")
-            lines.append(f"{i}. {name} (דירוג: {rating})")
+            lines.append(Messages.Admin.PRO_ROW.format(num=i, name=name, rating=rating))
             pros_map[str(i)] = str(p["_id"])
 
-        lines.append("\nהשב/י מספר לבחירה או 'ביטול' ליציאה.")
+        lines.append(Messages.Admin.SELECT_PROMPT)
 
         meta["admin_pros_context"] = pros_map
         await state_manager.set_metadata(chat_id, meta)
@@ -186,14 +182,14 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
         await whatsapp.send_message(chat_id, "\n".join(lines))
 
     else:
-        await whatsapp.send_message(chat_id, "❌ אפשרות לא חוקית. השב 1 או 2.")
+        await whatsapp.send_message(chat_id, Messages.Admin.INVALID_OPTION)
 
 
 async def _handle_pro_selection(chat_id, text, state_manager, whatsapp):
     """Validate the admin's pro choice and assign the lead."""
     if text in Messages.Keywords.CANCEL_KEYWORDS:
         await state_manager.clear_state(chat_id)
-        await whatsapp.send_message(chat_id, "בוטל.")
+        await whatsapp.send_message(chat_id, Messages.Admin.CANCELLED)
         return
 
     meta = await state_manager.get_metadata(chat_id)
@@ -201,14 +197,14 @@ async def _handle_pro_selection(chat_id, text, state_manager, whatsapp):
     lead_id = meta.get("selected_lead_id")
 
     if not text.isdigit() or text not in pros_map:
-        await whatsapp.send_message(chat_id, "❌ מספר לא חוקי. נסה שוב או שלח 'ביטול'.")
+        await whatsapp.send_message(chat_id, Messages.Admin.INVALID_NUMBER)
         return
 
     pro_id = pros_map[text]
     pro = await users_collection.find_one({"_id": ObjectId(pro_id)})
     if not pro:
         await state_manager.clear_state(chat_id)
-        await whatsapp.send_message(chat_id, "❌ איש המקצוע לא נמצא. אפס עם 'ניהול'.")
+        await whatsapp.send_message(chat_id, Messages.Admin.PRO_NOT_FOUND)
         return
 
     await _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp)
@@ -289,18 +285,18 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
 
     await state_manager.clear_state(chat_id)
     if offer_sent:
-        await whatsapp.send_message(chat_id, f"✅ הליד הועבר ל-{pro_name}.")
+        await whatsapp.send_message(
+            chat_id, Messages.Admin.ASSIGN_SUCCESS.format(pro_name=pro_name)
+        )
     elif offer_sent is None:
         await whatsapp.send_message(
             chat_id,
-            "⚠️ הליד לא נמצא לאחר העדכון — יש לבדוק בפאנל הניהול וליצור "
-            f"קשר ידני עם {pro_name} ועם הלקוח.",
+            Messages.Admin.ASSIGN_LEAD_LOOKUP_MISSED.format(pro_name=pro_name),
         )
     else:
         await whatsapp.send_message(
             chat_id,
-            f"⚠️ הליד שויך ל-{pro_name}, אבל שליחת ההצעה אליו נכשלה "
-            "(ייתכן שחלון 24 השעות שלו סגור). יש ליצור איתו קשר ידנית.",
+            Messages.Admin.ASSIGN_OFFER_FAILED.format(pro_name=pro_name),
         )
     logger.info(
         f"[admin_flow] Lead {lead_id} assigned to pro {pro.get('_id')} by admin {chat_id}"

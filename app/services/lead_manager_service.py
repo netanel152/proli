@@ -7,6 +7,7 @@ from app.core.logger import logger
 from app.core.constants import LeadStatus, Actor
 from app.core.config import settings
 from app.core.lead_history import status_history_entry
+from app.core.messages import Messages
 from app.services.context_manager_service import ContextManager
 
 
@@ -63,22 +64,17 @@ def is_address_complete(extracted_data) -> tuple[bool, str]:
     Returns (ok, reason). When ok is False, reason is a Hebrew-facing message
     listing the missing fields — safe to send directly to the customer.
     """
-    missing = []
-    if not (getattr(extracted_data, "street", None) or "").strip():
-        missing.append("רחוב")
-    if not (getattr(extracted_data, "street_number", None) or "").strip():
-        missing.append("מספר בית")
-    if not (getattr(extracted_data, "city", None) or "").strip():
-        missing.append("עיר")
-    if not (getattr(extracted_data, "floor", None) or "").strip():
-        missing.append("קומה")
-    if not (getattr(extracted_data, "apartment", None) or "").strip():
-        missing.append("מספר דירה")
+    missing = [
+        label
+        for field, label in Messages.Customer.ADDRESS_FIELD_LABELS.items()
+        if not (getattr(extracted_data, field, None) or "").strip()
+    ]
     if missing:
         return (
             False,
-            "כדי שבעל המקצוע יגיע למקום המדויק אני צריך/ה עוד פרטים לכתובת: "
-            + ", ".join(missing),
+            Messages.Customer.ADDRESS_MISSING_PARTS.format(
+                missing_fields=", ".join(missing)
+            ),
         )
     return True, ""
 

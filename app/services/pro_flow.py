@@ -14,16 +14,9 @@ from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
 from datetime import datetime, timedelta, timezone
 
-STATUS_LABELS = {
-    LeadStatus.NEW: "ממתין",
-    LeadStatus.CONTACTED: "ממתין",
-    LeadStatus.BOOKED: "מאושר",
-    LeadStatus.COMPLETED: "הושלם",
-    LeadStatus.REJECTED: "נדחה",
-    LeadStatus.CANCELLED: "בוטל",
-    LeadStatus.CLOSED: "סגור",
-    LeadStatus.PENDING_ADMIN_REVIEW: "ממתין לבדיקת מנהל",
-}
+# PRO-166: label vocabulary lives in the catalog; LeadStatus is a str Enum,
+# so the plain-string keys there match enum members transparently.
+STATUS_LABELS = Messages.Pro.STATUS_LABELS
 
 
 def _normalize(text: str) -> str:
@@ -183,7 +176,9 @@ async def _show_pro_dashboard(pro):
     rating = pro.get("candidate_score", 5.0)
     is_active = pro.get("is_active", True)
     status_emoji = "🟢" if is_active else "🔴"
-    status_text = "זמין" if is_active else "בהפסקה"
+    status_text = (
+        Messages.Pro.STATUS_AVAILABLE if is_active else Messages.Pro.STATUS_ON_BREAK
+    )
 
     pending_count = await leads_collection.count_documents(
         {"pro_id": pro["_id"], "status": LeadStatus.NEW}
@@ -219,7 +214,7 @@ async def _show_pro_dashboard(pro):
 async def _handle_job_selection(chat_id, text, pro, whatsapp, current_state):
     if text in Messages.Keywords.CANCEL_KEYWORDS or text == "ביטול":
         await StateManager.clear_state(chat_id)
-        return "הפעולה בוטלה."
+        return Messages.Pro.ACTION_CANCELLED
 
     meta = await StateManager.get_metadata(chat_id)
     is_cancel_flow = current_state == UserStates.PRO_SELECTING_JOB_TO_CANCEL
@@ -229,7 +224,7 @@ async def _handle_job_selection(chat_id, text, pro, whatsapp, current_state):
     mapping = meta.get(context_key, {})
 
     if text not in mapping:
-        return "בחירה לא תקינה. אנא בחר מספר מהרשימה או כתוב 'ביטול'."
+        return Messages.Pro.INVALID_JOB_SELECTION
 
     lead_id = mapping[text]
     lead = await leads_collection.find_one(
@@ -320,7 +315,7 @@ async def _handle_approve(pro, lead_manager, whatsapp):
     profession_line = ""
     if pro.get("profession_type"):
         label = type_labels.get(pro["profession_type"], pro["profession_type"])
-        profession_line = f"🔧 *מקצוע:* {label}\n"
+        profession_line = Messages.Customer.PROFESSION_LINE.format(label=label)
 
     # PRO-55: show the customer the exact price the AI quoted them (persisted on the
     # lead) — the single source of truth shared with the pro's approval request,
@@ -328,13 +323,17 @@ async def _handle_approve(pro, lead_manager, whatsapp):
     price_line = ""
     quoted_price = lead.get("quoted_price")
     if quoted_price:
-        price_line = f"\n💰 *הערכת המחיר שקיבלת:* {quoted_price}₪\n"
+        price_line = Messages.Customer.QUOTED_PRICE_LINE.format(
+            quoted_price=quoted_price
+        )
 
     # Rating
     rating_line = ""
     sp = pro.get("social_proof", {})
     if sp.get("review_count", 0) > 0:
-        rating_line = f"\n⭐ דירוג: {sp['rating']:.1f} ({sp['review_count']} ביקורות)"
+        rating_line = Messages.Customer.PRO_RATING_LINE.format(
+            rating=sp["rating"], review_count=sp["review_count"]
+        )
 
     customer_msg = Messages.Customer.PRO_FOUND.format(
         pro_name=pro_name,
@@ -495,7 +494,7 @@ async def _handle_resume(pro):
         sort=[("created_at", -1)],
     )
     if not lead:
-        return "אין שיחה מושהית כרגע."
+        return Messages.Pro.NO_PAUSED_CONVERSATION
 
     customer_chat_id = lead["chat_id"]
     current_state = await StateManager.get_state(customer_chat_id)
@@ -506,8 +505,8 @@ async def _handle_resume(pro):
             {"_id": lead["_id"]}, {"$set": {"is_paused": False}}
         )
         logger.info(f"Pro {pro['_id']} resumed bot for customer {customer_chat_id}")
-        return "✅ הבוט חזר לפעולה."
-    return "הבוט כבר פעיל."
+        return Messages.Pro.BOT_RESUMED
+    return Messages.Pro.BOT_ALREADY_ACTIVE
 
 
 async def _handle_finish(pro, whatsapp, chat_id):
@@ -529,7 +528,9 @@ async def _handle_finish(pro, whatsapp, chat_id):
         name = lead.get("customer_name", "לקוח")
         city = lead.get("city") or "לא ידוע"
         issue = lead.get("issue_type") or "תקלה"
-        lines.append(f"{i}. {name} - {city} ({issue})")
+        lines.append(
+            Messages.Pro.JOB_SELECT_ROW.format(num=i, name=name, city=city, issue=issue)
+        )
         mapping[str(i)] = str(lead["_id"])
 
     await StateManager.set_state(chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH)
@@ -634,7 +635,7 @@ async def _handle_active_jobs(pro):
     if not leads:
         return Messages.Pro.NO_ACTIVE_JOBS_LIST
 
-    lines = ["🔄 *עבודות פעילות:*\n"]
+    lines = [Messages.Pro.ACTIVE_JOBS_HEADER]
     for i, lead in enumerate(leads, 1):
         status_label = STATUS_LABELS.get(lead.get("status"), lead.get("status", "?"))
         issue = lead.get("issue_type", "לא ידוע")
@@ -647,7 +648,7 @@ async def _handle_active_jobs(pro):
             )
         )
 
-    lines.append(f'\n*סה"כ: {len(leads)} עבודות*')
+    lines.append(Messages.Pro.ACTIVE_JOBS_TOTAL.format(count=len(leads)))
     return "\n".join(lines)
 
 
@@ -710,7 +711,9 @@ async def _handle_cancel(pro, whatsapp, chat_id):
         name = lead.get("customer_name", "לקוח")
         city = lead.get("city") or "לא ידוע"
         issue = lead.get("issue_type") or "תקלה"
-        lines.append(f"{i}. {name} - {city} ({issue})")
+        lines.append(
+            Messages.Pro.JOB_SELECT_ROW.format(num=i, name=name, city=city, issue=issue)
+        )
         mapping[str(i)] = str(lead["_id"])
 
     await StateManager.set_state(chat_id, UserStates.PRO_SELECTING_JOB_TO_CANCEL)
@@ -759,7 +762,7 @@ async def _handle_history(pro):
     if not leads:
         return Messages.Pro.NO_HISTORY
 
-    lines = ["📋 *10 עבודות אחרונות שהושלמו:*\n"]
+    lines = [Messages.Pro.HISTORY_HEADER]
     for i, lead in enumerate(leads, 1):
         issue = lead.get("issue_type", "לא ידוע")
         address = lead.get("full_address") or "לא ידוע"
@@ -800,7 +803,7 @@ async def _handle_stats(pro):
     else:
         joined = "לא ידוע"
 
-    rating_str = f"{rating:.1f} ⭐" if rating else "אין עדיין"
+    rating_str = f"{rating:.1f} ⭐" if rating else Messages.Pro.RATING_NONE
 
     return Messages.Pro.STATS_HEADER + Messages.Pro.STATS_BODY.format(
         completed=completed,
@@ -832,7 +835,7 @@ async def _handle_summary(pro):
 
     social_proof = pro.get("social_proof", {})
     rating = social_proof.get("rating", 0.0)
-    rating_str = f"{rating:.1f} ⭐" if rating else "אין עדיין"
+    rating_str = f"{rating:.1f} ⭐" if rating else Messages.Pro.RATING_NONE
 
     if total_completed >= 20:
         motivation = Messages.Pro.SUMMARY_MOTIVATION_GREAT
