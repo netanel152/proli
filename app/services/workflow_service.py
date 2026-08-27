@@ -372,9 +372,12 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
         updated, past_pro, whatsapp
     )
     if not notified:
-        # Fail-open, same contract as the reassignment path: the lead is NEW
-        # with the SLA clock armed, so the approval monitor nudges and then
-        # re-routes rather than the customer waiting on a silent failure.
+        # Deliberately fail-open — unlike reassign_lead, which now escalates a
+        # failed offer to PENDING_ADMIN_REVIEW: here the customer just said
+        # "yes" to their previous pro, the SLA clock below is armed, and its
+        # customer-side recovery (nudge at 10m, reassignment offer at 25m)
+        # doesn't depend on the pro's closed window. Escalating would discard
+        # a valid loyalty preference over what may be a transient failure.
         logger.error(
             f"Loyalty dispatch to pro {past_pro['_id']} failed to send for "
             f"...{chat_id[-8:]} — SLA monitor will recover the lead"

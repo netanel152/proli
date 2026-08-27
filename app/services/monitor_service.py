@@ -222,8 +222,52 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
             )
             return False
 
-        # 4. Notify new pro
-        await notify_pro_new_lead(lead, new_pro, whatsapp)
+        # 4. Notify new pro. PRO-159 made this return honest: False now means
+        # the offer genuinely did not reach the pro — closed 24h window with no
+        # approved template (the pre-PRO-87 steady state), breaker engaged, or
+        # a raised send. In every one of those the pro cannot answer an offer
+        # they never saw, so continuing to "נמצא לך איש מקצוע" reports success
+        # over a known failure. Treat it as an assignment failure instead:
+        # escalate to a human immediately, mirroring the no-location branch
+        # above. (The armed SLA would recover in ≤25 min via the customer-side
+        # offer, but its pro-facing nudge fails on the very same closed window
+        # — a human with a phone is the only actor who can reach the pro.)
+        notified = await notify_pro_new_lead(lead, new_pro, whatsapp)
+        if not notified:
+            logger.error(
+                f"⛔ [Reassign] Offer for lead {lead_id} did not reach pro "
+                f"{new_pro_id} — escalating to PENDING_ADMIN_REVIEW."
+            )
+            escalated = await set_lead_status(
+                lead_id,
+                LeadStatus.PENDING_ADMIN_REVIEW,
+                Actor.SYSTEM,
+                extra_set={"escalation_reason": "pro_offer_send_failed"},
+                expected_status=LeadStatus.NEW,
+            )
+            if escalated is None:
+                # Someone else moved the lead between our write and now —
+                # leave it to them rather than fight over it.
+                logger.info(
+                    f"⏭️ [Reassign] Lead {lead_id} changed status before the "
+                    "offer-failure escalation — leaving it to the new owner."
+                )
+                return False
+            page_operator(
+                f"Lead {lead_id}: offer send to the reassigned pro failed "
+                "(closed 24h window / blocked send) — lead moved to "
+                "PENDING_ADMIN_REVIEW, needs manual contact."
+            )
+            try:
+                await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+            except Exception as e:
+                logger.error(
+                    f"Failed to notify customer ...{chat_id[-8:]} of pending "
+                    f"review: {e}"
+                )
+            await StateManager.clear_state(chat_id)
+            await ContextManager.clear_context(chat_id)
+            return False
 
         # 4b. Close the loop for the customer: they were told "מאתרים עבורך איש
         # מקצוע" (CUSTOMER_REASSIGNING) earlier — tell them who was found so the
