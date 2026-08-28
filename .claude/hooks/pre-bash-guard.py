@@ -13,14 +13,46 @@ import sys
 PROTECTED_BRANCHES = ("main", "master", "dev", "production")
 
 
-def _current_branch():
-    """Best-effort current git branch; empty string if it can't be determined."""
+def target_dir(command, default_cwd=None):
+    """Directory the git command actually operates on.
+
+    The guard has to read the branch that would *receive* the commit, which is
+    not always the one checked out where the session happens to be sitting:
+    ``git -C <dir> commit`` and ``cd <dir> && git commit`` both target another
+    tree. Once work runs in one worktree per issue (see "Running several issues
+    at once" in CLAUDE.md) that stops being an edge case and becomes the normal
+    shape, and reading the wrong tree is wrong in both directions — it blocked
+    every commit made in a worktree while the main tree sat on ``dev`` (its
+    resting state), and it would have waved through a commit aimed at ``dev``
+    whenever the main tree happened to be on a feature branch.
+
+    Pure, so it is testable without a repo.
+    """
+    match = re.search(r"\bgit\s+(?:-c\s+\S+\s+)*-C\s+(\"[^\"]+\"|'[^']+'|\S+)", command)
+    if match:
+        return match.group(1).strip("\"'")
+
+    match = re.search(r"^\s*cd\s+(\"[^\"]+\"|'[^']+'|\S+)\s*&&", command)
+    if match:
+        return match.group(1).strip("\"'")
+
+    return default_cwd
+
+
+def _current_branch(cwd=None):
+    """Best-effort current git branch; empty string if it can't be determined.
+
+    ``cwd`` is the tree to inspect (see :func:`target_dir`). An unreadable or
+    missing directory raises and yields ``""``, which ``evaluate`` treats as
+    "unknown branch, allow" — the same fail-open this has always had.
+    """
     try:
         result = subprocess.run(
             ["git", "branch", "--show-current"],
             capture_output=True,
             text=True,
             timeout=5,
+            cwd=cwd or None,
         )
         return result.stdout.strip()
     except Exception:
@@ -105,7 +137,8 @@ def main():
     if not command:
         sys.exit(0)
 
-    exit_code, message = evaluate(command, _current_branch())
+    branch = _current_branch(target_dir(command, data.get("cwd")))
+    exit_code, message = evaluate(command, branch)
     if exit_code != 0:
         print(message, file=sys.stderr)
     sys.exit(exit_code)

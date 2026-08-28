@@ -30,7 +30,7 @@ Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live
 
 **2. Move to In Progress.** Update the issue status to "In Progress" via Linear MCP, and assign it to me (`me`) if unassigned.
 
-**3. Create the branch.** Fetch first, then branch off the **remote** tip so you never build on a stale local main: `git fetch origin` then `git checkout -b <branch-name> origin/dev`. If Linear gives no branch name, use `feature/$1-<short-slug>`. **De-dupe the issue id:** Linear's suggested `gitBranchName` doubles the identifier when the issue title itself starts with it — e.g. a title "PRO-75: Delete SMS…" yields `…/pro-75-pro-75-delete-sms…`. Collapse the repeated `pro-N-pro-N` to a single `pro-N` before creating the branch (`…/pro-75-delete-sms…`). **Worktree guard:** if the target branch already exists in another worktree (`git worktree list` shows it, or `git checkout` reports it is checked out elsewhere), stop and tell me — do not force or delete it.
+**3. Create the branch.** Fetch first, then branch off the **remote** tip so you never build on a stale local main: `git fetch origin` then `git checkout -b <branch-name> origin/dev`. If Linear gives no branch name, use `feature/$1-<short-slug>`. **De-dupe the issue id:** Linear's suggested `gitBranchName` doubles the identifier when the issue title itself starts with it — e.g. a title "PRO-75: Delete SMS…" yields `…/pro-75-pro-75-delete-sms…`. Collapse the repeated `pro-N-pro-N` to a single `pro-N` before creating the branch (`…/pro-75-delete-sms…`). **Worktree guard:** if the target branch already exists in another worktree (`git worktree list` shows it, or `git checkout` reports it is checked out elsewhere), stop and tell me — do not force or delete it. **But if the branch for $1 is already checked out in *this* worktree**, that is the parallel-batch setup, not a collision: skip this step entirely and go to step 4. See "Running several issues at once" in CLAUDE.md.
 
 **4. Plan.** Restate the requirements as a short checklist of changes (files + what changes in each). Map each acceptance criterion to a change. Show me the plan and the FSM/lifecycle invariants it must preserve (context clearing, TTLs, DI pattern, text-only menus (no buttons)). Wait for nothing if the plan is obvious; pause for my confirmation only if there's a genuine design fork. Once the plan is settled, **post it as a comment on the issue** (via Linear MCP) before writing any code, so the plan is persisted even if the run is interrupted.
 
@@ -48,7 +48,10 @@ Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live
 
 **11. Close the loop in Linear.** Post a comment on $1 summarizing what was implemented and link the PR. Move the issue to "In Review" (not Done — a human merges the PR). 
 
-**12. Update the living system-audit artifact.** Republish the "Proli System Audit" artifact via the Artifact tool with `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7` (the `url` parameter is what updates it in place — omitting it forks a new artifact). Add a Fix-log row for $1 (date, one-line outcome, PR link) and, if $1 appears among the audit's "Filed in Linear" cards, mark that card done. Keep the title and 🩺 favicon unchanged.
+**12. Record it in the living system-audit artifact — respecting the single-writer rule.** Run `git worktree list` first; it decides which of these you do.
+
+- **One worktree — you are the only writer.** `action: "read"` the artifact and build your update from the version that comes back, then republish it via the Artifact tool with `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7` (the `url` parameter is what updates it in place — omitting it forks a new artifact). Add a Fix-log row for $1 (date, one-line outcome, PR link) and, if $1 appears among the audit's "Filed in Linear" cards, mark that card done. Keep the title and 🩺 favicon unchanged.
+- **More than one worktree — you are one track of a parallel batch. Do not publish.** The artifact has other writers right now; a concurrent republish is refused as stale, and forcing past it discards their entry. Put your Fix-log row in the PR body under a `## 🩺 Audit fix-log entry` heading and stop there — the session closing the batch drains every merged PR's section into one write. Say in your final status block that the row is queued, not published, so nobody assumes the dashboard is current.
 
 **Evidence gate:** If the issue carries `launch-readiness` or `ops-verification`, it may NOT be moved past "In Review" — by anyone, including Linear↔GitHub automation on PR merge — without evidence attached to the issue: an execution log, screenshot, or checklist with boxes actually ticked. A merged PR that only *adds a document or script* is not evidence that it was *executed*. If the deliverable is "run X", the Done criterion is the run, not the artifact.
 
@@ -63,6 +66,7 @@ PR:       <url>
 Tests:    <old> → <new> (no regressions)
 Review:   <blockers fixed N / warnings M>
 Linear:   In Review
+Audit:    published | queued in PR body (parallel batch)
 ```
 
 If you stopped early for any reason, say exactly which step and why, and what you need from me to continue.

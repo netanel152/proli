@@ -126,3 +126,75 @@ def test_mongo_drop_still_blocked():
 def test_harmless_command_allowed():
     assert guard.evaluate("ls -la", "main") == (0, "")
     assert guard.evaluate("pytest -q", "feature/x") == (0, "")
+
+
+# --- Which tree the guard reads (worktree-aware branch resolution) -----------
+#
+# ``target_dir`` decides *where* the branch is read from. Before it existed the
+# hook always read the session's own directory, which is wrong in both
+# directions once work runs in one worktree per issue: it blocked every commit
+# made in a worktree while the main tree sat on ``dev`` (its resting state),
+# and it would have waved through a commit aimed at ``dev`` whenever the main
+# tree happened to be on a feature branch. See "Running several issues at once"
+# in CLAUDE.md.
+
+
+def test_target_dir_defaults_to_the_session_cwd():
+    assert guard.target_dir("git status", "/d/Projects/proli") == "/d/Projects/proli"
+
+
+def test_target_dir_follows_dash_c():
+    assert (
+        guard.target_dir("git -C /d/Projects/proli-wt/pro-162 status", "/any")
+        == "/d/Projects/proli-wt/pro-162"
+    )
+
+
+def test_target_dir_follows_dash_c_after_global_options():
+    # `git -c user.email=x -C <dir> …` — the config option must not shadow -C.
+    assert (
+        guard.target_dir("git -c user.email=a@b -C /wt/pro-141 status", "/any")
+        == "/wt/pro-141"
+    )
+
+
+def test_target_dir_follows_dash_c_with_quoted_path():
+    assert (
+        guard.target_dir('git -C "D:/Projects/proli-wt/pro 162" status', "/any")
+        == "D:/Projects/proli-wt/pro 162"
+    )
+
+
+def test_target_dir_follows_a_leading_cd():
+    assert (
+        guard.target_dir("cd /d/Projects/proli-wt/pro-163 && git status", "/any")
+        == "/d/Projects/proli-wt/pro-163"
+    )
+
+
+def test_target_dir_ignores_a_cd_that_is_not_leading():
+    # Only a leading `cd X &&` redirects the guard; a cd buried later in the
+    # line is not reliably the tree the git command runs in.
+    assert guard.target_dir("git status && cd /elsewhere", "/session") == "/session"
+
+
+def test_target_dir_without_a_cwd_is_none():
+    # No -C, no leading cd, no cwd in the payload — subprocess then falls back
+    # to the hook process's own directory, which is the pre-existing behaviour.
+    assert guard.target_dir("git status", None) is None
+
+
+def test_targeting_a_protected_tree_is_still_blocked():
+    # The false-negative direction: the resolved branch is what `evaluate`
+    # judges, so targeting a tree that is on `dev` stays blocked no matter
+    # where the session itself is sitting.
+    code, msg = guard.evaluate("git -C /d/Projects/proli push origin HEAD", "dev")
+    assert code == 2
+    assert "dev" in msg
+
+
+def test_pushing_from_a_feature_worktree_is_allowed():
+    # The false-positive direction that made parallel delivery unusable.
+    assert guard.evaluate(
+        "git -C /d/Projects/proli-wt/pro-162 push -u origin HEAD", "chore/parallel"
+    ) == (0, "")

@@ -106,6 +106,38 @@ git branch --show-current && git log -1 --oneline && git status --short
 
 Stage by explicit path for the same reason; `git add -A` will happily commit the other session's in-flight work.
 
+### Running several issues at once (git worktrees)
+
+The hazard above is about the *working tree*, not the repo. To run issues in parallel, give each one its own tree — one worktree per issue, one Claude session per worktree, all under `D:\Projects\proli-wt\`. Sessions then cannot move `HEAD` under each other at all:
+
+```bash
+git fetch origin
+git worktree add -b <linear-branch-name> D:/Projects/proli-wt/pro-162 origin/dev
+git -C D:/Projects/proli-wt/pro-162 branch --unset-upstream
+cp .env D:/Projects/proli-wt/pro-162/
+cp .claude/settings.local.json D:/Projects/proli-wt/pro-162/.claude/
+```
+
+Four things that setup does **not** do for you:
+
+- **`worktree add -b <branch> <dir> origin/dev` sets the new branch's upstream to `origin/dev`.** A bare `git push` then aims straight at the protected integration branch. Unset it, as above, and push with `git push -u origin HEAD`.
+- **`.env`, `venv/` and `.claude/settings.local.json` are gitignored**, so a fresh worktree has none of them. `.env` matters most: config loads at import, so without it `Settings` refuses to construct and the suite cannot even collect.
+- **No venv in the worktree, and none is needed.** There is no `pyproject.toml`/`setup.py`, so nothing is ever pip-installed and imports resolve from the current directory — the root interpreter works from any tree: `D:/Projects/proli/venv/Scripts/python.exe -m pytest -q` with the worktree as cwd. `core.hooksPath` lives in `.git/config`, which worktrees share, so the pre-push branch protection is inherited — but the `PostToolUse` black/flake8 hook looks for a *project-local* venv and **silently no-ops** in a worktree. Run `black`/`flake8` by hand there.
+- **A worktree is a different project to Claude Code.** Session state is keyed by working directory, so `D:\Projects\proli-wt\pro-162` gets its own `~/.claude/projects/D--Projects-proli-wt-pro-162/` — its own auto-memory, its own permission history. Memory notes do **not** follow you into a worktree; this file does, which is why these conventions live here rather than in a memory note.
+
+**Merging cannot be parallelized.** `docs/TESTING.md`'s `Current status: N passed` is enforced *exactly* — the guard fails below **and** above — so two open PRs that both add tests write conflicting counts, and whichever merges second fails as a stale baseline. Land one PR at a time, and immediately before each:
+
+```bash
+git fetch origin && git rebase origin/dev
+D:/Projects/proli/venv/Scripts/python.exe -m pytest -q   # take the count from the summary line
+# write that exact count into docs/TESTING.md, then:
+git push --force-with-lease
+```
+
+**Disjoint file footprints are the whole selection criterion.** Two tracks editing one module spend more time resolving conflicts than the parallelism saves. Some work is never a parallel track: PRO-139 (extracting the dispatcher rewrites what every flow issue touches — it runs alone), the copy chain PRO-164/168/169 (all rewriting `messages.py`/`prompts.py`, serial by construction), and anything labelled `launch-readiness`/`ops-verification`, whose Done criterion is an operator run rather than a merged PR.
+
+Teardown once a track's PR is merged: `git worktree remove <dir> && git worktree prune`.
+
 ### Local Development (run all three in separate terminals)
 
 ```bash
@@ -270,4 +302,6 @@ A merged PR that only adds a document or a script is also not evidence that the 
 - Suggest `/cost` when a session is running long to monitor cache ratio.
 - Recommend starting a new session when switching to an unrelated task.
 - After finishing a code-change task, delegate to the **docs-syncer** subagent (incremental mode) to update any `.md` files made stale by the diff.
-- After completing any task/bug (PR opened or Linear issue moved), update the **living system-audit artifact** — republish it via the Artifact tool with `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7` (passing the URL is what updates in place; omitting it forks a new artifact). Add a Fix-log row (date, item, outcome + PR link) and update the affected item's status card. Keep the title ("Proli System Audit") and favicon (🩺) unchanged.
+- After completing any task/bug (PR opened or Linear issue moved), record it in the **living system-audit artifact** — but **exactly one session writes to it at a time.** It is a single shared document with no merge: a concurrent republish is refused as stale, and forcing past that refusal silently discards the other session's entry. Which mode you are in is a one-line check — `git worktree list`:
+  - **One worktree — you are the only writer.** `action: "read"` the artifact first and build the republish from the version that comes back, then republish via the Artifact tool with `url: https://claude.ai/code/artifact/363c67d3-e33c-44f2-a8fd-afe6534711c7` (passing the URL is what updates in place; omitting it forks a new artifact). Add a Fix-log row (date, item, outcome + PR link) and update the affected item's status card. Keep the title ("Proli System Audit") and favicon (🩺) unchanged.
+  - **More than one worktree — you are one track of a parallel batch. Do not publish.** Put your Fix-log row in the PR body instead, under a `## 🩺 Audit fix-log entry` heading, and stop there. Whoever closes the batch drains every merged PR's section into a single ordered write (`gh pr list --state merged --json number,body`), so the artifact takes one write instead of N racing ones — and no entry can be lost to a force. When in doubt, queue: a queued row costs one paste, a lost row is invisible.
