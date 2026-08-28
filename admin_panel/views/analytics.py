@@ -203,6 +203,18 @@ def view_analytics(T):
 
     with tab_pros:
         st.subheader(T.get("pro_perf_title", "Professional Performance"))
+        # PRO-157: the table now carries two different windows and a row type
+        # that looks like a data bug without this sentence. Global RTL CSS
+        # already covers st.caption, so no dir= wrapper is needed.
+        st.caption(
+            T.get(
+                "pro_perf_caption",
+                "Rows with no leads are pros who only declined offers in this "
+                "window — their leads were reassigned. Declined % is out of "
+                "known offers (leads held plus declines). An empty cell means "
+                "no data for the window, not zero.",
+            )
+        )
 
         perf = _fetch(T, aq.get_pro_performance, days)
         if perf:
@@ -214,13 +226,24 @@ def view_analytics(T):
                         T.get("col_pro_name", "Professional")
                     ),
                     "total_leads": st.column_config.NumberColumn(
-                        T.get("col_total", "Total")
+                        T.get("col_total", "Total"),
+                        help=T.get(
+                            "help_col_total",
+                            "Leads currently attributed to this pro in the "
+                            "window. Declines are NOT part of this number.",
+                        ),
                     ),
                     "completed": st.column_config.NumberColumn(
                         T.get("col_completed", "Completed")
                     ),
                     "rejected": st.column_config.NumberColumn(
-                        T.get("col_rejected", "Rejected")
+                        T.get("col_rejected", "Rejected"),
+                        help=T.get(
+                            "help_col_rejected",
+                            "Offers this pro explicitly declined — counted on "
+                            "top of Total, not out of it, and dated by the "
+                            "decline itself rather than the lead's creation.",
+                        ),
                     ),
                     "booked": st.column_config.NumberColumn(
                         T.get("col_booked", "Booked")
@@ -231,16 +254,24 @@ def view_analytics(T):
                         max_value=100,
                         format="%.1f%%",
                     ),
-                    "rejection_rate": st.column_config.ProgressColumn(
+                    "rejection_rate": st.column_config.NumberColumn(
                         T.get("col_rejection_rate", "Declined %"),
-                        min_value=0,
-                        max_value=100,
                         format="%.1f%%",
                     ),
                     "avg_rating": st.column_config.TextColumn(
                         T.get("col_rating", "Rating")
                     ),
                 },
+                column_order=(
+                    "name",
+                    "total_leads",
+                    "completion_rate",
+                    "rejection_rate",
+                    "completed",
+                    "booked",
+                    "rejected",
+                    "avg_rating",
+                ),
                 hide_index=True,
                 use_container_width=True,
             )

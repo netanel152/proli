@@ -238,6 +238,18 @@ TRANS = {
         "col_booked": "הוזמנו",
         "col_rate": "אחוז השלמה",
         "col_rating": "דירוג ממוצע",
+        "help_col_total": (
+            "לידים המשויכים כרגע לאיש המקצוע בתקופה. דחיות אינן נכללות במספר הזה."
+        ),
+        "help_col_rejected": (
+            "הצעות שאיש המקצוע דחה במפורש — נספרות בנוסף לסך הלידים ולא מתוכו, "
+            "ומתוארכות לפי מועד הדחייה עצמה ולא לפי מועד יצירת הליד."
+        ),
+        "pro_perf_caption": (
+            "שורות ללא לידים הן אנשי מקצוע שרק דחו הצעות בתקופה — הלידים שלהם "
+            "שויכו מחדש. אחוז דחיות מחושב מתוך ההצעות הידועות (לידים משויכים "
+            "ועוד דחיות). תא ריק פירושו שאין נתונים בתקופה, ולא אפס."
+        ),
         "auto_refresh": "רענון אוטומטי",
         "refresh_interval": "תדירות",
         "status": "סטטוס נוכחי",
@@ -522,6 +534,21 @@ TRANS = {
         "col_booked": "Booked",
         "col_rate": "Completion %",
         "col_rating": "Avg Rating",
+        "help_col_total": (
+            "Leads currently attributed to this pro in the window. Declines "
+            "are NOT part of this number."
+        ),
+        "help_col_rejected": (
+            "Offers this pro explicitly declined — counted on top of Total, "
+            "not out of it, and dated by the decline itself rather than the "
+            "lead's creation."
+        ),
+        "pro_perf_caption": (
+            "Rows with no leads are pros who only declined offers in this "
+            "window — their leads were reassigned. Declined % is out of known "
+            "offers (leads held plus declines). An empty cell means no data "
+            "for the window, not zero."
+        ),
         "auto_refresh": "Auto-refresh",
         "refresh_interval": "Interval",
         "status": "Current Status",
