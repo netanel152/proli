@@ -110,11 +110,55 @@ def get_daily_volume(db, days: int = 30) -> list[dict]:
 
 
 def get_pro_performance(db, days: int = 30) -> list[dict]:
-    """Per-professional lead counts, completion rate and average rating.
+    """Per-professional lead counts, completion/rejection rates, avg rating.
 
     Names come from a batched ``$lookup`` and ratings from ONE reviews
     aggregation — deliberately no per-pro queries (the deleted async copy had
     an N+1 here; this shape is the keeper).
+
+    **Rejections are counted from ``rejected_by``, never from resting status
+    (PRO-157).** Since PRO-117 made ``REJECTED`` a way-station — a rejected
+    lead is immediately re-matched to the next pro or escalated — no lead
+    rests in it, so the old status-based count read a permanent 0 and the
+    rejecting pro vanished from the table the moment the lead was
+    re-attributed. ``rejected_by`` is the durable record: multikey, so one
+    lead counts against every pro who explicitly rejected it, and a pro whose
+    every lead was rejected away still gets a (rejection-only) row.
+
+    **The denominator decision:** ``total_leads`` keeps meaning "leads
+    currently attributed to this pro" — folding rejected-and-gone leads back
+    in would drag ``completion_rate`` down for a reason unrelated to
+    completion. The declined-share lives in its own metric instead:
+    ``rejection_rate = rejected / (total_leads + rejected)``.
+
+    **Why ``orphaned_rejections`` is subtracted.** Only the *successful*
+    rematch rewrites ``pro_id`` (``monitor_service.reassign_lead``); every
+    escalation branch — no replacement found, ``MAX_REASSIGNMENTS``
+    exhausted, no usable location, ``pro_offer_send_failed``, and
+    ``pro_flow._escalate_rejected_lead`` — moves the lead to
+    PENDING_ADMIN_REVIEW and leaves ``pro_id`` pointing at the pro who
+    rejected it. Counting those raw would put one lead in *both* pipelines:
+    the pro who declined their only lead would render 50% declined and 0%
+    completed instead of 100% and "no data". So a lead parked in
+    PENDING_ADMIN_REVIEW / REJECTED whose ``pro_id`` appears in its own
+    ``rejected_by`` is not attributed to that pro.
+
+    **Two different windows, deliberately.** Attribution is windowed on
+    ``created_at`` — which ``reassign_lead`` *rewrites* on every successful
+    hop, so for a rematched lead it means "last assigned at", not "created
+    at". Rejections are windowed on ``last_rejected_at`` instead: it is the
+    rejection's own timestamp, it is index-backed (the compound
+    ``(rejected_by, last_rejected_at)`` index), and it keeps the escalation
+    path visible — an escalated lead keeps its original ``created_at``, so a
+    ``created_at`` window would hide exactly the failures this tab exists to
+    surface. Its known limit: ``last_rejected_at`` holds only the *latest*
+    rejection, so for a lead declined by several pros in turn every hop is
+    dated to the last one — bounded by ``MAX_REASSIGNMENTS``.
+
+    Remaining limit, accepted: a lead reassigned away for SLA *silence* (no
+    explicit דחה) is not attributable to the losing pro at all
+    (``reassigned_from`` holds only the last hop), so ``rejection_rate``
+    measures explicit declines, not every lost offer.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     pipeline = [
@@ -133,11 +177,40 @@ def get_pro_performance(db, days: int = 30) -> list[dict]:
                         "$cond": [{"$eq": ["$status", LeadStatus.COMPLETED]}, 1, 0]
                     }
                 },
-                "rejected": {
-                    "$sum": {"$cond": [{"$eq": ["$status", LeadStatus.REJECTED]}, 1, 0]}
-                },
                 "booked": {
                     "$sum": {"$cond": [{"$eq": ["$status", LeadStatus.BOOKED]}, 1, 0]}
+                },
+                # Leads still carrying this pro's id only because an
+                # escalation branch never cleared it (see the docstring).
+                # $expr is NOT usable here — mongomock silently returns an
+                # empty result set for it, so the test would pass for the
+                # wrong reason; the $cond form behaves identically on both.
+                "orphaned_rejections": {
+                    "$sum": {
+                        "$cond": [
+                            {
+                                "$and": [
+                                    {
+                                        "$in": [
+                                            "$pro_id",
+                                            {"$ifNull": ["$rejected_by", []]},
+                                        ]
+                                    },
+                                    {
+                                        "$in": [
+                                            "$status",
+                                            [
+                                                LeadStatus.PENDING_ADMIN_REVIEW,
+                                                LeadStatus.REJECTED,
+                                            ],
+                                        ]
+                                    },
+                                ]
+                            },
+                            1,
+                            0,
+                        ]
+                    }
                 },
             }
         },
@@ -156,8 +229,47 @@ def get_pro_performance(db, days: int = 30) -> list[dict]:
 
     raw_results = list(db.leads.aggregate(pipeline))
 
+    # Rejections, from the durable PRO-117 record, windowed on the rejection's
+    # own timestamp (see the docstring for why not created_at). $setUnion
+    # de-duplicates the array before counting: nothing stops a lead being
+    # re-assigned by an admin to a pro who already declined it and declined
+    # again, and rejected_by is appended to unconditionally.
+    rejections: dict = {}
+    for r in db.leads.aggregate(
+        [
+            {
+                "$match": {
+                    "last_rejected_at": {"$gte": cutoff},
+                    "rejected_by": {"$exists": True, "$ne": []},
+                }
+            },
+            {
+                "$project": {
+                    "rejected_by": {
+                        "$setUnion": [{"$ifNull": ["$rejected_by", []]}, []]
+                    }
+                }
+            },
+            {"$unwind": "$rejected_by"},
+            {"$group": {"_id": "$rejected_by", "count": {"$sum": 1}}},
+        ]
+    ):
+        rejections[r["_id"]] = r["count"]
+
+    # Pros who appear only through rejections (everything they held was
+    # re-attributed) still deserve a row — batch their names in one query,
+    # keeping the function N+1-free.
+    seen_ids = {doc["_id"] for doc in raw_results}
+    rejection_only_ids = [pid for pid in rejections if pid not in seen_ids]
+    rejection_only_names: dict = {}
+    if rejection_only_ids:
+        for user in db.users.find(
+            {"_id": {"$in": rejection_only_ids}}, {"business_name": 1}
+        ):
+            rejection_only_names[user["_id"]] = user.get("business_name", "Unknown")
+
     # Batch fetch all ratings in one aggregation instead of N per-pro queries
-    pro_ids = [doc["_id"] for doc in raw_results]
+    pro_ids = [doc["_id"] for doc in raw_results] + rejection_only_ids
     ratings: dict = {}
     for r in db.reviews.aggregate(
         [
@@ -170,19 +282,49 @@ def get_pro_performance(db, days: int = 30) -> list[dict]:
     results = []
     for doc in raw_results:
         pro_name = (doc.get("pro") or {}).get("business_name", "Unknown")
-        total = doc["total_leads"]
+        total = doc["total_leads"] - doc.get("orphaned_rejections", 0)
         completed = doc["completed"]
-        rate = round((completed / total * 100), 1) if total > 0 else 0
+        rejected = rejections.get(doc["_id"], 0)
+        offers = total + rejected
 
         results.append(
             {
                 "name": pro_name,
                 "total_leads": total,
                 "completed": completed,
-                "rejected": doc["rejected"],
+                "rejected": rejected,
                 "booked": doc["booked"],
-                "completion_rate": rate,
+                # None, not 0 — a pro holding nothing in this window has no
+                # completion rate to show, and a 0% progress bar reads as
+                # "completes nothing". Streamlit renders a null as empty.
+                "completion_rate": (
+                    round((completed / total * 100), 1) if total > 0 else None
+                ),
+                "rejection_rate": (
+                    round((rejected / offers * 100), 1) if offers > 0 else None
+                ),
                 "avg_rating": ratings.get(doc["_id"]) or "-",
+            }
+        )
+
+    # The $sort ran on the raw count, before orphaned leads were subtracted —
+    # re-sort on the number the operator actually reads.
+    results.sort(key=lambda r: -r["total_leads"])
+
+    # Rejection-only rows, after the attributed rows, highest decline count
+    # first. rejection_rate is 100% *within this window* — the pro may still
+    # hold leads assigned before the cutoff.
+    for pid in sorted(rejection_only_ids, key=lambda p: -rejections[p]):
+        results.append(
+            {
+                "name": rejection_only_names.get(pid, "Unknown"),
+                "total_leads": 0,
+                "completed": 0,
+                "rejected": rejections[pid],
+                "booked": 0,
+                "completion_rate": None,
+                "rejection_rate": 100.0,
+                "avg_rating": ratings.get(pid) or "-",
             }
         )
 

@@ -231,6 +231,12 @@ def view_analytics(T):
                         max_value=100,
                         format="%.1f%%",
                     ),
+                    "rejection_rate": st.column_config.ProgressColumn(
+                        T.get("col_rejection_rate", "Declined %"),
+                        min_value=0,
+                        max_value=100,
+                        format="%.1f%%",
+                    ),
                     "avg_rating": st.column_config.TextColumn(
                         T.get("col_rating", "Rating")
                     ),

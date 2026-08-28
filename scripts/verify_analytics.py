@@ -60,13 +60,20 @@ def verify_analytics():
     print("🏆 TOP PERFORMING PROFESSIONALS (30 Days)")
     print("-" * 80)
     print(
-        f"{'Name':<25} | {'Total':<8} | {'Completed':<10} | {'Rate':<10} | {'Rating':<8}"
+        f"{'Name':<25} | {'Total':<8} | {'Completed':<10} | {'Rate':<10} | "
+        f"{'Declined':<9} | {'Decl%':<8} | {'Rating':<8}"
     )
     print("-" * 80)
+
+    def _pct(v):
+        # PRO-157: None means "no leads in this window", not 0%.
+        return f"{v:>7.1f}%" if v is not None else f"{'—':>8}"
+
     for p in aq.get_pro_performance(db, days=30)[:5]:
         print(
             f"{p['name'][:25]:<25} | {p['total_leads']:<8} | {p['completed']:<10} | "
-            f"{p['completion_rate']:>8.1f}% | {p['avg_rating']}"
+            f"{_pct(p['completion_rate'])} | {p['rejected']:<9} | "
+            f"{_pct(p['rejection_rate'])} | {p['avg_rating']}"
         )
     print("-" * 80 + "\n")
 
