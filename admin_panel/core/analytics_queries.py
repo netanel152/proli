@@ -155,10 +155,19 @@ def get_pro_performance(db, days: int = 30) -> list[dict]:
     rejection, so for a lead declined by several pros in turn every hop is
     dated to the last one — bounded by ``MAX_REASSIGNMENTS``.
 
-    Remaining limit, accepted: a lead reassigned away for SLA *silence* (no
+    Two limits, both accepted. A lead reassigned away for SLA *silence* (no
     explicit דחה) is not attributable to the losing pro at all
     (``reassigned_from`` holds only the last hop), so ``rejection_rate``
-    measures explicit declines, not every lost offer.
+    measures explicit declines, not every lost offer. And because the two
+    windows use different fields, one narrow case subtracts without adding
+    back: an admin re-assigns a lead to the pro who declined it *before* the
+    cutoff (``admin_flow`` does not exclude ``rejected_by``, and rewrites
+    ``created_at``), that pro then goes silent into escalation — the lead is
+    an orphaned rejection so it leaves ``total_leads``, but its
+    ``last_rejected_at`` is outside the window so it never reaches
+    ``rejected``. Guarding it would need a date comparison *inside* the
+    ``$cond``, which mongomock cannot evaluate (naive vs aware datetimes), so
+    it would ship untested — not worth it for this path.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
     pipeline = [
@@ -266,7 +275,7 @@ def get_pro_performance(db, days: int = 30) -> list[dict]:
         for user in db.users.find(
             {"_id": {"$in": rejection_only_ids}}, {"business_name": 1}
         ):
-            rejection_only_names[user["_id"]] = user.get("business_name", "Unknown")
+            rejection_only_names[user["_id"]] = user.get("business_name") or "Unknown"
 
     # Batch fetch all ratings in one aggregation instead of N per-pro queries
     pro_ids = [doc["_id"] for doc in raw_results] + rejection_only_ids
@@ -281,7 +290,7 @@ def get_pro_performance(db, days: int = 30) -> list[dict]:
 
     results = []
     for doc in raw_results:
-        pro_name = (doc.get("pro") or {}).get("business_name", "Unknown")
+        pro_name = (doc.get("pro") or {}).get("business_name") or "Unknown"
         total = doc["total_leads"] - doc.get("orphaned_rejections", 0)
         completed = doc["completed"]
         rejected = rejections.get(doc["_id"], 0)
@@ -323,7 +332,10 @@ def get_pro_performance(db, days: int = 30) -> list[dict]:
                 "rejected": rejections[pid],
                 "booked": 0,
                 "completion_rate": None,
-                "rejection_rate": 100.0,
+                # Same formula as above with total_leads == 0, not a
+                # hardcoded 100 — an attributed row whose adjusted total
+                # falls to zero must render identically.
+                "rejection_rate": 100.0 if rejections[pid] else None,
                 "avg_rating": ratings.get(pid) or "-",
             }
         )
