@@ -1,4 +1,3 @@
-import asyncio
 from types import SimpleNamespace
 from app.providers.whatsapp import get_whatsapp
 from app.services.ai_engine_service import AIEngine, AIResponse
@@ -9,12 +8,13 @@ from app.services.lead_manager_service import (
 )
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
+from app.core.background_tasks import spawn_background_task
 from app.core.logger import logger
 from app.core.database import users_collection, leads_collection, slots_collection
 from app.core.messages import Messages
 from app.core.prompts import Prompts
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
-from app.core.phone import to_chat_id, strip_suffix
+from app.core.phone import to_chat_id, strip_suffix, mask_chat_id
 from app.services.lead_manager_service import set_lead_status
 from app.core.datetime_utils import parse_iso_to_utc
 from app.core.redis_client import (
@@ -230,7 +230,10 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         raise ChatLockBusyError(chat_id)
 
     try:
-        asyncio.create_task(whatsapp.send_chat_state_typing(chat_id))
+        spawn_background_task(
+            whatsapp.send_chat_state_typing(chat_id),
+            name=f"typing:{mask_chat_id(chat_id)}",
+        )
         await _process_incoming_message_inner(chat_id, user_text, media_url)
     finally:
         await release_chat_lock(chat_id)

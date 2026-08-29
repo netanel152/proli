@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
 from app.core.constants import UserStates, LeadStatus, WorkerConstants, Actor
 from app.core.messages import Messages
+from app.core.phone import mask_chat_id
 from tests.copy_util import static_prefix
 from app.services.workflow_service import (
     process_incoming_message,
@@ -16,6 +17,7 @@ from app.services.workflow_service import (
 )
 from app.services.ai_engine_service import AIResponse, ExtractedData
 import app.services.workflow_service
+import app.core.background_tasks as background_tasks_module
 
 
 @pytest.fixture
@@ -2219,3 +2221,42 @@ async def test_returning_customer_name_seeded_from_prior_lead(wf_mocks, mock_db)
         "custom_system_prompt", ""
     )
     assert "מוטי" in prompt
+
+
+# --- PRO-143: typing indicator via spawn_background_task ---
+
+
+@pytest.mark.asyncio
+async def test_typing_indicator_task_name_carries_masked_phone_suffix(
+    wf_mocks, monkeypatch
+):
+    """process_incoming_message spawns the typing indicator through
+    spawn_background_task (PRO-143) rather than a bare create_task, naming it
+    with app.core.phone.mask_chat_id(chat_id) rather than a raw chat_id[-4:]
+    slice. A raw slice on a '<digits>@c.us' id always yields the literal
+    string 'c.us' -- every recipient's failure log line would read the same,
+    telling the operator nothing (PRO-89 review finding; see
+    mask_chat_id's docstring). mask_chat_id strips the suffix first, so the
+    task name both omits the full phone number and carries a genuinely
+    per-recipient last-4-digits suffix -- pinning both halves of the fix.
+    """
+    mock_state = wf_mocks[1]
+    mock_state.get_state.return_value = UserStates.IDLE
+    chat_id = "972501234567@c.us"
+
+    captured = {}
+    real_spawn = app.services.workflow_service.spawn_background_task
+
+    def spy(coro, *, name):
+        captured["name"] = name
+        return real_spawn(coro, name=name)
+
+    monkeypatch.setattr(app.services.workflow_service, "spawn_background_task", spy)
+
+    await process_incoming_message(chat_id, "שלום")
+
+    for t in list(background_tasks_module.pending_background_tasks()):
+        await t
+
+    assert captured["name"] == f"typing:{mask_chat_id(chat_id)}"
+    assert "972501234567" not in captured["name"]
