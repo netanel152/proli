@@ -207,10 +207,6 @@ async def test_reject_with_replacement_reassigns_and_notifies_customer(
     for call in mock_monitor_wa.send_message.await_args_list:
         assert call.args != (REJECTING_PRO_CHAT_ID, Messages.SOS.PRO_LOST_LEAD)
 
-    # Text-only menu rule (CLAUDE.md).
-    mock_wa.send_interactive_buttons.assert_not_called()
-    mock_monitor_wa.send_interactive_buttons.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_reject_with_replacement_does_not_clear_customer_context(

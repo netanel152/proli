@@ -46,7 +46,7 @@ Every incoming message is evaluated top-down; the **first** branch whose conditi
 
 ## UserStates
 
-`IDLE` · `PRO_MODE` · `CUSTOMER_MODE` · `AWAITING_INTENT_CONFIRMATION` · `CUSTOMER_FLOW` · `AWAITING_ADDRESS` · `AWAITING_MEDIA` · `AWAITING_TIME` · `AWAITING_CONSENT` · `SOS` · `AWAITING_PRO_APPROVAL` · `PAUSED_FOR_HUMAN` · `AWAITING_RESCHEDULE_TIME` · `AWAITING_LOYALTY_CONFIRMATION` · `AWAITING_NEW_OR_EXISTING` · `AWAITING_CANCEL_CONFIRMATION` · `PRO_SELECTING_JOB_TO_FINISH` · `PRO_SELECTING_JOB_TO_CANCEL` · `PRO_AWAITING_FINAL_PRICE` · `ONBOARDING_*` (multi-step) · `ADMIN_MODE_IDLE` · `ADMIN_SELECTING_LEAD` · `ADMIN_SELECTING_ACTION` · `ADMIN_SELECTING_PRO`
+`IDLE` · `PRO_MODE` · `CUSTOMER_MODE` · `AWAITING_INTENT_CONFIRMATION` · `AWAITING_ADDRESS` · `AWAITING_CONSENT` · `AWAITING_PRO_APPROVAL` · `PAUSED_FOR_HUMAN` · `AWAITING_RESCHEDULE_TIME` · `AWAITING_LOYALTY_CONFIRMATION` · `AWAITING_NEW_OR_EXISTING` · `AWAITING_CANCEL_CONFIRMATION` · `PRO_SELECTING_JOB_TO_FINISH` · `PRO_SELECTING_JOB_TO_CANCEL` · `PRO_AWAITING_FINAL_PRICE` · `ONBOARDING_*` (multi-step) · `ADMIN_SELECTING_LEAD` · `ADMIN_SELECTING_ACTION` · `ADMIN_SELECTING_PRO`
 
 ## LeadStatus Lifecycle
 
@@ -61,7 +61,7 @@ Redis context (last 20 messages) must be cleared when:
 - Any transition back to `IDLE`
 - Entering `ONBOARDING_*` from a non-onboarding state
 - A lead is closed, completed, or rejected (customer flow ends)
-- Admin exits `ADMIN_MODE_IDLE` back to `IDLE`
+- Admin exits the routing wizard (`ADMIN_SELECTING_*`) back to `IDLE`
 
 Failure to clear context causes the AI to hallucinate from a previous conversation's history.
 

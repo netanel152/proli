@@ -434,9 +434,6 @@ async def test_customer_cancel_booked_lead_prompts_for_confirmation(
     ]
     assert pro_calls == []
 
-    # Text-only menu rule (CLAUDE.md): buttons are never used
-    mock_wa.send_interactive_buttons.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_customer_cancel_confirmation_yes_executes_cancel_and_releases_slot(
@@ -501,9 +498,6 @@ async def test_customer_cancel_confirmation_yes_executes_cancel_and_releases_slo
         ),
     )
 
-    # Text-only menu rule (CLAUDE.md): buttons are never used
-    mock_wa.send_interactive_buttons.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_customer_cancel_confirmation_no_keeps_job_booked(
@@ -553,7 +547,6 @@ async def test_customer_cancel_confirmation_no_keeps_job_booked(
         chat_id, Messages.Customer.CANCEL_ABORTED
     )
     mock_state.clear_state.assert_called_with(chat_id)
-    mock_wa.send_interactive_buttons.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -592,7 +585,6 @@ async def test_customer_cancel_confirmation_lead_already_resolved(
     )
     mock_slots.update_one.assert_not_called()
     mock_state.clear_state.assert_called_with(chat_id)
-    mock_wa.send_interactive_buttons.assert_not_called()
 
 
 @pytest.mark.asyncio

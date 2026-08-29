@@ -49,11 +49,6 @@ Input classes
 | `admin_selecting_lead` | → admin_selecting_action, "למי להעביר" | "מספר לא חוקי" | "מספר לא חוקי" | N/A[admin-menu] | "מספר לא חוקי" | TTL ≤ 900s | → idle, "בוטל" | N/A[race] |
 | `admin_selecting_action` | → admin_selecting_pro, "אנשי מקצוע פנויים" | "אפשרות לא חוקית" | "אפשרות לא חוקית" | N/A[admin-menu] | "אפשרות לא חוקית" | TTL ≤ 900s | → idle, "בוטל" | N/A[race] |
 | `admin_selecting_pro` | → idle, "הליד הועבר" | "מספר לא חוקי" | "מספר לא חוקי" | N/A[admin-menu] | "מספר לא חוקי" | TTL ≤ 900s | → idle, "בוטל" | N/A[race] |
-| `customer_flow` | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] |
-| `awaiting_media` | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] |
-| `awaiting_time` | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] |
-| `sos` | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] |
-| `admin_mode_idle` | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] | N/A[unreachable] |
 
 N/A legend
 ~~~~~~~~~~
@@ -64,7 +59,6 @@ N/A legend
 * ``pro-text-only`` — Pro-side commands are a text menu; a pro never sends the bot media.
 * ``race`` — State-independent. The per-chat Redis lock is taken before any state is read (workflow_service.py:219), so every state behaves identically; proven once in test_a_second_message_mid_flight_is_deferred_not_dropped.
 * ``resting`` — IDLE is the resting state — there is nothing to expire.
-* ``unreachable`` — Declared in UserStates but never set by any dispatcher path — pinned by test_declared_but_unreachable_states_stay_unreachable.
 
 Reading a cell: ``→ state`` is the state the FSM must land in, ``"…"`` is a
 fragment of the Hebrew the participant must receive, and ``silent`` means nothing
@@ -73,6 +67,7 @@ may be sent at all.
 
 from __future__ import annotations
 
+import pathlib
 import re
 from dataclasses import dataclass, field
 
@@ -138,10 +133,6 @@ NA_REASONS = {
         "Pro-side commands are a text menu; a pro never sends the bot media."
     ),
     "admin-menu": "The admin wizard is a text-only numeric menu.",
-    "unreachable": (
-        "Declared in UserStates but never set by any dispatcher path — pinned by "
-        "test_declared_but_unreachable_states_stay_unreachable."
-    ),
     "defect-finish": (
         "DEFECT: PRO_SELECTING_JOB_TO_FINISH is unreachable through the "
         "orchestrator — the PRO_BUSINESS_KEYWORDS bypass overwrites the state to "
@@ -372,13 +363,6 @@ def _arrange_admin(state: str, meta_key: str | None = None):
 # ===========================================================================
 # The matrix
 # ===========================================================================
-
-UNREACHABLE_NA = "unreachable"
-
-
-def _unreachable_row() -> dict:
-    return {cls: Cell(na=UNREACHABLE_NA) for cls in INPUT_CLASSES}
-
 
 MATRIX: dict[str, dict] = {
     # ---------------------------------------------------------------- customer
@@ -857,11 +841,6 @@ MATRIX: dict[str, dict] = {
         "race": Cell(na=RACE_NA),
     },
     # ------------------------------------------------- declared but unreachable
-    UserStates.CUSTOMER_FLOW: _unreachable_row(),
-    UserStates.AWAITING_MEDIA: _unreachable_row(),
-    UserStates.AWAITING_TIME: _unreachable_row(),
-    UserStates.SOS: _unreachable_row(),
-    UserStates.ADMIN_MODE_IDLE: _unreachable_row(),
 }
 
 ARRANGERS = {
@@ -1009,13 +988,9 @@ def test_the_matrix_covers_every_state_and_every_input_class():
             )
 
 
-def test_every_reachable_state_has_an_arranger():
-    reachable = {
-        state
-        for state, row in MATRIX.items()
-        if any(c.na != UNREACHABLE_NA for c in row.values())
-    }
-    assert reachable <= set(ARRANGERS)
+def test_every_state_has_an_arranger():
+    """No unreachable rows remain, so every state in the matrix needs one."""
+    assert set(MATRIX) <= set(ARRANGERS)
 
 
 def test_the_documented_matrix_matches_the_executable_one():
@@ -1032,27 +1007,36 @@ def test_the_documented_matrix_matches_the_executable_one():
     )
 
 
-@pytest.mark.asyncio
-async def test_declared_but_unreachable_states_stay_unreachable(world):
-    """``CUSTOMER_FLOW``, ``AWAITING_MEDIA``, ``AWAITING_TIME``, ``SOS`` and
-    ``ADMIN_MODE_IDLE`` are declared in the enum but no code path ever sets them.
-    Their matrix rows are N/A on that basis, so pin the basis: if one of them
-    starts being set, its row must become real."""
-    unreachable = [
-        state
-        for state, row in MATRIX.items()
-        if all(c.na == UNREACHABLE_NA for c in row.values())
-    ]
-    assert unreachable, "expected some states to be marked unreachable"
+def test_no_userstate_is_declared_without_production_setting_it():
+    """The inverse of the old "unreachable states stay unreachable" guard.
 
-    app_root = __import__("pathlib").Path(__file__).resolve().parents[2] / "app"
+    Five members — ``CUSTOMER_FLOW``, ``AWAITING_MEDIA``, ``AWAITING_TIME``,
+    ``SOS``, ``ADMIN_MODE_IDLE`` — sat in the enum that no dispatcher ever set.
+    They cost five permanently-N/A rows in this matrix (forty dark cells) and
+    made the enum a misleading description of the FSM: a reader could not tell
+    which states were real. They are gone; this keeps them gone.
+
+    ``ONBOARDING_*`` and the ``ADMIN_*`` wizard states are set indirectly (a
+    step table, a prefix match), so a bare mention of the member anywhere under
+    ``app/`` counts — this asks "is it wired up at all", not "is it passed to
+    set_state literally".
+    """
+    app_root = pathlib.Path(__file__).resolve().parents[2] / "app"
     sources = "\n".join(p.read_text(encoding="utf-8") for p in app_root.rglob("*.py"))
-    for state in unreachable:
-        member = state.name
-        assert not re.search(rf"set_state\([^)]*UserStates\.{member}\b", sources), (
-            f"UserStates.{member} is now set by production code — give it a real "
-            f"matrix row instead of the unreachable N/A"
-        )
+    # The declaration itself is not a use.
+    constants_src = (app_root / "core" / "constants.py").read_text(encoding="utf-8")
+    sources = sources.replace(constants_src, "")
+
+    unused = [
+        state.name
+        for state in UserStates
+        if not re.search(rf"UserStates\.{state.name}\b", sources)
+    ]
+    assert not unused, (
+        f"UserStates members that no code path ever sets: {unused}. Wire the "
+        f"state up or delete it — a declared-but-dead state is a lie about the "
+        f"FSM, and it costs a permanently-N/A row in this matrix."
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover - developer convenience
