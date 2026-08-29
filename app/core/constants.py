@@ -144,6 +144,17 @@ class WorkerConstants:
     # check on every tick (once per open lead, per tick).
     MAX_CUSTOMER_COMPLETION_CHECKS = 2  # Max completion checks per booked lead
     CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS = 6  # Min gap between two auto checks
+    # PRO-122: how many times an unparseable reply to the 1-5 rating prompt is
+    # re-prompted before `waiting_for_rating` is released. The flag never clears
+    # on its own, so an unbounded re-prompt would trap a customer who answers the
+    # closing question with a new request instead of a number.
+    MAX_RATING_REPROMPTS = 2
+    # PRO-122: how long the 1-5 rating prompt stays live. `waiting_for_rating`
+    # has no other expiry, and the ordinary outcome is silence, so without a
+    # window a prompt ignored months ago still captures the next bare digit the
+    # customer types -- landing a rating on the wrong (long-closed) job and
+    # leaving the current one uncompleted.
+    RATING_PROMPT_MAX_AGE_HOURS = 48
     STALE_BOOKED_LEAD_HOURS = 24  # Threshold for considering a booked lead "stale"
     GEO_RADIUS_STEPS = [
         10000,

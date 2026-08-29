@@ -13,6 +13,14 @@ class Messages:
             "כשהעבודה תסתיים — פשוט כתוב לי כאן *סיימתי* ונמשיך משם."
         )
         RATING_THANKS = "תודה רבה על הדירוג! ⭐"
+        # PRO-122: the closing question used to accept only an exact "1"-"5".
+        # Anything else fell through to the dispatcher, which — context already
+        # cleared on completion — greeted the customer anew and asked their name.
+        RATING_REPROMPT = (
+            "לא הצלחתי לקרוא את הדירוג 🙂\n"
+            "אנא השב מספר בין *1* (גרוע) ל-*5* (מצוין), או *דלג* אם אינך רוצה לדרג."
+        )
+        RATING_SKIPPED = "אין בעיה, תודה רבה על העדכון! 🙏"
         PRO_FOUND = (
             "🎉 *נמצא לך איש מקצוע!*\n\n"
             "👷 *שם:* {pro_name}\n"
@@ -28,8 +36,14 @@ class Messages:
             "\n{pro_name} יצור איתך קשר בקרוב! 👍"
         )
         RATE_SERVICE = "היי! 👋 איך היה השירות עם {pro_name}? נשמח לדירוג 1-5."
-        REVIEW_REQUEST = "תודה על הדירוג! האם תרצה לכתוב ביקורת קצרה על החוויה? אם כן, פשוט כתוב אותה כעת."
+        REVIEW_REQUEST = (
+            "תודה על הדירוג! האם תרצה לכתוב ביקורת קצרה על החוויה? "
+            "אם כן, פשוט כתוב אותה כעת (או השב *דלג*)."
+        )
         REVIEW_SAVED = "תודה רבה! הביקורת שלך נשמרה."
+        # PRO-122: REVIEW_REQUEST is framed as optional but had no skip path, so
+        # "לא" / "לא תודה" was stored verbatim as the pro's public review.
+        REVIEW_DECLINED = "תודה רבה! 🙏"
         ADDRESS_SAVED = "✅ הכתובת עודכנה בהצלחה!"
         ADDRESS_INVALID = "❌ לא הצלחתי לזהות את הכתובת. אנא נסה לשלוח מיקום (Location Pin) או הקלד עיר ורחוב בצורה ברורה."
         REQUEST_CANCELLED = (
@@ -795,6 +809,24 @@ class Messages:
             "urgent",
         ]
         RATING_OPTIONS = ["1", "2", "3", "4", "5"]
+        # PRO-122: an opt-out of the rating / review prompts. Matched by *exact*
+        # equality after strip+lower, never by `contains_keyword`: "לא" on its own
+        # is a decline, but "לא היה טוב" is a genuine negative review and must be
+        # saved rather than thrown away as a skip.
+        SKIP_TOKENS = (
+            "דלג",
+            "דלגי",
+            "לדלג",
+            "לא",
+            "לא תודה",
+            "לא, תודה",
+            "אין צורך",
+            "לא רוצה",
+            "skip",
+            "no",
+            "no thanks",
+            "nope",
+        )
         THANKS_KEYWORDS = [
             "תודה",
             "תודה רבה",
