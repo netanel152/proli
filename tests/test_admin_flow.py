@@ -334,6 +334,56 @@ async def test_self_assign_resets_reassignment_lifecycle_after_escalation(
 
 
 @pytest.mark.asyncio
+async def test_self_assign_clears_admin_reported_at_stamp(
+    patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
+):
+    """PRO-162 (WARNING fix) — a lead the SOS Reporter already paged the
+    operator about must not stay muted for the rest of SOS_REPORT_REPAGE_HOURS
+    once an admin takes ownership: a future stuck period under the new pro is
+    a new incident and must be able to page again immediately."""
+    db = patch_admin_collections
+    monkeypatch.setattr(settings, "ADMIN_PHONE", "972524828796")
+
+    admin_pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": admin_pro_id,
+            "phone_number": "972524828796",
+            "role": "professional",
+            "business_name": "מנהל המערכת",
+        }
+    )
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+            "admin_reported_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_state.get_metadata.return_value = {"selected_lead_id": str(lead_id)}
+
+    await admin_flow.handle_admin_message(
+        "admin@c.us",
+        "1",
+        UserStates.ADMIN_SELECTING_ACTION,
+        mock_state,
+        None,
+        mock_whatsapp,
+        None,
+    )
+
+    updated = await db.leads.find_one({"_id": lead_id})
+    assert updated["status"] == LeadStatus.NEW
+    assert (
+        "admin_reported_at" not in updated or updated.get("admin_reported_at") is None
+    )
+
+
+@pytest.mark.asyncio
 async def test_action_self_assign_without_admin_pro_profile(
     patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
 ):

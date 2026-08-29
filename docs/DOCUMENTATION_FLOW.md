@@ -148,7 +148,7 @@ All jobs run inside the Worker process via APScheduler.
 | SOS Healer | Every 10 min | Reassigns stuck leads or escalates to `PENDING_ADMIN_REVIEW`. PRO-73: gated to business hours (08:00–21:00 IL) + `sos_healer_active` toggle (default OFF) |
 | SLA Monitor | Every 5 min | Wakes up silent `PAUSED_FOR_HUMAN` chats after 15m; offers phone call. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default OFF) |
 | Pro-Approval SLA | Every 5 min | Nudges a silent pro at T+10m, then offers the customer a reassignment at T+25m (half thresholds for emergency leads); the reassignment offer is gated to business hours (PRO-73), the pro nudge is not |
-| SOS Reporter | Every 4 h | Sends batched admin report of all still-stuck leads |
+| SOS Reporter | Every 4 h | Pages operator once per newly-stuck lead (muted for `SOS_REPORT_REPAGE_HOURS`/24h after paging); the standing already-paged backlog is logged, not re-paged |
 | Stale Lead Nudger | Every 4 h | Reminds pros to close booked leads older than 24 h |
 | Lead Janitor | Every 6 h | Closes `CONTACTED` leads with no assigned pro after 24 h. PRO-73: gated to business hours (08:00–21:00 IL) + `lead_janitor_active` toggle (default OFF) |
 | Slot Regeneration | Sunday 01:00 IL | Generates appointment slots from recurring weekly templates |
