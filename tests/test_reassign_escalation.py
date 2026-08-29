@@ -643,6 +643,45 @@ async def test_reassign_lead_non_contacted_lead_rearms_approval_sla(
     assert 0 < ttl <= WorkerConstants.PRO_APPROVAL_TTL_SECONDS
 
 
+@pytest.mark.asyncio
+async def test_successful_reassignment_clears_admin_reported_at_stamp(
+    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context
+):
+    """PRO-162 (WARNING fix) — a lead the Reporter already paged about must not
+    stay muted for the rest of SOS_REPORT_REPAGE_HOURS once it has a fresh
+    owner: a future stuck period under the new pro is a new incident, and the
+    Reporter must be able to page about it immediately. ``set_lead_status`` is
+    NOT mocked here — this asserts the real DB write, not a call arg."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי אינסטלציה",
+        "phone_number": "972559444143",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
+    )
+    monkeypatch.setattr(
+        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=True)
+    )
+    lead = await _insert_exhausted_lead(
+        mock_db,
+        reassignment_count=0,
+        admin_reported_at=datetime.now(timezone.utc),
+    )
+
+    result = await reassign_lead(lead)
+
+    assert result is True
+    updated = await mock_db.leads.find_one({"_id": lead["_id"]})
+    assert (
+        "admin_reported_at" not in updated or updated.get("admin_reported_at") is None
+    )
+
+
 # ---------------------------------------------------------------------------
 # PRO-125 (code half) — a failed pro offer is an assignment failure, not a
 # silent success. ``notify_pro_new_lead`` returning False (PRO-159 made the

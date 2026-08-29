@@ -241,7 +241,11 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
             "approval_nudged": False,
             "reassign_offered": False,
         },
-        extra_unset={"escalation_reason": ""},
+        # PRO-162: `admin_reported_at` goes with `escalation_reason` and the
+        # `created_at` reset — the lead has a fresh owner, so a future stuck
+        # period is a new incident and must be able to page the operator rather
+        # than inherit the previous one's mute.
+        extra_unset={"escalation_reason": "", "admin_reported_at": ""},
     )
 
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})

@@ -110,7 +110,7 @@ The **Pro-Approval SLA** monitor (every 5 min) chases a silent pro on a `NEW` le
 2. At T+25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`), offers the customer a reassignment once — gated to business hours (PRO-73); the pro nudge in step 1 is not gated.
 3. Emergency leads use half of both thresholds. Both steps are idempotent via boolean flags on the lead.
 
-The **SOS Reporter** (every 4 h) sends a batched WhatsApp summary of all still-stuck leads to the admin number (`ADMIN_PHONE`).
+The **SOS Reporter** (every 4 h) pages the operator via `page_operator` (Sentry → email, not WhatsApp) once per newly-stuck lead, atomically stamping `admin_reported_at` so the same lead is muted for `SOS_REPORT_REPAGE_HOURS` (24h) afterward; the standing already-paged backlog is logged, not re-paged. A quiet tick therefore means "already paged," not "resolved" — check the admin panel, not the absence of new pages, to know whether a stuck lead is still open.
 
 ### Customer-triggered pause
 

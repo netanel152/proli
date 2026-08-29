@@ -56,7 +56,7 @@ Customer (WhatsApp)
 | SOS Healer | Every 10 min | Reassign leads stuck > 60 min; escalate to `PENDING_ADMIN_REVIEW` if no replacement. PRO-73: gated to business hours (08:00–21:00 IL) + `sos_healer_active` toggle (default OFF) |
 | SLA Monitor | Every 5 min | Wake up silent `PAUSED_FOR_HUMAN` chats after 15m; offer phone call. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default OFF) |
 | Pro-Approval SLA | Every 5 min | Nudge a silent pro at T+10m, then offer the customer a reassignment at T+25m (half thresholds for emergency leads); the customer-facing reassignment offer is gated to business hours (PRO-73) — the pro nudge is not |
-| SOS Reporter | Every 4 h | Send batched summary of stuck leads to admin WhatsApp |
+| SOS Reporter | Every 4 h | Page operator (`page_operator`, not WhatsApp) once per newly-stuck lead; muted for `SOS_REPORT_REPAGE_HOURS` (24h) after paging |
 | Lead Janitor | Every 6 h | Auto-reject `CONTACTED` leads with no assigned pro after 24 h. PRO-73: gated to business hours (08:00–21:00 IL) + `lead_janitor_active` toggle (default OFF) |
 | Slot Regeneration | Sunday 01:00 IL | Regenerate appointment slots from recurring weekly templates |
 | Daily Backup | 02:00 IL (daily), production only (PRO-127) | Create gzipped `mongodump`; upload to S3 if `BACKUP_S3_BUCKET` is configured |

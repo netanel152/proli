@@ -47,6 +47,13 @@ INDEX_SPECS = [
     ("Leads", leads_collection, [("pro_id", ASCENDING), ("status", ASCENDING)], {}),
     ("Leads", leads_collection, [("status", ASCENDING), ("created_at", ASCENDING)], {}),
     ("Leads", leads_collection, [("chat_id", ASCENDING), ("status", ASCENDING)], {}),
+    # PRO-162: the SOS Reporter's dedup clause. Its query is
+    # status + created_at + an $or over admin_reported_at, and every clause of
+    # an $or must be indexed or the whole query degrades to a collection scan.
+    # Deliberately NOT sparse: almost no lead carries the field, which makes
+    # `{"sparse": True}` look like free savings — but a sparse index cannot
+    # serve the `$exists: False` clause that is the whole point of the filter.
+    ("Leads", leads_collection, [("admin_reported_at", ASCENDING)], {}),
     # PRO-117: second clause of the fat-finger guard's $or in
     # _recently_responded_lead — every clause of an $or must be indexed
     # or the whole query degrades to a collection scan.
