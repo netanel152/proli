@@ -107,13 +107,15 @@ jobs:
           pytest -q | tee pytest-output.txt
 
       # docs/TESTING.md's "Current status" line is the single source of truth
-      # for the test baseline, but until this step it was only enforced by
-      # agents remembering to read it. Now it is a build invariant, both ways:
-      # fewer passed than the baseline = a regression slipped in; more passed
-      # = tests were added without bumping the doc (a stale baseline makes the
-      # next regression invisible). Update the line in the same PR that moves
-      # the count.
-      - name: Guard — test baseline matches docs/TESTING.md
+      # for the test baseline. The guard is a *floor*, not an equality: fewer
+      # passed than the baseline = a regression slipped in, and that fails the
+      # build. More passed = tests were added, which is normal and must not
+      # block the PR — it used to, and with several feature branches in flight
+      # at once that turned the doc into a merge bottleneck (whoever merged
+      # second failed as a stale baseline through no fault of their own).
+      # Growth posts a ::warning instead, and `refresh-test-baseline.yml`
+      # opens a PR to move the line once the change is on dev.
+      - name: Guard — test baseline floor (docs/TESTING.md)
         run: |
           baseline=$(grep -oP 'Current status: \K[0-9]+(?= passed)' docs/TESTING.md)
           actual=$(grep -oP '\b\K[0-9]+(?= passed)' pytest-output.txt | tail -1)
@@ -126,8 +128,8 @@ jobs:
             echo "::error::Regression: $actual tests passed but docs/TESTING.md says $baseline."
             exit 1
           elif [ "$actual" -gt "$baseline" ]; then
-            echo "::error::Stale baseline: $actual tests passed but docs/TESTING.md still says $baseline."
-            echo "::error::Update the 'Current status' line in docs/TESTING.md in this PR."
-            exit 1
+            echo "::warning::Baseline stale: $actual passed, docs/TESTING.md says $baseline."
+            echo "::warning::Not a failure — bump the 'Current status' line here if convenient, otherwise the refresh workflow opens a PR for it after this lands on dev."
+            exit 0
           fi
           echo "OK — baseline holds at $baseline passed."

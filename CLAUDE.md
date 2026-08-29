@@ -125,12 +125,14 @@ Four things that setup does **not** do for you:
 - **No venv in the worktree, and none is needed.** There is no `pyproject.toml`/`setup.py`, so nothing is ever pip-installed and imports resolve from the current directory — the root interpreter works from any tree: `D:/Projects/proli/venv/Scripts/python.exe -m pytest -q` with the worktree as cwd. `core.hooksPath` lives in `.git/config`, which worktrees share, so the pre-push branch protection is inherited — but the `PostToolUse` black/flake8 hook looks for a *project-local* venv and **silently no-ops** in a worktree. Run `black`/`flake8` by hand there.
 - **A worktree is a different project to Claude Code.** Session state is keyed by working directory, so `D:\Projects\proli-wt\pro-162` gets its own `~/.claude/projects/D--Projects-proli-wt-pro-162/` — its own auto-memory, its own permission history. Memory notes do **not** follow you into a worktree; this file does, which is why these conventions live here rather than in a memory note.
 
-**Merging cannot be parallelized.** `docs/TESTING.md`'s `Current status: N passed` is enforced *exactly* — the guard fails below **and** above — so two open PRs that both add tests write conflicting counts, and whichever merges second fails as a stale baseline. Land one PR at a time, and immediately before each:
+**Merges no longer have to be serialized.** `docs/TESTING.md`'s `Current status: N passed` used to be enforced as an *equality* — the guard failed below **and** above — so two open PRs that both added tests wrote conflicting counts and whichever merged second failed as a stale baseline. The guard is now a **floor**: below the line is a regression and fails the build; above it posts a `::warning` and passes, and `.github/workflows/refresh-test-baseline.yml` opens a `chore: refresh test baseline` PR once the change is on `dev`. Two branches that both add tests can now merge in either order.
+
+Still rebase before pushing — the *content* of `docs/TESTING.md` (and every other file) conflicts normally:
 
 ```bash
 git fetch origin && git rebase origin/dev
-D:/Projects/proli/venv/Scripts/python.exe -m pytest -q   # take the count from the summary line
-# write that exact count into docs/TESTING.md, then:
+D:/Projects/proli/venv/Scripts/python.exe -m pytest -q   # count comes from the summary line
+# bumping the line yourself is welcome but optional — the refresh workflow catches it
 git push --force-with-lease
 ```
 
@@ -184,7 +186,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected baseline lives in `docs/TESTING.md` ("Current status" line) — the single source of truth for the pass/skip count, enforced exactly by the "Guard — test baseline" CI step (fails on a regression **or** a stale baseline, so the count and the doc must move in the same PR). Integration tests are skipped without `MONGO_TEST_URI`.
+Expected baseline lives in `docs/TESTING.md` ("Current status" line) — the single source of truth for the pass/skip count, enforced as a **floor** by the "Guard — test baseline floor" CI step: fewer passed than the line fails the build, more passed posts a warning and passes. Bumping the line in the same PR is welcome; if you don't, `refresh-test-baseline.yml` opens a PR to move it after the merge. Integration tests are skipped without `MONGO_TEST_URI`.
 
 Canonical run is `pytest` inside the project virtualenv (PRO-50, pinned `pydantic`/`pydantic-core`/`pydantic-settings` for deterministic resolution). Unit tests need neither a real MongoDB (in-memory `mongomock`) nor a real Redis (in-memory `fakeredis`, PRO-78) — no external services required.
 
