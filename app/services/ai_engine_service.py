@@ -16,6 +16,7 @@ from tenacity import (
     wait_exponential,
     retry_if_exception_type,
 )
+from app.core.background_tasks import spawn_background_task
 from app.core.database import users_collection
 from bson import ObjectId
 
@@ -239,7 +240,10 @@ class AIEngine:
                         response.usage_metadata, "total_token_count", 0
                     )
                     if token_count:
-                        asyncio.create_task(_track_token_usage(pro_id, token_count))
+                        spawn_background_task(
+                            _track_token_usage(pro_id, token_count),
+                            name=f"track_token_usage:{pro_id}",
+                        )
 
                 if require_json:
                     try:

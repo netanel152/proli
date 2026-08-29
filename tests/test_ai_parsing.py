@@ -1,9 +1,12 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from pydantic import SecretStr
+from bson import ObjectId
 import json
 from app.core.messages import Messages
+from app.core.background_tasks import pending_background_tasks
 from app.services.ai_engine_service import AIEngine, AIResponse, ExtractedData
+import app.services.ai_engine_service as ai_engine_module
 
 
 @pytest.fixture
@@ -166,3 +169,54 @@ async def test_detect_service_intent_short_text_shortcircuits(ai_engine):
     result = await ai_engine.detect_service_intent("hi")
     assert result is False
     ai_engine.client.aio.models.generate_content.assert_not_called()
+
+
+# --- Token accounting via spawn_background_task (PRO-143) ---
+
+
+@pytest.mark.asyncio
+async def test_analyze_conversation_spawns_named_token_tracking_task_for_pro(
+    ai_engine, monkeypatch, mock_db
+):
+    """The token-accounting call used to be a bare asyncio.create_task
+    (collectable mid-flight, PRO-143); it now goes through
+    spawn_background_task under a name discriminated by pro_id
+    ("track_token_usage:<pro_id>", matching the sibling typing-indicator
+    task naming) and its DB increment still lands.
+    """
+    monkeypatch.setattr(ai_engine_module, "users_collection", mock_db.users)
+
+    pro_id = str(ObjectId())
+    await mock_db.users.insert_one({"_id": ObjectId(pro_id), "total_tokens_used": 0})
+
+    mock_response = MagicMock()
+    mock_response.parsed = AIResponse(
+        reply_to_user="ok",
+        extracted_data=ExtractedData(
+            city=None, issue=None, full_address=None, appointment_time=None
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+    mock_response.usage_metadata = MagicMock(total_token_count=42)
+    ai_engine.client.aio.models.generate_content = AsyncMock(return_value=mock_response)
+
+    spawned = {}
+    real_spawn = ai_engine_module.spawn_background_task
+
+    def spy(coro, *, name):
+        spawned["name"] = name
+        return real_spawn(coro, name=name)
+
+    monkeypatch.setattr(ai_engine_module, "spawn_background_task", spy)
+
+    await ai_engine.analyze_conversation(
+        [], "Hi", custom_system_prompt="", pro_id=pro_id
+    )
+
+    for t in list(pending_background_tasks()):
+        await t
+
+    assert spawned.get("name") == f"track_token_usage:{pro_id}"
+    updated = await mock_db.users.find_one({"_id": ObjectId(pro_id)})
+    assert updated["total_tokens_used"] == 42
