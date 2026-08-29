@@ -19,18 +19,22 @@ Extracted into a streamlit-free module (collection injected, mongomock in
 tests, PRO-140/PRO-158 precedent).
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import mongomock
 import pandas as pd
 import pytest
 from bson import ObjectId
 
+from admin_panel.core.config import TRANS
 from admin_panel.core.lead_queries import (
     EDITOR_COLUMNS,
     SKIP_LEAD_GONE,
     SKIP_NO_CHANGE,
     SKIP_UNRESOLVED,
+    build_edit_form_payload,
+    build_lead_row,
+    client_label,
     save_lead_edits,
 )
 from app.core.constants import Actor
@@ -637,3 +641,384 @@ def test_status_change_to_different_value_appends_exactly_one_entry(db):
     assert len(doc["status_history"]) == 1
     assert doc["status_history"][0]["status"] == "booked"
     assert doc["status_history"][0]["by"] == Actor.ADMIN
+
+
+# --- PRO-163: client_label precedence — display_name > customer_name > phone ---
+
+
+@pytest.mark.parametrize(
+    "lead, expected",
+    [
+        (
+            {
+                "display_name": "משה כהן",
+                "customer_name": "Danny",
+                "chat_id": "972500000000@c.us",
+            },
+            "משה כהן",
+        ),
+        (
+            {
+                "display_name": "   ",
+                "customer_name": "Danny",
+                "chat_id": "972500000000@c.us",
+            },
+            "Danny",
+        ),
+        (
+            {"customer_name": "Danny", "chat_id": "972500000000@c.us"},
+            "Danny",
+        ),
+        (
+            {
+                "display_name": None,
+                "customer_name": "   ",
+                "chat_id": "972500000000@c.us",
+            },
+            "972500000000",
+        ),
+        (
+            {"chat_id": "972500000000@c.us"},  # neither key present
+            "972500000000",
+        ),
+    ],
+    ids=[
+        "display_name_wins_over_customer_name",
+        "blank_display_name_falls_to_customer_name",
+        "customer_name_used_when_display_name_absent",
+        "whitespace_only_at_both_rungs_falls_to_phone",
+        "both_absent_falls_to_phone",
+    ],
+)
+def test_client_label_precedence(lead, expected):
+    assert client_label(lead) == expected
+
+
+# --- PRO-163: build_edit_form_payload ---
+
+
+def test_build_edit_form_payload_non_blank_name_trimmed_into_set_ops():
+    set_ops, unset_ops = build_edit_form_payload(
+        status="new",
+        details="d",
+        details_touched=False,
+        display_name="  משה כהן  ",
+        pro_name=UNKNOWN_PRO_LABEL,
+        pro_map_name_to_id={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert set_ops["display_name"] == "משה כהן"
+    assert unset_ops == {}
+
+
+@pytest.mark.parametrize("blank_name", ["", "   ", None])
+def test_build_edit_form_payload_blank_name_unsets_display_name(blank_name):
+    set_ops, unset_ops = build_edit_form_payload(
+        status="new",
+        details="d",
+        details_touched=False,
+        display_name=blank_name,
+        pro_name=UNKNOWN_PRO_LABEL,
+        pro_map_name_to_id={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert unset_ops == {"display_name": ""}
+    assert "display_name" not in set_ops
+
+
+def test_build_edit_form_payload_status_always_present():
+    set_ops, _ = build_edit_form_payload(
+        status="booked",
+        details="burst pipe",
+        details_touched=False,
+        display_name="A",
+        pro_name=UNKNOWN_PRO_LABEL,
+        pro_map_name_to_id={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert set_ops["status"] == "booked"
+
+
+def test_build_edit_form_payload_details_untouched_omits_details_and_issue_type():
+    # The headline PRO-163 fix: the details box is prefilled with the
+    # *composed* summary, and the form submits every input on every save —
+    # so writing details back unconditionally stamped that whole composed
+    # string into the pro-facing `issue_type` (the offer's "תקלה:" line,
+    # Messages.Pro.NEW_LEAD_DETAILS) on a save that only touched something
+    # else, like the client name. Untouched must mean untouched: no key.
+    set_ops, _ = build_edit_form_payload(
+        status="new",
+        details="<issue> | <time> | <address>",
+        details_touched=False,
+        display_name="A",
+        pro_name=UNKNOWN_PRO_LABEL,
+        pro_map_name_to_id={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert "details" not in set_ops
+    assert "issue_type" not in set_ops
+
+
+def test_build_edit_form_payload_details_touched_writes_details_and_issue_type():
+    set_ops, _ = build_edit_form_payload(
+        status="new",
+        details="burst pipe under sink",
+        details_touched=True,
+        display_name="A",
+        pro_name=UNKNOWN_PRO_LABEL,
+        pro_map_name_to_id={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert set_ops["details"] == "burst pipe under sink"
+    assert set_ops["issue_type"] == "burst pipe under sink"
+
+
+def test_build_edit_form_payload_unknown_pro_label_nulls_pro_id():
+    set_ops, _ = build_edit_form_payload(
+        status="new",
+        details="d",
+        details_touched=False,
+        display_name="A",
+        pro_name=UNKNOWN_PRO_LABEL,
+        pro_map_name_to_id={"Some Pro": str(ObjectId())},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert set_ops["pro_id"] is None
+
+
+def test_build_edit_form_payload_known_pro_name_maps_to_object_id():
+    pro_id = str(ObjectId())
+    set_ops, _ = build_edit_form_payload(
+        status="new",
+        details="d",
+        details_touched=False,
+        display_name="A",
+        pro_name="Some Pro",
+        pro_map_name_to_id={"Some Pro": pro_id},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert set_ops["pro_id"] == ObjectId(pro_id)
+
+
+def test_build_edit_form_payload_unrecognized_pro_name_omits_pro_id_key():
+    # Neither the unassigned sentinel nor a name present in the map — the
+    # code has no "else" branch for this, so pin what it actually does:
+    # no pro_id key at all, rather than assuming a default is applied.
+    set_ops, _ = build_edit_form_payload(
+        status="new",
+        details="d",
+        details_touched=False,
+        display_name="A",
+        pro_name="A Pro Who Vanished",
+        pro_map_name_to_id={"Some Pro": str(ObjectId())},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert "pro_id" not in set_ops
+
+
+# --- PRO-163: round-trip through mongomock, the acceptance criterion ---
+
+
+def test_display_name_round_trips_through_save_and_read_back(db):
+    leads = db.leads
+    lead_id = leads.insert_one(
+        {"chat_id": "972500000000@c.us", "status": "new"}
+    ).inserted_id
+
+    set_ops, unset_ops = build_edit_form_payload(
+        status="new",
+        details="d",
+        details_touched=False,
+        display_name="  משה כהן  ",
+        pro_name=UNKNOWN_PRO_LABEL,
+        pro_map_name_to_id={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    update_op = {"$set": set_ops}
+    if unset_ops:
+        update_op["$unset"] = unset_ops
+    leads.update_one({"_id": lead_id}, update_op)
+
+    doc = leads.find_one({"_id": lead_id})
+    assert client_label(doc) == "משה כהן"
+
+    # Now clear the name: the field must disappear from the document, not
+    # just read as falsy, so the phone fallback is reachable again.
+    set_ops2, unset_ops2 = build_edit_form_payload(
+        status="new",
+        details="d",
+        details_touched=False,
+        display_name="   ",
+        pro_name=UNKNOWN_PRO_LABEL,
+        pro_map_name_to_id={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    update_op2 = {"$set": set_ops2}
+    if unset_ops2:
+        update_op2["$unset"] = unset_ops2
+    leads.update_one({"_id": lead_id}, update_op2)
+
+    doc2 = leads.find_one({"_id": lead_id})
+    assert "display_name" not in doc2
+    assert client_label(doc2) == "972500000000"
+
+
+# --- PRO-163: i18n key parity for the Edit-Lead-form keys ---
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "client_name_label",
+        "client_name_placeholder",
+        "client_name_help",
+        "phone_number_label",
+        "phone_readonly_help",
+        "status_label",
+        "details_label",
+        "professional_label",
+        "save_changes_btn",
+        "edit_lead_btn",
+        "check_not_sent",
+    ],
+)
+def test_edit_lead_form_i18n_keys_present_and_non_empty_in_both_languages(key):
+    for lang, lang_dict in TRANS.items():
+        assert key in lang_dict, f"{key} missing from TRANS[{lang}]"
+        assert lang_dict[key].strip(), f"{key} is blank in TRANS[{lang}]"
+
+
+# --- PRO-163: EDITOR_COLUMNS carries the raw display_name the Edit form
+# prefills from, alongside the composed `client` cell — the pairing that
+# stops a save blanking a name nobody touched. (No `_details` twin: the
+# details box is prefilled from the composed cell itself, so there is
+# nothing for a raw carrier to be read by — see the comment in
+# lead_queries.py.) ---
+
+
+def test_editor_columns_carries_the_raw_display_name_hidden_column():
+    assert "_display_name" in EDITOR_COLUMNS
+
+
+# --- PRO-163: build_lead_row — the compose site, now extracted and testable ---
+
+
+def _row_lead_doc(**overrides):
+    doc = {
+        "_id": ObjectId(),
+        "created_at": datetime(2026, 1, 15, 10, 0, tzinfo=timezone.utc),
+        "chat_id": "972500000000@c.us",
+        "status": "new",
+        "pro_id": None,
+    }
+    doc.update(overrides)
+    return doc
+
+
+def test_build_lead_row_keys_exactly_match_editor_columns():
+    row = build_lead_row(
+        _row_lead_doc(),
+        pro_map_id_to_name={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert set(row.keys()) == set(EDITOR_COLUMNS)
+
+
+def test_build_lead_row_client_and_raw_display_name_pairing_with_name():
+    row = build_lead_row(
+        _row_lead_doc(display_name="משה כהן"),
+        pro_map_id_to_name={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert row["client"] == "משה כהן"
+    assert row["_display_name"] == "משה כהן"
+
+
+def test_build_lead_row_client_and_raw_display_name_pairing_without_name():
+    row = build_lead_row(
+        _row_lead_doc(),
+        pro_map_id_to_name={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert row["client"] == "972500000000"  # phone fallback via client_label
+    assert row["_display_name"] == ""
+
+
+def test_build_lead_row_synthesizes_details_summary_from_structured_fields():
+    # No `details` text was ever typed for this lead — only the structured
+    # AI-extracted fields — so the composed cell has to be built from them
+    # rather than echoing a raw string. (There is no `_details` raw carrier:
+    # the Edit form's details box is prefilled from this same composed
+    # value, so "touched" is measured against it directly — see the comment
+    # next to `_display_name` in EDITOR_COLUMNS.)
+    row = build_lead_row(
+        _row_lead_doc(
+            issue_type="נזילה מתחת לכיור",
+            appointment_time="10:00",
+            full_address="תל אביב",
+        ),
+        pro_map_id_to_name={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert row["details_summary"] == "נזילה מתחת לכיור | 10:00 | תל אביב"
+
+
+def test_build_lead_row_date_converted_to_israel_time():
+    # 2026-01-15 is outside Israel's DST window, so the offset is a fixed
+    # +2h (IST) — 10:00 UTC becomes 12:00 local.
+    row = build_lead_row(
+        _row_lead_doc(),
+        pro_map_id_to_name={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert row["date"].hour == 12
+    assert row["date"].utcoffset() == timedelta(hours=2)
+
+
+def test_build_lead_row_professional_maps_known_pro_id_to_name():
+    pro_id = ObjectId()
+    row = build_lead_row(
+        _row_lead_doc(pro_id=pro_id),
+        pro_map_id_to_name={pro_id: "דני החשמלאי"},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert row["professional"] == "דני החשמלאי"
+
+
+def test_build_lead_row_professional_falls_back_to_unknown_label():
+    row = build_lead_row(
+        _row_lead_doc(pro_id=ObjectId()),  # not in the map
+        pro_map_id_to_name={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert row["professional"] == UNKNOWN_PRO_LABEL
+
+
+def test_build_lead_row_parses_legacy_deal_marker_into_details_summary():
+    # Early leads packed the structured fields into a "[DEAL: ...]" marker
+    # inside the free-text `details` instead of separate columns. Never had
+    # a test before this extraction.
+    row = build_lead_row(
+        _row_lead_doc(details="פנייה ישנה [DEAL: 10:00|תל אביב|נזילה מתחת לכיור]"),
+        pro_map_id_to_name={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    assert row["details_summary"] == "נזילה מתחת לכיור | 10:00 | תל אביב"
+
+
+def test_build_lead_row_malformed_deal_marker_hits_except_and_leaves_defaults():
+    # Real-world Mongo drift: `details` corrupted to a non-string whose
+    # str() representation still contains the "[DEAL:" marker text, so the
+    # guard enters the parse branch — but `.split` on a non-string raises
+    # AttributeError. The parser must catch that rather than crash the
+    # whole row (and, by extension, the whole leads table): reaching this
+    # assert at all proves the except fired.
+    row = build_lead_row(
+        _row_lead_doc(details=["[DEAL: 10:00|תל אביב|נזילה מתחת לכיור]"]),
+        pro_map_id_to_name={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+    )
+    # Left the pre-try defaults in place rather than having successfully
+    # parsed the marker into the clean composed form the successful-parse
+    # test above pins.
+    assert row["details_summary"] != "נזילה מתחת לכיור | 10:00 | תל אביב"
