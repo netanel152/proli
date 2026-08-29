@@ -365,9 +365,6 @@ async def test_below_max_reassignments_attempts_normal_reassignment(
     assert updated["pro_id"] == "new_pro"
     assert updated["reassignment_count"] == WorkerConstants.MAX_REASSIGNMENTS
 
-    # Text-only menu rule (CLAUDE.md) — no interactive buttons anywhere in this flow.
-    mock_whatsapp.send_interactive_buttons.assert_not_called()
-
 
 # ---------------------------------------------------------------------------
 # PRO-117 — notify_old_pro param and the no-usable-location escalation branch

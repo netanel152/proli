@@ -69,12 +69,8 @@ class UserStates(str, Enum):
     PRO_MODE = "pro_mode"  # User is acting as a Professional
     CUSTOMER_MODE = "customer_mode"  # Pro temporarily acting as a customer
     AWAITING_INTENT_CONFIRMATION = "awaiting_intent_confirmation"  # Transient: waiting for 1/2 after intent detected
-    CUSTOMER_FLOW = "customer_flow"  # User is in a booking flow
     AWAITING_ADDRESS = "awaiting_address"
-    AWAITING_MEDIA = "awaiting_media"
-    AWAITING_TIME = "awaiting_time"
     AWAITING_CONSENT = "awaiting_consent"  # Waiting for privacy consent
-    SOS = "sos"
     AWAITING_PRO_APPROVAL = "awaiting_pro_approval"
     PAUSED_FOR_HUMAN = "paused_for_human"
     AWAITING_RESCHEDULE_TIME = "awaiting_reschedule_time"
@@ -85,7 +81,6 @@ class UserStates(str, Enum):
     ONBOARDING_PRICES = "onboarding_prices"
     ONBOARDING_CONFIRM = "onboarding_confirm"
     # Admin routing wizard
-    ADMIN_MODE_IDLE = "admin_mode_idle"
     ADMIN_SELECTING_LEAD = "admin_selecting_lead"
     ADMIN_SELECTING_ACTION = "admin_selecting_action"
     ADMIN_SELECTING_PRO = "admin_selecting_pro"
