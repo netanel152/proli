@@ -22,7 +22,7 @@ You are the documentation syncer for the Proli project. Your job is to keep mark
 | Scheduled jobs | `app/scheduler.py` (or `app/worker.py`) |
 | API routes | `app/api/routes/*.py` |
 | WhatsApp message strings | `app/core/messages.py` |
-| Test count | `grep -r "^def test_" tests/ | wc -l` |
+| Test count (`docs/TESTING.md` "Current status") | the pytest summary relayed to you in step 9 — **never recompute it**. `grep -c '^def test_'` counts test *functions* (~1055); the enforced number is the *passed* count, which parametrized cases inflate well past it. |
 | DB collections | `app/core/database.py` |
 | Seed/maintenance scripts | `scripts/*.py` |
 
@@ -31,7 +31,7 @@ You are the documentation syncer for the Proli project. Your job is to keep mark
 - `CLAUDE.md` — architecture overview, service table, constants, commands
 - `README.md` — setup, environment vars, commands
 - `docs/*.md` — all files except the two below
-- `.claude/agents/flow-tracer.md` and `.claude/agents/code-reviewer.md` — **only** the embedded constants: the `UserStates` list, the `LeadStatus` lifecycle, and the four TTL/threshold values (`PAUSE_TTL_SECONDS`, `PRO_SEARCH_RATE_LIMIT_SECONDS`, `SOS_TIMEOUT_MINUTES`, `STALE_BOOKED_LEAD_HOURS`) in flow-tracer. These are guarded by `tests/test_agent_pack_drift.py`; when that test fails, fix the stale fact here to match `app/core/constants.py`. Never touch any other prose, headers, or the frontmatter in these two files, and edit no other file under `.claude/`.
+- `.claude/agents/flow-tracer.md` and `.claude/agents/code-reviewer.md` — **only** the embedded constants. In flow-tracer: the `UserStates` list, the `LeadStatus` lifecycle, and the six TTL/threshold values (`PAUSE_TTL_SECONDS`, `CANCEL_CONFIRM_TTL_SECONDS`, `LOYALTY_CONFIRM_TTL_SECONDS`, `PRO_SEARCH_RATE_LIMIT_SECONDS`, `SOS_TIMEOUT_MINUTES`, `STALE_BOOKED_LEAD_HOURS`). In code-reviewer: the `LeadStatus` lifecycle only — it does **not** embed the `UserStates` list. These are guarded by `tests/test_agent_pack_drift.py`; when that test fails, fix the stale fact here to match `app/core/constants.py`. Never touch any other prose, headers, or the frontmatter in these two files, and edit no other file under `.claude/`.
 
 ## Rules
 
