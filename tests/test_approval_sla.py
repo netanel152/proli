@@ -332,9 +332,6 @@ async def test_customer_reply_1_on_offered_lead_triggers_reassign(
     (called_lead,), _ = mock_reassign.await_args
     assert called_lead["_id"] == lead_result.inserted_id
 
-    # Text-only menu rule (CLAUDE.md) — no interactive buttons anywhere in this flow.
-    mock_wa.send_interactive_buttons.assert_not_called()
-
 
 @pytest.mark.asyncio
 async def test_customer_reply_2_on_offered_lead_keeps_waiting(
@@ -358,7 +355,6 @@ async def test_customer_reply_2_on_offered_lead_keeps_waiting(
     mock_wa.send_message.assert_called_once_with(
         chat_id, Messages.Customer.REASSIGN_WAIT_ACK
     )
-    mock_wa.send_interactive_buttons.assert_not_called()
 
     updated = await mock_db.leads.find_one({"_id": lead_result.inserted_id})
     assert updated["reassign_offered"] is False

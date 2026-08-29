@@ -247,12 +247,8 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `PRO_MODE` | Sender is an active professional |
 | `CUSTOMER_MODE` | Professional acting as a customer. Entered via the `לקוח` keyword or a confirmed intent prompt; sticky until their own lead closes |
 | `AWAITING_INTENT_CONFIRMATION` | Prompting Pro to switch to `CUSTOMER_MODE` (5m TTL, one re-prompt) |
-| `CUSTOMER_FLOW` | Customer is actively in a booking conversation |
 | `AWAITING_ADDRESS` | Waiting for customer to provide missing parts of 5-field address |
-| `AWAITING_MEDIA` | Waiting for customer to send a photo or video of the issue |
-| `AWAITING_TIME` | Waiting for customer to confirm or select an appointment time |
 | `AWAITING_CONSENT` | Waiting for customer to accept the privacy policy (first contact) |
-| `SOS` | Customer requested a human representative; bot in alert mode |
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold (1h TTL) |
 | `PRO_SELECTING_JOB_TO_FINISH` | Pro has multiple active jobs and is picking which one to finish |
 | `PRO_SELECTING_JOB_TO_CANCEL` | Pro has multiple booked jobs and is picking which one to cancel |
@@ -263,7 +259,7 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `AWAITING_NEW_OR_EXISTING` | A customer with a confirmed BOOKED job messages about something else; asked whether it's a new request or about the existing job |
 | `AWAITING_CANCEL_CONFIRMATION` | A cancel keyword on a confirmed BOOKED job; waiting for an explicit '1'/'2' before acting (5m TTL, PRO-118) |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
-| `ADMIN_MODE_IDLE` / `ADMIN_SELECTING_LEAD` / `ADMIN_SELECTING_ACTION` / `ADMIN_SELECTING_PRO` | Admin routing wizard steps (`ניהול` keyword, 15m TTL) |
+| `ADMIN_SELECTING_LEAD` / `ADMIN_SELECTING_ACTION` / `ADMIN_SELECTING_PRO` | Admin routing wizard steps (`ניהול` keyword, 15m TTL) |
 
 ---
 
