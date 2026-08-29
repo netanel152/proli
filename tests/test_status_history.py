@@ -178,6 +178,39 @@ async def test_set_lead_status_expected_status_guard_allows_matching_transition(
 
 
 @pytest.mark.asyncio
+async def test_set_lead_status_expected_pro_id_guard_blocks_wrong_owner(mock_db):
+    """PRO-123: status alone is not enough to guard a transition — a
+    reassignment leaves the lead at NEW under a DIFFERENT pro, so a stale
+    write from the previous owner must not match just because the status
+    happens to line up. ``expected_pro_id`` closes that gap."""
+    current_owner = ObjectId()
+    stale_owner = ObjectId()
+    result = await mock_db.leads.insert_one(
+        {
+            "chat_id": "status_history_pro_guard@c.us",
+            "status": LeadStatus.NEW,
+            "pro_id": current_owner,
+            "status_history": [status_history_entry(LeadStatus.NEW, Actor.SYSTEM)],
+        }
+    )
+    lead_id = result.inserted_id
+
+    # The stale pro's write matches on status but not on ownership -> blocked.
+    updated = await set_lead_status(
+        lead_id,
+        LeadStatus.BOOKED,
+        Actor.PRO,
+        expected_status=LeadStatus.NEW,
+        expected_pro_id=stale_owner,
+    )
+
+    assert updated is None
+    doc = await mock_db.leads.find_one({"_id": lead_id})
+    assert doc["status"] == LeadStatus.NEW
+    assert len(doc["status_history"]) == 1
+
+
+@pytest.mark.asyncio
 async def test_set_lead_status_two_sequential_transitions_append_ordered_entries(
     mock_db,
 ):

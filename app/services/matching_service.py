@@ -1,11 +1,16 @@
+import math
+
 from app.core.database import users_collection, leads_collection, slots_collection
 from app.core.logger import logger
 from app.core.constants import LeadStatus, WorkerConstants, ISRAEL_CITIES_COORDS
+from app.core.messages import Messages
 from app.services.geocoding_service import resolve_city_to_coords
 from app.services.scheduling_service import check_pro_availability
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from bson import ObjectId
+
+EARTH_RADIUS_METERS = 6_371_000
 
 
 def get_coordinates(city_name: str):
@@ -114,9 +119,12 @@ async def determine_best_pro(
                 logger.info(
                     f"No direct location match for '{location}', trying reverse match..."
                 )
-                all_pros_cursor = users_collection.find(
-                    {"is_active": True, "role": "professional"}
-                )
+                # PRO-123: build from `base_filter`, not a hand-rolled
+                # `{is_active, role}`. The short version silently dropped both
+                # `pending_approval: {$ne: True}` (offering leads to pros who
+                # were never approved) and `excluded_pro_ids` (re-picking a pro
+                # who had already rejected or been reassigned off this lead).
+                all_pros_cursor = users_collection.find(base_filter)
                 all_pros = await all_pros_cursor.to_list(
                     length=WorkerConstants.DB_QUERY_LIMIT
                 )
@@ -210,6 +218,106 @@ async def determine_best_pro(
     except Exception as e:
         logger.error(f"Error in determine_best_pro: {e}")
         return None
+
+
+def _pro_coordinates(pro: dict):
+    """[lon, lat] from a pro's GeoJSON ``location``, or None when unset/malformed."""
+    coords = (pro.get("location") or {}).get("coordinates")
+    if not isinstance(coords, (list, tuple)) or len(coords) != 2:
+        return None
+    try:
+        return [float(coords[0]), float(coords[1])]
+    except (TypeError, ValueError):
+        return None
+
+
+def _distance_meters(a, b) -> float:
+    """Great-circle distance in metres between two [lon, lat] pairs."""
+    lon1, lat1 = math.radians(a[0]), math.radians(a[1])
+    lon2, lat2 = math.radians(b[0]), math.radians(b[1])
+    dlon, dlat = lon2 - lon1, lat2 - lat1
+    h = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    )
+    return 2 * EARTH_RADIUS_METERS * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _areas_match(pro: dict, location: str) -> bool:
+    """The text fallback `determine_best_pro` uses, in both directions."""
+    if not location:
+        return False
+    location = location.lower()
+    areas = [str(a).lower() for a in (pro.get("service_areas") or [])]
+    return any(area in location or location in area for area in areas)
+
+
+def required_profession(lead: dict) -> Optional[str]:
+    """The profession a lead explicitly asks for, or None when it doesn't.
+
+    ``lead.issue_type`` is free text written by the AI ("נזילה בכיור"), not a
+    controlled vocabulary — there is no profession field on a lead, and
+    ``determine_best_pro`` does not filter on one either. So this only answers
+    the confident case: the text names a profession from the onboarding
+    vocabulary. Anything else returns None and imposes no constraint, rather
+    than inventing a taxonomy that would wrongly block pros from real work.
+    """
+    issue = (lead.get("issue_type") or "").lower()
+    if not issue:
+        return None
+    for name, profession in Messages.Onboarding.TYPE_MAP.items():
+        if not name.isdigit() and name.lower() in issue:
+            return profession
+    return None
+
+
+async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:
+    """Would routing have offered this lead to this pro? (PRO-123)
+
+    The same gates `determine_best_pro` applies — active, approved, not
+    excluded, within `GEO_RADIUS_STEPS[-1]`, under `MAX_PRO_LOAD` — expressed
+    as a per-pair predicate so the pro-initiated `מצא` search cannot hand out
+    work the routing engine would never have offered. Geo is computed in
+    Python rather than via `$geoNear` because this checks one known pro, not a
+    ranked sweep.
+    """
+    if not pro.get("is_active", True):
+        return False
+    if pro.get("pending_approval") is True:
+        return False
+
+    # A pro who already rejected this lead must not be able to claim it back.
+    if pro["_id"] in (lead.get("rejected_by") or []):
+        return False
+
+    wanted = required_profession(lead)
+    if wanted:
+        own = pro.get("profession_type")
+        if own and own not in (wanted, "general", "handyman"):
+            return False
+
+    location = lead.get("city") or lead.get("full_address")
+    pro_coords = _pro_coordinates(pro)
+    lead_coords = await resolve_city_to_coords(location) if location else None
+    max_radius = WorkerConstants.GEO_RADIUS_STEPS[-1]
+    if pro_coords and lead_coords:
+        if _distance_meters(pro_coords, [lead_coords[0], lead_coords[1]]) > max_radius:
+            return False
+    elif not _areas_match(pro, location):
+        # No coordinates on one side or the other — fall back to the same
+        # service_areas text match routing uses, and refuse when even that
+        # cannot place the pro near the job.
+        return False
+
+    active_load = await leads_collection.count_documents(
+        {
+            "pro_id": pro["_id"],
+            "status": {
+                "$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]
+            },
+        }
+    )
+    return active_load < WorkerConstants.MAX_PRO_LOAD
 
 
 async def book_slot_for_lead(

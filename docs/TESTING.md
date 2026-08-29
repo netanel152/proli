@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 1392 passed, 102 skipped, 3 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 96 skips are cells of the PRO-83 state × input matrix, each carrying a documented reason from `NA_REASONS` and still visible in the generated table. Most are deliberate: a cell is N/A when another cell already proves the same thing — the whole `race` column, the `ttl-class`/`same-reprompt`/`same-exit` collapses. 15 are not by design: `defect-finish`, `defect-cancel` and `defect-price` are dark because of the same tracked product defects the strict xfails document below.)
+**Current status: 1415 passed, 102 skipped, 2 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 96 skips are cells of the PRO-83 state × input matrix, each carrying a documented reason from `NA_REASONS` and still visible in the generated table. Most are deliberate: a cell is N/A when another cell already proves the same thing — the whole `race` column, the `ttl-class`/`same-reprompt`/`same-exit` collapses. 15 are not by design: `defect-finish`, `defect-cancel` and `defect-price` are dark because of the same tracked product defects the strict xfails document below.)
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here. CI enforces it as a **floor**, not an equality: the "Guard — test baseline floor" step in `.github/workflows/tests.yml` fails the build when the passed count is **below** this line (a regression), and posts a `::warning` when it is above (tests were added — normal, and no longer a merge blocker; requiring equality meant two branches that both added tests could not merge in either order). Bump the line in your PR if it is convenient; otherwise `.github/workflows/refresh-test-baseline.yml` opens a `chore: refresh test baseline` PR after the change lands on `dev`, so the floor keeps tracking reality — a floor left far below the real count would hide a regression underneath it.
 
@@ -283,11 +283,13 @@ python -m tests.e2e.test_e2e_state_matrix
 
 ### Defects it found
 
-Three `xfail(strict=True)` tests document behaviour the system should have and does
-not. Strict mode turns each into a hard failure the moment it is fixed.
+Two `xfail(strict=True)` tests document behaviour the system should have and does
+not. Strict mode turns each into a hard failure the moment it is fixed — which is
+exactly how the third one left this table: PRO-123 fixed the reverse-match
+fallback, `test_text_fallback_routing_still_honours_exclusions` started passing,
+and it is now an ordinary regression test.
 
 | Test | Defect |
 |---|---|
 | `test_pro_can_select_which_job_to_finish` | `PRO_SELECTING_JOB_TO_FINISH` is unreachable through the orchestrator — the `PRO_BUSINESS_KEYWORDS` bypass overwrites the state to `PRO_MODE` before `pro_flow` reads it, so "1" runs approve instead of picking job 1. |
 | `test_pro_final_price_is_recorded` | `PRO_AWAITING_FINAL_PRICE` is absent from the dispatch, so PRO-33's `final_price` / `commission_amount` can never be captured in production. |
-| `test_text_fallback_routing_still_honours_exclusions` | `determine_best_pro`'s reverse-match fallback drops `excluded_pro_ids` and the `pending_approval` guard. |

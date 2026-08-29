@@ -29,6 +29,13 @@ async def pro_setup(mock_db):
         "is_active": True,
         "social_proof": {"rating": 4.5, "review_count": 3},
         "created_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+        # PRO-123: `_handle_search` now runs leads through
+        # `matching_service.is_pro_eligible_for_lead`, which needs a way to
+        # place this pro geographically — give it both a location (geo path)
+        # and matching service_areas (text fallback) so search tests aren't
+        # coupled to which branch the predicate takes.
+        "location": {"type": "Point", "coordinates": [34.7818, 32.0853]},
+        "service_areas": ["תל אביב"],
     }
     # Avoid duplicate key on re-run within same module scope
     existing = await mock_db.users.find_one({"_id": PRO_ID})
@@ -416,6 +423,132 @@ async def test_approve_persists_correct_slot_id_with_multiple_active_jobs(
         await db.slots.delete_many({"_id": {"$in": [slot_a_id, slot_b_id]}})
 
 
+# --- Approve race guard (PRO-123) ---
+#
+# monitor_service.reassign_lead leaves a rejected/timed-out lead at NEW under
+# a DIFFERENT pro. A stale "אשר" from the original pro, arriving after that
+# handoff, must not be able to book the lead out from under its new owner —
+# `_handle_approve` now guards the write with both expected_status=NEW and
+# expected_pro_id=<this pro>, and lead_manager.update_lead_status returns the
+# updated doc (or None when the guard didn't match) so the caller can tell.
+
+
+@pytest.mark.asyncio
+async def test_approve_guards_write_with_lead_and_pro_id(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """The write to lead_manager must carry both guards — this is the whole
+    fix; a regression here silently re-opens the race."""
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=None)
+    )
+
+    await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    mock_lm.update_lead_status.assert_called_once()
+    _, kwargs = mock_lm.update_lead_status.call_args
+    assert kwargs["expected_status"] == LeadStatus.NEW
+    assert kwargs["expected_pro_id"] == pro_doc["_id"]
+
+    await db.leads.delete_many({"_id": lead_id})
+
+
+@pytest.mark.asyncio
+async def test_approve_lost_race_books_nothing_and_messages_nobody(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """The lead moved on (reassigned/answered elsewhere) between the read and
+    the write — update_lead_status reports the lost guard as None. The pro
+    must be told the truth, and neither a slot nor a customer message goes
+    out for a lead this pro no longer owns."""
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_lm.update_lead_status = AsyncMock(return_value=None)
+    mock_book_slot = AsyncMock(return_value=ObjectId())
+    monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", mock_book_slot)
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert result == Messages.Pro.NO_PENDING_APPROVALS
+    mock_book_slot.assert_not_called()
+    mock_wa.send_message.assert_not_called()
+    # The lead itself is untouched — _handle_approve never wrote to it, the
+    # (mocked) lead_manager is the only write path exercised here.
+    lead = await db.leads.find_one({"_id": lead_id})
+    assert lead["status"] == LeadStatus.NEW
+
+    await db.leads.delete_many({"_id": lead_id})
+
+
+@pytest.mark.asyncio
+async def test_approve_lost_race_with_recent_response_returns_already_responded(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """Same lost race, but this pro has a BOOKED lead from moments ago —
+    read as a fat-finger double-press rather than a bare 'nothing pending'."""
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    recent_booked_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": recent_booked_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.BOOKED,
+            "chat_id": "972502222222@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_lm.update_lead_status = AsyncMock(return_value=None)
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=None)
+    )
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert result == Messages.Pro.ALREADY_RESPONDED
+    mock_wa.send_message.assert_not_called()
+
+    await db.leads.delete_many({"_id": {"$in": [lead_id, recent_booked_id]}})
+
+
 # --- Reject ---
 #
 # PRO-117: reject no longer dead-ends the lead — it hands off to
@@ -665,6 +798,111 @@ def test_parse_final_price_shapes():
     assert _parse_final_price("0501234567") is None  # phone-shaped, out of bounds
     assert _parse_final_price("0") is None
     assert _parse_final_price("2000000") is None  # above sanity ceiling
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("אשר", True),  # APPROVE_COMMANDS
+        ("1", True),  # numeric alias, also an APPROVE_COMMANDS entry
+        ("עזרה", True),  # HELP_COMMANDS
+        ("מצא", True),  # SEARCH_COMMANDS
+        ("דלג", False),  # SKIP_COMMANDS is deliberately excluded — an
+        # answer to the price prompt, not a command that abandons it
+        ("450", False),  # an ordinary quoted price
+        ("תודה רבה", False),  # free text
+    ],
+)
+def test_is_pro_command_matches_dispatcher_keywords_excludes_skip_and_free_text(
+    text, expected
+):
+    """PRO-123: `_is_pro_command` is what decides whether a reply inside
+    PRO_AWAITING_FINAL_PRICE abandons the price prompt. It must recognize
+    every keyword list the dispatcher matches, but SKIP_COMMANDS ('דלג') is
+    deliberately excluded — that's an answer to the price prompt itself."""
+    assert app.services.pro_flow._is_pro_command(text) is expected
+
+
+@pytest.mark.asyncio
+async def test_final_price_prompt_help_command_clears_state_and_shows_help(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """PRO-123: a recognized command arriving while PRO_AWAITING_FINAL_PRICE
+    abandons the price prompt instead of being parsed as an (invalid) price —
+    'עזרה' must show the help menu, not FINAL_PRICE_INVALID."""
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.COMPLETED,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_state = _mock_price_state(monkeypatch, lead_id)
+
+    result = await handle_pro_text_command(
+        "972500000000@c.us", "עזרה", mock_wa, mock_lm
+    )
+
+    assert result == Messages.Pro.HELP_MENU
+    mock_state.clear_state.assert_awaited_once()
+    lead = await db.leads.find_one({"_id": lead_id})
+    assert "final_price" not in lead  # never reached _handle_final_price_reply
+
+    await db.leads.delete_many({"_id": lead_id})
+
+
+@pytest.mark.asyncio
+async def test_final_price_prompt_ambiguous_number_dispatches_command_not_price(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """PRO-123 regression case: '1' is both an APPROVE_COMMANDS alias and a
+    plausible price. While PRO_AWAITING_FINAL_PRICE is active for one
+    (already-completed) lead, a separate NEW lead offer lands and the pro
+    replies '1' meaning approve — it must not be recorded as final_price=1
+    on the completed job."""
+    pro_doc, db = pro_setup
+    completed_lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": completed_lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.COMPLETED,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    new_lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": new_lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_state = _mock_price_state(monkeypatch, completed_lead_id)
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=None)
+    )
+
+    result = await handle_pro_text_command("972500000000@c.us", "1", mock_wa, mock_lm)
+
+    assert Messages.Pro.APPROVE_SUCCESS in result
+    # Two chats get cleared on this path: the pro's, because the price prompt
+    # was abandoned, and the customer's, by the approve handler. Assert the one
+    # this test is about by chat_id rather than by call count.
+    cleared = [c.args[0] for c in mock_state.clear_state.await_args_list]
+    assert "972500000000@c.us" in cleared
+    completed_lead = await db.leads.find_one({"_id": completed_lead_id})
+    assert "final_price" not in completed_lead
+
+    await db.leads.delete_many({"_id": {"$in": [completed_lead_id, new_lead_id]}})
 
 
 @pytest.mark.asyncio
@@ -1096,9 +1334,13 @@ def _make_mock_redis():
 @pytest.mark.asyncio
 async def test_search_no_stuck_leads_sets_cooldown(pro_setup, mock_wa):
     """First call with empty DB: returns NO_STUCK_LEADS and locks cool-down."""
-    pro_doc, _ = pro_setup
+    pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
     redis, store = _make_mock_redis()
+    # PRO-123: _handle_search now gates on this pro's own active load before
+    # ever reaching the cool-down — clear leftovers from earlier tests in this
+    # module (shared mock_db) so the load gate can't short-circuit this test.
+    await db.leads.delete_many({"pro_id": pro_doc["_id"]})
 
     with patch(
         "app.services.pro_flow.get_redis_client",
@@ -1115,9 +1357,12 @@ async def test_search_no_stuck_leads_sets_cooldown(pro_setup, mock_wa):
 @pytest.mark.asyncio
 async def test_search_rate_limited_sends_wait_message(pro_setup, mock_wa):
     """Second call within cool-down returns the rate-limited sentinel and sends formatted message."""
-    pro_doc, _ = pro_setup
+    pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
     redis, store = _make_mock_redis()
+    # PRO-123: clear leaked active leads so the load gate doesn't preempt
+    # the rate-limit check this test is actually about.
+    await db.leads.delete_many({"pro_id": pro_doc["_id"]})
     # Pre-seed an active cool-down with ~6 minutes remaining
     store[f"rate_limit:pro_search:{chat_id}"] = (
         "1",
@@ -1146,6 +1391,9 @@ async def test_search_finds_stuck_lead_and_assigns(pro_setup, mock_wa):
     pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
     redis, store = _make_mock_redis()
+    # PRO-123: clear leaked active leads from earlier tests so this pro isn't
+    # already at MAX_PRO_LOAD when the eligibility check runs.
+    await db.leads.delete_many({"pro_id": pro_doc["_id"]})
 
     lead_id = ObjectId()
     await db.leads.insert_one(
@@ -1185,6 +1433,9 @@ async def test_search_resets_reassignment_lifecycle_after_escalation(
     redis, store = _make_mock_redis()
 
     await db.leads.delete_many({"status": LeadStatus.PENDING_ADMIN_REVIEW})
+    # PRO-123: clear leaked active leads from earlier tests so this pro isn't
+    # already at MAX_PRO_LOAD when the eligibility check runs.
+    await db.leads.delete_many({"pro_id": pro_doc["_id"]})
     lead_id = ObjectId()
     await db.leads.insert_one(
         {
@@ -1215,6 +1466,112 @@ async def test_search_resets_reassignment_lifecycle_after_escalation(
     assert lead["approval_nudged"] is False
     assert lead["reassign_offered"] is False
     assert lead["pro_notified_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_search_while_paused_refuses_before_setting_cooldown(pro_setup, mock_wa):
+    """PRO-123: a paused pro is told to resume, and the search never consumes
+    the 10-minute cool-down for a request it refused outright."""
+    pro_doc, db = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    redis, store = _make_mock_redis()
+    paused_pro = {**pro_doc, "is_active": False}
+
+    with patch(
+        "app.services.pro_flow.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
+        result = await _handle_search(paused_pro, chat_id, mock_wa)
+
+    assert result == Messages.Pro.SEARCH_WHILE_PAUSED
+    redis.setex.assert_not_called()
+    assert store == {}
+
+
+@pytest.mark.asyncio
+async def test_search_at_max_load_refuses_before_setting_cooldown(pro_setup, mock_wa):
+    """PRO-123: a pro already at MAX_PRO_LOAD is told to finish a job first,
+    and — same as the paused gate — this must not burn the search cool-down."""
+    pro_doc, db = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    redis, store = _make_mock_redis()
+    await db.leads.delete_many({"pro_id": pro_doc["_id"]})
+    for _ in range(WorkerConstants.MAX_PRO_LOAD):
+        await db.leads.insert_one(
+            {
+                "pro_id": pro_doc["_id"],
+                "status": LeadStatus.BOOKED,
+                "chat_id": "customer@c.us",
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
+
+    with patch(
+        "app.services.pro_flow.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
+        result = await _handle_search(pro_doc, chat_id, mock_wa)
+
+    assert result == Messages.Pro.SEARCH_LOAD_FULL.format(
+        active=WorkerConstants.MAX_PRO_LOAD, max_jobs=WorkerConstants.MAX_PRO_LOAD
+    )
+    redis.setex.assert_not_called()
+    assert store == {}
+
+
+@pytest.mark.asyncio
+async def test_search_skips_ineligible_lead_and_claims_next_eligible_one(
+    pro_setup, mock_wa
+):
+    """PRO-123: the oldest PENDING_ADMIN_REVIEW lead is not automatically
+    claimed anymore — a pro whose profession doesn't match it must be skipped
+    in favor of the next, eligible candidate, rather than blocking the pro's
+    search entirely."""
+    pro_doc, db = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    redis, store = _make_mock_redis()
+    plumber_pro = {**pro_doc, "profession_type": "plumber"}
+
+    await db.leads.delete_many({"status": LeadStatus.PENDING_ADMIN_REVIEW})
+    await db.leads.delete_many({"pro_id": pro_doc["_id"]})
+
+    ineligible_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": ineligible_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "issue_type": "צריך חשמלאי דחוף",  # electrician-only, pro is a plumber
+            "city": "תל אביב",
+            "created_at": datetime.now(timezone.utc) - timedelta(minutes=90),
+        }
+    )
+    eligible_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": eligible_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "issue_type": "נזילה",  # no profession named -> no constraint
+            "city": "תל אביב",
+            "created_at": datetime.now(timezone.utc) - timedelta(minutes=80),
+        }
+    )
+
+    with patch(
+        "app.services.pro_flow.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
+        result = await _handle_search(plumber_pro, chat_id, mock_wa)
+
+    assert "נזילה" in result
+    ineligible = await db.leads.find_one({"_id": ineligible_id})
+    assert ineligible["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert "pro_id" not in ineligible
+    eligible = await db.leads.find_one({"_id": eligible_id})
+    assert eligible["status"] == LeadStatus.NEW
+    assert eligible["pro_id"] == pro_doc["_id"]
 
 
 # --- Help command does not clear context ---
@@ -1344,9 +1701,15 @@ async def test_dashboard_includes_finish_when_booked(
 @pytest.mark.asyncio
 async def test_search_via_chapesh_synonym(pro_setup, mock_wa):
     """Typing 'חפש' (not 'מצא') reaches _handle_search with rate-limit behavior."""
-    pro_doc, _ = pro_setup
+    pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
     redis, store = _make_mock_redis()
+    # PRO-123: this test asserts NO_STUCK_LEADS, so it has to guarantee that
+    # precondition — clear both the pro's active leads (the load gate would
+    # preempt the search) and the PENDING_ADMIN_REVIEW queue itself, which an
+    # earlier test in this file deliberately leaves a lead sitting in.
+    await db.leads.delete_many({"pro_id": pro_doc["_id"]})
+    await db.leads.delete_many({"status": LeadStatus.PENDING_ADMIN_REVIEW})
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
