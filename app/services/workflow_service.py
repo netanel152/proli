@@ -1319,7 +1319,12 @@ async def _process_incoming_message_inner(
             await lead_manager.log_message(chat_id, "model", completion_resp)
             return
 
-        rating_resp = await handle_customer_rating_text(chat_id, user_text)
+        # `has_media` so an unreadable *caption* on a photo doesn't earn a
+        # re-prompt: media is fetched in step 3, below this block, and a
+        # re-prompt here would return before the photo is ever downloaded.
+        rating_resp = await handle_customer_rating_text(
+            chat_id, user_text, has_media=bool(media_url)
+        )
         if rating_resp:
             await whatsapp.send_message(chat_id, rating_resp)
             await lead_manager.log_message(chat_id, "model", rating_resp)
