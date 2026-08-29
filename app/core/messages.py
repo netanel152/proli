@@ -391,6 +391,16 @@ class Messages:
             "⏳ חיפשת לאחרונה. אנא המתן {minutes} דקות לפני החיפוש הבא."
         )
         NO_STUCK_LEADS = "אין לידים תקועים זמינים כרגע. ננסה שוב מאוחר יותר 👍"
+        # PRO-123: the `מצא` search now applies the same gates as routing, so it
+        # has to be able to say *why* it refused instead of returning nothing.
+        SEARCH_WHILE_PAUSED = (
+            "☕ אתה כרגע במצב 'בהפסקה', ולכן החיפוש מושבת.\n"
+            "כתוב *זמין* כדי לחזור לקבל עבודות ואז נסה שוב."
+        )
+        SEARCH_LOAD_FULL = (
+            "🔧 יש לך כבר {active} עבודות פעילות (המקסימום הוא {max_jobs}).\n"
+            "סיים אחת מהן ואז אפשר לחפש עבודה נוספת."
+        )
         STUCK_LEAD_FOUND = (
             "📢 *נמצא ליד תקוע:*\n\n"
             "🛠️ *תקלה:* {issue}\n"

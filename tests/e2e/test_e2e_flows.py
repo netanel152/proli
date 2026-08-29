@@ -1251,22 +1251,19 @@ async def test_a_second_message_mid_flight_is_deferred_not_dropped(world):
 # ===========================================================================
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT found by this harness: the reverse-match fallback in "
-        "matching_service.determine_best_pro (matching_service.py:117) queries "
-        "{is_active, role} directly instead of spreading base_filter, so both "
-        "excluded_pro_ids and the pending_approval guard are dropped on that branch. "
-        "A pro who just timed out on a lead can be handed the same lead straight "
-        "back — an escalation loop — and a pro still awaiting admin approval can be "
-        "routed live work."
-    ),
-)
 @pytest.mark.asyncio
 async def test_text_fallback_routing_still_honours_exclusions(world):
-    """The regex branch misses on a full address, so the reverse match runs — which
-    is the production shape: `full_address` is "הרצל 5, ראש העין", not a bare city."""
+    """PRO-123 fix verification (was xfail DEFECT until this landed): the
+    reverse-match fallback in matching_service.determine_best_pro used to
+    query {is_active, role} directly instead of spreading base_filter, so
+    both excluded_pro_ids and the pending_approval guard were dropped on that
+    branch — a pro who just timed out on a lead could be handed the same
+    lead straight back, and a pro still awaiting admin approval could be
+    routed live work. It now builds from base_filter, so both guards apply.
+
+    The regex branch misses on a full address, so the reverse match runs —
+    which is the production shape: `full_address` is "הרצל 5, ראש העין", not
+    a bare city."""
     from app.services.matching_service import determine_best_pro
 
     primary = await world.add_pro(
