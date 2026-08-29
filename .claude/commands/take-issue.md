@@ -1,7 +1,7 @@
 ---
 description: Pull a Linear issue, implement it on a feature branch, review + test + sync docs via subagents, open a PR, and move the issue to In Review. One issue per run.
 argument-hint: <ISSUE-ID> (e.g. PRO-123)
-allowed-tools: Bash(git:*), Bash(gh:*), Bash(venv/Scripts/pytest:*), Bash(python -m pytest:*), Read, Grep, Glob, Edit, Write
+allowed-tools: Task, Bash(git:*), Bash(gh:*), Bash(venv/Scripts/python.exe -m pytest:*), Bash(python -m pytest:*), Read, Grep, Glob, Edit, Write, mcp__linear__get_issue, mcp__linear__list_issues, mcp__linear__save_issue, mcp__linear__save_comment, mcp__linear__list_comments
 model: opus
 ---
 
@@ -20,25 +20,29 @@ Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live
 - **Stop if the working tree is dirty.** If `git status` above shows uncommitted changes, stop and tell me to stash or commit first — do not build on a dirty tree.
 - **Stuck > 15 min of effort or blocked on a real ambiguity → stop and ask.** Don't guess at unclear requirements; post what you need on the issue and pause.
 - **You are the implementer.** Write the production code yourself. Delegate review, tests, and docs to the subagents below — never delegate the implementation.
-- **Run all subagents in the foreground (blocking).** Never background a subagent and poll its output file with shell sleep loops.
+- **Run all subagents in the foreground (blocking).**
 
 ## The loop
 
 **1. Fetch the issue.** Use the Linear MCP to get issue **$1**: title, description, acceptance criteria, priority, labels, linked issues, and Linear's suggested branch name. If the issue can't be found, stop and say so.
 
-**Model selection (per-issue).** Read the issue's labels: a `model:sonnet` label → run the **implementation** pass on Sonnet; a `model:opus` label → Opus; neither → the current default. Heuristic for how issues should be labelled: **sonnet** for typo / config / string / dedup / known-root-cause bugfixes (mechanical, well-scoped); **opus** for unclear FSM or concurrency bugs, refactors, epics, or architectural change. This label governs the implementation pass **only** — the `code-reviewer` and `flow-tracer` subagents always keep whatever model their own frontmatter declares, regardless of the label.
+**Model selection (per-issue).** Read the issue's labels: a `model:sonnet` label → run the **implementation** pass on Sonnet; a `model:opus` label → Opus; neither → the current default. Heuristic for how issues should be labelled: **sonnet** for typo / config / string / dedup / known-root-cause bugfixes (mechanical, well-scoped); **opus** for unclear FSM or concurrency bugs, refactors, epics, or architectural change. This label governs the implementation pass **only**; it never changes which model a subagent runs on. A subagent that declares a `model:` in its own frontmatter keeps it (`test-writer` → sonnet, `flow-tracer` and `ux-reviewer` → opus); `code-reviewer` deliberately declares none and inherits the session model.
 
 **2. Move to In Progress.** Update the issue status to "In Progress" via Linear MCP, and assign it to me (`me`) if unassigned.
 
 **3. Create the branch.** Fetch first, then branch off the **remote** tip so you never build on a stale local main: `git fetch origin` then `git checkout -b <branch-name> origin/dev`. If Linear gives no branch name, use `feature/$1-<short-slug>`. **De-dupe the issue id:** Linear's suggested `gitBranchName` doubles the identifier when the issue title itself starts with it — e.g. a title "PRO-75: Delete SMS…" yields `…/pro-75-pro-75-delete-sms…`. Collapse the repeated `pro-N-pro-N` to a single `pro-N` before creating the branch (`…/pro-75-delete-sms…`). **Worktree guard:** if the target branch already exists in another worktree (`git worktree list` shows it, or `git checkout` reports it is checked out elsewhere), stop and tell me — do not force or delete it. **But if the branch for $1 is already checked out in *this* worktree**, that is the parallel-batch setup, not a collision: skip this step entirely and go to step 4. See "Running several issues at once" in CLAUDE.md.
 
-**4. Plan.** Restate the requirements as a short checklist of changes (files + what changes in each). Map each acceptance criterion to a change. Show me the plan and the FSM/lifecycle invariants it must preserve (context clearing, TTLs, DI pattern, text-only menus (no buttons)). Wait for nothing if the plan is obvious; pause for my confirmation only if there's a genuine design fork. Once the plan is settled, **post it as a comment on the issue** (via Linear MCP) before writing any code, so the plan is persisted even if the run is interrupted.
+**4. Plan.** Restate the requirements as a short checklist of changes (files + what changes in each). Map each acceptance criterion to a change. Show me the plan and the FSM/lifecycle invariants it must preserve (context clearing, TTLs, DI pattern, text-only menus (no buttons)). Wait for nothing if the plan is obvious; pause for my confirmation only if there's a genuine design fork. Once the plan is settled, **post it as a comment on the issue** (via Linear MCP) before writing any code, so the plan is persisted even if the run is interrupted. Skip the comment for a mechanical one-file fix (a typo, a constant, a string) where the plan is one line and the diff says it better — the round-trip costs more than it preserves.
 
 **5. Implement.** Write the code, file by file. Respect every Proli convention: async safety, dependency injection through parameters in pro_flow/customer_flow, state writes through state_manager_service with the right WorkerConstants TTL, context cleared on flow exit, no hardcoded secrets, PII masked in logs.
 
-**6. Tests (write).** Delegate to the **test-writer** subagent to add coverage for the new/changed branches. It runs **only its own new/changed test files** — the full suite does not run yet; that happens once, in step 8, after review has finalized the branch.
+**6. Tests (write).** Delegate to the **test-writer** subagent to add coverage for the new/changed branches. **It does not run pytest** — nothing runs until step 8. It works to a coverage budget (one test per behaviour, table-driven variants, check `tests/e2e/` before adding a happy-path test), so a typical bugfix comes back with 3–8 tests, not thirty.
 
-**7. Review.** Delegate to the **code-reviewer** subagent. If it returns BLOCKERS, fix them and re-review. WARNINGS: fix if quick, otherwise note them in the PR description. Review-driven test changes go back through **test-writer** (continue the same agent), which again runs only the affected test file. If the change touches `admin_panel/`, also delegate to the **ux-reviewer** subagent.
+**7. Review.** Delegate to the **code-reviewer** subagent. If it returns BLOCKERS, fix them and re-review. WARNINGS: fix if quick, otherwise note them in the PR description. Review-driven test changes go back through **test-writer** (continue the same agent) — still with no run. Coverage is not the reviewer's remit; test-writer owns it, and re-auditing it here only loops findings back into another round of edits.
+
+  Two conditional reviewers, only when the diff calls for them — do not run either by default:
+  - **ux-reviewer** if the change touches `admin_panel/`.
+  - **flow-tracer** if the change touches the `workflow_service.py` dispatch order, a `UserStates` transition, or a TTL. It is the pack's FSM specialist and dispatch bugs are the recurring issue class; ask it to trace the specific transition and return its one-line invariant verdict.
 
 **8. Full suite (once, on the final branch state).** Delegate to the **test-runner** subagent to run the full suite — after review fixes are in, so one run covers the code that will actually be committed (running it before review means re-running it after every review-driven test change). Re-run **only** to confirm a fix after a failure — a confirmation re-run is not a violation of the once-per-loop intent. The baseline lives in `docs/TESTING.md` ("Current status" line): fewer passed = regression (fix the production code yourself and re-run until green); more passed = update the baseline in `docs/TESTING.md` (step 9). CI enforces the line as a **floor** (the "Guard — test baseline floor" step fails on a regression and warns on growth), so a forgotten bump will not block the merge — `refresh-test-baseline.yml` opens a PR for it afterwards — but move it in step 9 anyway so the floor keeps tracking reality.
 
