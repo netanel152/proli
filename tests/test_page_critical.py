@@ -44,6 +44,18 @@ def test_page_critical_masks_pii_phone_number(caplog):
     assert "97252****567" in record.message
 
 
+def test_page_critical_masks_address(caplog):
+    # PRO-174: scrub(), not the two old scrubbers by hand — address masking
+    # has to reach Sentry the same as any other sink.
+    with caplog.at_level(logging.CRITICAL, logger="proli.paging"):
+        page_critical("stuck lead at רחוב הרצל 15, תל אביב")
+
+    record = next(r for r in caplog.records if r.name == "proli.paging")
+    assert "הרצל" not in record.message
+    assert "***ADDRESS***" in record.message
+    assert record.message.endswith("תל אביב")
+
+
 def test_page_critical_redacts_known_secret(monkeypatch, caplog):
     monkeypatch.setattr(logmod, "_SECRET_VALUES", ("hunter2",))
 

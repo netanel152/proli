@@ -15,16 +15,19 @@ route call and the fakeredis fixture on the same loop.
 import hashlib
 import hmac
 import json
+import re
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 
 from app.core.config import settings
 from app.main import app
 from app.providers.whatsapp import delivery
+
+_HEX12 = re.compile(r"^[0-9a-f]{12}$")
 
 sync_client = TestClient(app)
 
@@ -102,6 +105,46 @@ def _status_only_payload(wamid="wamid.STATUSROUTE1", status="delivered"):
                                     "recipient_id": "972501234567",
                                 }
                             ]
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def _two_message_batch_payload():
+    # One POST, one "value", two messages from two different senders — the
+    # shape that PRO-174's per-message (not per-batch) trace_id binding
+    # exists for.
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {
+                "id": "WABA_ID",
+                "changes": [
+                    {
+                        "field": "messages",
+                        "value": {
+                            "messaging_product": "whatsapp",
+                            "contacts": [
+                                {"wa_id": "972501111111", "profile": {"name": "Dana"}},
+                                {"wa_id": "972502222222", "profile": {"name": "Noa"}},
+                            ],
+                            "messages": [
+                                {
+                                    "from": "972501111111",
+                                    "id": "wamid.BATCH1",
+                                    "type": "text",
+                                    "text": {"body": "hi from Dana"},
+                                },
+                                {
+                                    "from": "972502222222",
+                                    "id": "wamid.BATCH2",
+                                    "type": "text",
+                                    "text": {"body": "hi from Noa"},
+                                },
+                            ],
                         },
                     }
                 ],
@@ -208,13 +251,56 @@ async def test_post_with_valid_signature_enqueues_and_opens_window(
 
     assert resp.status_code == 200
     assert resp.json() == {"status": "processing_message"}
+    # PRO-174: bound per-message inside the batch loop. new_trace_id() is
+    # unkeyed random now (the PRO-174 blocker fix — a digest of
+    # message_id+chat_id was a decryption key for mask_pii), so only the
+    # shape is checkable via ANY; the actual value is pulled out separately.
     _capturing_pool.enqueue_job.assert_awaited_once_with(
-        "process_message_task", CHAT_ID, "hi", None, message_id="wamid.ROUTE1"
+        "process_message_task",
+        CHAT_ID,
+        "hi",
+        None,
+        message_id="wamid.ROUTE1",
+        trace_id=ANY,
     )
+    forwarded_trace_id = _capturing_pool.enqueue_job.await_args.kwargs["trace_id"]
+    assert _HEX12.match(forwarded_trace_id)
 
     assert await fake_redis.exists(f"wa:window:{CHAT_ID}")
     ttl = await fake_redis.ttl(f"wa:window:{CHAT_ID}")
     assert 0 < ttl <= 86400
+
+
+@pytest.mark.asyncio
+async def test_post_batch_with_two_senders_enqueues_two_distinct_trace_ids(
+    fake_redis, _capturing_pool
+):
+    # PRO-174: the trace_id binding sits inside the per-message `for` loop,
+    # not around the whole batch — one POST carrying two conversations must
+    # enqueue two jobs with two different correlation ids, not one shared id
+    # for the batch.
+    payload = _two_message_batch_payload()
+    raw = json.dumps(payload).encode()
+    with patch.object(settings, "META_APP_SECRET", SecretStr("shh-secret")):
+        resp = await _post(
+            raw,
+            {
+                "X-Hub-Signature-256": _sign(raw, "shh-secret"),
+                "Content-Type": "application/json",
+            },
+        )
+
+    assert resp.status_code == 200
+    assert _capturing_pool.enqueue_job.await_count == 2
+
+    trace_ids = [
+        call.kwargs["trace_id"] for call in _capturing_pool.enqueue_job.await_args_list
+    ]
+    # The value is unpredictable random now (new_trace_id() takes no
+    # parameters) — the property this test exists to pin is that the
+    # per-message loop mints one *per message*, not one for the whole batch.
+    assert all(_HEX12.match(tid) for tid in trace_ids)
+    assert len(set(trace_ids)) == 2
 
 
 @pytest.mark.asyncio

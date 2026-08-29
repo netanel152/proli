@@ -1,8 +1,12 @@
+import re
+
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, patch
 from pydantic import SecretStr
 from app.main import app
+
+_HEX12 = re.compile(r"^[0-9a-f]{12}$")
 
 client = TestClient(app)
 
@@ -51,13 +55,21 @@ def test_webhook_valid_text_message(mock_background_tasks):
     assert response.status_code == 200
     assert response.json() == {"status": "processing_message"}
 
+    # PRO-174: the route now also forwards the trace_id it bound for this
+    # turn. new_trace_id() is unkeyed random (PRO-174 blocker fix — a digest
+    # of message_id+chat_id was a decryption key for mask_pii), so the exact
+    # value cannot be predicted here — assert shape via ANY, then check the
+    # actual forwarded value separately.
     mock_pool.enqueue_job.assert_called_once_with(
         "process_message_task",
         "972501234567@c.us",
         "Hello Proli",
         None,
         message_id="F1234567890",
+        trace_id=ANY,
     )
+    forwarded_trace_id = mock_pool.enqueue_job.call_args.kwargs["trace_id"]
+    assert _HEX12.match(forwarded_trace_id)
 
 
 def test_webhook_ignored_group_message(mock_background_tasks):

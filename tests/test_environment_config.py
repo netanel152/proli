@@ -188,34 +188,50 @@ def _invoke_setup_logging(monkeypatch, is_prod_like: bool) -> MagicMock:
     return add_mock
 
 
-def test_setup_logging_prod_like_branch_for_staging(monkeypatch):
-    add_mock = _invoke_setup_logging(monkeypatch, is_prod_like=True)
+@pytest.mark.parametrize("environment", [STAGING_ENV, PRODUCTION_ENV])
+def test_setup_logging_prod_like_branch_for_staging_and_production(
+    monkeypatch, environment
+):
+    # PRO-174: the file sink moved inside the dev-only branch — it wrote to
+    # Railway's ephemeral container filesystem, discarded on every deploy and
+    # unreachable while running, so prod-like now adds exactly one sink.
+    #
+    # Parametrized over the ENVIRONMENT string (not just is_prod_like=True
+    # twice): setup_logging() branches on is_prod_like, computed here via the
+    # real is_prod_like_env() from each environment string, so this is the
+    # test that actually distinguishes staging from production rather than
+    # calling the same bool through twice — the previous pair of tests
+    # asserted an identical shape from an identical input.
+    add_mock = _invoke_setup_logging(
+        monkeypatch, is_prod_like=is_prod_like_env(environment)
+    )
 
-    assert add_mock.call_count == 2
-    stdout_call, file_call = add_mock.call_args_list
+    assert add_mock.call_count == 1
+    (stdout_call,) = add_mock.call_args_list
 
     assert stdout_call.kwargs.get("serialize") is True
     assert "colorize" not in stdout_call.kwargs
 
-    assert file_call.kwargs.get("diagnose") is False
-
-
-def test_setup_logging_prod_like_branch_for_production(monkeypatch):
-    add_mock = _invoke_setup_logging(monkeypatch, is_prod_like=True)
-
-    stdout_call, file_call = add_mock.call_args_list
-    assert stdout_call.kwargs.get("serialize") is True
-    assert file_call.kwargs.get("diagnose") is False
+    # No call adds a file sink pointed at logs/proli.log (the dev-only sink).
+    assert not any(
+        "proli.log" in str(call.args[0] if call.args else "")
+        for call in add_mock.call_args_list
+    )
 
 
 def test_setup_logging_dev_branch_not_taken_for_prod_like(monkeypatch):
+    # PRO-174: dev still gets both sinks — stdout plus the file archive that
+    # `/logs` reads locally — with diagnose=True on the file sink (dev only;
+    # a prod-like traceback with local variables is a PII/secret leak risk).
     add_mock = _invoke_setup_logging(monkeypatch, is_prod_like=False)
 
+    assert add_mock.call_count == 2
     stdout_call, file_call = add_mock.call_args_list
     # Dev branch: colorize=True, no serialize kwarg at all.
     assert stdout_call.kwargs.get("colorize") is True
     assert "serialize" not in stdout_call.kwargs
 
+    assert "proli.log" in str(file_call.args[0])
     assert file_call.kwargs.get("diagnose") is True
 
 

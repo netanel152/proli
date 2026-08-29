@@ -2,8 +2,7 @@ import sys
 import os
 import re
 import logging
-import json
-from datetime import datetime
+import uuid
 from loguru import logger
 from app.core.config import settings
 
@@ -46,14 +45,149 @@ def redact_secrets(message: str) -> str:
     return message
 
 
-def _pii_filter(record):
-    """Loguru sink filter: always mask PII and redact secrets before writing.
+# PRO-174: street-address masking. PRO-173 established that a customer's
+# street address is at least as identifying as the phone number `mask_pii`
+# already removes — it fixed the leak for operator pages by narrowing them to
+# the city. The same leak class applies to any log line that carries a
+# `full_address`: the webhook's "Location message from …: <address>", the
+# lead-parse failure that echoes the whole `[DEAL: …]` string, the escalation
+# warning that logs `full_address=<repr>`. This closes it at the sink, so it
+# holds for the lines nobody thought about — and it lands *before* the
+# external drain in PRO-175 rather than after.
+#
+# Hebrew alphabet only (א–ת). A Latin-script address the customer typed —
+# "Herzl 15, Tel Aviv" — is NOT masked, and that is a known gap, not a
+# covered case: the geocoder is asked for `language=he` so anything it
+# returns is Hebrew, but `full_address` is an AI extraction of whatever the
+# customer wrote. Latin has no delimiter this side of a real parser, so the
+# honest statement is "Hebrew is covered", not "addresses are covered".
+_HEB = "א-ת"
+# Israeli street names carry all four apostrophe glyphs interchangeably
+# (רח' / רח׳ / צה"ל / צה״ל) — users type the ASCII pair, Hebrew keyboards
+# produce the geresh/gershayim.
+_GERESH = "'\"׳״"
 
-    Secrets first, then PII: a secret that happens to contain a ``972…`` digit
-    run would otherwise be mangled by ``mask_pii`` and no longer match
-    ``redact_secrets`` (same order as ``page_critical``)."""
-    record["message"] = mask_pii(redact_secrets(record["message"]))
+# One Hebrew token: 2+ letters with an optional geresh tail, OR a single
+# letter that carries one. That second alternative is not an edge case —
+# Israeli neighbourhood addresses are full of it ("רמת אביב ג' 12",
+# "נווה שאנן ב'"), and requiring two letters let the whole address through:
+# branch B needs the house number to follow the name directly, so one
+# unmatchable token ahead of it drops the entire match.
+_HEB_WORD = rf"(?:[{_HEB}]{{2,}}(?:[{_GERESH}][{_HEB}]*)?|[{_HEB}][{_GERESH}])"
+
+# A house number: 1–3 digits standing alone. The lookarounds are load-bearing
+# — without the `:` guard "מחר 10:00" (an appointment time, which every lead
+# carries) reads as a street number and a genuinely useful log line is
+# destroyed; without the `\d` guard a masked phone's trailing digits qualify.
+_HOUSE_NUMBER = r"(?<![\d:.])\d{1,3}(?![\d:.])"
+
+# Deliberately excludes דרך and מעלה: both are ordinary Hebrew words far more
+# often than street prefixes, and "דרך מנחם בגין 12" is still caught by the
+# bare-street branch below. Longest alternative first so רחוב is not eaten
+# by רח.
+_STREET_KEYWORD = (
+    rf"רחוב|רח[{_GERESH}]|שדרות|שדרת|שד[{_GERESH}]|סמטת|סמטה|שכונת|כיכר|ככר"
+)
+
+# Horizontal whitespace only — never a newline. A bare `\s+` would let a
+# Hebrew word ending one line and a number opening the next read as a
+# street address, and multi-line records are routine here (the SOS report
+# joins its lines with a newline): "stuck in חיפה" / "2 pros available"
+# would have collapsed into a single line with the city, the count and the
+# break between them all gone.
+_WS = r"[^\S\r\n]+"
+
+# Two branches, tried in order:
+#   A. an explicit street prefix + 1–3 name words + an optional house number
+#      ("רחוב הרצל 15", "שד' רוטשילד")
+#   B. a bare 1–3 word street name immediately followed by a house number
+#      ("הרצל 15", "בן גוריון 42", "רמת אביב ג' 12") — the form
+#      `compose_full_address` emits.
+# `(?<![HEB])` on both so a keyword is never matched mid-word (מדרך).
+#
+# The trailing ", <city>" is intentionally left alone. That is PRO-173's line
+# exactly: the city is genuine triage context (it says which pro pool is
+# short), the street is not, and `lead=<id>` remains the real lookup key.
+_ADDRESS_PATTERN = re.compile(
+    rf"(?<![{_HEB}]){{}}".format(
+        rf"(?:(?:{_STREET_KEYWORD}){_WS}{_HEB_WORD}(?:{_WS}{_HEB_WORD}){{0,2}}"
+        rf"(?:{_WS}{_HOUSE_NUMBER})?"
+        rf"|{_HEB_WORD}(?:{_WS}{_HEB_WORD}){{0,2}}{_WS}{_HOUSE_NUMBER})"
+    )
+)
+
+
+def mask_address(message: str) -> str:
+    """Mask the identifying part of a Hebrew street address (PRO-174).
+
+    Errs toward over-masking, on purpose. A false positive costs one mangled
+    Hebrew fragment in a log line; a false negative ships a customer's front
+    door to whatever the logs drain into. PRO-173 made the same call and wrote
+    it down: degrading is "the right way to fail here".
+    """
+    return _ADDRESS_PATTERN.sub("***ADDRESS***", message)
+
+
+def scrub(message: str) -> str:
+    """Every scrubber, in the one order that is correct — the single
+    definition ``_pii_filter`` and ``page_critical`` both call, so the two
+    egresses cannot drift apart as scrubbers are added.
+
+    Secrets first: a secret containing a ``972…`` digit run would otherwise be
+    mangled by ``mask_pii`` and no longer match ``redact_secrets``. Addresses
+    last, and unable to touch a masked phone either way — ``_HOUSE_NUMBER``
+    refuses any digit run longer than three.
+    """
+    return mask_address(mask_pii(redact_secrets(message)))
+
+
+def _pii_filter(record):
+    """Loguru sink filter: scrub every record before any sink writes it.
+
+    Bound extras are scrubbed too, not just the message. `serialize=True`
+    emits `record["extra"]` verbatim into the prod JSON line, and PRO-174
+    makes `logger.contextualize` the house pattern — so the next person to
+    bind `chat_id=chat_id` would route a raw phone number straight past every
+    scrubber in this module. Strings only; `_stdlib` and `sentry_skip` are
+    bools and pass through untouched.
+    """
+    record["message"] = scrub(record["message"])
+    # `.get`, not `record["extra"]`: a sink filter is handed whatever the
+    # caller built, and a bare `{"message": ...}` record must scrub rather
+    # than raise — a filter that throws takes the log line with it.
+    for key, value in (record.get("extra") or {}).items():
+        if isinstance(value, str):
+            record["extra"][key] = scrub(value)
     return True
+
+
+# PRO-174: the correlation id. `logger.py` has emitted a `trace_id` field
+# since the beginning and nothing ever bound one, so the 344 log calls in
+# `app/` could not be grouped by conversation, lead or request — the single
+# question this product generates ("what happened with this pro, on this
+# lead?") was unanswerable from the logs.
+def new_trace_id() -> str:
+    """A correlation id for one conversation turn. Random, by construction.
+
+    It is tempting to derive this from the chat id and the provider's message
+    id so the two processes can each compute it. Do not: an unsalted digest
+    of the chat id is a *decryption key for* ``mask_pii``, published on every
+    line that carries it. The message id is logged verbatim (the idempotency
+    lines on both routes, the `wamid` Sentry tag), and the masked phone beside
+    it — ``97250****567`` — leaves 10⁴ candidates, so the seed is recovered in
+    milliseconds; the whole Israeli mobile space falls in minutes. The field
+    would undo, in public, exactly what the rest of this module exists to do.
+
+    Determinism buys nothing anyway. The API mints the id, binds it, and
+    forwards it to the worker as an explicit job kwarg, so nothing needs to
+    recompute it — and the one path that derives its own (a job enqueued
+    before that kwarg existed) is not required to match.
+
+    12 hex chars is ~48 bits: nowhere near collision range for the handful of
+    turns in flight at once, and short enough to read off a terminal and paste
+    into a log search.
+    """
+    return uuid.uuid4().hex[:12]
 
 
 # PRO-113 — the ONLY way to page the operator. sentry_sdk's LoggingIntegration
@@ -78,8 +212,11 @@ def page_critical(message: str) -> None:
     pymongo auth error echoing a credentialed URI) would reach Sentry as
     frames/vars that ``redact_secrets`` never sees. Callers interpolate the
     scrubbed ``str(exc)`` into the message instead.
+
+    PRO-174: ``scrub``, not the two scrubbers by hand — Sentry is an egress
+    like any sink, and the address masking has to reach it too.
     """
-    safe = mask_pii(redact_secrets(message))
+    safe = scrub(message)
     try:
         _PAGING_LOGGER.critical(safe, stacklevel=2)
     except Exception:
@@ -91,33 +228,10 @@ def page_critical(message: str) -> None:
         logger.opt(depth=1).critical(safe)
 
 
-# Create logs directory if it doesn't exist
+# Development-only file sink target (see setup_logging). Just a path here —
+# the directory is created inside the dev branch, so a prod-like boot on
+# Railway does not leave an empty `logs/` on the container filesystem.
 log_dir = os.path.join(os.getcwd(), "logs")
-if not os.path.exists(log_dir):
-    os.makedirs(log_dir)
-
-
-def json_formatter(record):
-    """
-    Custom JSON formatter for Loguru.
-    """
-    subset = {
-        "timestamp": record["time"].isoformat(),
-        "level": record["level"].name,
-        "message": record["message"],
-        "module": record["module"],
-        "function": record["function"],
-        "line": record["line"],
-    }
-
-    # Include trace_id if available in extra context
-    if "trace_id" in record["extra"]:
-        subset["trace_id"] = record["extra"]["trace_id"]
-
-    if record["exception"]:
-        subset["exception"] = record["exception"]
-
-    return json.dumps(subset) + "\n"
 
 
 def _is_logging_machinery_frame(frame) -> bool:
@@ -172,6 +286,41 @@ class InterceptHandler(logging.Handler):
         )
 
 
+def _dev_format(record) -> str:
+    """Format template for the development sinks, as a callable.
+
+    A callable rather than a plain string because the human-readable format
+    has to render ``{extra[trace_id]}``, and that placeholder raises
+    ``KeyError`` on every line emitted outside a ``contextualize`` block —
+    a scheduler tick, a startup line, anything no entry point minted an id
+    for. The prod sink needs none of this: ``serialize`` emits whatever
+    extras are bound and simply omits the ones that are not.
+
+    Without this the correlation id existed only in staging and production:
+    the dev stdout format named no extras and the dev file sink used
+    loguru's default, which also drops them — so PRO-174's whole point was
+    invisible in the one environment where `/logs` tells an operator to
+    grep for it.
+
+    The default must NOT be written into the record. Loguru hands one
+    record object to every active sink for a single log call, so a
+    ``setdefault`` here would stamp ``trace_id="-"`` onto the shared
+    ``extra`` and every later sink — the prod JSON one included — would
+    then report an id that was never bound. The unbound case substitutes a
+    literal dash into the *template* instead, leaving the placeholder (and
+    loguru's own handling of the value) for when the key really is there.
+
+    Returns the template loguru then renders, so it owns the trailing
+    newline. Colour markup is stripped by the non-colorized file sink.
+    """
+    trace = "{extra[trace_id]}" if "trace_id" in record["extra"] else "-"
+    return (
+        "<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | "
+        "<cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> | "
+        "trace=<magenta>" + trace + "</magenta> - <level>{message}</level>\n"
+    )
+
+
 def setup_logging():
     """
     Configure Loguru and intercept standard logging.
@@ -184,7 +333,12 @@ def setup_logging():
     is_prod_like = settings.is_prod_like
 
     if is_prod_like:
-        # Structured JSON logging for staging/production
+        # Structured JSON logging for staging/production. `serialize=True`,
+        # not a hand-rolled formatter: it already emits every bound extra
+        # under `record.extra`, which is what carries the PRO-174 `trace_id`
+        # into the JSON line. (The `json_formatter` that used to sit in this
+        # module built that field by hand and was never wired to any sink —
+        # dead since it was written; deleted in PRO-174.)
         logger.add(
             sys.stdout,
             format="{message}",
@@ -196,24 +350,32 @@ def setup_logging():
         # Human-readable for development
         logger.add(
             sys.stdout,
-            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+            format=_dev_format,
             level=settings.LOG_LEVEL,
             filter=_pii_filter,
             colorize=True,
         )
 
-    # File handler (always structured/archive, always PII-masked)
-    logger.add(
-        os.path.join(log_dir, "proli.log"),
-        filter=_pii_filter,
-        rotation="10 MB",
-        retention="10 days",
-        level="DEBUG",
-        compression="zip",
-        enqueue=True,
-        backtrace=True,
-        diagnose=not is_prod_like,
-    )
+        # File handler — development only (PRO-174). On Railway this wrote to
+        # an ephemeral container filesystem: discarded on every deploy and
+        # restart, unreachable while running, and `logs/` is gitignored, so it
+        # was pure I/O cost buying an archive nobody could ever read. In
+        # staging/production the log of record is the stdout JSON stream the
+        # platform captures (and, once PRO-175 lands, drains off-platform).
+        # Locally it is still the thing `/logs` reads, so it stays.
+        os.makedirs(log_dir, exist_ok=True)
+        logger.add(
+            os.path.join(log_dir, "proli.log"),
+            format=_dev_format,
+            filter=_pii_filter,
+            rotation="10 MB",
+            retention="10 days",
+            level="DEBUG",
+            compression="zip",
+            enqueue=True,
+            backtrace=True,
+            diagnose=True,
+        )
 
     logging.basicConfig(handlers=[InterceptHandler()], level=0, force=True)
 
@@ -230,4 +392,13 @@ def setup_logging():
 
 
 setup_logging()
-__all__ = ["logger", "setup_logging", "page_critical", "mask_pii", "redact_secrets"]
+__all__ = [
+    "logger",
+    "setup_logging",
+    "page_critical",
+    "mask_pii",
+    "redact_secrets",
+    "mask_address",
+    "scrub",
+    "new_trace_id",
+]

@@ -38,9 +38,18 @@ streamlit run admin_panel/main.py
 
 Proli uses **Loguru** with PII masking applied to all sinks.
 
+| environment | log of record | how to read it |
+|---|---|---|
+| local (bare processes) | `logs/proli.log` — rotating at 10 MB, retained 10 days | `Read`/`Grep` the file |
+| local (docker-compose) | container stdout | `docker-compose logs --tail=100 worker` / `… api` |
+| staging / production | container **stdout**, captured by Railway | Railway dashboard → service → Logs, or the `railway` MCP's `get_logs` |
+
+**There is no `logs/proli.log` in staging or production** (PRO-174). The file sink is development-only: on Railway it wrote to an ephemeral container filesystem that is discarded on every deploy and restart and is unreachable while the service runs, so it bought an archive nobody could read. Prod-like environments emit structured JSON on stdout instead.
+
 - **Console:** Human-readable colored output in development; JSON in production.
-- **File:** `logs/proli.log` — rotating at 10 MB, retained 10 days, gzip-compressed.
+- **Correlation (PRO-174):** every line emitted while handling one inbound message carries a `trace_id` — a 12-hex-char id minted at the webhook and forwarded to the ARQ job, so the API's lines and the worker's lines for the same turn share it. Random, tied to nothing — never the customer's phone. Renders as a `trace=<id>` column in development, `"trace_id": "<id>"` in the staging/production JSON.
 - **PII masking:** Israeli phone numbers are masked in all environments: `972521234567` → `97252****567`.
+- **Address masking (PRO-174):** Hebrew street addresses are replaced with `***ADDRESS***`, leaving the trailing `, <city>` intact as triage context. Latin-script addresses are a known uncovered gap.
 - **Secret redaction (PRO-80):** known secret values are replaced with `***REDACTED***` wherever they appear in a log line — a URL query string (e.g. the uvicorn access line `POST /webhook?token=…`), a URL path, an exception string, etc. Complements PRO-79, which suppresses `httpx`/`httpcore` INFO request logs at the source. Since PRO-94 the redaction list is sourced automatically from every `SecretStr` field on `Settings`, so the PRO-89 `META_ACCESS_TOKEN`/`META_APP_SECRET`/`META_VERIFY_TOKEN` are covered without any redaction-list change.
 - **Token Accounting (FinOps):** AI token usage is tracked per `pro_id` and stored in the `total_tokens_used` field of the `users` collection. This is handled by a fire-and-forget background task.
 

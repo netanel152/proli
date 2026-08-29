@@ -4,7 +4,7 @@ from arq.connections import RedisSettings
 from arq.worker import Retry
 from app.core.config import settings
 from app.services.workflow_service import process_incoming_message, whatsapp
-from app.core.logger import logger, mask_pii, page_critical
+from app.core.logger import logger, mask_pii, new_trace_id, page_critical
 from app.core.sentry import sentry_active
 from app.core.database import client
 from app.core.http_client import close_http_client
@@ -103,15 +103,43 @@ async def _resolve_inbound_media(media_url: str | None) -> str | None:
 
 
 async def process_message_task(
-    ctx, chat_id: str, user_text: str, media_url: str = None, message_id: str = None
+    ctx,
+    chat_id: str,
+    user_text: str,
+    media_url: str = None,
+    message_id: str = None,
+    trace_id: str = None,
+    **_ignored,
 ):
     """
     ARQ Task wrapper for process_incoming_message.
     Sends a user-friendly error message if processing fails.
 
-    ``message_id`` (the provider's wamid) is optional so jobs enqueued
-    before the kwarg existed still deserialize.
+    ``message_id`` (the provider's wamid) and ``trace_id`` (PRO-174) are both
+    optional so jobs enqueued before either kwarg existed still deserialize.
+    ``**_ignored`` covers the other direction, which is the one that actually
+    loses messages: api and worker are separate Railway services and do not
+    restart together, so for the length of a deploy a *new* api enqueues a
+    kwarg an *old* worker has no parameter for — a TypeError inside arq's
+    `run_job`, and the message is gone rather than deferred. It does not
+    retroactively protect this deploy (the worker running then is the old
+    one), but it means the next kwarg added here costs nothing.
     """
+    # PRO-174: the correlation id the webhook minted for this turn, rebound
+    # here so every line the worker emits — and everything the flows log
+    # beneath it — carries the same id as the API's. A locally minted id is
+    # the fallback for a job enqueued before this kwarg existed: it cannot
+    # match the api's half of that turn, but it still groups the worker's,
+    # which is what makes those lines readable at all.
+    with logger.contextualize(trace_id=trace_id or new_trace_id()):
+        await _process_message(chat_id, user_text, media_url, message_id)
+
+
+async def _process_message(
+    chat_id: str, user_text: str, media_url: str = None, message_id: str = None
+):
+    """The task body, split out so all of it — the ``except`` arms included —
+    runs inside the ``trace_id`` binding."""
     logger.info(f"Task started: processing message for {chat_id}")
     if sentry_active():
         # PRO-134: tags set at task start (not in an except) so they ride

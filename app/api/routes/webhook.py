@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from app.schemas.whatsapp import WebhookPayload
-from app.core.logger import logger
+from app.core.logger import logger, new_trace_id
 from app.core.config import settings
 from app.core.constants import APIStatus
 from app.core.messages import Messages
@@ -16,14 +16,33 @@ async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=N
     """
     Legacy inbound webhook — the retired vendor's payload envelope.
     """
-    # Webhook Token Verification
-    if settings.WEBHOOK_TOKEN:
-        if token != settings.WEBHOOK_TOKEN.get_secret_value():
-            logger.warning(
-                "Security Alert: Webhook request with invalid or missing token"
-            )
-            return JSONResponse(status_code=403, content={"status": "forbidden"})
+    # PRO-174: mint and bind the correlation id before anything is logged —
+    # above the token check, so a rejected probe's "Security Alert" line is
+    # correlatable too. `contextualize` is contextvars-backed, so the binding
+    # belongs to this request's task and cannot bleed into a concurrently
+    # handled chat. Deliberately random and derived from nothing: see
+    # `new_trace_id` for why a digest of the chat id would be a way to undo
+    # `mask_pii` rather than a correlation id.
+    trace_id = new_trace_id()
+    with logger.contextualize(trace_id=trace_id):
+        # Webhook Token Verification
+        if settings.WEBHOOK_TOKEN:
+            if token != settings.WEBHOOK_TOKEN.get_secret_value():
+                logger.warning(
+                    "Security Alert: Webhook request with invalid or missing token"
+                )
+                return JSONResponse(status_code=403, content={"status": "forbidden"})
 
+        return await _handle_webhook(payload, trace_id)
+
+
+async def _handle_webhook(payload: WebhookPayload, trace_id: str):
+    """The legacy route's body, split out so the whole of it runs inside the
+    ``trace_id`` binding above — including the `except` handler, which is
+    exactly the line an operator most needs to correlate. The id is passed
+    down as a plain argument rather than read back out of loguru's context:
+    the enqueue below has to forward it, and loguru exposes no public reader
+    for a contextualized value."""
     try:
         # Idempotency Check (Redis)
         if payload.idMessage:
@@ -106,6 +125,10 @@ async def webhook_endpoint(payload: WebhookPayload, token: str = Query(default=N
                 user_text,
                 media_url,
                 message_id=payload.idMessage,
+                # Sent, not recomputed worker-side: `idMessage` is optional on
+                # this envelope, and a recomputed id would silently diverge
+                # from the API's every time it is absent (PRO-174).
+                trace_id=trace_id,
             )
             return {"status": APIStatus.PROCESSING}
 
