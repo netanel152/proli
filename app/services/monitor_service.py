@@ -1,7 +1,15 @@
 import time
 from datetime import datetime, timedelta, timezone
+from typing import Any, Mapping
 from app.core.database import leads_collection, users_collection
-from app.core.constants import LeadStatus, UserStates, WorkerConstants, Defaults, Actor
+from app.core.constants import (
+    LeadStatus,
+    UserStates,
+    WorkerConstants,
+    Defaults,
+    Actor,
+    ISRAEL_CITIES_COORDS,
+)
 from app.core.phone import to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.core.logger import logger, page_critical
@@ -23,6 +31,52 @@ from bson import ObjectId
 whatsapp = get_whatsapp()
 
 
+def page_safe_city(lead: Mapping[str, Any]) -> str:
+    """City-only location context for an operator page (PRO-173).
+
+    Operator pages mask the customer's phone to its last 4 digits; putting
+    ``full_address`` into the same Sentry event undid that one field later. A
+    street address is at least as identifying as the number just redacted, and
+    ``page_critical``'s scrubbers know how to recognise phone numbers and
+    secrets, not Hebrew street names. Every page already carries ``lead=<id>``,
+    which is the admin-panel lookup key the docstrings promise; the city is
+    genuine triage context (it says which pro pool is short), so it is the only
+    part of the location worth keeping.
+
+    **The output is closed**: an ``ISRAEL_CITIES_COORDS`` key or the literal
+    "unknown city", never a value copied out of the lead. ``city`` is not
+    trusted over ``full_address`` — the two are the same AI parse of the same
+    customer message (``ai_engine_service.ExtractedData.city`` is a plain
+    ``Optional[str]`` with no vocabulary check), and ``workflow_service``'s
+    sticky-facts fallback copies ``full_address`` straight into ``city`` on a
+    turn that extracts no city, so a composed street address genuinely reaches
+    that field. Both go through the allowlist instead.
+
+    The known cost: the dict is far smaller than the list of Israeli cities
+    (which is why ``geocoding_service`` exists), so a real city sometimes
+    degrades to "unknown city". That is the right way to fail here — the
+    ``lead=<id>`` in the page is the actual lookup key.
+
+    Matching prefers the **rightmost** allowlist name, since a Hebrew address
+    puts the city last and Israeli streets are routinely named after other
+    cities ("רחוב באר שבע 3, חולון" is in חולון). Longest wins the tie, so
+    "תל אביב יפו" beats "תל אביב". ``isinstance`` rather than ``or ""``:
+    the Reporter calls this between claiming a lead and paging about it, a
+    window in which nothing may raise (see ``send_periodic_admin_report``), so
+    a legacy non-string field must degrade rather than throw.
+    """
+    for raw in (lead.get("city"), lead.get("full_address")):
+        # casefold both sides so the dict's lowercase Latin keys can match a
+        # Latin-script address; a no-op on Hebrew, which is the normal case.
+        text = (raw if isinstance(raw, str) else "").casefold()
+        matches = [name for name in ISRAEL_CITIES_COORDS if name.casefold() in text]
+        if matches:
+            return max(
+                matches, key=lambda name: (text.rfind(name.casefold()), len(name))
+            )
+    return "unknown city"
+
+
 async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
     """Page the admin the moment a lead exhausts its reassignments (PRO-63).
 
@@ -39,8 +93,9 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
 
     Still best-effort: an alert failure must never abort the escalation, so
     exceptions are swallowed after logging. The phone is masked to its last 4
-    digits — the operator opens the lead in the admin panel for the rest,
-    rather than the full number being retained in a Sentry event.
+    digits and the location is narrowed to the city (PRO-173) — the operator
+    opens the lead in the admin panel for the rest, rather than the full number
+    or a street address being retained in a Sentry event.
     """
     try:
         local_phone = to_local_phone(lead.get("chat_id")) or ""
@@ -48,9 +103,10 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
             f"Lead escalated to PENDING_ADMIN_REVIEW after {attempts} failed "
             f"reassignments — customer ***{local_phone[-4:]}, "
             f"issue={lead.get('issue_type') or 'unknown'}, "
-            # `or` (not a dict default) covers a null full_address, not just a
-            # missing key — same guard as send_sos_alert.
-            f"address={lead.get('full_address') or 'unknown'}, "
+            # PRO-173: city only, never `full_address`. Masking the phone and
+            # then paging the customer's street address in the same event
+            # undoes the masking; `page_safe_city` cannot emit free-form text.
+            f"city={page_safe_city(lead)}, "
             f"lead={lead.get('_id')}. Customer was promised a callback within "
             "the hour."
         )
@@ -559,13 +615,19 @@ async def send_periodic_admin_report():
             # PRO-88: paged via Sentry, not WhatsApp. The admin's Cloud API
             # service window is permanently closed, so this batched digest would
             # have needed its own approved template. Phones are masked to their
-            # last 4 digits — this is a "go look at the panel" signal, not a
-            # data export.
+            # last 4 digits and the location is the city only (PRO-173, which
+            # also added the `lead=` id) — this is a "go look at the panel"
+            # signal, not a data export, and it now carries the id to look up.
             report_lines = [
                 f"{count} lead(s) stuck for more than {timeout_minutes} minutes:"
             ]
             for lead in stuck_leads:
-                local = (lead.get("chat_id") or "").split("@")[0]
+                # isinstance for the same reason as page_safe_city: this is
+                # inside the claim→page window, so a legacy non-string chat_id
+                # must mask to nothing rather than raise and mute a lead the
+                # operator was never told about.
+                raw_chat = lead.get("chat_id")
+                local = (raw_chat if isinstance(raw_chat, str) else "").split("@")[0]
                 created_at = lead.get("created_at")
                 # hasattr, not a truthiness check: a legacy or string
                 # created_at must not cost the whole batch its page.
@@ -576,8 +638,8 @@ async def send_periodic_admin_report():
                 )
                 report_lines.append(
                     f"- ***{local[-4:]}: {lead.get('issue_type') or 'unknown issue'}"
-                    f" in {lead.get('full_address') or 'unknown city'}"
-                    f" (waiting since {since})"
+                    f" in {page_safe_city(lead)}"
+                    f" (waiting since {since}, lead={lead.get('_id')})"
                 )
             report_lines.append("Open the admin panel to reassign or call.")
 
