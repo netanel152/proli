@@ -41,7 +41,7 @@ from app.providers.whatsapp.base import (
     TemplateNotRegisteredError,
     WhatsAppProvider,
 )
-from app.providers.whatsapp.window import is_service_window_open
+from app.providers.whatsapp.window import claim_window_page, is_service_window_open
 
 _GRAPH_ROOT = "https://graph.facebook.com"
 
@@ -203,13 +203,12 @@ class CloudAPIProvider(WhatsAppProvider):
                 f"{kind} via template {fallback.key!r}"
             )
             return fallback
-        page = await self._first_window_page_today(chat_id)
-        # With every registry entry still DRAFT, a closed window is the
-        # *expected* state for business-initiated sends the moment the cloud
-        # provider goes live — so only the first block per recipient per day
-        # pages (CRITICAL → Sentry → email); the rest stay at ERROR. A page
-        # that fires dozens of times a morning stops being a page.
-        log = page_critical if page else logger.error
+        # Only the first block per recipient per day pages (CRITICAL → Sentry
+        # → email); the rest stay at ERROR. A page that fires dozens of times a
+        # morning stops being a page. Policy and rationale live in
+        # ``claim_window_page`` — the claim is shared with the asynchronous
+        # 131047 handler, so this condition pages once however it is noticed.
+        log = page_critical if await claim_window_page(chat_id) else logger.error
         log(
             f"WhatsApp {kind} to {_mask(chat_id)} blocked: 24h service window "
             "closed and no approved fallback template is registered "
@@ -219,19 +218,6 @@ class CloudAPIProvider(WhatsAppProvider):
         raise ServiceWindowClosedError(
             f"service window closed for {_mask(chat_id)}; no fallback template"
         )
-
-    async def _first_window_page_today(self, chat_id: str) -> bool:
-        """True once per chat_id per 24h. Fail-loud: if Redis is unreadable we
-        cannot dedupe, and paging twice beats not paging."""
-        try:
-            from app.core.redis_client import get_redis_client
-
-            redis = await get_redis_client()
-            return bool(
-                await redis.set(f"wa:window:page:{chat_id}", "1", ex=86400, nx=True)
-            )
-        except Exception:
-            return True
 
     # ------------------------------------------------------------------
     # Outbound
