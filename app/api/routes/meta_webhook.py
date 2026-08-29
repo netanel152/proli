@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from app.core.config import settings
 from app.core.constants import APIStatus
-from app.core.logger import logger
+from app.core.logger import logger, new_trace_id
 from app.core.phone import to_chat_id
 from app.core.redis_client import get_arq_pool, get_redis_client
 from app.providers.whatsapp import delivery
@@ -140,46 +140,60 @@ async def meta_webhook_endpoint(request: Request):
                 continue
             chat_id = normalized.chat_id
 
-            # Idempotency — same Redis pattern (and key namespace) as the
-            # legacy route: Meta redelivers on slow/failed responses.
-            if normalized.message_id:
-                redis = await get_redis_client()
-                is_new = await redis.set(
-                    f"webhook:{normalized.message_id}", "processed", ex=86400, nx=True
-                )
-                if not is_new:
-                    logger.info(
-                        f"Idempotency: skipping duplicate Meta message "
-                        f"{normalized.message_id}"
+            # PRO-174: mint the correlation id *inside* the loop, not around
+            # the batch. One Meta POST can carry several messages from several
+            # chats, and each is its own conversation turn — a batch-level id
+            # would merge them back into the single unqueryable stream this
+            # issue is about.
+            trace_id = new_trace_id()
+            with logger.contextualize(trace_id=trace_id):
+                # Idempotency — same Redis pattern (and key namespace) as the
+                # legacy route: Meta redelivers on slow/failed responses.
+                if normalized.message_id:
+                    redis = await get_redis_client()
+                    is_new = await redis.set(
+                        f"webhook:{normalized.message_id}",
+                        "processed",
+                        ex=86400,
+                        nx=True,
+                    )
+                    if not is_new:
+                        logger.info(
+                            f"Idempotency: skipping duplicate Meta message "
+                            f"{normalized.message_id}"
+                        )
+                        continue
+
+                # Coarse DDoS shield only — the precise per-customer limit with
+                # pro/admin exemptions runs in the worker (see workflow_service).
+                if not await SecurityService.check_rate_limit(
+                    chat_id, limit=50, window_seconds=60
+                ):
+                    logger.warning(
+                        f"⛔ Webhook DDoS shield tripped for ...{chat_id[-8:]}"
                     )
                     continue
 
-            # Coarse DDoS shield only — the precise per-customer limit with
-            # pro/admin exemptions runs in the worker (see workflow_service).
-            if not await SecurityService.check_rate_limit(
-                chat_id, limit=50, window_seconds=60
-            ):
-                logger.warning(f"⛔ Webhook DDoS shield tripped for ...{chat_id[-8:]}")
-                continue
-
-            try:
-                if arq_pool is None:
-                    arq_pool = await get_arq_pool()
-                await arq_pool.enqueue_job(
-                    "process_message_task",
-                    chat_id,
-                    normalized.text,
-                    normalized.media_url,
-                    message_id=normalized.message_id,
-                )
-            except Exception:
-                # Release the idempotency claim: the outer handler answers 200
-                # (Meta must not retry-storm us), so a claimed-but-unqueued
-                # wamid would otherwise be a permanently lost message.
-                if normalized.message_id:
-                    await redis.delete(f"webhook:{normalized.message_id}")
-                raise
-            enqueued += 1
+                try:
+                    if arq_pool is None:
+                        arq_pool = await get_arq_pool()
+                    await arq_pool.enqueue_job(
+                        "process_message_task",
+                        chat_id,
+                        normalized.text,
+                        normalized.media_url,
+                        message_id=normalized.message_id,
+                        trace_id=trace_id,
+                    )
+                except Exception:
+                    # Release the idempotency claim: the outer handler answers
+                    # 200 (Meta must not retry-storm us), so a claimed-but-
+                    # unqueued wamid would otherwise be a permanently lost
+                    # message.
+                    if normalized.message_id:
+                        await redis.delete(f"webhook:{normalized.message_id}")
+                    raise
+                enqueued += 1
 
         if enqueued:
             return {"status": APIStatus.PROCESSING}
