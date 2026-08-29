@@ -273,7 +273,18 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
             # has a fresh owner, so if it goes stuck *again* that is a new
             # incident and must be able to page the operator immediately rather
             # than inherit the previous incident's 24h mute.
-            extra_unset={"admin_reported_at": ""},
+            #
+            # PRO-121 rides the same rule: `emergency_hold_acked` throttles the
+            # "I've marked it urgent" reply to once per wait, and
+            # `emergency_paused_alerted` throttles the paused-for-human operator
+            # page. A new pro is a new wait, so both re-arm here — otherwise a
+            # customer who declares an emergency against the *replacement* pro
+            # gets the generic soft-hold reply and nobody is paged.
+            extra_unset={
+                "admin_reported_at": "",
+                "emergency_hold_acked": "",
+                "emergency_paused_alerted": "",
+            },
             expected_status=lead.get("status"),
         )
         if updated is None:

@@ -115,13 +115,22 @@ process_incoming_message(chat_id, text, media_url)
         │         send_sos_alert(admin + pro)
         │         notify customer BOT_PAUSED_BY_CUSTOMER
         │
-        ├─ Emergency Detection (Task 1)
-        │      └─ normalized_text contains EMERGENCY_KEYWORDS?
-        │         → set lead.is_emergency = True
-        │         → notify customer EMERGENCY_ACK (once per lead)
+        ├─ Emergency escalation (PRO-121) — only while parked in a holding state
+        │  (AWAITING_PRO_APPROVAL / AWAITING_ADDRESS / AWAITING_LOYALTY_CONFIRMATION /
+        │  AWAITING_NEW_OR_EXISTING)
+        │      └─ flag lead.is_emergency, then either handle in place
+        │         (EMERGENCY_WHILE_WAITING / EMERGENCY_NEED_CITY) or release the
+        │         state and fall through to normal routing below
+        │      (detection — is_emergency_text: whole-token keywords + clitic-
+        │       prefixed stems, minus negation phrases — runs once at the top;
+        │       outside a holding state it is applied inline at lead
+        │       creation/dispatch further down, sending EMERGENCY_ACK or
+        │       EMERGENCY_NEED_CITY depending on whether a city is known)
         │
         ├─ State == PAUSED_FOR_HUMAN?
         │      └─ log message, reset TTL to 900 s, update lead.paused_at, return
+        │         (an emergency keyword here flags the lead and pages the operator
+        │          once, without un-pausing or messaging the customer)
         │
         ├─ State == AWAITING_PRO_APPROVAL?
         │      └─ registered pro + PRO_ONLY_KEYWORDS? → fall through (soft-hold escape:
@@ -184,7 +193,8 @@ process_incoming_message(chat_id, text, media_url)
                ├─ Phase 2 — Pro Persona AI (if pro assigned)
                │      adopts pro's system prompt, pricing, social proof
                │      tracks token usage: $inc users.total_tokens_used (fire-and-forget)
-               │      is_deal=True → _finalize_deal()
+               │      is_deal=True (or an emergency lead with a matched
+               │      pro, even without [DEAL]) → _finalize_deal()
                │
                └─ _finalize_deal():
                       check for emergency (Lead.is_emergency == True)
