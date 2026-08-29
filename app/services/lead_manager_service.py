@@ -18,6 +18,7 @@ async def set_lead_status(
     extra_set: Optional[dict] = None,
     extra_unset: Optional[dict] = None,
     expected_status=None,
+    expected_pro_id=None,
 ):
     """Canonical lead status transition — the single writer of ``lead.status``.
 
@@ -38,7 +39,10 @@ async def set_lead_status(
     any direct ``$set`` of ``status`` that bypasses this helper.
 
     ``expected_status`` adds a guard to the filter so a transition can be made
-    conditional (and race-safe) on the lead's current status.
+    conditional (and race-safe) on the lead's current status. ``expected_pro_id``
+    does the same for ownership: status alone is not always enough, because a
+    reassignment leaves the lead at ``NEW`` under a *different* pro, so a stale
+    write from the previous owner still matches on status (PRO-123).
     """
     oid = lead_id if isinstance(lead_id, ObjectId) else ObjectId(lead_id)
     set_fields = {"status": status, "updated_at": datetime.now(timezone.utc)}
@@ -53,6 +57,8 @@ async def set_lead_status(
     query = {"_id": oid}
     if expected_status is not None:
         query["status"] = expected_status
+    if expected_pro_id is not None:
+        query["pro_id"] = expected_pro_id
     return await leads_collection.find_one_and_update(
         query, update, return_document=ReturnDocument.AFTER
     )
@@ -286,7 +292,13 @@ class LeadManager:
             return None
 
     async def update_lead_status(
-        self, lead_id: str, status: str, pro_id: str = None, actor: str = Actor.SYSTEM
+        self,
+        lead_id: str,
+        status: str,
+        pro_id: str = None,
+        actor: str = Actor.SYSTEM,
+        expected_status=None,
+        expected_pro_id=None,
     ):
         """Transition a lead's status (and optionally its ``pro_id``).
 
@@ -294,9 +306,31 @@ class LeadManager:
         ``status_history`` push happens here too. ``actor`` defaults to
         ``Actor.SYSTEM``; pass ``Actor.PRO`` / ``Actor.CUSTOMER`` / ``Actor.ADMIN``
         from the relevant flow.
+
+        ``expected_status`` / ``expected_pro_id`` are forwarded as the same
+        conditional guards :func:`set_lead_status` documents. The updated
+        document is **returned** (``None`` when a guard did not match) so a
+        caller can tell a real transition from a lost race instead of
+        proceeding as though it had won (PRO-123).
         """
         extra_set = {"pro_id": pro_id} if pro_id else None
-        await set_lead_status(lead_id, status, actor, extra_set=extra_set)
+        updated = await set_lead_status(
+            lead_id,
+            status,
+            actor,
+            extra_set=extra_set,
+            expected_status=expected_status,
+            expected_pro_id=expected_pro_id,
+        )
+        if updated is None and (
+            expected_status is not None or expected_pro_id is not None
+        ):
+            logger.info(
+                f"Lead {lead_id} not updated to {status}: guard did not match "
+                "(concurrent writer won)"
+            )
+            return None
         logger.info(
             f"Lead {lead_id} updated: Status -> {status}, Pro -> {pro_id or 'Unchanged'}"
         )
+        return updated

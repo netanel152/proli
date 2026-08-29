@@ -9,7 +9,7 @@ from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
 from app.core.phone import strip_suffix, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.core.redis_client import get_redis_client
-from app.services.matching_service import book_slot_for_lead
+from app.services.matching_service import book_slot_for_lead, is_pro_eligible_for_lead
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
 from datetime import datetime, timedelta, timezone
@@ -17,6 +17,37 @@ from datetime import datetime, timedelta, timezone
 # PRO-166: label vocabulary lives in the catalog; LeadStatus is a str Enum,
 # so the plain-string keys there match enum members transparently.
 STATUS_LABELS = Messages.Pro.STATUS_LABELS
+
+
+# PRO-123: the exact keyword lists the dispatcher in `handle_pro_text_command`
+# matches, in the same order. Kept next to the dispatcher so the two cannot
+# drift: a command added below must be added here, or it starts being swallowed
+# by the PRO_AWAITING_FINAL_PRICE prompt again. SKIP_COMMANDS is deliberately
+# absent — "דלג" is an answer to the price prompt, not a command that abandons it.
+_PRO_COMMAND_LISTS = (
+    "PAUSE_COMMANDS",
+    "RESUME_COMMANDS",
+    "BOT_PAUSE_COMMANDS",
+    "BOT_RESUME_COMMANDS",
+    "HELP_COMMANDS",
+    "MENU_COMMANDS",
+    "APPROVE_COMMANDS",
+    "REJECT_COMMANDS",
+    "FINISH_COMMANDS",
+    "DETAILS_COMMANDS",
+    "CANCEL_BOOKED_COMMANDS",
+    "ACTIVE_JOBS_COMMANDS",
+    "HISTORY_COMMANDS",
+    "SUMMARY_COMMANDS",
+    "STATS_COMMANDS",
+    "REVIEWS_COMMANDS",
+    "SEARCH_COMMANDS",
+)
+
+
+def _is_pro_command(text: str) -> bool:
+    """True if `text` (already `_normalize`d) is a keyword the pro dispatcher handles."""
+    return any(text in getattr(Messages.Keywords, name) for name in _PRO_COMMAND_LISTS)
 
 
 def _normalize(text: str) -> str:
@@ -57,8 +88,20 @@ async def handle_pro_text_command(
 
     # State: awaiting the final charged price after a job was completed (PRO-33).
     # The lead is already COMPLETED — this only records final_price, never gates.
+    #
+    # PRO-123: a real command must not be eaten as a price. The prompt has a
+    # 10-minute TTL, so a fresh lead offer lands inside it routinely and the pro
+    # answers "אשר"/"דחה"/"פרטים" — which used to be parsed as a (non-numeric)
+    # price and lost. The prompt is optional and never gates COMPLETED, so a
+    # command simply abandons it: clear the state, then dispatch normally.
     if current_state == UserStates.PRO_AWAITING_FINAL_PRICE:
-        return await _handle_final_price_reply(chat_id, text, pro)
+        if not _is_pro_command(text):
+            return await _handle_final_price_reply(chat_id, text, pro)
+        await StateManager.clear_state(chat_id)
+        logger.info(
+            f"Pro {pro['_id']} sent command {text!r} while awaiting a final "
+            "price — abandoning the price prompt and handling the command."
+        )
 
     # Availability Toggles (Vacation Mode)
     if text in Messages.Keywords.PAUSE_COMMANDS:
@@ -281,9 +324,30 @@ async def _handle_approve(pro, lead_manager, whatsapp):
             return Messages.Pro.ALREADY_RESPONDED
         return Messages.Pro.NO_PENDING_APPROVALS
 
-    await lead_manager.update_lead_status(
-        str(lead["_id"]), LeadStatus.BOOKED, pro["_id"], actor=Actor.PRO
+    # PRO-123: guard the write on both the status we read *and* the ownership
+    # we read. Status alone is not enough — `monitor_service.reassign_lead`
+    # leaves the lead at NEW under the *new* pro, so a stale "אשר" arriving
+    # after a reassignment would still match on status and hand the lead back
+    # to the pro who never answered, on top of the pro already offered it.
+    booked = await lead_manager.update_lead_status(
+        str(lead["_id"]),
+        LeadStatus.BOOKED,
+        pro["_id"],
+        actor=Actor.PRO,
+        expected_status=LeadStatus.NEW,
+        expected_pro_id=pro["_id"],
     )
+    if booked is None:
+        # Lost the race: the lead moved on between our read and our write.
+        # Nothing is booked and nobody is messaged — the pro is told the truth.
+        logger.info(
+            f"Pro {pro['_id']} approved lead {lead['_id']} but it had already "
+            "moved on (reassigned or answered elsewhere) — no booking made."
+        )
+        if await _recently_responded_lead(pro["_id"]):
+            return Messages.Pro.ALREADY_RESPONDED
+        return Messages.Pro.NO_PENDING_APPROVALS
+
     # PRO-120: center the slot search on the customer's requested time; the
     # created_at fallback (inside book_slot_for_lead) only applies to ASAP
     # leads that carry no concrete appointment_datetime.
@@ -885,8 +949,33 @@ async def _handle_search(pro, chat_id: str, whatsapp):
     """
     Proactive stuck-lead search for pros. Rate-limited per chat_id via Redis
     (PRO_SEARCH_RATE_LIMIT_SECONDS). Assigns the oldest PENDING_ADMIN_REVIEW
-    lead to this pro as NEW so the existing "אשר"/"דחה" flow takes over.
+    lead *this pro is eligible for* to them as NEW so the existing "אשר"/"דחה"
+    flow takes over.
+
+    PRO-123: eligibility is the same predicate routing itself applies
+    (`matching_service.is_pro_eligible_for_lead`) — a pro-initiated search must
+    not be a back door to work `determine_best_pro` would never have offered
+    them (out of area, over `MAX_PRO_LOAD`, paused, or already rejected by them).
     """
+    # PRO-123: pro-level gates first, before the cool-down is consumed — these
+    # are not a failed search, they are "you cannot take work right now", and
+    # locking a 10-minute cool-down on them would punish the pro for asking.
+    if not pro.get("is_active", True):
+        return Messages.Pro.SEARCH_WHILE_PAUSED
+
+    active_load = await leads_collection.count_documents(
+        {
+            "pro_id": pro["_id"],
+            "status": {
+                "$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]
+            },
+        }
+    )
+    if active_load >= WorkerConstants.MAX_PRO_LOAD:
+        return Messages.Pro.SEARCH_LOAD_FULL.format(
+            active=active_load, max_jobs=WorkerConstants.MAX_PRO_LOAD
+        )
+
     redis_client = await get_redis_client()
     rate_limit_key = f"rate_limit:pro_search:{chat_id}"
 
@@ -900,10 +989,14 @@ async def _handle_search(pro, chat_id: str, whatsapp):
         # sentinel: handled internally, caller must not send PRO_HELP_MENU
         return ""
 
-    stuck = await leads_collection.find_one(
+    # PRO-123: scan the queue oldest-first and take the first lead this pro is
+    # actually eligible for, instead of handing over whatever happens to be at
+    # the head of it. Checking only the oldest would also let one permanently
+    # ineligible lead block the feature for everyone.
+    candidates = await leads_collection.find(
         {"status": LeadStatus.PENDING_ADMIN_REVIEW},
         sort=[("created_at", 1)],
-    )
+    ).to_list(length=WorkerConstants.DB_QUERY_LIMIT)
 
     # Lock the cool-down regardless of outcome
     await redis_client.setex(
@@ -912,31 +1005,42 @@ async def _handle_search(pro, chat_id: str, whatsapp):
         "1",
     )
 
-    if not stuck:
-        return Messages.Pro.NO_STUCK_LEADS
-
     # Same fresh-start reset as the admin assignment path (PRO-63): a pro
     # claiming a stuck lead must clear the exhausted-reassignment state, or the
     # next Healer sweep re-escalates the lead off them and re-pages the admin.
     # `created_at` is reset for the same reason as there — the Healer measures
     # staleness from it, so leaving it stale would let the sweep yank the lead
     # back off the pro who just claimed it.
-    now = datetime.now(timezone.utc)
-    await set_lead_status(
-        stuck["_id"],
-        LeadStatus.NEW,
-        Actor.PRO,
-        extra_set={
-            "pro_id": pro["_id"],
-            "assigned_by_admin_at": now,
-            "created_at": now,
-            "pro_notified_at": now,
-            "reassignment_count": 0,
-            "approval_nudged": False,
-            "reassign_offered": False,
-        },
-        extra_unset={"escalation_reason": ""},
-    )
+    stuck = None
+    for candidate in candidates:
+        if not await is_pro_eligible_for_lead(pro, candidate):
+            continue
+        now = datetime.now(timezone.utc)
+        # expected_status makes the claim atomic: two pros sending מצא at once
+        # (or the admin assigning from the panel) cannot both take one lead —
+        # the loser gets None and moves on to the next candidate.
+        claimed = await set_lead_status(
+            candidate["_id"],
+            LeadStatus.NEW,
+            Actor.PRO,
+            extra_set={
+                "pro_id": pro["_id"],
+                "assigned_by_admin_at": now,
+                "created_at": now,
+                "pro_notified_at": now,
+                "reassignment_count": 0,
+                "approval_nudged": False,
+                "reassign_offered": False,
+            },
+            extra_unset={"escalation_reason": ""},
+            expected_status=LeadStatus.PENDING_ADMIN_REVIEW,
+        )
+        if claimed is not None:
+            stuck = candidate
+            break
+
+    if not stuck:
+        return Messages.Pro.NO_STUCK_LEADS
 
     wait_minutes = 0
     created_at = stuck.get("created_at")

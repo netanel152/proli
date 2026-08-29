@@ -138,6 +138,61 @@ async def test_update_lead_status_with_explicit_actor(mock_lead_manager_db):
 
 
 @pytest.mark.asyncio
+async def test_update_lead_status_forwards_guards_and_returns_updated_doc(
+    mock_lead_manager_db,
+):
+    """PRO-123: expected_status/expected_pro_id must reach the same
+    find_one_and_update filter set_lead_status builds, and the updated doc
+    (not None) comes back to the caller so a real transition is
+    distinguishable from a lost race."""
+    mock_leads, _, _ = mock_lead_manager_db
+    lead_manager = LeadManager()
+
+    lead_id = "507f1f77bcf86cd799439011"
+    pro_id = ObjectId("507f1f77bcf86cd799439012")
+    updated_doc = {"_id": ObjectId(lead_id), "status": "booked", "pro_id": pro_id}
+    mock_leads.find_one_and_update = AsyncMock(return_value=updated_doc)
+
+    result = await lead_manager.update_lead_status(
+        lead_id,
+        "booked",
+        pro_id,
+        actor=Actor.PRO,
+        expected_status="new",
+        expected_pro_id=pro_id,
+    )
+
+    assert result == updated_doc
+    query, _ = mock_leads.find_one_and_update.call_args[0]
+    assert query["status"] == "new"
+    assert query["pro_id"] == pro_id
+
+
+@pytest.mark.asyncio
+async def test_update_lead_status_returns_none_when_guard_lost_race(
+    mock_lead_manager_db,
+):
+    """A concurrent writer already moved the lead — find_one_and_update
+    matches nothing and update_lead_status must report None rather than
+    logging/behaving as though its own write had won."""
+    mock_leads, _, _ = mock_lead_manager_db
+    lead_manager = LeadManager()
+
+    mock_leads.find_one_and_update = AsyncMock(return_value=None)
+
+    result = await lead_manager.update_lead_status(
+        "507f1f77bcf86cd799439011",
+        "booked",
+        ObjectId(),
+        actor=Actor.PRO,
+        expected_status="new",
+        expected_pro_id=ObjectId(),
+    )
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_get_chat_history_cache_miss(mock_lead_manager_db):
     _, mock_messages, mock_context_manager = mock_lead_manager_db
     lead_manager = LeadManager()
