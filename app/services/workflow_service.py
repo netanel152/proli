@@ -96,6 +96,12 @@ PRO_BUSINESS_KEYWORDS = (
     set(Messages.Keywords.APPROVE_COMMANDS)
     | set(Messages.Keywords.REJECT_COMMANDS)
     | set(Messages.Keywords.FINISH_COMMANDS)
+    # PRO-168: `Pro.REMINDER` advertises *סיימתי* and *עדיין עובד* as equals,
+    # so they need equal routing. Without this, a pro who ordered service for
+    # themselves — exactly the pro parked in CUSTOMER_MODE / the
+    # AWAITING_PRO_APPROVAL hold — answers the reminder and reaches the
+    # customer AI instead of `pro_flow._handle_still_working`.
+    | set(Messages.Keywords.STILL_WORKING_COMMANDS)
     | set(Messages.Keywords.ACTIVE_JOBS_COMMANDS)
     | set(Messages.Keywords.HISTORY_COMMANDS)
     | set(Messages.Keywords.STATS_COMMANDS)

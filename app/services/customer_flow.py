@@ -203,7 +203,22 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     ) and await _rating_pending(chat_id):
         return None
 
-    yes_tokens = {"1", "כן", "כן הסתיים", "כן, הסתיים", "הסתיים", "yes", "done"}
+    # PRO-168 §7: `COMPLETION_NOT_YET_ACK` tells the customer to write
+    # *סיימתי* when the job wraps up — and the word matched nothing here, so
+    # the reply fell through to the AI and the lead stayed BOOKED. The pro side
+    # has always accepted it (`Keywords.FINISH_COMMANDS`); the customer side
+    # now does too. Only reachable for a chat that owns a BOOKED lead, so a
+    # stray "סיימתי" cannot complete anything else.
+    yes_tokens = {
+        "1",
+        "כן",
+        "כן הסתיים",
+        "כן, הסתיים",
+        "הסתיים",
+        "סיימתי",
+        "yes",
+        "done",
+    }
     is_completion = (
         normalized in yes_tokens
         or Messages.Keywords.CUSTOMER_COMPLETION_INDICATOR in stripped
