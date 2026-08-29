@@ -151,6 +151,12 @@ if [ -d "$WT_ROOT" ]; then
     git -C "$REPO" worktree list --porcelain | grep -qF "worktree $d" && continue
     if rmdir "$d" 2>/dev/null; then
       echo "removed  $(basename "$d")  (empty leftover)"
+    elif [ -z "$(ls -A "$d" 2>/dev/null)" ]; then
+      # Empty but undeletable: a process still holds it as its cwd. Saying
+      # "not empty; inspect it" here sent people looking for contents that were
+      # never there — the fix is to close the shell or editor, not to inspect.
+      echo "LOCKED   $(basename "$d") — empty, but a process still has it open."
+      echo "         Close that shell or editor, then: rmdir \"$d\""
     else
       echo "LEFTOVER $(basename "$d") — not a worktree and not empty; inspect it"
     fi
