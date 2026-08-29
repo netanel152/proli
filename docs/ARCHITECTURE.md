@@ -296,7 +296,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | Collection | Purpose |
 |-----------|---------|
 | `users` | Professionals and customers. Pros have `location` (2dsphere), `service_areas`, `price_list`, `social_proof`, `total_tokens_used` |
-| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count` |
+| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `customer_name` (AI-extracted from the conversation), `display_name` (optional, admin-set label from the admin panel's Edit-Lead form; falls back to `customer_name`, then the phone), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count` |
 | `messages` | Chat history log per `chat_id` |
 | `slots` | Appointment slots per pro with atomic locking (`is_taken`) |
 | `settings` | Scheduler config toggles (`sos_healer_active`, `lead_janitor_active`, `sla_monitor_active`, etc. — the three cold customer-facing toggles default OFF, PRO-73) |

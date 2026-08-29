@@ -33,11 +33,13 @@ wrong — and there is no ``VALID_TRANSITIONS`` helper in ``app/`` to validate
 against. Recorded here so the absence reads as a decision, not an oversight.
 """
 
+import pytz
 from bson.objectid import ObjectId
 
 from app.core.constants import Actor
 from app.core.lead_history import status_history_entry
 from app.core.logger import logger
+from app.core.phone import strip_suffix
 
 #: Columns the leads editor frame carries. ``id`` and ``_chat_id`` are hidden
 #: from the admin by ``column_config`` — hidden, not dropped: they are still
@@ -51,7 +53,21 @@ EDITOR_COLUMNS = [
     "details_summary",
     "status",
     "_chat_id",
+    # PRO-163: the *raw* display name behind the composed `client` cell,
+    # carried hidden the way `_chat_id` already is. The Edit form prefills
+    # the name box from this and never from `client`, which falls back to
+    # the customer's own name or the phone — prefilling from the composed
+    # value would save one of those back as an admin-authored name.
+    #
+    # There is deliberately no `_details` twin. The details box is prefilled
+    # from the *composed* summary, so "did the admin touch it" has to be
+    # measured against that same composed value; a raw carrier would be read
+    # by nobody.
+    "_display_name",
 ]
+
+#: The panel renders every timestamp in Israel local time.
+_IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 #: Editor column -> lead document field. ``details_summary`` writes both
 #: ``details`` and ``issue_type``, so it is handled separately below.
@@ -63,6 +79,155 @@ _SIMPLE_FIELDS = {"status": "status"}
 SKIP_UNRESOLVED = "unresolved_row"
 SKIP_NO_CHANGE = "no_change"
 SKIP_LEAD_GONE = "lead_gone"
+
+
+def client_label(lead):
+    """The name to show for ``lead`` — the admin's label, the customer's own
+    name, else the phone.
+
+    PRO-163. The leads frame's ``client`` column is composed in exactly one
+    place, so this is the only function that decides what an admin sees as the
+    customer's name: the editor column, the Kanban card, the lead selectbox and
+    the skipped-row warnings all read the composed value.
+
+    Three rungs, in order:
+
+    1. ``display_name`` — what an admin typed into the Edit form. Optional and
+       additive, so a lead without it reads exactly as before and no migration
+       is needed. Blank and whitespace-only count as absent rather than being
+       stored, which is why clearing the input unsets the field: an empty
+       string would render an anonymous row with no way back to the phone.
+    2. ``customer_name`` — the name the AI extracted when the customer gave it
+       (``prompts.py``). The pro already sees this on every lead offer as
+       "לקוח: דני", so falling straight to the phone here meant the panel and
+       the pro's WhatsApp disagreed about who the customer is.
+    3. the phone number, ``@c.us`` stripped.
+    """
+    name = (lead.get("display_name") or "").strip()
+    if name:
+        return name
+    known = (lead.get("customer_name") or "").strip()
+    if known:
+        return known
+    return strip_suffix(lead.get("chat_id") or "")
+
+
+def build_lead_row(lead, *, pro_map_id_to_name, unknown_pro_label):
+    """One lead document -> one row of the leads-editor frame.
+
+    PRO-163. Extracted from ``views/home.py``'s ``get_leads_data`` closure,
+    which sat behind ``@st.cache_data`` inside another function and so could
+    not be reached from a test at all. That is exactly where this ticket's own
+    regression lived: the Edit form prefills from a hidden column composed
+    here, and while that column was missing the form read ``""`` every time and
+    its blank-means-clear rule erased names nobody had touched.
+
+    The row carries two values the admin never sees but the form depends on:
+    ``_chat_id`` (identity) and ``_display_name`` (the raw value behind the
+    composed ``client`` cell). ``client`` is for display and falls back; the
+    raw carrier is how a submit tells a real edit from an untouched field.
+    Composing and carrying them together, here, is what keeps that pair
+    honest.
+
+    Same move as ``save_lead_edits`` (PRO-161) and the PRO-140/PRO-158 query
+    extractions: streamlit-free, so it has a test.
+    """
+    issue_type = lead.get("issue_type", lead.get("issue", lead.get("details", "")))
+    appointment_time = lead.get("appointment_time", lead.get("time_preference", "?"))
+    full_address = lead.get("full_address", lead.get("address", "?"))
+
+    # Legacy shape: some early leads packed the structured fields into a
+    # "[DEAL: time|address|issue]" marker inside the free-text details.
+    if (
+        not lead.get("issue_type")
+        and not lead.get("issue")
+        and "[DEAL:" in str(lead.get("details", ""))
+    ):
+        try:
+            parts = lead["details"].split("[DEAL:")[1].split("]")[0].split("|")
+            if len(parts) >= 3:
+                appointment_time = parts[0].strip()
+                full_address = parts[1].strip()
+                issue_type = parts[2].strip()
+        except (IndexError, KeyError, AttributeError):
+            pass
+
+    display_details = lead.get("details", "")
+    if not display_details and issue_type:
+        display_details = f"{issue_type} | {appointment_time} | {full_address}"
+    if issue_type != lead.get("details", ""):
+        display_details = f"{issue_type} | {appointment_time} | {full_address}"
+
+    pro_name = pro_map_id_to_name.get(lead.get("pro_id"), unknown_pro_label)
+
+    return {
+        "id": str(lead["_id"]),
+        "date": lead["created_at"].astimezone(_IL_TZ),
+        "client": client_label(lead),
+        "_display_name": (lead.get("display_name") or ""),
+        "professional": pro_name,
+        "details_summary": display_details,
+        "status": lead.get("status", "N/A"),
+        "_chat_id": lead["chat_id"],
+    }
+
+
+def build_edit_form_payload(
+    *,
+    status,
+    details,
+    details_touched,
+    display_name,
+    pro_name,
+    pro_map_name_to_id,
+    unknown_pro_label,
+):
+    """Translate the Edit-Lead form's fields into ``($set, $unset)`` ops.
+
+    PRO-163. Split out of the view for the same reason the table's save was
+    (PRO-161): a payload built inline in a Streamlit callback cannot be tested,
+    and this form has already shipped one that wrote the *editor's column
+    names* onto the lead document — ``client``, ``phone_number``,
+    ``details_summary`` — none of which any reader looks for, so every field
+    but ``status`` was silently discarded.
+
+    Unlike ``_build_update_payload`` this receives whole values rather than
+    changed cells: the form submits every input on every save, so "unchanged"
+    has to be passed in rather than detected. That is what ``details_touched``
+    is for, and it is not a nicety — see below.
+    """
+    set_ops = {"status": status}
+    unset_ops = {}
+
+    if details_touched:
+        # The editor shows one composed summary cell; the lead document keeps
+        # the admin's text in both fields the rest of the app reads from.
+        #
+        # Only on a real edit. The details box is prefilled with the *composed*
+        # summary ("<issue> | <time> | <address>"), so writing it back
+        # unconditionally stamped that whole string into `issue_type` every
+        # time the form was saved for any reason — including a save that only
+        # set a client name. `issue_type` is pro-facing (the "תקלה:" line of
+        # the lead offer) and is a matching input, so that is live corruption
+        # of a field the customer never sees but the pro does.
+        set_ops["details"] = details
+        set_ops["issue_type"] = details
+
+    name = (display_name or "").strip()
+    if name:
+        set_ops["display_name"] = name
+    else:
+        # Cleared, not blanked — see ``client_label``.
+        unset_ops["display_name"] = ""
+
+    if pro_name == unknown_pro_label:
+        # PRO-60: clearing the pro must null pro_id, or matching, the healer
+        # and pro-flow keep treating the lead as assigned.
+        set_ops["pro_id"] = None
+    elif pro_name in pro_map_name_to_id:
+        set_ops["pro_id"] = ObjectId(pro_map_name_to_id[pro_name])
+
+    return set_ops, unset_ops
 
 
 def _resolve_lead_id(edited_df, row_idx):

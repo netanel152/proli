@@ -20,6 +20,8 @@ from admin_panel.core.lead_queries import (
     SKIP_LEAD_GONE,
     SKIP_NO_CHANGE,
     SKIP_UNRESOLVED,
+    build_edit_form_payload,
+    build_lead_row,
     save_lead_edits,
 )
 from admin_panel.core.rbac import can_edit, has_permission
@@ -178,46 +180,19 @@ def view_leads_dashboard(T):
             # the frame carries it even when there is nothing to show.
             return pd.DataFrame(columns=EDITOR_COLUMNS)
 
-        data = []
-        for l in leads:
-            issue_type = l.get("issue_type", l.get("issue", l.get("details", "")))
-            appointment_time = l.get("appointment_time", l.get("time_preference", "?"))
-            full_address = l.get("full_address", l.get("address", "?"))
-
-            if (
-                not l.get("issue_type")
-                and not l.get("issue")
-                and "[DEAL:" in str(l.get("details", ""))
-            ):
-                try:
-                    parts = l["details"].split("[DEAL:")[1].split("]")[0].split("|")
-                    if len(parts) >= 3:
-                        appointment_time = parts[0].strip()
-                        full_address = parts[1].strip()
-                        issue_type = parts[2].strip()
-                except (IndexError, KeyError, AttributeError):
-                    pass
-
-            display_details = l.get("details", "")
-            if not display_details and issue_type:
-                display_details = f"{issue_type} | {appointment_time} | {full_address}"
-            if issue_type != l.get("details", ""):
-                display_details = f"{issue_type} | {appointment_time} | {full_address}"
-
-            pro_id = l.get("pro_id")
-            pro_name = pro_map_id_to_name.get(pro_id, T["unknown_pro"])
-
-            data.append(
-                {
-                    "id": str(l["_id"]),
-                    "date": l["created_at"].astimezone(pytz.timezone("Asia/Jerusalem")),
-                    "client": strip_suffix(l["chat_id"]),
-                    "professional": pro_name,
-                    "details_summary": display_details,
-                    "status": l.get("status", "N/A"),
-                    "_chat_id": l["chat_id"],
-                }
+        # PRO-163: the per-lead row build moved to `lead_queries` so it has a
+        # real test. It is where this ticket's own regression lived — a hidden
+        # column the Edit form prefills from — and it was unreachable from a
+        # test while it sat inside this @st.cache_data closure. Same move as
+        # save_lead_edits (PRO-161) and the PRO-140/158 query extractions.
+        data = [
+            build_lead_row(
+                l,
+                pro_map_id_to_name=pro_map_id_to_name,
+                unknown_pro_label=T["unknown_pro"],
             )
+            for l in leads
+        ]
 
         # `pd.DataFrame(rows, columns=...)` is a *reindex*, not a validation: a
         # renamed producer key yields a silent all-NaN column. That degrades
@@ -307,7 +282,17 @@ def view_leads_dashboard(T):
 
         if not leads_df.empty:
             # Export CSV
-            csv = leads_df.to_csv(index=False).encode("utf-8-sig")
+            # PRO-163: `_`-prefixed columns are internal carriers for the
+            # editor and the Edit form (`_chat_id`, `_display_name`,
+            # `_details`), not operator-facing data — they duplicate
+            # visible columns in the export.
+            csv = (
+                leads_df.drop(
+                    columns=[c for c in leads_df.columns if c.startswith("_")]
+                )
+                .to_csv(index=False)
+                .encode("utf-8-sig")
+            )
             st.download_button(
                 label=T.get("export_csv", "Export CSV"),
                 data=csv,
@@ -329,6 +314,7 @@ def view_leads_dashboard(T):
                 column_config={
                     "id": None,
                     "_chat_id": None,
+                    "_display_name": None,
                     "date": st.column_config.DatetimeColumn(
                         T["col_date"],
                         format="D MMM YYYY, h:mm a",
@@ -336,7 +322,13 @@ def view_leads_dashboard(T):
                         disabled=True,
                     ),
                     "client": st.column_config.TextColumn(
-                        T["col_client"], width="small", disabled=True
+                        # PRO-163: "medium", because this column held 12 Latin
+                        # digits before and can now hold a Hebrew name. The
+                        # grid CSS forces LTR, so an over-long RTL string clips
+                        # from its *start* — the wrong end for a name.
+                        T["col_client"],
+                        width="medium",
+                        disabled=True,
                     ),
                     "professional": st.column_config.SelectboxColumn(
                         T["col_pro"], width="medium", options=pro_names, required=False
@@ -644,24 +636,60 @@ def _render_selected_lead_actions(
                         index=status_options.index(current_status),
                         format_func=lambda x: T.get(x, x.capitalize()),
                     )
-                    # Shown for context, not editable: the customer's identity
-                    # is their `chat_id`, and this form never wrote either
-                    # field to the lead (see the payload below). Leaving them
-                    # editable meant typing into them and being told it saved.
-                    # Making them do something real is PRO-163.
-                    st.text_input(
-                        T.get("client_name_label", "Client Name"),
-                        value=selected_lead.get("client", ""),
-                        disabled=True,
+                    # PRO-163: a real, optional label for the customer.
+                    # Prefilled from the *raw* `_display_name`, never from the
+                    # composed `client` — that falls back to the customer's
+                    # own name or the phone, so prefilling from it would save
+                    # one of those back as an admin-authored name on the first
+                    # submit. pd.isna, not `or`: a missing key reindexes to
+                    # NaN, NaN is truthy, so `or ""` would put the literal
+                    # "nan" in the box and then save it.
+                    raw_name = selected_lead.get("_display_name")
+                    current_name = (
+                        "" if raw_name is None or pd.isna(raw_name) else str(raw_name)
                     )
-                    st.text_input(
-                        T.get("phone_number_label", "Phone Number"),
-                        value=selected_lead.get("_chat_id", ""),
-                        disabled=True,
+                    new_client_name = st.text_input(
+                        T.get("client_name_label", "שם לקוח"),
+                        value=current_name,
+                        max_chars=40,
+                        # Describes the fallback rather than restating the
+                        # number: a greyed phone number inside an empty box
+                        # reads as content, and the number is shown just below.
+                        placeholder=T.get(
+                            "client_name_placeholder",
+                            "לא הוגדר שם — יוצג השם מהשיחה או הטלפון",
+                        ),
+                        help=T.get(
+                            "client_name_help",
+                            "שם לתצוגה בפאנל בלבד.",
+                        ),
                     )
+                    # Read-only by decision, not by omission (PRO-163): the
+                    # chat_id is the lead's identity and the key the FSM, the
+                    # Redis context and wa_delivery are all keyed by. Re-keying
+                    # a conversation is a migration, not a text input.
+                    #
+                    # Static text rather than a disabled input: a disabled
+                    # <input> cannot be selected in Chrome, so the operator
+                    # could not copy the number they are being shown in order
+                    # to dial it. st.code carries a copy button, and nothing
+                    # about it invites typing — which documents "read-only"
+                    # more honestly than a greyed box with a hover tooltip.
+                    st.caption(T.get("phone_number_label", "מספר טלפון"))
+                    st.code(
+                        strip_suffix(selected_lead.get("_chat_id", "")),
+                        language=None,
+                    )
+                    st.caption(
+                        T.get(
+                            "phone_readonly_help",
+                            "מספר זה הוא מזהה השיחה ואינו ניתן לעריכה.",
+                        )
+                    )
+                    current_details = str(selected_lead.get("details_summary") or "")
                     new_details = st.text_area(
-                        T.get("details_label", "Details"),
-                        value=selected_lead.get("details_summary", ""),
+                        T.get("details_label", "פרטי הבקשה"),
+                        value=current_details,
                     )
 
                     unassigned_label = T["unknown_pro"]
@@ -688,33 +716,64 @@ def _render_selected_lead_actions(
                         # by the rerun; this PR makes it a toast, so it gets
                         # fixed rather than amplified. Writes the same pair the
                         # table editor writes (`lead_queries._build_update_payload`).
-                        update_data = {
-                            "status": new_status,
-                            "details": new_details,
-                            "issue_type": new_details,
-                        }
-                        if new_pro == unassigned_label:
-                            # Explicitly unassigning must actually release ownership
-                            # — clear pro_id so matching/healer/pro-flow stop treating
-                            # the lead as owned. Otherwise the lead only *displays* as
-                            # unassigned while pro_id still points at the old pro
-                            # (ghost assignment). Uses the localized T["unknown_pro"]
-                            # sentinel so the option matches every other view (RTL).
-                            update_data["pro_id"] = None
-                        elif new_pro in pro_map_name_to_id:
-                            update_data["pro_id"] = ObjectId(
-                                pro_map_name_to_id[new_pro]
-                            )
+                        # PRO-163: built by a streamlit-free helper so the
+                        # payload has a real test — this form has already
+                        # shipped one that wrote editor column names onto the
+                        # lead and discarded every field but `status`.
+                        # Unassigning clears pro_id so matching/healer/pro-flow
+                        # stop treating the lead as owned, via the localized
+                        # T["unknown_pro"] sentinel every other view uses.
+                        update_data, unset_data = build_edit_form_payload(
+                            status=new_status,
+                            details=new_details,
+                            # The box is prefilled with the *composed*
+                            # summary, so an untouched submit used to stamp
+                            # "<issue> | <time> | <address>" into the
+                            # pro-facing `issue_type` on every save (PRO-163).
+                            details_touched=(new_details != current_details),
+                            display_name=new_client_name,
+                            pro_name=new_pro,
+                            pro_map_name_to_id=pro_map_name_to_id,
+                            unknown_pro_label=unassigned_label,
+                        )
 
                         update_op = {"$set": update_data}
+                        if unset_data:
+                            update_op["$unset"] = unset_data
                         if new_status != selected_lead.get("status"):
                             update_op["$push"] = {
                                 "status_history": status_history_entry(
                                     new_status, Actor.ADMIN
                                 )
                             }
-                        leads_collection.update_one({"_id": ObjectId(lid)}, update_op)
-                        log_audit("edit_lead", {"lead_id": lid})
+                        res = leads_collection.update_one(
+                            {"_id": ObjectId(lid)}, update_op
+                        )
+                        if getattr(res, "matched_count", 0) == 0:
+                            # The lead was deleted inside the 30s cache
+                            # window: nothing was written, so neither the
+                            # audit entry nor the success toast may claim
+                            # otherwise. The table path already refuses this
+                            # (SKIP_LEAD_GONE); this one used to report
+                            # "1 saved" over a no-op, and PRO-163 adds a
+                            # $unset to the same call.
+                            st.error(
+                                T.get(
+                                    "lead_no_longer_listed",
+                                    "That lead is no longer listed.",
+                                )
+                            )
+                            st.stop()
+                        # Which fields, not just that an edit happened — a
+                        # display_name is operator-authored content about a
+                        # customer. Names only; values stay out of the log.
+                        log_audit(
+                            "edit_lead",
+                            {
+                                "lead_id": lid,
+                                "fields": sorted(list(update_data) + list(unset_data)),
+                            },
+                        )
                         # PRO-161: the st.success here was discarded by the
                         # rerun below — the admin saw a flicker and nothing
                         # else. Route it through the same flash the table Save
