@@ -72,9 +72,14 @@ async def send_daily_reminders():
                 )
                 time_str = job_time.strftime("%H:%M")
                 client_phone = strip_suffix(job["chat_id"])
-                details = job.get("details", "פרטים חסרים")
+                # PRO-168: this read `job.get("details")` — a field the bot
+                # never writes. Only the admin panel does, and it mirrors the
+                # same value into `issue_type` anyway, so every agenda line for
+                # a bot-created lead rendered the fallback "פרטים חסרים".
+                # `issue_type` is the strict superset.
+                issue = job.get("issue_type") or Messages.Fallbacks.UNKNOWN
                 msg += Messages.Pro.DAILY_AGENDA_ROW.format(
-                    time=time_str, details=details, phone=client_phone
+                    time=time_str, issue=issue, phone=client_phone
                 )
 
             msg += Messages.Pro.DAILY_AGENDA_FOOTER

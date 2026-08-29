@@ -7,6 +7,12 @@ them are ``DRAFT`` until PRO-87 creates the Business Portfolio and the
 templates clear Meta review — flipping an entry to ``APPROVED`` (with the exact
 name Meta approved) is the single code change that arms it.
 
+A spec stores no body text: the copy has exactly one home
+(``app/core/messages.py``, ARCHITECTURE_STANDARD §10). What it stores instead
+is ``source`` — the ``Messages.*`` constant the template must be worded from
+(PRO-168), so a copy rewrite and a template submission can be checked against
+each other without either becoming a second copy of the sentence.
+
 Two lookups, two callers:
 
 * ``resolve(key)`` — ``CloudAPIProvider.send_template`` refuses to transmit a
@@ -33,6 +39,14 @@ class TemplateSpec:
     meta_name: str  # the name registered with Meta (final on approval)
     status: TemplateStatus = TemplateStatus.DRAFT
     language: str = "he"  # templates are approved per language (catalog §5)
+    # PRO-168: the `Messages.*` constant this template must be worded from.
+    # A spec deliberately stores no body text — the copy has exactly one home
+    # (`app/core/messages.py`, ARCHITECTURE_STANDARD §10) and duplicating it
+    # here would create a second place to forget. What the registry does owe
+    # the catalog is the *pointer*, so a copy pass can tell at a glance which
+    # template each rewritten string is the source of, and so a submitted
+    # template can be diffed against the string it was approved from.
+    source: str = ""
 
 
 # Keyed by logical name. The keys are the PRO-88 catalog rows that survived the
@@ -41,23 +55,85 @@ class TemplateSpec:
 TEMPLATES: dict[str, TemplateSpec] = {
     spec.key: spec
     for spec in (
-        # Professional-facing
-        TemplateSpec("lead_offer", "proli_lead_offer"),  # P1 (+P2 folded in)
-        TemplateSpec("lead_offer_reassigned", "proli_lead_offer_reassigned"),  # P3
-        TemplateSpec("early_lead", "proli_early_lead"),  # P4 (fate open — PRO-88 §3)
-        TemplateSpec("approval_nudge", "proli_approval_nudge"),  # P5
-        TemplateSpec("daily_agenda", "proli_daily_agenda"),  # P6
-        TemplateSpec("stale_lead_reminder", "proli_stale_lead_reminder"),  # P7
-        TemplateSpec("finish_reminder", "proli_finish_reminder"),  # P8
-        TemplateSpec("pro_lost_lead", "proli_pro_lost_lead"),  # P9
-        TemplateSpec("bot_paused", "proli_bot_paused"),  # P10
-        TemplateSpec("sos_alert", "proli_sos_alert"),  # P11
-        TemplateSpec("customer_cancelled", "proli_customer_cancelled"),  # P12
-        TemplateSpec("onboarding_verdict", "proli_onboarding_verdict"),  # P13
+        # Professional-facing. `source` names the catalog constant each
+        # template's body must be worded from (PRO-168) — P2 folded into P1, so
+        # lead_offer carries the navigation line's constant alongside it.
+        TemplateSpec(
+            "lead_offer",
+            "proli_lead_offer",
+            source="Messages.Pro.APPROVAL_REQUEST + Messages.Pro.NAVIGATE_TO",
+        ),  # P1 (+P2 folded in)
+        TemplateSpec(
+            "lead_offer_reassigned",
+            "proli_lead_offer_reassigned",
+            source="Messages.Pro.NEW_LEAD_HEADER + Messages.Pro.NEW_LEAD_DETAILS",
+        ),  # P3
+        TemplateSpec(
+            "early_lead",
+            "proli_early_lead",
+            source="Messages.Pro.EARLY_LEAD_HEADER + Messages.Pro.EARLY_LEAD_DETAILS",
+        ),  # P4 (fate open — PRO-88 §3)
+        TemplateSpec(
+            "approval_nudge",
+            "proli_approval_nudge",
+            source="Messages.Pro.APPROVAL_NUDGE",
+        ),  # P5
+        TemplateSpec(
+            "daily_agenda",
+            "proli_daily_agenda",
+            source="Messages.Pro.DAILY_AGENDA_HEADER",
+        ),  # P6
+        TemplateSpec(
+            "stale_lead_reminder",
+            "proli_stale_lead_reminder",
+            source="Messages.Pro.STALE_LEAD_REMINDER",
+        ),  # P7
+        TemplateSpec(
+            "finish_reminder",
+            "proli_finish_reminder",
+            source="Messages.Pro.REMINDER",
+        ),  # P8
+        TemplateSpec(
+            "pro_lost_lead",
+            "proli_pro_lost_lead",
+            source="Messages.SOS.PRO_LOST_LEAD",
+        ),  # P9
+        TemplateSpec(
+            "bot_paused",
+            "proli_bot_paused",
+            source="Messages.Pro.PAUSE_NOTIFICATION",
+        ),  # P10
+        TemplateSpec(
+            "sos_alert",
+            "proli_sos_alert",
+            source="Messages.SOS.PRO_ALERT",
+        ),  # P11
+        TemplateSpec(
+            "customer_cancelled",
+            "proli_customer_cancelled",
+            source="Messages.Pro.CUSTOMER_CANCELLED",
+        ),  # P12
+        TemplateSpec(
+            "onboarding_verdict",
+            "proli_onboarding_verdict",
+            source="Messages.Onboarding.APPROVED_NOTIFICATION",
+        ),  # P13
         # Customer-facing
-        TemplateSpec("no_pro_available", "proli_no_pro_available"),  # C1
-        TemplateSpec("completion_check", "proli_completion_check"),  # C2
-        TemplateSpec("reassignment_notice", "proli_reassignment_notice"),  # C3
+        TemplateSpec(
+            "no_pro_available",
+            "proli_no_pro_available",
+            source="Messages.SOS.NO_PRO_AVAILABLE",
+        ),  # C1
+        TemplateSpec(
+            "completion_check",
+            "proli_completion_check",
+            source="Messages.Customer.COMPLETION_CHECK",
+        ),  # C2
+        TemplateSpec(
+            "reassignment_notice",
+            "proli_reassignment_notice",
+            source="Messages.SOS.CUSTOMER_REASSIGNING",
+        ),  # C3
     )
 }
 

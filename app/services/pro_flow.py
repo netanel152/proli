@@ -34,6 +34,7 @@ _PRO_COMMAND_LISTS = (
     "APPROVE_COMMANDS",
     "REJECT_COMMANDS",
     "FINISH_COMMANDS",
+    "STILL_WORKING_COMMANDS",
     "DETAILS_COMMANDS",
     "CANCEL_BOOKED_COMMANDS",
     "ACTIVE_JOBS_COMMANDS",
@@ -138,6 +139,9 @@ async def handle_pro_text_command(
     if text in Messages.Keywords.FINISH_COMMANDS:
         return await _handle_finish(pro, whatsapp, chat_id)
 
+    if text in Messages.Keywords.STILL_WORKING_COMMANDS:
+        return await _handle_still_working(pro)
+
     if text in Messages.Keywords.DETAILS_COMMANDS:
         return await _handle_details(pro)
 
@@ -215,7 +219,7 @@ async def handle_pro_text_command(
 
 
 async def _show_pro_dashboard(pro):
-    pro_name = pro.get("business_name", "איש מקצוע")
+    pro_name = pro.get("business_name") or Defaults.GENERIC_PRO_NAME
     rating = pro.get("candidate_score", 5.0)
     is_active = pro.get("is_active", True)
     status_emoji = "🟢" if is_active else "🔴"
@@ -241,14 +245,18 @@ async def _show_pro_dashboard(pro):
         )
     ]
 
+    # PRO-168: the dashboard and HELP_MENU both render the canonical Pro.CMD_*
+    # rows, so the two menus can no longer advertise different keywords. The
+    # dashboard shows the contextual subset; HELP_MENU shows all of them.
     if pending_count > 0:
-        lines.append(Messages.Pro.PRO_DASHBOARD_CMD_APPROVE_REJECT)
+        lines.append(Messages.Pro.CMD_APPROVE)
+        lines.append(Messages.Pro.CMD_REJECT)
     if booked_count > 0:
-        lines.append(Messages.Pro.PRO_DASHBOARD_CMD_FINISH)
-        lines.append(Messages.Pro.PRO_DASHBOARD_CMD_DETAILS)
-        lines.append(Messages.Pro.PRO_DASHBOARD_CMD_CANCEL)
-    lines.append(Messages.Pro.PRO_DASHBOARD_CMD_SEARCH)
-    lines.append(Messages.Pro.PRO_DASHBOARD_CMD_AVAILABILITY)
+        lines.append(Messages.Pro.CMD_FINISH)
+        lines.append(Messages.Pro.CMD_DETAILS)
+        lines.append(Messages.Pro.CMD_CANCEL)
+    lines.append(Messages.Pro.CMD_SEARCH)
+    lines.append(Messages.Pro.CMD_PAUSE if is_active else Messages.Pro.CMD_RESUME)
     lines.append(Messages.Pro.DASHBOARD_TIP)
 
     return "\n".join(lines)
@@ -589,9 +597,9 @@ async def _handle_finish(pro, whatsapp, chat_id):
     lines = []
     mapping = {}
     for i, lead in enumerate(leads, 1):
-        name = lead.get("customer_name", "לקוח")
-        city = lead.get("city") or "לא ידוע"
-        issue = lead.get("issue_type") or "תקלה"
+        name = lead.get("customer_name") or Messages.Fallbacks.CUSTOMER_NAME
+        city = lead.get("city") or Messages.Fallbacks.UNKNOWN
+        issue = lead.get("issue_type") or Messages.Fallbacks.ISSUE_UNKNOWN
         lines.append(
             Messages.Pro.JOB_SELECT_ROW.format(num=i, name=name, city=city, issue=issue)
         )
@@ -601,6 +609,37 @@ async def _handle_finish(pro, whatsapp, chat_id):
     await StateManager.set_metadata(chat_id, {"finishing_jobs_context": mapping})
 
     return Messages.Pro.SELECT_JOB_TO_FINISH.format(jobs_list="\n".join(lines))
+
+
+async def _handle_still_working(pro):
+    """PRO-168: the answer `Pro.REMINDER` advertises for "not finished yet".
+
+    The reminder used to offer 'עדיין עובד' and no keyword list contained it,
+    so the reply fell through to the dashboard and the nudges kept arriving.
+    The only thing the pro is asking for is quiet, and quiet is exactly what
+    the reminder cap already expresses: both counters — `reminder_sent_count`
+    (the Tier-1 finish reminder in `notification_service.send_pro_reminder`)
+    and `reminders_sent` (the 24h stale-lead nudger in `monitor_service`) —
+    are moved to `MAX_PRO_REMINDERS`, which each sender checks before writing.
+
+    Applied to every BOOKED lead of this pro, because the reminder does not
+    name a lead, so neither can the answer to it. The lead stays BOOKED and
+    *סיימתי* still closes it; nothing else about the job changes.
+    """
+    result = await leads_collection.update_many(
+        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED},
+        {
+            "$set": {
+                "reminder_sent_count": WorkerConstants.MAX_PRO_REMINDERS,
+                "reminders_sent": WorkerConstants.MAX_PRO_REMINDERS,
+            }
+        },
+    )
+    logger.info(
+        f"Pro {pro['_id']} replied 'still working' — silenced finish reminders "
+        f"on {result.modified_count} booked lead(s)."
+    )
+    return Messages.Pro.STILL_WORKING_ACK
 
 
 async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
@@ -702,10 +741,10 @@ async def _handle_active_jobs(pro):
     lines = [Messages.Pro.ACTIVE_JOBS_HEADER]
     for i, lead in enumerate(leads, 1):
         status_label = STATUS_LABELS.get(lead.get("status"), lead.get("status", "?"))
-        issue = lead.get("issue_type", "לא ידוע")
+        issue = lead.get("issue_type", Messages.Fallbacks.UNKNOWN)
         # `or` covers both key-missing and key-present-with-None (nullable full_address)
-        address = lead.get("full_address") or "לא ידוע"
-        time = lead.get("appointment_time", "לא נקבע")
+        address = lead.get("full_address") or Messages.Fallbacks.UNKNOWN
+        time = lead.get("appointment_time", Messages.Fallbacks.TIME_UNSET)
         lines.append(
             Messages.Pro.ACTIVE_JOB_ROW.format(
                 num=i, status=status_label, issue=issue, address=address, time=time
@@ -733,8 +772,8 @@ async def _handle_details(pro):
         customer_phone_intl = raw_phone
         city = lead.get("city") or ""
         street = lead.get("street") or ""
-        issue = lead.get("issue_type") or "לא ידוע"
-        appt = lead.get("appointment_time") or "לא נקבע"
+        issue = lead.get("issue_type") or Messages.Fallbacks.UNKNOWN
+        appt = lead.get("appointment_time") or Messages.Fallbacks.TIME_UNSET
         address_query = (
             f"{street} {city}".strip()
             if (street or city)
@@ -746,7 +785,7 @@ async def _handle_details(pro):
                 num=i,
                 customer_phone=customer_phone,
                 customer_phone_intl=customer_phone_intl,
-                city=city or "לא ידוע",
+                city=city or Messages.Fallbacks.UNKNOWN,
                 issue=issue,
                 appointment_time=appt,
                 address_encoded=address_encoded,
@@ -772,9 +811,9 @@ async def _handle_cancel(pro, whatsapp, chat_id):
     lines = []
     mapping = {}
     for i, lead in enumerate(leads, 1):
-        name = lead.get("customer_name", "לקוח")
-        city = lead.get("city") or "לא ידוע"
-        issue = lead.get("issue_type") or "תקלה"
+        name = lead.get("customer_name") or Messages.Fallbacks.CUSTOMER_NAME
+        city = lead.get("city") or Messages.Fallbacks.UNKNOWN
+        issue = lead.get("issue_type") or Messages.Fallbacks.ISSUE_UNKNOWN
         lines.append(
             Messages.Pro.JOB_SELECT_ROW.format(num=i, name=name, city=city, issue=issue)
         )
@@ -828,8 +867,8 @@ async def _handle_history(pro):
 
     lines = [Messages.Pro.HISTORY_HEADER]
     for i, lead in enumerate(leads, 1):
-        issue = lead.get("issue_type", "לא ידוע")
-        address = lead.get("full_address") or "לא ידוע"
+        issue = lead.get("issue_type", Messages.Fallbacks.UNKNOWN)
+        address = lead.get("full_address") or Messages.Fallbacks.UNKNOWN
         completed_at = lead.get("completed_at")
         if completed_at:
             if isinstance(completed_at, datetime):
@@ -837,7 +876,7 @@ async def _handle_history(pro):
             else:
                 date_str = str(completed_at)[:10]
         else:
-            date_str = "לא ידוע"
+            date_str = Messages.Fallbacks.UNKNOWN
         lines.append(
             Messages.Pro.HISTORY_ROW.format(
                 num=i, issue=issue, address=address, date=date_str
@@ -865,7 +904,7 @@ async def _handle_stats(pro):
     if created_at and isinstance(created_at, datetime):
         joined = created_at.strftime("%d/%m/%Y")
     else:
-        joined = "לא ידוע"
+        joined = Messages.Fallbacks.UNKNOWN
 
     rating_str = f"{rating:.1f} ⭐" if rating else Messages.Pro.RATING_NONE
 
@@ -1054,7 +1093,9 @@ async def _handle_search(pro, chat_id: str, whatsapp):
     logger.info(f"Pro {pro['_id']} claimed stuck lead {stuck['_id']} via search")
 
     return Messages.Pro.STUCK_LEAD_FOUND.format(
-        issue=stuck.get("issue_type") or "לא ידוע",
-        city=stuck.get("city") or stuck.get("full_address") or "לא ידוע",
+        issue=stuck.get("issue_type") or Messages.Fallbacks.UNKNOWN,
+        city=stuck.get("city")
+        or stuck.get("full_address")
+        or Messages.Fallbacks.UNKNOWN,
         wait_minutes=wait_minutes,
     )

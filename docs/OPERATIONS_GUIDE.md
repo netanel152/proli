@@ -111,8 +111,8 @@ The **Stale Lead Nudger** (every 4 h) finds leads in `BOOKED` status older than 
 3. Limits reminders to `MAX_PRO_REMINDERS` (3) per lead.
 
 The **SLA Monitor** (every 5 min; PRO-73: business hours + `sla_monitor_active` toggle, default OFF) checks chats in the `PAUSED_FOR_HUMAN` state:
-1. If 15 minutes of silence pass, the bot sends `Messages.Customer.SLA_DEFLECTION_MESSAGE`.
-2. This proactive "wake up" offers the customer a telephone call escalation if the Pro is unresponsive.
+1. If 15 minutes of silence pass, the bot sends `Messages.Customer.SLA_DEFLECTION_MESSAGE` and `check_sla_deflection` clears the pause state — no callback is booked.
+2. This proactive "wake up" hands the customer back to normal bot routing instead of leaving them stuck waiting on the Pro; the copy no longer promises a telephone call, since the code never books one.
 
 The **Pro-Approval SLA** monitor (every 5 min) chases a silent pro on a `NEW` lead awaiting approval, timed from `pro_notified_at`, instead of waiting for the 60-min SOS Healer:
 1. At T+10 min (`APPROVAL_NUDGE_MINUTES`), nudges the pro once.

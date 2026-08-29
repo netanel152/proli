@@ -3,6 +3,8 @@ Tests for workflow_service.process_incoming_message routing branches.
 Covers: reset, pro auto-detect, address collection, onboarding, deal finalization.
 """
 
+import re
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
@@ -2260,3 +2262,27 @@ async def test_typing_indicator_task_name_carries_masked_phone_suffix(
 
     assert captured["name"] == f"typing:{mask_chat_id(chat_id)}"
     assert "972501234567" not in captured["name"]
+
+
+# --- PRO-168 review follow-up: REMINDER's sibling options must route alike ---
+
+
+def test_every_reminder_keyword_is_a_pro_business_keyword():
+    """PRO-168 regression guard: Pro.REMINDER advertises *סיימתי* and
+    *עדיין עובד* as equal options, so both must route the same way -- always to
+    pro_flow, even mid-CUSTOMER_MODE or under the AWAITING_PRO_APPROVAL soft
+    hold. STILL_WORKING_COMMANDS was missing from PRO_BUSINESS_KEYWORDS until
+    this fix: the finish keyword reached pro_flow while its sibling option was
+    swallowed by the customer AI instead. Parses the *token* tokens straight
+    out of the message so a future reword of REMINDER re-checks itself instead
+    of pinning today's literal wording."""
+    tokens = re.findall(r"\*(.+?)\*", Messages.Pro.REMINDER)
+    assert (
+        tokens
+    ), f"Messages.Pro.REMINDER has no *token* to check: {Messages.Pro.REMINDER!r}"
+
+    for token in tokens:
+        assert token in app.services.workflow_service.PRO_BUSINESS_KEYWORDS, (
+            f"Messages.Pro.REMINDER advertises {token!r} but it is missing from "
+            f"PRO_BUSINESS_KEYWORDS -- its sibling option would route differently."
+        )

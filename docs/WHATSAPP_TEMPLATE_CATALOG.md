@@ -1,6 +1,6 @@
 # WhatsApp Template Catalog (PRO-88)
 
-**Status:** inventory complete, template designs draft. Nothing here has been submitted to Meta. The machine-readable half of this catalog now exists in code — `app/providers/whatsapp/template_registry.py` (PRO-89) — with every entry `DRAFT`; flipping an entry to `APPROVED` (with the exact name Meta approves) is the single code change that arms it for sending.
+**Status:** inventory complete, template designs draft. Nothing here has been submitted to Meta. The machine-readable half of this catalog now exists in code — `app/providers/whatsapp/template_registry.py` (PRO-89) — with every entry `DRAFT`; flipping an entry to `APPROVED` (with the exact name Meta approves) is the single code change that arms it for sending. Each `TemplateSpec` also carries a `source` field (PRO-168) naming the exact `Messages.*` constant its body must be worded from — the same constant this document cites per row — so a copy rewrite and a template submission can be checked against each other without either becoming a second home for the sentence.
 
 ## What this document is
 

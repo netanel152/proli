@@ -10,6 +10,7 @@ from app.scheduler import (
     BACKUP_FAILURE_COUNT_KEY,
 )
 from app.core.constants import LeadStatus, WorkerConstants
+from app.core.messages import Messages
 import app.scheduler as scheduler_module
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")
@@ -123,7 +124,7 @@ async def test_send_daily_reminders(mock_collections, mock_actions):
         "created_at": datetime.now(pytz.utc),
         "appointment_datetime": datetime.now(pytz.utc),
         "chat_id": "12345@c.us",
-        "details": "Leaky Faucet",
+        "issue_type": "Leaky Faucet",
     }
 
     # Setup chained cursor mock for Leads
@@ -188,7 +189,7 @@ async def test_send_daily_reminders_includes_booked_lead_with_appointment_today(
             "status": LeadStatus.BOOKED,
             "appointment_datetime": appt_utc,
             "chat_id": "972500000002@c.us",
-            "details": "Today's Leak Job",
+            "issue_type": "Today's Leak Job",
         }
     )
 
@@ -200,6 +201,49 @@ async def test_send_daily_reminders_includes_booked_lead_with_appointment_today(
     msg_sent = scheduler_module.whatsapp.send_message.call_args[0][1]
     assert "15:00" in msg_sent
     assert "Today's Leak Job" in msg_sent
+
+
+@pytest.mark.asyncio
+async def test_send_daily_reminders_falls_back_when_issue_type_missing(mock_db):
+    """PRO-168: the agenda row used to render `job.get("details")` — a field a
+    lead never carries — so every row silently printed the old "פרטים חסרים"
+    placeholder. It now reads the lead's real `issue_type`, falling back to
+    `Messages.Fallbacks.UNKNOWN` (not the old literal) only when that is
+    genuinely absent."""
+    await mock_db.users.delete_many({})
+    await mock_db.leads.delete_many({})
+
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "No Issue Plumbing",
+            "phone_number": "972500000007",
+            "is_active": True,
+        }
+    )
+
+    now_il = datetime.now(IL_TZ)
+    today = now_il.date()
+    appt_local = IL_TZ.localize(datetime(today.year, today.month, today.day, 9, 0, 0))
+    appt_utc = appt_local.astimezone(pytz.utc)
+
+    await mock_db.leads.insert_one(
+        {
+            "pro_id": pro_id,
+            "status": LeadStatus.BOOKED,
+            "appointment_datetime": appt_utc,
+            "chat_id": "972500000008@c.us",
+            # no issue_type at all
+        }
+    )
+
+    await scheduler_module.send_daily_reminders()
+
+    scheduler_module.whatsapp.send_message.assert_called_once()
+    msg_sent = scheduler_module.whatsapp.send_message.call_args[0][1]
+    assert Messages.Fallbacks.UNKNOWN in msg_sent
+    assert "פרטים חסרים" not in msg_sent
 
 
 @pytest.mark.asyncio
@@ -232,7 +276,7 @@ async def test_send_daily_reminders_excludes_booked_lead_with_appointment_tomorr
             "status": LeadStatus.BOOKED,
             "appointment_datetime": appt_utc,
             "chat_id": "972500000004@c.us",
-            "details": "Tomorrow's Job",
+            "issue_type": "Tomorrow's Job",
         }
     )
 
@@ -266,7 +310,7 @@ async def test_send_daily_reminders_excludes_booked_lead_without_appointment_dat
             "status": LeadStatus.BOOKED,
             "created_at": datetime.now(pytz.utc),
             "chat_id": "972500000006@c.us",
-            "details": "No Appointment Job",
+            "issue_type": "No Appointment Job",
         }
     )
 

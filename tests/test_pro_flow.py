@@ -3,6 +3,8 @@ Tests for pro_flow.py: all professional text commands.
 Covers: approve, reject, finish, active jobs, history, stats, reviews.
 """
 
+import re
+
 import pytest
 import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1045,7 +1047,7 @@ async def test_unknown_command_returns_dashboard(
     result = await handle_pro_text_command(
         "972500000000@c.us", "שלום", mock_wa, mock_lm
     )
-    assert f"סטטוס: {Messages.Pro.STATUS_AVAILABLE}" in result
+    assert f"*סטטוס:* {Messages.Pro.STATUS_AVAILABLE}" in result
     assert "יוסי אינסטלציה" in result
 
 
@@ -1242,7 +1244,7 @@ async def test_intent_detected_prompts_switch(pro_setup, mock_wa, mock_lm, monke
     # INTENT_DETECTED sent as text message
     mock_wa.send_message.assert_called_once()
     call_text = mock_wa.send_message.call_args[0][1]
-    assert "השב *1*" in call_text
+    assert call_text == Messages.Pro.INTENT_DETECTED
     # State set to AWAITING_INTENT_CONFIRMATION with 5-min TTL
     mock_state.set_state.assert_called_once_with(
         f"{PRO_PHONE}@c.us",
@@ -1987,10 +1989,9 @@ async def test_help_returns_help_menu_not_dashboard(
     result = await handle_pro_text_command(chat_id, "עזרה", mock_wa, mock_lm)
 
     assert result == Messages.Pro.HELP_MENU
-    assert "מדריך" in result
     assert "אשר" in result
     assert "סיכום" in result
-    assert "תפריט" in result  # tip at the bottom
+    assert "תפריט" in result  # the CMD_MENU row
 
 
 @pytest.mark.asyncio
@@ -2199,3 +2200,141 @@ async def test_reviews_via_feedback_keyword(pro_setup, mock_wa, mock_lm, monkeyp
     result = await handle_pro_text_command(chat_id, "פידבק", mock_wa, mock_lm)
 
     assert result == Messages.Pro.NO_REVIEWS_WITH_TEXT
+
+
+# --- PRO-168: 'עדיין עובד' (still working) --------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("keyword", Messages.Keywords.STILL_WORKING_COMMANDS)
+async def test_still_working_keyword_variants_silence_reminders_on_all_booked_leads(
+    pro_setup, mock_wa, mock_lm, monkeypatch, keyword
+):
+    """PRO-168: `Pro.REMINDER` advertises 'עדיין עובד' as the way to stop the
+    finish-nudges. Every spelling in STILL_WORKING_COMMANDS must reach
+    `_handle_still_working`, which silences the reminder counters on *every*
+    BOOKED lead of this pro — the reminder never names a lead, so neither can
+    the reply to it."""
+    pro_doc, db = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    await db.leads.delete_many({"pro_id": PRO_ID})
+
+    lead_a = ObjectId()
+    lead_b = ObjectId()
+    await db.leads.insert_many(
+        [
+            {
+                "_id": lead_a,
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "chat_id": "972501111111@c.us",
+                "created_at": datetime.now(timezone.utc),
+            },
+            {
+                "_id": lead_b,
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "chat_id": "972502222222@c.us",
+                "created_at": datetime.now(timezone.utc),
+            },
+        ]
+    )
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    result = await handle_pro_text_command(chat_id, keyword, mock_wa, mock_lm)
+
+    assert result == Messages.Pro.STILL_WORKING_ACK
+    for lead_id in (lead_a, lead_b):
+        lead = await db.leads.find_one({"_id": lead_id})
+        assert lead["reminder_sent_count"] == WorkerConstants.MAX_PRO_REMINDERS
+        assert lead["reminders_sent"] == WorkerConstants.MAX_PRO_REMINDERS
+
+
+# --- PRO-168: HELP_MENU / dashboard keyword truthfulness -------------------
+
+
+def test_every_cmd_keyword_has_a_dispatcher_list():
+    """PRO-168 §7 regression guard for the original 'עדיין עובד' defect:
+    `Pro.REMINDER` advertised a keyword that matched no `Messages.Keywords`
+    list, so replying with it silently fell through to the dashboard. This
+    walks every `*keyword*` token in every canonical `Messages.Pro.CMD_*` row
+    — what both `HELP_MENU` and the dashboard are built from — and asserts
+    each one is matched by some keyword list `handle_pro_text_command`
+    actually dispatches on (`pro_flow._PRO_COMMAND_LISTS`)."""
+    cmd_names = [name for name in dir(Messages.Pro) if name.startswith("CMD_")]
+    assert cmd_names, "no CMD_* rows found on Messages.Pro"
+
+    dispatched = set()
+    for list_name in app.services.pro_flow._PRO_COMMAND_LISTS:
+        dispatched.update(getattr(Messages.Keywords, list_name))
+
+    for name in cmd_names:
+        row = getattr(Messages.Pro, name)
+        tokens = re.findall(r"\*(.+?)\*", row)
+        assert tokens, f"Messages.Pro.{name} has no *keyword* token: {row!r}"
+        keyword = tokens[0]
+        assert keyword in dispatched, (
+            f"Messages.Pro.{name} advertises {keyword!r} but no entry in any "
+            f"pro_flow._PRO_COMMAND_LISTS list matches it — a pro replying "
+            f"with it would silently fall through to the dashboard."
+        )
+
+
+def test_help_menu_advertises_every_cmd_row_the_dashboard_can_show():
+    """HELP_MENU and the dashboard both render `Messages.Pro.CMD_*` rows —
+    PRO-168 built them from the same source specifically so the two menus
+    cannot drift apart. Every row the dashboard is capable of showing must
+    also appear, verbatim, somewhere in HELP_MENU."""
+    dashboard_rows = (
+        Messages.Pro.CMD_APPROVE,
+        Messages.Pro.CMD_REJECT,
+        Messages.Pro.CMD_FINISH,
+        Messages.Pro.CMD_DETAILS,
+        Messages.Pro.CMD_CANCEL,
+        Messages.Pro.CMD_SEARCH,
+        Messages.Pro.CMD_PAUSE,
+        Messages.Pro.CMD_RESUME,
+    )
+    for row in dashboard_rows:
+        assert row in Messages.Pro.HELP_MENU
+
+
+@pytest.mark.asyncio
+async def test_dashboard_shows_pause_command_when_pro_is_active(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """An active pro sees CMD_PAUSE (an offer to stop taking work), not CMD_RESUME."""
+    pro_doc, db = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    await db.users.update_one({"_id": PRO_ID}, {"$set": {"is_active": True}})
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    result = await handle_pro_text_command(chat_id, "תפריט", mock_wa, mock_lm)
+
+    assert Messages.Pro.CMD_PAUSE in result
+    assert Messages.Pro.CMD_RESUME not in result
+
+
+@pytest.mark.asyncio
+async def test_dashboard_shows_resume_command_when_pro_is_paused(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """A paused pro sees CMD_RESUME (the way back in), not CMD_PAUSE."""
+    pro_doc, db = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+    await db.users.update_one({"_id": PRO_ID}, {"$set": {"is_active": False}})
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    result = await handle_pro_text_command(chat_id, "תפריט", mock_wa, mock_lm)
+
+    assert Messages.Pro.CMD_RESUME in result
+    assert Messages.Pro.CMD_PAUSE not in result

@@ -1,217 +1,289 @@
+"""The copy catalog — every sentence a customer, professional or operator reads.
+
+PRO-168 rewrote this file against `docs/COPY_STYLE_GUIDE.md`. The rules that
+shape what you see below, in the guide's numbering:
+
+* §2 neutral-first gender — rephrase so no gendered verb is needed; `השב/י`
+  only when a verb is unavoidable; never bare masculine in customer copy.
+* §3 one menu format — a lead-in ending `?`/`:`, then `*token* — text`, one
+  option per line. Every advertised digit/keyword has a handler (§7).
+* §4 at most one emoji per message, at the start of the headline; sibling
+  messages agree. Structured cards use bold field labels (§5), not one emoji
+  per row.
+* §6 RTL safety — Latin/numeric placeholders end-of-line or on their own line.
+* §8 the product is **פרולי** in Hebrew copy; no trailing whitespace.
+
+Menus are text-only by hard product rule (see CLAUDE.md): nothing here is ever
+rendered through `send_interactive`.
+"""
+
+
 class Messages:
     class Customer:
-        # User-facing messages
+        # --- The 1-5 rating ask -------------------------------------------
+        # §7: three messages open the rating window — COMPLETION_ACK (the
+        # customer confirmed), RATE_SERVICE (the pro finished) and
+        # RATING_REPROMPT (an unreadable answer) — and all three set the same
+        # `waiting_for_rating` flag. They share this line so they cannot
+        # advertise three different answer sets, and so every one of them
+        # mentions the *דלג* skip that `Keywords.SKIP_TOKENS` already handles.
+        RATING_SCALE_LINE = (
+            "אפשר לענות במספר בין *1* (גרוע) ל-*5* (מצוין), או *דלג* לדילוג."
+        )
+
         COMPLETION_CHECK = (
-            "היי! 👋 אנחנו ב-Proli רוצים לוודא שהכל תקין עם השירות מ-{pro_name}. "
-            "האם העבודה הסתיימה?\n\n"
-            "השב *1* — כן, הסתיים ✅\n"
-            "השב *2* — עדיין לא ❌"
+            "היי 👋 רק לוודא שהכל תקין עם השירות מ{pro_name}.\n"
+            "העבודה הסתיימה?\n"
+            "*1* — כן, הסתיים\n"
+            "*2* — עדיין לא"
         )
-        COMPLETION_ACK = "מעולה! שמחים לשמוע. איך היה השירות עם {pro_name}? נשמח אם תדרגו אותו מ-1 (גרוע) עד 5 (מצוין)."
+        COMPLETION_ACK = (
+            "🙌 מעולה, שמחתי לשמוע.\n"
+            "איך היה השירות עם {pro_name}?\n" + RATING_SCALE_LINE
+        )
         COMPLETION_NOT_YET_ACK = (
-            "אין בעיה 👍 לא נטריד יותר בינתיים.\n"
-            "כשהעבודה תסתיים — פשוט כתוב לי כאן *סיימתי* ונמשיך משם."
+            "👍 אין בעיה, לא אטריד יותר בינתיים.\n"
+            "כשהעבודה תסתיים אפשר לכתוב לי כאן *סיימתי* ונמשיך משם."
         )
-        RATING_THANKS = "תודה רבה על הדירוג! ⭐"
+        RATING_THANKS = "⭐ תודה רבה על הדירוג!"
         # PRO-122: the closing question used to accept only an exact "1"-"5".
         # Anything else fell through to the dispatcher, which — context already
         # cleared on completion — greeted the customer anew and asked their name.
-        RATING_REPROMPT = (
-            "לא הצלחתי לקרוא את הדירוג 🙂\n"
-            "אנא השב מספר בין *1* (גרוע) ל-*5* (מצוין), או *דלג* אם אינך רוצה לדרג."
-        )
-        RATING_SKIPPED = "אין בעיה, תודה רבה על העדכון! 🙏"
+        RATING_REPROMPT = "🙂 לא הצלחתי לקרוא את הדירוג.\n" + RATING_SCALE_LINE
+        RATING_SKIPPED = "🙏 אין בעיה, תודה רבה על העדכון!"
+        # §4/§5: one headline emoji, bold field labels; §6: the phone number
+        # and every other Latin/numeric value sits at the end of its line.
         PRO_FOUND = (
             "🎉 *נמצא לך איש מקצוע!*\n\n"
-            "👷 *שם:* {pro_name}\n"
-            "📞 *טלפון:* {pro_phone}\n"
+            "*שם:* {pro_name}\n"
+            "*טלפון:* {pro_phone}\n"
             "{profession_line}"
             "\n"
-            "📋 *פרטי העבודה:*\n"
-            "🛠️ תקלה: {issue_type}\n"
-            "📍 כתובת: {full_address}\n"
-            "⏰ תאריך ושעה: {appointment_time}\n"
+            "*פרטי העבודה*\n"
+            "*תקלה:* {issue_type}\n"
+            "*כתובת:* {full_address}\n"
+            "*מועד:* {appointment_time}\n"
             "{price_line}"
             "{rating_line}"
-            "\n{pro_name} יצור איתך קשר בקרוב! 👍"
+            "\n{pro_name} ייצור איתך קשר בקרוב."
         )
-        RATE_SERVICE = "היי! 👋 איך היה השירות עם {pro_name}? נשמח לדירוג 1-5."
+        RATE_SERVICE = (
+            "🙌 העבודה עם {pro_name} סומנה כהושלמה.\n"
+            "איך היה השירות?\n" + RATING_SCALE_LINE
+        )
         REVIEW_REQUEST = (
-            "תודה על הדירוג! האם תרצה לכתוב ביקורת קצרה על החוויה? "
-            "אם כן, פשוט כתוב אותה כעת (או השב *דלג*)."
+            "תודה על הדירוג! אפשר גם לכתוב ביקורת קצרה על החוויה —\n"
+            "פשוט לכתוב אותה כאן, או להשיב *דלג* לדילוג."
         )
         REVIEW_SAVED = "תודה רבה! הביקורת שלך נשמרה."
         # PRO-122: REVIEW_REQUEST is framed as optional but had no skip path, so
         # "לא" / "לא תודה" was stored verbatim as the pro's public review.
-        REVIEW_DECLINED = "תודה רבה! 🙏"
-        ADDRESS_SAVED = "✅ הכתובת עודכנה בהצלחה!"
-        ADDRESS_INVALID = "❌ לא הצלחתי לזהות את הכתובת. אנא נסה לשלוח מיקום (Location Pin) או הקלד עיר ורחוב בצורה ברורה."
-        REQUEST_CANCELLED = (
-            "👍 הבקשה בוטלה. אם תרצה/י לפתוח פנייה חדשה, פשוט שלח/י הודעה."
+        REVIEW_DECLINED = "🙏 תודה רבה!"
+        ADDRESS_SAVED = "✅ הכתובת עודכנה בהצלחה."
+        # §8: the English aside "(Location Pin)" is gone; §2: no bare masculine.
+        ADDRESS_INVALID = (
+            "❌ לא הצלחתי לזהות את הכתובת.\n"
+            "אפשר לשתף מיקום, או לכתוב עיר ורחוב בצורה ברורה."
         )
-        CANCELLED_ACTIVE_LEAD = "✅ ביטלתי את העבודה כבקשתך. עדכנתי את איש המקצוע."
+        REQUEST_CANCELLED = "👍 הבקשה בוטלה. לפתיחת פנייה חדשה — פשוט לשלוח לי הודעה."
+        CANCELLED_ACTIVE_LEAD = "✅ ביטלתי את העבודה כבקשתך. איש המקצוע עודכן."
         # PRO-118: a cancel keyword on a BOOKED job asks before acting —
         # text-only menu, destructive action only on an explicit '1'.
         CANCEL_CONFIRM_PROMPT = (
-            "רק לוודא — לבטל את העבודה שנקבעה? ⚠️\n"
-            "השב '1' לביטול העבודה, או '2' כדי להשאיר אותה."
+            "⚠️ רק לוודא — לבטל את העבודה שנקבעה?\n"
+            "*1* — כן, לבטל\n"
+            "*2* — לא, להשאיר אותה"
         )
         CANCEL_ABORTED = "👍 העבודה נשארת כמתוכנן."
         CANCEL_NO_ACTIVE = "לא מצאתי עבודה פעילה לביטול — ייתכן שהיא כבר עודכנה."
         RESCHEDULE_OFFER = (
-            "אין בעיה! בוא נתאם מועד חדש. הנה הזמנים הפנויים של איש המקצוע:\n"
+            "אין בעיה, נתאם מועד חדש. הנה הזמנים הפנויים של איש המקצוע:\n"
             "{slots}\n\n"
-            "השב עם מספר התור הרצוי, או 'ביטול' כדי להשאיר את המועד הנוכחי."
+            "אפשר להשיב במספר התור הרצוי, או *ביטול* כדי להשאיר את המועד הנוכחי."
         )
         RESCHEDULE_SUCCESS = (
-            "✅ מעולה! המועד שונה בהצלחה ל-{new_time}. איש המקצוע עודכן."
+            "✅ המועד שונה בהצלחה. איש המקצוע עודכן.\nמועד חדש: {new_time}"
         )
         RESCHEDULE_NO_SLOTS = (
-            "מצטערים, לא מצאתי תורים פנויים כרגע אצל איש המקצוע. "
-            "האם תרצה לבטל את העבודה או להמתין?"
+            "לא מצאתי תורים פנויים כרגע אצל איש המקצוע.\n"
+            "אפשר להשיב *ביטול* כדי לבטל את העבודה, או *נציג* כדי לתאם מול הצוות."
         )
-        RESCHEDULE_INVALID_CHOICE = "אנא בחר מספר תור חוקי מהרשימה."
+        RESCHEDULE_INVALID_CHOICE = "אנא לבחור מספר תור מהרשימה."
         RESCHEDULE_CANCELLED = "המועד נשאר כפי שהיה."
         HELP_INFO = (
-            "אני המערכת החכמה של Proli! 🛠️\n"
-            "אני כאן כדי לעזור לך למצוא את איש המקצוע המתאים ביותר. "
-            "פשוט תאר/י לי את התקלה והמיקום שלך, ואני אדאג להשאר."
+            "🛠️ אני העוזר החכם של פרולי.\n"
+            "אני כאן כדי למצוא לך את איש המקצוע המתאים ביותר. "
+            "אפשר לתאר לי את התקלה ואת המיקום, ואני אדאג לשאר."
         )
+        # §7: PENDING_REVIEW and STATUS_PENDING_ADMIN_REVIEW describe the same
+        # state — a lead sitting in PENDING_ADMIN_REVIEW waiting for a human to
+        # route it — so they say the same thing. PENDING_REVIEW announces it,
+        # STATUS_* answers a status pull about it, STILL_PENDING_REVIEW repeats
+        # it when the customer writes again inside the short-circuit window.
         PENDING_REVIEW = (
-            "קיבלתי את הפנייה שלך! 👍\n"
-            "כרגע אנחנו מחפשים את איש המקצוע המתאים ביותר.\n"
-            "צוות Proli יחזור אליך בהקדם עם עדכון."
+            "👍 קיבלתי את הפנייה שלך.\n"
+            "נציג/ה מצוות פרולי בוחן/ת אותה ידנית ומשבץ/ת איש מקצוע מתאים.\n"
+            "אעדכן אותך כאן ברגע שיש חדש."
         )
         STILL_PENDING_REVIEW = (
-            "הפנייה שלך עדיין בבדיקה אצל צוות Proli. "
-            "נחזור אליך ברגע שנוכל לשבץ איש מקצוע מתאים. 🙏"
+            "🙏 הפנייה שלך עדיין נבחנת ידנית אצל צוות פרולי.\n"
+            "אעדכן אותך כאן ברגע שיש איש מקצוע מתאים."
         )
         AWAITING_APPROVAL = (
-            "מעולה, העברתי את הפרטים והמדיה לאיש המקצוע לאישור. "
-            "אעדכן אותך ממש בקרוב. 👍"
+            "👍 העברתי את הפרטים ואת המדיה לאיש המקצוע לאישור.\n"
+            "אעדכן אותך ממש בקרוב."
         )
-        AWAITING_APPROVAL_TRANSPARENT = "✅ העברתי את הפנייה שלך ל-{pro_name}. \nזמן המענה הממוצע שלו הוא כ-10 דקות.\nאעדכן אותך כאן ברגע שהוא יאשר את העבודה!"
-        YOU_ARE_WELCOME = "בכיף! אני כאן אם תצטרך עוד משהו. 🛠️"
-        STILL_WAITING = "הפנייה שלך נמצאת עכשיו אצל איש המקצוע לאישור. נעדכן אותך ברגע שנקבל תשובה! 🙏"
+        AWAITING_APPROVAL_TRANSPARENT = (
+            "✅ העברתי את הפנייה שלך ל{pro_name}.\n"
+            "זמן המענה הממוצע שלו הוא כ-10 דקות.\n"
+            "אעדכן אותך כאן ברגע שהעבודה תאושר."
+        )
+        YOU_ARE_WELCOME = "🛠️ בכיף! אני כאן אם צריך עוד משהו."
+        STILL_WAITING = (
+            "🙏 הפנייה שלך נמצאת עכשיו אצל איש המקצוע לאישור.\n"
+            "אעדכן אותך ברגע שתתקבל תשובה."
+        )
         # PRO-56 approval-SLA: offered to the customer when the pro stays silent.
         REASSIGN_OFFER = (
-            "איש המקצוע עדיין לא אישר את הפנייה. 🕐\n"
-            "השב *1* — לחפש לך איש מקצוע אחר\n"
-            "השב *2* — להמתין עוד קצת"
+            "🕐 איש המקצוע עדיין לא אישר את הפנייה. מה עושים?\n"
+            "*1* — לחפש איש מקצוע אחר\n"
+            "*2* — להמתין עוד קצת"
         )
         REASSIGN_WAIT_ACK = (
-            "אין בעיה, ממשיכים להמתין לאישור. אעדכן אותך ברגע שיש תשובה! 🙏"
+            "🙏 אין בעיה, ממשיכים להמתין לאישור. אעדכן אותך ברגע שיש תשובה."
         )
         BOT_PAUSED_BY_PRO = (
-            "איש המקצוע ביקש לדבר איתך ישירות. 📞\n"
-            "הבוט מושהה כרגע — איש המקצוע ידבר איתך בהודעות."
+            "📞 איש המקצוע ביקש לדבר איתך ישירות.\n"
+            "אני מושהה כרגע — ההודעות הבאות יגיעו ממנו."
         )
-        BOT_PAUSED_BY_CUSTOMER = "✅ קיבלתי! מעביר אותך לנציג אנושי.\n"
-        EMERGENCY_ACK = "🚨 *זיהיתי מצב חירום.* \nאני מדלג על שאר הפרטים ומזעיק עכשיו אנשי מקצוע פנויים באזור שלך! בינתיים, אנא שמור על בטיחות."
+        BOT_PAUSED_BY_CUSTOMER = "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת."
+        # PRO-121 owns this message's wording; PRO-168 only stripped the
+        # trailing whitespace that used to survive to the phone (§8).
+        EMERGENCY_ACK = (
+            "🚨 *זיהיתי מצב חירום.*\n"
+            "אני מדלג על שאר הפרטים ומזעיק עכשיו אנשי מקצוע פנויים באזור שלך! "
+            "בינתיים, אנא לשמור על בטיחות."
+        )
+        # §7: `monitor_service.check_sla_deflection` clears the pause state and
+        # books nothing at all. The old copy offered "אקבע לך שיחה טלפונית"
+        # with a כן/לא menu whose replies fell straight through to the AI. This
+        # says only what the code does: the handoff timed out and the bot is
+        # back, so the customer can simply keep writing here.
         SLA_DEFLECTION_MESSAGE = (
-            "אני רואה שאיש המקצוע שלנו כרגע באמצע עבודה מורכבת ולא התפנה לענות.\n"
-            "תרצה שאקבע לך שיחה טלפונית איתו להמשך היום?\n\n"
-            "השב *כן* - לקביעת שיחה\n"
-            "השב *לא* - להמשך המתנה בוואטסאפ"
+            "🕐 איש המקצוע עדיין לא התפנה לענות, ואני חוזר לטפל בפנייה שלך.\n"
+            "אפשר פשוט לכתוב לי כאן ואמשיך מכאן — או לכתוב *נציג* כדי לחזור "
+            "ולהמתין למענה אנושי."
         )
         LOYALTY_OFFER = (
-            "איזה כיף שחזרת אלינו! 🏠\n"
-            "ראיתי שבעבר {pro_name} טיפל בך. תרצה שאבדוק קודם אם הוא פנוי לקחת את העבודה הזו?\n\n"
-            "השב *1* - כן, אשמח שזה יהיה הוא.\n"
-            "השב *2* - לא, חפש לי מישהו אחר."
+            "🏠 איזה כיף שחזרת אלינו!\n"
+            "בעבר {pro_name} טיפל בך — לבדוק קודם אם הוא פנוי לעבודה הזו?\n"
+            "*1* — כן, אשמח שזה יהיה הוא\n"
+            "*2* — לא, לחפש מישהו אחר"
         )
         # PRO-119: the accept ack must match what actually happened. Sent only
         # when the lead was complete enough to dispatch and the pro really was
         # contacted this turn.
         LOYALTY_ACCEPTED_NOTIFYING = (
-            "מעולה! 🙌 פניתי ל{pro_name} עם הפרטים, ואעדכן אותך ברגע שיאשר."
+            "🙌 מעולה! פניתי ל{pro_name} עם הפרטים, ואעדכן אותך ברגע שיאשר."
         )
         # Sent when the address gate is not satisfied yet: the preference is
         # saved, but no pro was contacted — so the copy promises nothing and
         # asks for what is still missing ({missing} is the gate's own reason).
         LOYALTY_ACCEPTED_NEED_DETAILS = (
-            "מעולה, רשמתי ש{pro_name} יטפל בעבודה הזו. 👌\n" "{missing}"
+            "👌 מעולה, רשמתי ש{pro_name} יטפל בעבודה הזו.\n" "{missing}"
         )
         # PRO-119: the lead changed hands while the loyalty prompt was open —
         # neutral, promises nothing, since the race winner owns it now.
         LOYALTY_ALREADY_UPDATED = (
-            "הפנייה שלך כבר עודכנה במערכת — נמשיך לטפל בה ואעדכן אותך. 🙏"
+            "🙏 הפנייה שלך כבר עודכנה במערכת — ממשיכים לטפל בה ואעדכן אותך."
         )
-        LOYALTY_DECLINED = (
-            "בסדר גמור, אני אחפש עבורך את איש המקצוע הפנוי והמתאים ביותר."
-        )
+        LOYALTY_DECLINED = "בסדר גמור, אחפש עבורך את איש המקצוע הפנוי והמתאים ביותר."
         LOYALTY_REPROMPT = (
-            "לא בטוח שהבנתי 🙂\n"
-            "השב *1* אם תרצה שאבדוק מול איש המקצוע הקודם, או *2* כדי שאחפש מישהו אחר."
+            "🙂 לא בטוח שהבנתי. לבדוק מול איש המקצוע הקודם?\n"
+            "*1* — כן, לבדוק מולו\n"
+            "*2* — לא, לחפש מישהו אחר"
         )
+        # §7: `pro_flow._execute_cancel` writes LeadStatus.CANCELLED — a
+        # terminal status. It frees the slot, clears state and context, and
+        # stops; `cancel_reason: "pro_cancelled"` is read nowhere and no
+        # scheduler job looks at CANCELLED leads. Nothing is searching for a
+        # replacement, so the copy must not say that it is — it offers the two
+        # routes that do work instead.
         PRO_CANCELLED_BOOKING = (
             "⚠️ *עדכון:* איש המקצוע ביטל את העבודה שנקבעה.\n"
-            "אנו נחפש לך איש מקצוע אחר בהקדם. 🙏"
+            "אפשר לכתוב לי כאן ואפתח פנייה חדשה מיד, "
+            "או *נציג* כדי לדבר עם מישהו מהצוות."
         )
         # PRO-116: shown when a customer with a confirmed BOOKED job writes about
         # something else — so we don't silently open a second parallel lead.
         EXISTING_JOB_PROMPT = (
-            "יש לך כבר עבודה מאושרת עם {pro_name} 🛠️\n"
-            "({issue} — {appointment}).\n\n"
-            "זו פנייה *חדשה*?\n"
-            "השב *1* — כן, בעיה חדשה\n"
-            "השב *2* — זה לגבי העבודה הקיימת"
+            "🛠️ יש לך כבר עבודה מאושרת עם {pro_name} ({issue} — {appointment}).\n"
+            "זו פנייה חדשה?\n"
+            "*1* — כן, בעיה חדשה\n"
+            "*2* — זה לגבי העבודה הקיימת"
         )
-        NEW_REQUEST_ACK = (
-            "בסדר גמור 🙂 ספר/י לי מה הבעיה החדשה ואני כבר אדאג לך לאיש מקצוע."
-        )
+        NEW_REQUEST_ACK = "🙂 בסדר גמור. מה הבעיה החדשה? אדאג לך לאיש מקצוע."
         EXISTING_JOB_HANDOFF = (
-            "אין בעיה! העברתי את ההודעה ל{pro_name} והוא יחזור אליך בהקדם. 🛠️"
+            "🛠️ אין בעיה! העברתי את ההודעה ל{pro_name} והוא יחזור אליך בהקדם."
         )
 
-        # --- Status pull responses (PR #1) ---
+        # --- Status pull responses ---
+        # §4: the sibling set agrees — every one of these opens with its own
+        # status emoji and carries no second emoji.
         STATUS_NO_ACTIVE_LEAD = (
             "👋 אין לך כרגע פנייה פעילה אצלנו.\n"
-            "אם תרצה/י לפתוח פנייה חדשה, פשוט תאר/י את הבעיה ונחזור אליך."
+            "לפתיחת פנייה חדשה — פשוט לתאר את הבעיה ואטפל בה."
         )
         STATUS_NEW = (
             "📨 *סטטוס הפנייה שלך*\n\n"
-            "קיבלנו את הפנייה ואנחנו מאתרים עבורך איש מקצוע מתאים.\n"
-            "🔧 בעיה: {issue}\n"
-            "⏱️ עודכן לאחרונה: {updated_at}"
+            "קיבלנו את הפנייה ואנחנו מאתרים איש מקצוע מתאים.\n"
+            "*בעיה:* {issue}\n"
+            "*עודכן לאחרונה:* {updated_at}"
         )
         STATUS_CONTACTED = (
             "📤 *סטטוס הפנייה שלך*\n\n"
-            "שלחנו את הפנייה לאיש מקצוע ואנו ממתינים לאישורו.\n"
-            "🔧 בעיה: {issue}\n"
-            "⏱️ עודכן לאחרונה: {updated_at}"
+            "הפנייה נשלחה לאיש מקצוע ואנחנו ממתינים לאישורו.\n"
+            "*בעיה:* {issue}\n"
+            "*עודכן לאחרונה:* {updated_at}"
         )
         STATUS_BOOKED = (
             "✅ *סטטוס הפנייה שלך*\n\n"
             "הפנייה אושרה ומשובצת.\n"
-            "👤 איש מקצוע: {pro_name}\n"
-            "🔧 בעיה: {issue}\n"
-            "📅 מועד: {appointment_time}"
+            "*איש מקצוע:* {pro_name}\n"
+            "*בעיה:* {issue}\n"
+            "*מועד:* {appointment_time}"
         )
         STATUS_PENDING_ADMIN_REVIEW = (
             "🕒 *סטטוס הפנייה שלך*\n\n"
-            "נציג מטעמנו בוחן את הפנייה ידנית — נחזור אליך בהקדם."
+            "נציג/ה מצוות פרולי בוחן/ת את הפנייה ידנית ומשבץ/ת איש מקצוע מתאים.\n"
+            "אעדכן אותך כאן ברגע שיש חדש."
         )
         STATUS_COMPLETED = (
             "✔️ *סטטוס הפנייה שלך*\n\n"
-            "העבודה הסתיימה. אם טרם דירגת את איש המקצוע, נשמח אם תוכל/י לעשות זאת."
+            "העבודה הסתיימה. אם עוד לא דירגת את איש המקצוע, נשמח לדירוג."
         )
         STATUS_CANCELLED = "❌ *סטטוס הפנייה שלך*\n\nהפנייה בוטלה."
         STATUS_REJECTED_OR_CLOSED = (
-            "ℹ️ *סטטוס הפנייה שלך*\n\nהפנייה נסגרה. תוכל/י לפתוח פנייה חדשה בכל עת."
+            "ℹ️ *סטטוס הפנייה שלך*\n\nהפנייה נסגרה. אפשר לפתוח פנייה חדשה בכל עת."
         )
 
-        # --- PRO-166: migrated verbatim from call sites ---
+        # --- PRO-166: migrated from call sites ---
         # Optional lines composed into PRO_FOUND (built in pro_flow.py).
-        PROFESSION_LINE = "🔧 *מקצוע:* {label}\n"
-        QUOTED_PRICE_LINE = "\n💰 *הערכת המחיר שקיבלת:* {quoted_price}₪\n"
-        PRO_RATING_LINE = "\n⭐ דירוג: {rating:.1f} ({review_count} ביקורות)"
-        # workflow_service's AWAITING_NEW_OR_EXISTING re-prompt.
-        NEW_OR_EXISTING_REPROMPT = "אנא השב 1 (בעיה חדשה) או 2 (לגבי העבודה הקיימת)."
+        PROFESSION_LINE = "*מקצוע:* {label}\n"
+        QUOTED_PRICE_LINE = "\n*הערכת המחיר שקיבלת:* {quoted_price}₪\n"
+        PRO_RATING_LINE = "\n*דירוג:* {rating:.1f} ({review_count} ביקורות)"
+        # workflow_service's AWAITING_NEW_OR_EXISTING re-prompt. §3: same menu
+        # shape and same option wording as EXISTING_JOB_PROMPT, which is the
+        # question this re-asks.
+        NEW_OR_EXISTING_REPROMPT = (
+            "🙂 לא בטוח שהבנתי. זו פנייה חדשה?\n"
+            "*1* — כן, בעיה חדשה\n"
+            "*2* — זה לגבי העבודה הקיימת"
+        )
         # lead_manager_service's address gate: the sentence plus the field
         # vocabulary it lists (attribute name -> Hebrew label, in gate order).
         ADDRESS_MISSING_PARTS = (
-            "כדי שבעל המקצוע יגיע למקום המדויק אני צריך/ה עוד פרטים לכתובת: "
+            "כדי שאיש המקצוע יגיע למקום המדויק נשאר רק להשלים לכתובת: "
             "{missing_fields}"
         )
         ADDRESS_FIELD_LABELS = {
@@ -223,22 +295,87 @@ class Messages:
         }
 
     class Pro:
-        # Messages sent to professionals
-        REMINDER = """👋 היי, רק מוודא לגבי העבודה האחרונה. האם סיימת? 
-השב 'סיימתי' לאישור או 'עדיין עובד' לעדכון."""
-        STALE_LEAD_REMINDER = "היי {pro_name}! 👋\nשמתי לב שהעבודה שנקבעה אצל {customer_name} עדיין מסומנת כפתוחה.\nאם סיימת אותה, אנא השב *סיימתי* כדי לשחרר את המערכת ולקבל עבודות חדשות!"
+        # --- The canonical command list (§3) ------------------------------
+        # One row per keyword, in the one menu format. `HELP_MENU` renders all
+        # of them, grouped; `pro_flow._show_pro_dashboard` renders the subset
+        # that applies right now. Both read these rows, so the dashboard and
+        # the help menu can no longer advertise different keywords — which is
+        # exactly what the three separate hand-written menus here used to do.
+        # Every keyword below is matched by a `Messages.Keywords` list that
+        # `handle_pro_text_command` dispatches on (§7).
+        CMD_APPROVE = "*אשר* — קבלת העבודה שממתינה לך"
+        CMD_REJECT = "*דחה* — דחיית העבודה שממתינה לך"
+        CMD_DETAILS = "*פרטים* — פרטי העבודות הפעילות וקישורי ניווט"
+        CMD_ACTIVE_JOBS = "*עבודות* — רשימת העבודות הפעילות"
+        CMD_FINISH = "*סיימתי* — סיום עבודה פעילה"
+        CMD_CANCEL = "*ביטול* — ביטול עבודה פעילה"
+        CMD_SEARCH = "*חפש* — איתור לידים פנויים"
+        CMD_RESUME = "*זמין* — חזרה לקבלת עבודות"
+        CMD_PAUSE = "*הפסקה* — עצירה זמנית של קבלת עבודות"
+        CMD_SUMMARY = "*סיכום* — סיכום הביצועים שלך"
+        CMD_REVIEWS = "*ביקורות* — הביקורות האחרונות שלך"
+        CMD_HISTORY = "*היסטוריה* — העבודות האחרונות שהושלמו"
+        CMD_MENU = "*תפריט* — חזרה ללוח הבקרה"
+
+        HELP_MENU = "\n".join(
+            (
+                "📖 *הפקודות של פרולי*",
+                "",
+                "*קבלת עבודות:*",
+                CMD_APPROVE,
+                CMD_REJECT,
+                "",
+                "*ניהול העבודה:*",
+                CMD_DETAILS,
+                CMD_ACTIVE_JOBS,
+                CMD_FINISH,
+                CMD_CANCEL,
+                "",
+                "*יוזמה וזמינות:*",
+                CMD_SEARCH,
+                CMD_RESUME,
+                CMD_PAUSE,
+                "",
+                "*העסק שלך:*",
+                CMD_SUMMARY,
+                CMD_REVIEWS,
+                CMD_HISTORY,
+                "",
+                CMD_MENU,
+            )
+        )
+
+        # --- Messages sent to professionals -------------------------------
+        # §7: this used to advertise 'עדיין עובד', a keyword no Keywords list
+        # contained, so the reply fell through to the dashboard. Both options
+        # below are now real commands (FINISH_COMMANDS / STILL_WORKING_COMMANDS).
+        REMINDER = (
+            "👋 רק מוודא לגבי העבודות הפתוחות שלך. סיימת?\n"
+            "*סיימתי* — לסגירת עבודה\n"
+            "*עדיין עובד* — להפסקת התזכורות על כולן"
+        )
+        # The answer to 'עדיין עובד': the finish nudges stop for this pro's
+        # open jobs, which is exactly what the handler does.
+        STILL_WORKING_ACK = (
+            "👍 עודכן, לא אזכיר לך שוב על העבודות הפתוחות.\n"
+            "כשתסיים — אפשר לכתוב *סיימתי* ואסגור אותן."
+        )
+        STALE_LEAD_REMINDER = (
+            "👋 היי {pro_name}, העבודה אצל {customer_name} עדיין מסומנת כפתוחה.\n"
+            "אם סיימת אותה — אפשר לכתוב *סיימתי* כדי לשחרר מקום לעבודות חדשות."
+        )
         CUSTOMER_REPORTED_COMPLETION = "👍 הלקוח דיווח שהעבודה הסתיימה. הסטטוס עודכן."
         APPROVE_SUCCESS = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
-        CALENDAR_UPDATE_SUCCESS = "\n📅 היומן עודכן בהצלחה!"
+        CALENDAR_UPDATE_SUCCESS = "\nהיומן עודכן בהצלחה."
         NO_PENDING_APPROVE = "לא מצאתי עבודה חדשה לאישור."
-        ALREADY_RESPONDED = "כבר הגבת לקריאה זו. לא ניתן לשנות את בחירתך כעת."
+        ALREADY_RESPONDED = "כבר הגבת לקריאה זו, ולא ניתן לשנות את הבחירה כעת."
         # PRO-117: sent only after the rematch actually happened, so the copy
         # states a done fact rather than promising a future search.
         REJECT_SUCCESS = "העבודה נדחתה. הפנייה הועברה לאיש מקצוע אחר."
         # PRO-117: sent when reject → rematch found no replacement and the lead
         # was escalated to admin review — no "we'll find someone else" promise.
         REJECT_SUCCESS_ESCALATED = (
-            "העבודה נדחתה. הפנייה הועברה לצוות Proli לשיבוץ ידני."
+            "העבודה נדחתה. הפנייה הועברה לצוות פרולי לשיבוץ ידני."
         )
         NO_PENDING_REJECT = "לא מצאתי עבודה חדשה לדחייה."
         FINISH_SUCCESS = "✅ עודכן שהעבודה הסתיימה. תודה!"
@@ -246,32 +383,46 @@ class Messages:
         # non-blocking follow-up, always skippable.
         FINISH_SUCCESS_ASK_PRICE = (
             "✅ עודכן שהעבודה הסתיימה. תודה!\n\n"
-            "💰 כמה גבית על העבודה? (בשקלים)\n"
-            "שלח מספר בלבד, או 'דלג' לדילוג."
+            "כמה גבית על העבודה?\n"
+            "אפשר לשלוח מספר בשקלים, או *דלג* לדילוג."
         )
         FINAL_PRICE_RECORDED = "💰 נרשם: {price}₪. תודה!"
         FINAL_PRICE_SKIPPED = "👍 דילגתי על רישום המחיר."
-        FINAL_PRICE_INVALID = "לא זוהה סכום — דילגתי על רישום המחיר. אפשר להמשיך כרגיל."
+        FINAL_PRICE_INVALID = "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל."
         NO_ACTIVE_FINISH = "לא מצאתי עבודה פעילה לסיום."
-        STATUS_PAUSED = "☕ *הסטטוס שלך שונה ל'בהפסקה'.* לא תקבל הצעות עבודה חדשות עד שתכתוב 'זמין'."
-        STATUS_RESUMED = "🚀 *הסטטוס שלך שונה ל'זמין'.* חזרת לקבל הצעות עבודה!"
-        NO_PENDING_APPROVALS = "❌ אין לך כרגע עבודות שממתינות לאישור."
-        NO_ACTIVE_JOBS = "❌ אין לך עבודות פעילות כרגע שניתן לסיים."
+        STATUS_PAUSED = (
+            "☕ *הסטטוס שלך שונה ל'בהפסקה'.*\n"
+            "לא יגיעו אליך הצעות עבודה חדשות עד שתכתוב *זמין*."
+        )
+        STATUS_RESUMED = "🚀 *הסטטוס שלך שונה ל'זמין'.*\nחזרת לקבל הצעות עבודה!"
+        NO_PENDING_APPROVALS = "אין לך כרגע עבודות שממתינות לאישור."
+        NO_ACTIVE_JOBS = "אין לך עבודות פעילות כרגע שניתן לסיים."
         SELECT_JOB_TO_FINISH = (
-            "איזו עבודה סיימת?\n{jobs_list}\nהשב עם מספר העבודה, או 'ביטול'."
+            "📋 איזו עבודה סיימת?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
         )
         # Sent when pro is first matched — conversation still in progress, no action needed yet
         EARLY_LEAD_HEADER = "👀 *שיחה בתהליך*"
         LOYALTY_LEAD_HEADER = "🌟 *לקוח חוזר שלך ביקש אותך!*"
-        EARLY_LEAD_DETAILS = "🛠️ *תקלה:* {issue_type}\n📍 *עיר:* {city}"
-        EARLY_LEAD_FOOTER = "\n\nהבוט אוסף פרטים מהלקוח (כתובת + תאריך ושעה).\nתקבל הודעה עם כל הפרטים לאישורך — *אין צורך לפעול עכשיו.*"
+        EARLY_LEAD_DETAILS = "*תקלה:* {issue_type}\n*עיר:* {city}"
+        EARLY_LEAD_FOOTER = (
+            "\n\nאני אוסף מהלקוח את שאר הפרטים (כתובת, תאריך ושעה).\n"
+            "תקבל הודעה עם כל הפרטים לאישורך — *אין צורך לפעול עכשיו.*"
+        )
         # Sent when deal closes — ready for approval
         DEAL_CONFIRMED_HEADER = "✅ *הלקוח אישר! פרטי העבודה:*"
-        EMERGENCY_LEAD_HEADER = "🚨 *קריאת חירום דחופה!* 🚨"
+        EMERGENCY_LEAD_HEADER = "🚨 *קריאת חירום דחופה!*"
         NEW_LEAD_HEADER = "📢 *הצעת עבודה חדשה*"
-        NEW_LEAD_DETAILS = "👤 *לקוח:* {customer_name}\n📍 *כתובת:* {full_address}\nℹ️ *פרטים נוספים:* {extra_info}\n🛠️ *תקלה:* {issue_type}\n⏰ *תאריך ושעה מועדפים:* {appointment_time}"
-        NEW_LEAD_TRANSCRIPTION = "\n🎙️ *תמליל:* {transcription}"
-        NEW_LEAD_FOOTER = "\n\nהשב 'אשר' לקבלת העבודה או 'דחה' לדחייה."
+        NEW_LEAD_DETAILS = (
+            "*לקוח:* {customer_name}\n"
+            "*כתובת:* {full_address}\n"
+            "*פרטים נוספים:* {extra_info}\n"
+            "*תקלה:* {issue_type}\n"
+            "*מועד מועדף:* {appointment_time}"
+        )
+        NEW_LEAD_TRANSCRIPTION = "\n*תמליל:* {transcription}"
+        NEW_LEAD_FOOTER = "\n\n*אשר* — לקבלת העבודה\n*דחה* — לדחייה"
         # Floor/apartment line rendered into {extra_info} of NEW_LEAD_DETAILS and
         # APPROVAL_REQUEST. '-' placeholders keep the line shape stable when a
         # field is missing, so the pro sees the same layout on every offer.
@@ -279,33 +430,36 @@ class Messages:
         # Header for the numbered media-links block appended to a lead offer.
         # Media is always sent as text links, never re-sent as files — see
         # notification_service.format_media_links for the policy.
-        MEDIA_ATTACHED_HEADER = "📸 *מדיה מצורפת:*"
+        MEDIA_ATTACHED_HEADER = "*מדיה מצורפת:*"
+        # §6: the customer's phone is Latin/numeric, so it ends its own line.
         APPROVAL_REQUEST = (
-            "📋 *פרטי עבודה חדשה לאישורך:*\n\n"
-            "👤 *לקוח:* {customer_name} ({customer_phone})\n"
-            "📍 *כתובת:* {full_address}\n"
-            "ℹ️ *פרטים נוספים:* {extra_info}\n"
-            "🛠️ *תקלה:* {issue_type}\n"
-            "⏰ *תאריך ושעה:* {appointment_time}\n"
+            "📋 *פרטי עבודה חדשה לאישורך*\n\n"
+            "*לקוח:* {customer_name}\n"
+            "*טלפון:* {customer_phone}\n"
+            "*כתובת:* {full_address}\n"
+            "*פרטים נוספים:* {extra_info}\n"
+            "*תקלה:* {issue_type}\n"
+            "*מועד:* {appointment_time}\n"
             "{price_line}"
-            "\nכדי לאשר השב: *אשר*\n"
-            "כדי לדחות השב: *דחה*"
+            "\n*אשר* — לאישור העבודה\n"
+            "*דחה* — לדחייה"
         )
         # PRO-55: the AI-quoted price the customer was promised, shown to the pro
         # before approval. Appended to APPROVAL_REQUEST only when a quote exists.
-        APPROVAL_PRICE_LINE = "💰 *הערכת מחיר שניתנה ללקוח:* {quoted_price}₪\n"
+        APPROVAL_PRICE_LINE = "*הערכת מחיר שניתנה ללקוח:* {quoted_price}₪\n"
         # PRO-56: nudge a pro who hasn't approved within the SLA window.
         APPROVAL_NUDGE = (
             "⏰ ליד ממתין לאישורך כבר {minutes} דק'.\n"
-            "השב *אשר* לאישור או *דחה* לדחייה."
+            "*אשר* — לאישור\n"
+            "*דחה* — לדחייה"
         )
         PAUSE_ACK = (
-            "⏸️ הבוט הושהה. תוכל לדבר עם הלקוח ישירות.\n"
-            "הבוט יחזור לפעולה אוטומטית בעוד שעתיים או כשתשלח 'המשך'."
+            "⏸️ הבוט הושהה ואפשר לדבר עם הלקוח ישירות.\n"
+            "הבוט יחזור לפעולה אוטומטית בעוד שעתיים, או מיד עם *המשך*."
         )
         PAUSE_NOTIFICATION = (
             "🚨 הלקוח מבקש מענה אנושי.\n"
-            "כנס לשיחה בוואטסאפ. הבוט יחזור לפעולה אוטומטית בעוד שעתיים."
+            "אפשר להיכנס לשיחה בוואטסאפ. הבוט יחזור לפעולה אוטומטית בעוד שעתיים."
         )
         CUSTOMER_CANCELLED = (
             "⚠️ *עדכון חשוב:* הלקוח/ה {customer_name} ביטל/ה את העבודה "
@@ -314,150 +468,121 @@ class Messages:
         CUSTOMER_RESCHEDULED_SUCCESS = (
             "📅 *עדכון יומן:* הלקוח/ה {customer_name} בכתובת {address} "
             "שינה/תה את מועד העבודה.\n"
-            "מועד ישן: {old_time}\n"
-            "מועד חדש: {new_time}\n"
+            "*מועד ישן:* {old_time}\n"
+            "*מועד חדש:* {new_time}\n"
             "היומן שלך עודכן אוטומטית."
         )
         # PRO-116: the customer has a confirmed job with this pro and wants to
         # talk about it (not open a new request) — nudge the pro to reach out.
         CUSTOMER_EXISTING_JOB_QUERY = (
-            "💬 *הלקוח/ה {customer_name} רוצה לעדכן/לשאול לגבי העבודה הקיימת:*\n"
-            "🛠️ {issue}\n"
-            "📞 {customer_phone}\n\n"
-            "אנא צור/י קשר בהקדם."
+            "💬 *הלקוח/ה {customer_name} רוצה לעדכן או לשאול לגבי העבודה הקיימת*\n"
+            "*תקלה:* {issue}\n"
+            "*טלפון:* {customer_phone}\n\n"
+            "אנא לפנות אליו בהקדם."
         )
-        NAVIGATE_TO = "🚗 נווט לכתובת:"
-        NO_ACTIVE_JOBS_LIST = "אין לך עבודות פעילות כרגע. 👍"
-        NO_HISTORY = "עדיין אין לך עבודות מושלמות."
+        NAVIGATE_TO = "🚗 ניווט לכתובת:"
+        NO_ACTIVE_JOBS_LIST = "👍 אין לך עבודות פעילות כרגע."
+        NO_HISTORY = "עדיין אין לך עבודות שהושלמו."
         NO_REVIEWS = "עדיין אין לך ביקורות."
-        ACTIVE_JOB_ROW = "  {num}. [{status}] {issue} — {address} | {time}"
-        HISTORY_ROW = "  {num}. {issue} — {address} | {date}"
-        REVIEW_ROW = '  ⭐{rating} — "{comment}"'
-        STATS_HEADER = "📊 *הסטטיסטיקות שלך:*\n"
+        # §6: no ' | '-separated mixed-direction rows — the address and the
+        # numeric date/time each get their own line, ending in their value.
+        ACTIVE_JOB_ROW = "{num}. [{status}] {issue}\n*כתובת:* {address}\n*מועד:* {time}"
+        HISTORY_ROW = "{num}. {issue}\n*כתובת:* {address}\n*תאריך:* {date}"
+        STATS_HEADER = "📊 *הסטטיסטיקות שלך*\n"
         STATS_BODY = (
-            "✅ עבודות שהושלמו: {completed}\n"
-            "🔄 עבודות פעילות: {active}\n"
-            "⭐ דירוג ממוצע: {rating}\n"
-            "💬 ביקורות: {reviews}\n"
-            "📅 הצטרפת: {joined}"
+            "*עבודות שהושלמו:* {completed}\n"
+            "*עבודות פעילות:* {active}\n"
+            "*דירוג ממוצע:* {rating}\n"
+            "*ביקורות:* {reviews}\n"
+            "*הצטרפת:* {joined}"
         )
+        # §6: every numeric value sits at the end of its line.
         PRO_DASHBOARD_HEADER = (
-            "שלום {pro_name}! 🛠️\n"
-            "⭐ דירוג: {rating}\n"
-            "{status_emoji} סטטוס: {status_text}\n"
-            "💼 עבודות פעילות: {active_jobs}/{max_jobs}\n\n"
-            "*פקודות המערכת:*"
-        )
-        PRO_DASHBOARD_CMD_APPROVE_REJECT = (
-            "✅ 'אשר' / ❌ 'דחה' — לעבודה שממתינה לתשובתך"
-        )
-        PRO_DASHBOARD_CMD_FINISH = "🏁 'סיימתי' — לסיום עבודה פעילה"
-        PRO_DASHBOARD_CMD_DETAILS = "📋 'פרטים' — לצפייה בעבודות הפעילות"
-        PRO_DASHBOARD_CMD_CANCEL = "🚫 'ביטול' — לביטול עבודה פעילה"
-        PRO_DASHBOARD_CMD_SEARCH = "🔍 'חפש' — לאיתור לידים פנויים"
-        PRO_DASHBOARD_CMD_AVAILABILITY = "☕ 'הפסקה' / 🚀 'זמין' — לשליטה בקבלת עבודות"
-        # Keep for backward compat with any references in tests
-        PRO_DASHBOARD = (
-            "שלום {pro_name}! 🛠️\n"
-            "⭐ דירוג: {rating}\n"
-            "{status_emoji} סטטוס: {status_text}\n"
-            "💼 עבודות פעילות: {active_jobs}/{max_jobs}\n\n"
-            "*פקודות המערכת:*\n"
-            "✅ 'אשר' / ❌ 'דחה' - לעבודות שממתינות לתשובתך\n"
-            "🏁 'סיימתי' - לסיום עבודה פעילה\n"
-            "🔍 'חפש' - לאיתור לידים פנויים\n"
-            "☕ 'הפסקה' / 🚀 'זמין' - לשליטה בקבלת עבודות"
+            "🛠️ *שלום {pro_name}*\n"
+            "*דירוג:* {rating}\n"
+            "*סטטוס:* {status_text} {status_emoji}\n"
+            "*עבודות פעילות:* {active_jobs}/{max_jobs}\n\n"
+            "*מה אפשר לעשות עכשיו:*"
         )
         INTENT_DETECTED = (
-            "🛠️ זיהיתי שאתה מדווח על תקלה. האם תרצה לעבור למצב לקוח כדי שאזמין לך איש מקצוע?\n\n"
-            "השב *1* — כן, עבור למצב לקוח 👤\n"
-            "השב *2* — לא, אני ממשיך כטכנאי 🛠️"
+            "🛠️ זיהיתי שאתה מדווח על תקלה. לעבור למצב לקוח כדי שאזמין לך איש מקצוע?\n"
+            "*1* — כן, לעבור למצב לקוח\n"
+            "*2* — לא, להמשיך כטכנאי"
         )
         INTENT_REPROMPT = (
-            "לא הבנתי 🤔 בוא ננסה שוב:\n\n"
-            "השב *1* (או 'כן') — עבור למצב לקוח 👤\n"
-            "השב *2* (או 'לא') — המשך כטכנאי 🛠️"
+            "🤔 לא הבנתי. לעבור למצב לקוח?\n"
+            "*1* — כן, לעבור למצב לקוח\n"
+            "*2* — לא, להמשיך כטכנאי"
         )
-        SWITCHED_TO_CUSTOMER = "מעולה, עברת למצב לקוח 👤. כעת אטפל בך כמו בכל לקוח שלנו. ספר לי שוב, מה התקלה?"
+        SWITCHED_TO_CUSTOMER = (
+            "👤 מעולה, עברת למצב לקוח. מכאן אטפל בך כמו בכל לקוח שלנו.\n"
+            "אז ספר לי שוב — מה התקלה?"
+        )
         SWITCH_CANCELLED = "👍 ממשיכים כרגיל במצב טכנאי."
         # Currently unsent: PRO-69 removed the auto-return at dispatch time (it fired
         # while the pro's own request was still live). Kept for the follow-up that
         # announces the return when their lead actually closes.
         AUTO_RETURNED_TO_PRO = (
-            "הקריאה שלך הועברה לאיש המקצוע לאישור. בינתיים, החזרתי אותך למצב טכנאי 🛠️ "
+            "🛠️ הקריאה שלך הועברה לאיש מקצוע לאישור, והחזרתי אותך למצב טכנאי "
             "כדי שתוכל להמשיך לנהל את העסק כרגיל."
         )
-        SEARCH_RATE_LIMITED = (
-            "⏳ חיפשת לאחרונה. אנא המתן {minutes} דקות לפני החיפוש הבא."
-        )
-        NO_STUCK_LEADS = "אין לידים תקועים זמינים כרגע. ננסה שוב מאוחר יותר 👍"
+        SEARCH_RATE_LIMITED = "⏳ חיפשת לאחרונה. אפשר לחפש שוב בעוד {minutes} דקות."
+        NO_STUCK_LEADS = "👍 אין לידים תקועים זמינים כרגע. אפשר לנסות שוב מאוחר יותר."
         # PRO-123: the `מצא` search now applies the same gates as routing, so it
         # has to be able to say *why* it refused instead of returning nothing.
         SEARCH_WHILE_PAUSED = (
             "☕ אתה כרגע במצב 'בהפסקה', ולכן החיפוש מושבת.\n"
-            "כתוב *זמין* כדי לחזור לקבל עבודות ואז נסה שוב."
+            "אפשר לכתוב *זמין* כדי לחזור לקבל עבודות ואז לחפש שוב."
         )
         SEARCH_LOAD_FULL = (
-            "🔧 יש לך כבר {active} עבודות פעילות (המקסימום הוא {max_jobs}).\n"
-            "סיים אחת מהן ואז אפשר לחפש עבודה נוספת."
+            "🔧 יש לך כבר {active} עבודות פעילות, והמקסימום הוא {max_jobs}.\n"
+            "אחרי סיום אחת מהן אפשר לחפש עבודה נוספת."
         )
         STUCK_LEAD_FOUND = (
-            "📢 *נמצא ליד תקוע:*\n\n"
-            "🛠️ *תקלה:* {issue}\n"
-            "📍 *עיר:* {city}\n"
-            "⏰ *ממתין:* {wait_minutes} דק'\n\n"
-            "השב 'אשר' כדי לקחת את העבודה."
+            "📢 *נמצא ליד תקוע*\n\n"
+            "*תקלה:* {issue}\n"
+            "*עיר:* {city}\n"
+            "*ממתין:* {wait_minutes} דק'\n\n"
+            "*אשר* — לקחת את העבודה"
         )
-        DETAILS_HEADER = "📋 *עבודות פעילות (מאושרות):*\n"
+        DETAILS_HEADER = "📋 *עבודות פעילות (מאושרות)*\n"
+        # §6: no ' | '-separated mixed-direction rows — the phone number and the
+        # two links each get their own line, ending in the Latin value.
         DETAILS_ROW = (
-            "  {num}. 🛠️ {issue} | ⏰ {appointment_time}\n"
-            "     📍 {city}\n"
-            "     📞 {customer_phone} | 💬 https://wa.me/{customer_phone_intl}\n"
-            "     🗺️ https://waze.com/ul?q={address_encoded}"
+            "{num}. {issue}\n"
+            "*מועד:* {appointment_time}\n"
+            "*עיר:* {city}\n"
+            "*טלפון:* {customer_phone}\n"
+            "*צ'אט:* https://wa.me/{customer_phone_intl}\n"
+            "*ניווט:* https://waze.com/ul?q={address_encoded}"
         )
         SELECT_JOB_TO_CANCEL = (
-            "איזו עבודה לבטל?\n{jobs_list}\nהשב עם מספר העבודה, או 'ביטול'."
+            "🚫 איזו עבודה לבטל?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
         )
         CANCEL_SUCCESS = "✅ העבודה בוטלה. הלקוח עודכן."
-        HELP_MENU = (
-            "📖 *מדריך הפקודות המלא*\n\n"
-            "📥 *קבלת עבודות:*\n"
-            "  • *אשר* — קבלת עבודה חדשה\n"
-            "  • *דחה* — דחיית עבודה חדשה\n\n"
-            "🔧 *ניהול העבודה:*\n"
-            "  • *פרטים* — פרטי עבודות פעילות + קישורי ניווט\n"
-            "  • *סיימתי* — סיום עבודה פעילה\n"
-            "  • *ביטול* — ביטול עבודה פעילה\n\n"
-            "🚀 *יוזמה ושליטה:*\n"
-            "  • *חפש* — חיפוש לידים פנויים במערכת\n"
-            "  • *זמין* — חזרה לקבלת עבודות\n"
-            "  • *הפסקה* — הפסקת קבלת עבודות זמנית\n\n"
-            "📊 *העסק שלי:*\n"
-            "  • *סיכום* — סיכום ביצועים חודשי\n"
-            "  • *ביקורות* — הביקורות האחרונות שלך\n\n"
-            "💡 להחזרת לוח הבקרה הראשי, כתוב *תפריט*."
-        )
         SUMMARY_BODY = (
             "📊 *סיכום ביצועים*\n\n"
-            "✅ עבודות שהושלמו החודש: *{this_month}*\n"
-            '📦 סה"כ עבודות: *{total_completed}*\n'
-            "🔄 עבודות פעילות כרגע: *{active}*\n"
-            "⭐ דירוג ממוצע: *{rating}*\n\n"
+            "*עבודות שהושלמו החודש:* {this_month}\n"
+            '*סה"כ עבודות:* {total_completed}\n'
+            "*עבודות פעילות כרגע:* {active}\n"
+            "*דירוג ממוצע:* {rating}\n\n"
             "{motivation}"
         )
-        SUMMARY_MOTIVATION_GREAT = "🏆 כל הכבוד! אתה מהטובים שלנו. המשך כך!"
-        SUMMARY_MOTIVATION_GOOD = "💪 עבודה טובה! כל עבודה מוסיפה לשם הטוב שלך."
-        SUMMARY_MOTIVATION_START = "🌱 תחילת דרך! ביצועים מצוינים מתחילים מהצעד הראשון."
+        SUMMARY_MOTIVATION_GREAT = "כל הכבוד! אתה מהטובים שלנו. המשך כך."
+        SUMMARY_MOTIVATION_GOOD = "עבודה טובה! כל עבודה מוסיפה לשם הטוב שלך."
+        SUMMARY_MOTIVATION_START = "תחילת דרך! ביצועים מצוינים מתחילים מהצעד הראשון."
         NO_REVIEWS_WITH_TEXT = (
-            "עדיין אין ביקורות כתובות. לאחר כל עבודה, לקוחות יכולים להשאיר לך ביקורת 💬"
+            "💬 עדיין אין ביקורות כתובות. אחרי כל עבודה לקוחות יכולים להשאיר לך ביקורת."
         )
+        # §4 one emoji, §6 no ' | ' row: the two numbers move onto their own
+        # line, each at the end of a Hebrew phrase.
         REVIEWS_HEADER = (
-            "💬 *הביקורות האחרונות שלך* (ממוצע ⭐{rating:.1f} | {count} דירוגים):\n"
+            "💬 *הביקורות האחרונות שלך*\n" "ממוצע {rating:.1f} מתוך {count} דירוגים\n"
         )
         REVIEW_TEXT_ROW = '  ⭐{rating} — "{comment}"'
-        DASHBOARD_TIP = (
-            "\n💡 טיפ: כדי לראות את רשימת הפקודות המלאה של המערכת, הקלד 'עזרה'."
-        )
+        DASHBOARD_TIP = "\nלרשימת הפקודות המלאה — *עזרה*."
 
         # --- PRO-166: migrated verbatim from app/services/pro_flow.py ---
         # Status vocabulary rendered into ACTIVE_JOB_ROW and the dashboard.
@@ -473,47 +598,58 @@ class Messages:
         }
         STATUS_AVAILABLE = "זמין"
         STATUS_ON_BREAK = "בהפסקה"
-        ACTION_CANCELLED = "הפעולה בוטלה."
-        INVALID_JOB_SELECTION = "בחירה לא תקינה. אנא בחר מספר מהרשימה או כתוב 'ביטול'."
+        ACTION_CANCELLED = "👍 הפעולה בוטלה."
+        INVALID_JOB_SELECTION = "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה."
         NO_PAUSED_CONVERSATION = "אין שיחה מושהית כרגע."
         BOT_RESUMED = "✅ הבוט חזר לפעולה."
         BOT_ALREADY_ACTIVE = "הבוט כבר פעיל."
-        JOB_SELECT_ROW = "{num}. {name} - {city} ({issue})"
-        ACTIVE_JOBS_HEADER = "🔄 *עבודות פעילות:*\n"
-        ACTIVE_JOBS_TOTAL = '\n*סה"כ: {count} עבודות*'
-        HISTORY_HEADER = "📋 *10 עבודות אחרונות שהושלמו:*\n"
+        JOB_SELECT_ROW = "{num}. {name} — {city} ({issue})"
+        ACTIVE_JOBS_HEADER = "🔄 *עבודות פעילות*\n"
+        ACTIVE_JOBS_TOTAL = '\n*סה"כ:* {count} עבודות'
+        HISTORY_HEADER = "📋 *10 העבודות האחרונות שהושלמו*\n"
         RATING_NONE = "אין עדיין"
 
-        # --- PRO-166: migrated verbatim from app/scheduler.py (daily agenda) ---
+        # --- PRO-166: migrated from app/scheduler.py (daily agenda) ---
         DAILY_AGENDA_HEADER = (
-            "☀️ *בוקר טוב {pro_name}!* \nהנה העבודות שלך להיום ({date}):"
+            "☀️ *בוקר טוב {pro_name}!*\nהנה העבודות שלך להיום ({date}):"
         )
-        DAILY_AGENDA_ROW = "\n🛠️ *{time}* - {details}\n   📞 {phone}\n"
-        DAILY_AGENDA_FOOTER = "\nשיהיה יום מוצלח! 💪"
+        # PRO-168 §7: this row used to render `job.get("details")` — a field
+        # the bot never writes. Only the admin panel does
+        # (`admin_panel/core/lead_queries.py`), and it mirrors the same value
+        # into `issue_type` anyway, so every agenda line for a bot-created lead
+        # rendered the literal fallback "פרטים חסרים". `issue_type` is the
+        # strict superset. §6: the time and the phone are numeric, so each
+        # ends its own labelled line rather than opening one.
+        DAILY_AGENDA_ROW = "\n{issue}\n*שעה:* {time}\n*טלפון:* {phone}\n"
+        DAILY_AGENDA_FOOTER = "\nשיהיה יום מוצלח!"
 
     class Admin:
-        # PRO-166: the ניהול wizard's copy, migrated verbatim from
-        # app/services/admin_flow.py so the PRO-168 rewrite touches one file.
+        # PRO-166 migrated the ניהול wizard's copy here; PRO-168 brought it into
+        # the standard voice — the bare "בוטל.", the transliteration
+        # "פרופסיונלי" and the un-emoji'd error strings are gone, and the whole
+        # register now agrees on one emoji convention (§4).
         # Sent to the ADMIN's own WhatsApp chat, never to customers or pros.
-        NO_STUCK_LEADS = "✅ אין לידים תקועים כרגע"
+        NO_STUCK_LEADS = "✅ אין לידים תקועים כרגע."
         STUCK_LEADS_HEADER = "📋 *לידים הממתינים לטיפול:*\n"
         WAIT_MINUTES = "{wait_minutes}ד'"
         STUCK_LEAD_ROW = "{num}. {city} — {issue} (ממתין {wait})"
-        SELECT_PROMPT = "\nהשב/י מספר לבחירה או 'ביטול' ליציאה."
-        CANCELLED = "בוטל."
-        INVALID_NUMBER = "❌ מספר לא חוקי. נסה שוב או שלח 'ביטול'."
+        SELECT_PROMPT = "\nאפשר להשיב במספר לבחירה, או *ביטול* ליציאה."
+        CANCELLED = "👍 בוטל. אפשר להתחיל מחדש עם *ניהול*."
+        INVALID_NUMBER = "⚠️ מספר לא חוקי. אפשר לנסות שוב, או *ביטול* ליציאה."
         ACTION_MENU = (
-            "בחרת בליד. למי להעביר?\n"
-            "1. קח את הליד לעצמך\n"
-            "2. הצג רשימת אנשי מקצוע פנויים"
+            "📋 בחרת בליד. למי להעביר אותו?\n"
+            "*1* — קח את הליד לעצמך\n"
+            "*2* — הצג רשימת אנשי מקצוע פנויים"
         )
-        NO_ADMIN_PRO_PROFILE = "❌ לא נמצא פרופיל פרופסיונלי למנהל. נסה אפשרות 2."
-        LEAD_NOT_FOUND = "❌ הליד לא נמצא. אפס עם 'ניהול'."
-        NO_AVAILABLE_PROS = "❌ לא נמצאו אנשי מקצוע פנויים לליד זה."
+        NO_ADMIN_PRO_PROFILE = (
+            "⚠️ לא נמצא פרופיל איש מקצוע למנהל. אפשר לבחור באפשרות *2*."
+        )
+        LEAD_NOT_FOUND = "⚠️ הליד לא נמצא. אפשר להתחיל מחדש עם *ניהול*."
+        NO_AVAILABLE_PROS = "⚠️ לא נמצאו אנשי מקצוע פנויים לליד זה."
         AVAILABLE_PROS_HEADER = "👷 *אנשי מקצוע פנויים:*\n"
         PRO_ROW = "{num}. {name} (דירוג: {rating})"
-        INVALID_OPTION = "❌ אפשרות לא חוקית. השב 1 או 2."
-        PRO_NOT_FOUND = "❌ איש המקצוע לא נמצא. אפס עם 'ניהול'."
+        INVALID_OPTION = "⚠️ אפשרות לא חוקית. אפשר להשיב *1* או *2*."
+        PRO_NOT_FOUND = "⚠️ איש המקצוע לא נמצא. אפשר להתחיל מחדש עם *ניהול*."
         ASSIGN_SUCCESS = "✅ הליד הועבר ל-{pro_name}."
         ASSIGN_LEAD_LOOKUP_MISSED = (
             "⚠️ הליד לא נמצא לאחר העדכון — יש לבדוק בפאנל הניהול וליצור "
@@ -526,11 +662,11 @@ class Messages:
 
     class SOS:
         CUSTOMER_REASSIGNING = (
-            "מתנצלים על ההמתנה, אנו מאתרים עבורך איש מקצוע זמין יותר כעת... ⏳"
+            "⏳ מתנצל על ההמתנה — אני מאתר עבורך איש מקצוע זמין יותר כעת."
         )
         NO_PRO_AVAILABLE = (
-            "מצטערים 😔 לא הצלחנו למצוא איש מקצוע זמין לבקשתך כרגע.\n"
-            "אנא נסה שוב מאוחר יותר או פנה אלינו ישירות לקבלת עזרה."
+            "😔 לא הצלחתי למצוא איש מקצוע זמין לבקשתך כרגע.\n"
+            "אפשר לנסות שוב מאוחר יותר, או לכתוב *נציג* כדי לדבר עם מישהו מהצוות."
         )
         # PRO-63: sent when a lead exhausts MAX_REASSIGNMENTS. This is the worst
         # moment a customer can have with Proli — they have been failed three
@@ -553,19 +689,18 @@ class Messages:
 
         TO_USER_WITH_PRO = (
             "✅ קיבלתי! העברתי את בקשתך לאיש המקצוע שלך.\n"
-            "הוא ייצור איתך קשר בהקדם האפשרי. 🛠️\n\n"
-            "אם לא קיבלת מענה תוך זמן קצר, תוכל/י לפנות אלינו שוב."
+            "הוא ייצור איתך קשר בהקדם האפשרי.\n"
+            "אם לא תקבל/י מענה תוך זמן קצר, אפשר לפנות אלינו שוב."
         )
         TO_USER_NO_PRO = (
-            "✅ קיבלתי! העברתי את פנייתך לצוות התמיכה שלנו.\n"
-            "נחזור אליך בהקדם האפשרי. 👨‍💻\n\n"
-            "אנחנו כאן בשבילך ונטפל בעניין בהקדם!"
+            "✅ קיבלתי! העברתי את פנייתך לצוות התמיכה של פרולי.\n"
+            "נחזור אליך בהקדם האפשרי."
         )
         PRO_ALERT = (
-            "⚠️ *הלקוח שלך צריך עזרה!*\n\n"
-            "📞 *טלפון:* {phone}\n"
-            "💬 *הודעה:* {last_message}\n\n"
-            "פנה/י אליו בהקדם האפשרי."
+            "⚠️ *הלקוח שלך צריך עזרה*\n\n"
+            "*טלפון:* {phone}\n"
+            "*הודעה:* {last_message}\n\n"
+            "אנא לפנות אליו בהקדם האפשרי."
         )
 
     class Alerts:
@@ -574,25 +709,24 @@ class Messages:
         # (PRO-75); we never send a WA-down alert over WhatsApp. Only the recovery
         # notice (instance authorized again) goes over WhatsApp.
         WHATSAPP_RECOVERED = (
-            "✅ *מערכת Proli התאוששה*\n\n"
-            "חיבור ה-WhatsApp חזר למצב 'authorized'.\n"
+            "✅ *מערכת פרולי התאוששה*\n\n"
+            "חיבור הוואטסאפ חזר למצב 'authorized'.\n"
             "ההודעות מעובדות כרגיל."
         )
 
     class Consent:
         REQUEST = (
-            "שלום! 👋 ברוכים הבאים ל-Proli.\n\n"
-            "לפני שנתחיל, חשוב לנו ליידע אותך:\n"
-            "אנו שומרים את מספר הטלפון שלך, ההודעות והמיקום "
-            "כדי לחבר אותך עם בעלי מקצוע מתאימים.\n\n"
-            "המידע שלך מאובטח ומשותף רק עם בעל המקצוע שמטפל בפנייה שלך.\n"
-            "בכל עת תוכל/י לבקש מחיקת המידע.\n\n"
-            "השב/י *כן* או *אישור* להמשך, או *לא* לביטול."
+            "👋 שלום וברוכים הבאים לפרולי.\n\n"
+            "לפני שמתחילים, חשוב לנו ליידע אותך:\n"
+            "אנחנו שומרים את מספר הטלפון, ההודעות והמיקום שלך "
+            "כדי לחבר אותך עם אנשי מקצוע מתאימים.\n\n"
+            "המידע מאובטח ומשותף רק עם איש המקצוע שמטפל בפנייה שלך, "
+            "ובכל עת אפשר לבקש למחוק אותו.\n\n"
+            "*כן* — להמשיך\n"
+            "*לא* — לביטול"
         )
-        ACCEPTED = "תודה! ✅ אפשר להתחיל. ספר/י לי במה אוכל לעזור?"
-        DECLINED = (
-            "הבנו. 🙏 לא נשמור מידע עליך. אם תשנה את דעתך, שלח/י הודעה מתי שתרצה."
-        )
+        ACCEPTED = "✅ תודה! אפשר להתחיל. במה אוכל לעזור?"
+        DECLINED = "🙏 הבנתי, לא נשמור מידע עליך. אם תשנה/י את דעתך — פשוט לשלוח הודעה."
         ACCEPT_KEYWORDS = [
             "כן",
             "אישור",
@@ -607,57 +741,63 @@ class Messages:
 
     class Onboarding:
         WELCOME = (
-            "👋 ברוכים הבאים להרשמה כאיש מקצוע ב-Proli!\n\n"
-            "נשאל אותך כמה שאלות קצרות כדי ליצור את הפרופיל שלך.\n"
+            "👋 ברוכים הבאים להרשמה כאיש מקצוע בפרולי!\n\n"
+            "כמה שאלות קצרות ונבנה את הפרופיל שלך.\n"
             "בסיום, מנהל המערכת יאשר את הפרופיל ותתחיל לקבל עבודות.\n\n"
             "מה *שם העסק* שלך?"
         )
+        # §3/§4: the seven 1️⃣-7️⃣ emoji digits became the canonical menu format.
+        # TYPE_MAP still matches the plain digits "1"-"7" the pro replies with.
         ASK_TYPE = (
-            "מעולה! ✅\n"
-            "מה *סוג המקצוע* שלך?\n\n"
-            "1️⃣ אינסטלטור\n"
-            "2️⃣ חשמלאי\n"
-            "3️⃣ הנדימן\n"
-            "4️⃣ מנעולן\n"
-            "5️⃣ צבעי\n"
-            "6️⃣ ניקיון\n"
-            "7️⃣ כללי\n\n"
-            "שלח את המספר או את שם המקצוע."
+            "✅ מעולה! מה *סוג המקצוע* שלך?\n"
+            "*1* — אינסטלטור\n"
+            "*2* — חשמלאי\n"
+            "*3* — הנדימן\n"
+            "*4* — מנעולן\n"
+            "*5* — צבעי\n"
+            "*6* — ניקיון\n"
+            "*7* — כללי\n\n"
+            "אפשר לשלוח את המספר או את שם המקצוע."
         )
         ASK_AREAS = (
-            "👍 עכשיו, באילו *ערים/אזורים* אתה עובד?\n"
-            "שלח רשימת ערים מופרדות בפסיקים.\n"
+            "👍 באילו *ערים או אזורים* אתה עובד?\n"
+            "אפשר לשלוח רשימת ערים מופרדות בפסיקים.\n"
             "לדוגמה: תל אביב, רמת גן, חולון"
         )
         ASK_PRICES = (
             "💰 מה *המחירים* שלך? (אופציונלי)\n"
-            "שלח רשימת שירותים ומחירים, או השב *דלג* לדילוג.\n"
+            "אפשר לשלוח רשימת שירותים ומחירים, או להשיב *דלג* לדילוג.\n"
             "לדוגמה:\n"
             "תיקון נזילה - 250₪\n"
             "החלפת ברז - 350₪"
         )
         CONFIRM = (
-            "📋 *סיכום הפרופיל שלך:*\n\n"
-            "🏢 שם: {name}\n"
-            "🔧 מקצוע: {type}\n"
-            "📍 אזורים: {areas}\n"
-            "💰 מחירים: {prices}\n\n"
-            "הכל נכון? השב *אשר* לשליחה או *ביטול* להתחלה מחדש."
+            "📋 *סיכום הפרופיל שלך*\n\n"
+            "*שם:* {name}\n"
+            "*מקצוע:* {type}\n"
+            "*אזורים:* {areas}\n"
+            "*מחירים:* {prices}\n\n"
+            "הכל נכון?\n"
+            "*אשר* — לשליחה\n"
+            "*ביטול* — להתחלה מחדש"
         )
         SUCCESS = (
             "🎉 תודה! הפרופיל שלך נשלח לאישור.\n"
-            "נעדכן אותך ברגע שהפרופיל יאושר ותתחיל לקבל עבודות. 👍"
+            "נעדכן אותך ברגע שהפרופיל יאושר ותתחיל לקבל עבודות."
         )
-        CANCELLED = "❌ ההרשמה בוטלה. תוכל להתחיל מחדש בכל עת עם *הרשמה*."
-        ALREADY_REGISTERED = "כבר יש לך פרופיל במערכת! 😊"
-        PENDING_ALREADY = "הפרופיל שלך כבר בהמתנה לאישור. נעדכן אותך בקרוב! ⏳"
+        CANCELLED = "❌ ההרשמה בוטלה. אפשר להתחיל מחדש בכל עת עם *הרשמה*."
+        ALREADY_REGISTERED = "😊 כבר יש לך פרופיל במערכת!"
+        PENDING_ALREADY = "⏳ הפרופיל שלך כבר ממתין לאישור. נעדכן אותך בקרוב!"
         APPROVED_NOTIFICATION = (
-            "✅ הפרופיל שלך אושר! מעכשיו תתחיל לקבל הצעות עבודה. בהצלחה! 🎉"
+            "🎉 הפרופיל שלך אושר! מעכשיו יגיעו אליך הצעות עבודה. בהצלחה!"
         )
         REJECTED_NOTIFICATION = (
-            "לצערנו, הפרופיל שלך לא אושר בשלב זה. צור קשר לפרטים נוספים."
+            "לצערנו הפרופיל שלך לא אושר בשלב זה. אפשר לפנות אלינו לפרטים נוספים."
         )
-        INVALID_TYPE = "לא הבנתי. שלח מספר 1-7 או שם מקצוע (אינסטלטור, חשמלאי וכו')."
+        INVALID_TYPE = (
+            "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע "
+            "(אינסטלטור, חשמלאי וכו')."
+        )
 
         TYPE_MAP = {
             "1": "plumber",
@@ -686,10 +826,10 @@ class Messages:
             "general": "כללי",
         }
 
-        # --- PRO-166: migrated verbatim from app/services/pro_onboarding_service.py ---
-        NAME_LENGTH_ERROR = "שם העסק חייב להיות בין 2 ל-100 תווים. נסה שוב:"
-        CITIES_PARSE_ERROR = "לא זיהיתי ערים. שלח רשימת ערים מופרדות בפסיקים:"
-        CONFIRM_REPROMPT = "השב *אשר* לשליחה או *ביטול* להתחלה מחדש."
+        # --- PRO-166: migrated from app/services/pro_onboarding_service.py ---
+        NAME_LENGTH_ERROR = "שם העסק חייב להיות באורך 2 עד 100 תווים. אפשר לנסות שוב:"
+        CITIES_PARSE_ERROR = "לא זיהיתי ערים. אפשר לשלוח רשימת ערים מופרדות בפסיקים:"
+        CONFIRM_REPROMPT = "*אשר* — לשליחה\n*ביטול* — להתחלה מחדש"
 
     class System:
         # RESET_SUCCESS was removed 2026-08-27 (operator decision): a global
@@ -707,6 +847,19 @@ class Messages:
         APPROVE_COMMANDS = ["אשר", "1", "approve"]
         REJECT_COMMANDS = ["דחה", "2", "reject"]
         FINISH_COMMANDS = ["סיימתי", "3", "finish", "done"]
+        # PRO-168 §7: `Pro.REMINDER` advertises 'עדיין עובד' as the answer that
+        # stops the finish nudges. It matched no list at all, so the reply fell
+        # through to the dashboard and the reminders kept coming. Listed with
+        # the forms a pro actually types, matched like every other command
+        # (exact, after `_normalize`).
+        STILL_WORKING_COMMANDS = [
+            "עדיין עובד",
+            "עדיין עובדת",
+            "עוד עובד",
+            "עוד עובדת",
+            "עדיין בעבודה",
+            "still working",
+        ]
         # PRO-33: skip the optional "how much did you charge?" price prompt.
         SKIP_COMMANDS = ["דלג", "דילוג", "skip", "-"]
         ACTIVE_JOBS_COMMANDS = ["עבודות", "4", "jobs", "active"]
@@ -849,7 +1002,10 @@ class Messages:
             "בסדר גמור",
         ]
 
-        # Completion check text tokens (used in handle_customer_completion_text)
+        # Completion check text tokens (used in handle_customer_completion_text).
+        # Must stay in step with the "*1* — כן, הסתיים" option in
+        # Customer.COMPLETION_CHECK: a customer who types the option back
+        # verbatim is confirming completion.
         CUSTOMER_COMPLETION_INDICATOR = "כן, הסתיים"
 
         # Customer status pull — '?' must be exact match; words matched after .strip().lower()
@@ -864,14 +1020,22 @@ class Messages:
         CUSTOMER_NAME = "לקוח"
         UNKNOWN = "לא ידוע"
         TIME_ASAP = "בהקדם"
+        # PRO-168: the pro-facing job lists and the admin wizard hand-rolled
+        # these inline. §9 — a value that can be empty formats through a
+        # Fallback, never as an empty hole in a sentence.
+        TIME_UNSET = "לא נקבע"
+        CITY_UNKNOWN = "עיר לא ידועה"
+        ISSUE_UNKNOWN = "בעיה לא ידועה"
+        PRO_NAME_MISSING = "ללא שם"
 
     class Errors:
-        AI_OVERLOAD = "סליחה, אני חווה עומס כרגע. נסה שוב עוד רגע."
-        GENERIC_ERROR = "משהו השתבש. אנא נסה שוב."
+        AI_OVERLOAD = "סליחה, אני חווה עומס כרגע. אפשר לנסות שוב בעוד רגע."
+        GENERIC_ERROR = "משהו השתבש. אפשר לנסות שוב."
         # PRO-21 — graceful throttle messages
-        RATE_LIMITED = "⏳ קיבלנו ממך הרבה הודעות ברצף. אנא המתן רגע ונסה שוב."
+        RATE_LIMITED = "⏳ הגיעו ממך הרבה הודעות ברצף. אפשר לנסות שוב בעוד רגע."
         DAILY_AI_CAP_REACHED = (
-            "הגעת למכסת הפניות היומית. נסה שוב מחר, ואם זה דחוף אנא פנה אלינו 🙏"
+            "🙏 הגעת למכסת הפניות היומית. אפשר לנסות שוב מחר — "
+            "ואם זה דחוף, לכתוב *נציג*."
         )
 
     class AISystemPrompts:

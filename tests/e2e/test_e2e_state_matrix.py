@@ -26,26 +26,26 @@ Input classes
 
 | state | keyword | free | offtopic | wrong | emoji | silence | interrupt | race |
 |---|---|---|---|---|---|---|---|---|
-| `idle` | "אני המערכת החכמה של Proli" | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | silent | N/A[race] |
-| `awaiting_consent` | → idle, "אפשר להתחיל" | "ברוכים הבאים ל-Proli" | N/A[same-reprompt] | "ברוכים הבאים ל-Proli" | N/A[same-reprompt] | N/A[ttl-class] | → idle, "לא נשמור מידע עליך" | N/A[race] |
+| `idle` | "🛠️ אני העוזר החכם של פרולי." | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | silent | N/A[race] |
+| `awaiting_consent` | → idle, "אפשר להתחיל" | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "לא נשמור מידע עליך" | N/A[race] |
 | `customer_mode` | "מה הכתובת" | "מאיפה בדיוק" | "במה אפשר לעזור" | "ראיתי את התמונה" | "לעזור" | N/A[ttl-class] | → pro_mode | N/A[race] |
-| `awaiting_address` | → idle, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "עוד פרטים לכתובת" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
-| `awaiting_pro_approval` | → awaiting_pro_approval, "מאתרים עבורך איש מקצוע זמין" | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | TTL ≤ 3600s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
-| `paused_for_human` | silent | silent | N/A[same-reprompt] | silent | N/A[same-reprompt] | TTL ≤ 900s | "מעביר אותך לנציג אנושי" | N/A[race] |
-| `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "בחר מספר תור חוקי" | N/A[same-reprompt] | "בחר מספר תור חוקי" | N/A[same-reprompt] | N/A[ttl-class] | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
-| `awaiting_loyalty_confirmation` | → awaiting_pro_approval, "עם הפרטים, ואעדכן אותך ברגע שיאשר" | → idle, "אחפש עבורך את איש המקצוע הפנוי" | N/A[same-reprompt] | "לא בטוח שהבנתי" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
-| `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "אנא השב 1 (בעיה חדשה) או 2" | N/A[same-reprompt] | "אנא השב 1 (בעיה חדשה) או 2" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
-| `awaiting_cancel_confirmation` | → idle, "ביטלתי את העבודה" | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | TTL ≤ 300s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
-| `pro_mode` | "פקודות המערכת" | "פקודות המערכת" | N/A[same-reprompt] | N/A[pro-text-only] | "פקודות המערכת" | N/A[ttl-class] | "פקודות המערכת" | N/A[race] |
-| `awaiting_intent_confirmation` | → customer_mode, "עברת למצב לקוח" | "בוא ננסה שוב" | N/A[same-reprompt] | N/A[pro-text-only] | "בוא ננסה שוב" | N/A[ttl-class] | → idle, "ממשיכים כרגיל" | N/A[race] |
+| `awaiting_address` | → idle, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "כדי שאיש המקצוע יגיע למקום המדויק נשאר רק להשלים לכתובת:" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
+| `awaiting_pro_approval` | → awaiting_pro_approval, "⏳ מתנצל על ההמתנה — אני מאתר עבורך איש מקצוע זמין יותר כעת." | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | TTL ≤ 3600s | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
+| `paused_for_human` | silent | silent | N/A[same-reprompt] | silent | N/A[same-reprompt] | TTL ≤ 900s | "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
+| `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "אנא לבחור מספר תור מהרשימה." | N/A[same-reprompt] | "אנא לבחור מספר תור מהרשימה." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
+| `awaiting_loyalty_confirmation` | → awaiting_pro_approval, "עם הפרטים, ואעדכן אותך ברגע שיאשר" | → idle, "אחפש עבורך את איש המקצוע הפנוי" | N/A[same-reprompt] | "לא בטוח שהבנתי" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
+| `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "🙂 לא בטוח שהבנתי. זו פנייה חדשה?" | N/A[same-reprompt] | "🙂 לא בטוח שהבנתי. זו פנייה חדשה?" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
+| `awaiting_cancel_confirmation` | → idle, "ביטלתי את העבודה" | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | TTL ≤ 300s | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
+| `pro_mode` | "*מה אפשר לעשות עכשיו:*" | "*מה אפשר לעשות עכשיו:*" | N/A[same-reprompt] | N/A[pro-text-only] | "*מה אפשר לעשות עכשיו:*" | N/A[ttl-class] | "*מה אפשר לעשות עכשיו:*" | N/A[race] |
+| `awaiting_intent_confirmation` | → customer_mode, "עברת למצב לקוח" | "🤔 לא הבנתי. לעבור למצב לקוח?" | N/A[same-reprompt] | N/A[pro-text-only] | "🤔 לא הבנתי. לעבור למצב לקוח?" | N/A[ttl-class] | → idle, "ממשיכים כרגיל" | N/A[race] |
 | `pro_selecting_job_to_finish` | N/A[defect-finish] | N/A[defect-finish] | N/A[defect-finish] | N/A[pro-text-only] | N/A[defect-finish] | N/A[ttl-class] | N/A[defect-finish] | N/A[race] |
 | `pro_selecting_job_to_cancel` | N/A[defect-cancel] | N/A[defect-cancel] | N/A[defect-cancel] | N/A[pro-text-only] | N/A[defect-cancel] | N/A[ttl-class] | N/A[defect-cancel] | N/A[race] |
 | `pro_awaiting_final_price` | N/A[defect-price] | N/A[defect-price] | N/A[defect-price] | N/A[pro-text-only] | N/A[defect-price] | TTL ≤ 600s | N/A[defect-price] | N/A[race] |
-| `onboarding_name` | → onboarding_type, "סוג המקצוע" | → onboarding_type, "סוג המקצוע" | "בין 2 ל-100 תווים" | N/A[pro-text-only] | "בין 2 ל-100 תווים" | N/A[ttl-class] | → idle, "ההרשמה בוטלה" | N/A[race] |
-| `onboarding_type` | → onboarding_areas, "ערים/אזורים" | → onboarding_areas, "ערים/אזורים" | "שלח מספר 1-7" | N/A[pro-text-only] | "שלח מספר 1-7" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `onboarding_name` | → onboarding_type, "סוג המקצוע" | → onboarding_type, "סוג המקצוע" | "שם העסק חייב להיות באורך 2 עד 100 תווים. אפשר לנסות שוב:" | N/A[pro-text-only] | "שם העסק חייב להיות באורך 2 עד 100 תווים. אפשר לנסות שוב:" | N/A[ttl-class] | → idle, "ההרשמה בוטלה" | N/A[race] |
+| `onboarding_type` | → onboarding_areas, "👍 באילו *ערים או אזורים* אתה עובד?" | → onboarding_areas, "👍 באילו *ערים או אזורים* אתה עובד?" | "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע (אינסטלטור, חשמלאי וכו')." | N/A[pro-text-only] | "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע (אינסטלטור, חשמלאי וכו')." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 | `onboarding_areas` | → onboarding_prices, "המחירים" | → onboarding_prices, "המחירים" | "לא זיהיתי ערים" | N/A[pro-text-only] | → onboarding_prices, "המחירים" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 | `onboarding_prices` | → onboarding_confirm, "סיכום הפרופיל שלך" | → onboarding_confirm, "סיכום הפרופיל שלך" | N/A[same-reprompt] | N/A[pro-text-only] | → onboarding_confirm, "סיכום הפרופיל שלך" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
-| `onboarding_confirm` | → idle, "הפרופיל שלך נשלח לאישור" | "השב *אשר* לשליחה" | N/A[same-reprompt] | N/A[pro-text-only] | "השב *אשר* לשליחה" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `onboarding_confirm` | → idle, "הפרופיל שלך נשלח לאישור" | "*אשר* — לשליחה" | N/A[same-reprompt] | N/A[pro-text-only] | "*אשר* — לשליחה" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 | `admin_selecting_lead` | → admin_selecting_action, "למי להעביר" | "מספר לא חוקי" | N/A[same-reprompt] | N/A[admin-menu] | "מספר לא חוקי" | N/A[ttl-class] | → idle, "בוטל" | N/A[race] |
 | `admin_selecting_action` | → admin_selecting_pro, "אנשי מקצוע פנויים" | "אפשרות לא חוקית" | N/A[same-reprompt] | N/A[admin-menu] | "אפשרות לא חוקית" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 | `admin_selecting_pro` | → idle, "הליד הועבר" | "מספר לא חוקי" | N/A[same-reprompt] | N/A[admin-menu] | "מספר לא חוקי" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
@@ -77,6 +77,8 @@ from dataclasses import dataclass, field
 import pytest
 
 from app.core.constants import UserStates, WorkerConstants
+from app.core.messages import Messages
+from tests.copy_util import static_prefix
 from tests.e2e import reserved_numbers as R
 from tests.e2e.ai_replay import reply
 
@@ -91,6 +93,21 @@ INPUT_CLASSES = (
     "interrupt",
     "race",
 )
+
+# PRO-167/PRO-168: fragments derived from the copy catalog rather than retyped
+# literals, so a reworded template cannot silently pin the pre-rewrite text.
+# Each is trimmed to a single line — a Cell.expect fragment lands inside one
+# row of the generated markdown table, so it may not itself contain "\n".
+_HELP_INFO_LINE = Messages.Customer.HELP_INFO.split("\n")[0]
+_CONSENT_REQUEST_LINE = Messages.Consent.REQUEST.split("\n")[0]
+_NEW_OR_EXISTING_REPROMPT_LINE = Messages.Customer.NEW_OR_EXISTING_REPROMPT.split("\n")[
+    0
+]
+_ADDRESS_MISSING_PREFIX = static_prefix(Messages.Customer.ADDRESS_MISSING_PARTS)
+_DASHBOARD_LAST_LINE = Messages.Pro.PRO_DASHBOARD_HEADER.split("\n")[-1]
+_INTENT_REPROMPT_LINE = Messages.Pro.INTENT_REPROMPT.split("\n")[0]
+_ASK_AREAS_LINE = Messages.Onboarding.ASK_AREAS.split("\n")[0]
+_CONFIRM_REPROMPT_LINE = Messages.Onboarding.CONFIRM_REPROMPT.split("\n")[0]
 
 
 @dataclass
@@ -384,7 +401,7 @@ def _arrange_admin(state: str, meta_key: str | None = None):
 MATRIX: dict[str, dict] = {
     # ---------------------------------------------------------------- customer
     UserStates.IDLE: {
-        "keyword": Cell(send="עזרה", expect=("אני המערכת החכמה של Proli",)),
+        "keyword": Cell(send="עזרה", expect=(_HELP_INFO_LINE,)),
         "free": Cell(
             send="יש לי נזילה בתל אביב",
             ai=[reply("מאתר איש מקצוע.", city="תל אביב", issue="נזילה")],
@@ -416,11 +433,11 @@ MATRIX: dict[str, dict] = {
         ),
         "free": Cell(
             send="כן בטח אין בעיה",
-            expect=("ברוכים הבאים ל-Proli",),
+            expect=(_CONSENT_REQUEST_LINE,),
         ),
-        "offtopic": Cell(send="מה?", expect=("ברוכים הבאים ל-Proli",)),
-        "wrong": Cell(send="", media="image", expect=("ברוכים הבאים ל-Proli",)),
-        "emoji": Cell(send="👍", expect=("ברוכים הבאים ל-Proli",)),
+        "offtopic": Cell(send="מה?", expect=(_CONSENT_REQUEST_LINE,)),
+        "wrong": Cell(send="", media="image", expect=(_CONSENT_REQUEST_LINE,)),
+        "emoji": Cell(send="👍", expect=(_CONSENT_REQUEST_LINE,)),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
             send="לא", expect_state=UserStates.IDLE, expect=("לא נשמור מידע עליך",)
@@ -490,7 +507,7 @@ MATRIX: dict[str, dict] = {
         "offtopic": Cell(
             send="כמה זה יעלה לי בערך?",
             ai=[reply("נחזור לזה — קודם הכתובת.")],
-            expect=("עוד פרטים לכתובת",),
+            expect=(_ADDRESS_MISSING_PREFIX,),
         ),
         "wrong": Cell(
             send="",
@@ -515,7 +532,7 @@ MATRIX: dict[str, dict] = {
         "keyword": Cell(
             send="1",
             expect_state=UserStates.AWAITING_PRO_APPROVAL,
-            expect=("מאתרים עבורך איש מקצוע זמין",),
+            expect=(Messages.SOS.CUSTOMER_REASSIGNING,),
         ),
         "free": Cell(send="מתי הוא מגיע?", expect=("אצל איש המקצוע לאישור",)),
         "offtopic": Cell(send="מה מזג האוויר?", expect=("אצל איש המקצוע לאישור",)),
@@ -525,7 +542,7 @@ MATRIX: dict[str, dict] = {
         "interrupt": Cell(
             send="נציג",
             expect_state=UserStates.PAUSED_FOR_HUMAN,
-            expect=("מעביר אותך לנציג אנושי",),
+            expect=(Messages.Customer.BOT_PAUSED_BY_CUSTOMER,),
         ),
         "race": Cell(na=RACE_NA),
     },
@@ -538,17 +555,32 @@ MATRIX: dict[str, dict] = {
         "silence": Cell(max_ttl=900),
         # SOS is checked above the pause gate, so asking for a human again
         # re-acknowledges and re-arms the window rather than being swallowed.
-        "interrupt": Cell(send="נציג", expect=("מעביר אותך לנציג אנושי",)),
+        "interrupt": Cell(
+            send="נציג", expect=(Messages.Customer.BOT_PAUSED_BY_CUSTOMER,)
+        ),
         "race": Cell(na=RACE_NA),
     },
     UserStates.AWAITING_RESCHEDULE_TIME: {
         "keyword": Cell(
             send="1", expect_state=UserStates.IDLE, expect=("המועד שונה בהצלחה",)
         ),
-        "free": Cell(send="הראשון מתאים לי", expect=("בחר מספר תור חוקי",)),
-        "offtopic": Cell(send="מה קורה?", expect=("בחר מספר תור חוקי",)),
-        "wrong": Cell(send="", media="image", expect=("בחר מספר תור חוקי",)),
-        "emoji": Cell(send="👍", expect=("בחר מספר תור חוקי",)),
+        "free": Cell(
+            send="הראשון מתאים לי",
+            expect=(Messages.Customer.RESCHEDULE_INVALID_CHOICE,),
+        ),
+        "offtopic": Cell(
+            send="מה קורה?",
+            expect=(Messages.Customer.RESCHEDULE_INVALID_CHOICE,),
+        ),
+        "wrong": Cell(
+            send="",
+            media="image",
+            expect=(Messages.Customer.RESCHEDULE_INVALID_CHOICE,),
+        ),
+        "emoji": Cell(
+            send="👍",
+            expect=(Messages.Customer.RESCHEDULE_INVALID_CHOICE,),
+        ),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
             send="בטל", expect_state=UserStates.IDLE, expect=("המועד נשאר כפי שהיה",)
@@ -584,7 +616,7 @@ MATRIX: dict[str, dict] = {
         "interrupt": Cell(
             send="נציג",
             expect_state=UserStates.PAUSED_FOR_HUMAN,
-            expect=("מעביר אותך לנציג אנושי",),
+            expect=(Messages.Customer.BOT_PAUSED_BY_CUSTOMER,),
         ),
         "race": Cell(na=RACE_NA),
     },
@@ -592,15 +624,15 @@ MATRIX: dict[str, dict] = {
         "keyword": Cell(
             send="1", expect_state=UserStates.IDLE, expect=("הבעיה החדשה",)
         ),
-        "free": Cell(send="בעצם לא משנה", expect=("אנא השב 1 (בעיה חדשה) או 2",)),
-        "offtopic": Cell(send="מה השעה?", expect=("אנא השב 1 (בעיה חדשה) או 2",)),
-        "wrong": Cell(send="", media="image", expect=("אנא השב 1 (בעיה חדשה) או 2",)),
-        "emoji": Cell(send="👍", expect=("אנא השב 1 (בעיה חדשה) או 2",)),
+        "free": Cell(send="בעצם לא משנה", expect=(_NEW_OR_EXISTING_REPROMPT_LINE,)),
+        "offtopic": Cell(send="מה השעה?", expect=(_NEW_OR_EXISTING_REPROMPT_LINE,)),
+        "wrong": Cell(send="", media="image", expect=(_NEW_OR_EXISTING_REPROMPT_LINE,)),
+        "emoji": Cell(send="👍", expect=(_NEW_OR_EXISTING_REPROMPT_LINE,)),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
             send="נציג",
             expect_state=UserStates.PAUSED_FOR_HUMAN,
-            expect=("מעביר אותך לנציג אנושי",),
+            expect=(Messages.Customer.BOT_PAUSED_BY_CUSTOMER,),
         ),
         "race": Cell(na=RACE_NA),
     },
@@ -641,25 +673,25 @@ MATRIX: dict[str, dict] = {
         "interrupt": Cell(
             send="נציג",
             expect_state=UserStates.PAUSED_FOR_HUMAN,
-            expect=("מעביר אותך לנציג אנושי",),
+            expect=(Messages.Customer.BOT_PAUSED_BY_CUSTOMER,),
         ),
         "race": Cell(na=RACE_NA),
     },
     # --------------------------------------------------------------------- pro
     UserStates.PRO_MODE: {
-        "keyword": Cell(send="תפריט", expect=("פקודות המערכת",)),
+        "keyword": Cell(send="תפריט", expect=(_DASHBOARD_LAST_LINE,)),
         "free": Cell(
             send="מה יש לי היום ביומן",
             ai=[],
-            expect=("פקודות המערכת",),
+            expect=(_DASHBOARD_LAST_LINE,),
         ),
-        "offtopic": Cell(send="מה שלומך", expect=("פקודות המערכת",)),
+        "offtopic": Cell(send="מה שלומך", expect=(_DASHBOARD_LAST_LINE,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
-        "emoji": Cell(send="👍", expect=("פקודות המערכת",)),
+        "emoji": Cell(send="👍", expect=(_DASHBOARD_LAST_LINE,)),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
             send="התחלה",
-            expect=("פקודות המערכת",),
+            expect=(_DASHBOARD_LAST_LINE,),
         ),
         "race": Cell(na=RACE_NA),
     },
@@ -669,10 +701,10 @@ MATRIX: dict[str, dict] = {
             expect_state=UserStates.CUSTOMER_MODE,
             expect=("עברת למצב לקוח",),
         ),
-        "free": Cell(send="בוא נגיד שכן", expect=("בוא ננסה שוב",)),
-        "offtopic": Cell(send="מה קורה", expect=("בוא ננסה שוב",)),
+        "free": Cell(send="בוא נגיד שכן", expect=(_INTENT_REPROMPT_LINE,)),
+        "offtopic": Cell(send="מה קורה", expect=(_INTENT_REPROMPT_LINE,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
-        "emoji": Cell(send="👍", expect=("בוא ננסה שוב",)),
+        "emoji": Cell(send="👍", expect=(_INTENT_REPROMPT_LINE,)),
         "silence": Cell(max_ttl=300),
         "interrupt": Cell(
             send="2", expect_state=UserStates.IDLE, expect=("ממשיכים כרגיל",)
@@ -720,10 +752,10 @@ MATRIX: dict[str, dict] = {
             expect_state=UserStates.ONBOARDING_TYPE,
             expect=("סוג המקצוע",),
         ),
-        "offtopic": Cell(send="א", expect=("בין 2 ל-100 תווים",)),
+        "offtopic": Cell(send="א", expect=(Messages.Onboarding.NAME_LENGTH_ERROR,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
         # A single emoji is one codepoint, so it fails the 2-char minimum.
-        "emoji": Cell(send="👍", expect=("בין 2 ל-100 תווים",)),
+        "emoji": Cell(send="👍", expect=(Messages.Onboarding.NAME_LENGTH_ERROR,)),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
             send="ביטול", expect_state=UserStates.IDLE, expect=("ההרשמה בוטלה",)
@@ -734,16 +766,16 @@ MATRIX: dict[str, dict] = {
         "keyword": Cell(
             send="1",
             expect_state=UserStates.ONBOARDING_AREAS,
-            expect=("ערים/אזורים",),
+            expect=(_ASK_AREAS_LINE,),
         ),
         "free": Cell(
             send="אינסטלטור",
             expect_state=UserStates.ONBOARDING_AREAS,
-            expect=("ערים/אזורים",),
+            expect=(_ASK_AREAS_LINE,),
         ),
-        "offtopic": Cell(send="לא יודע", expect=("שלח מספר 1-7",)),
+        "offtopic": Cell(send="לא יודע", expect=(Messages.Onboarding.INVALID_TYPE,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
-        "emoji": Cell(send="👍", expect=("שלח מספר 1-7",)),
+        "emoji": Cell(send="👍", expect=(Messages.Onboarding.INVALID_TYPE,)),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
             send="ביטול", expect_state=UserStates.IDLE, expect=("ההרשמה בוטלה",)
@@ -808,10 +840,10 @@ MATRIX: dict[str, dict] = {
             expect_state=UserStates.IDLE,
             expect=("הפרופיל שלך נשלח לאישור",),
         ),
-        "free": Cell(send="נראה לי בסדר", expect=("השב *אשר* לשליחה",)),
-        "offtopic": Cell(send="מה זה?", expect=("השב *אשר* לשליחה",)),
+        "free": Cell(send="נראה לי בסדר", expect=(_CONFIRM_REPROMPT_LINE,)),
+        "offtopic": Cell(send="מה זה?", expect=(_CONFIRM_REPROMPT_LINE,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
-        "emoji": Cell(send="👍", expect=("השב *אשר* לשליחה",)),
+        "emoji": Cell(send="👍", expect=(_CONFIRM_REPROMPT_LINE,)),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
             send="ביטול", expect_state=UserStates.IDLE, expect=("ההרשמה בוטלה",)
@@ -943,9 +975,9 @@ _COLLAPSED: dict[str, list[tuple[str, str]]] = {
 
 for _reason, _cells in _COLLAPSED.items():
     for _state, _input_class in _cells:
-        assert not MATRIX[_state][_input_class].na, (
-            f"{_state} x {_input_class} is already N/A — collapsing it hides why"
-        )
+        assert not MATRIX[_state][
+            _input_class
+        ].na, f"{_state} x {_input_class} is already N/A — collapsing it hides why"
         MATRIX[_state][_input_class] = Cell(na=_reason)
 
 
