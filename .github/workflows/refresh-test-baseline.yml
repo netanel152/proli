@@ -1,0 +1,111 @@
+name: 🔢 Refresh test baseline
+
+# The "Guard — test baseline floor" step in tests.yml only fails a PR that runs
+# FEWER tests than docs/TESTING.md claims. Growth is normal, so it posts a
+# warning instead of blocking — which used to serialize merges: with several
+# feature branches in flight, whoever merged second failed as a stale baseline
+# through no fault of their own.
+#
+# A floor is only safe while the line stays close to reality: a baseline left far
+# below the real count hides a regression that lands underneath it. So this job
+# runs on dev after every merge and, when the line has drifted, opens a PR that
+# moves it. Direct push is not an option — dev is branch-protected.
+#
+# Requires the repo setting "Allow GitHub Actions to create and approve pull
+# requests" (Settings → Actions → General → Workflow permissions). Without it the
+# gh call fails and the job goes red, which is itself the signal to bump the line
+# by hand.
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    env:
+      GEMINI_API_KEY: "ci-not-a-real-key"
+      CLOUDINARY_CLOUD_NAME: "ci"
+      CLOUDINARY_API_KEY: "ci"
+      CLOUDINARY_API_SECRET: "ci"
+      WHATSAPP_DRY_RUN: "true"
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          pytest -q | tee pytest-output.txt
+
+      - name: Compare and open a PR if the line drifted
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          summary=$(grep -oP '^\d+ passed.*' pytest-output.txt | tail -1)
+          passed=$(echo "$summary"  | grep -oP '\b\K[0-9]+(?= passed)')
+          skipped=$(echo "$summary" | grep -oP '\b\K[0-9]+(?= skipped)' || echo 0)
+          xfailed=$(echo "$summary" | grep -oP '\b\K[0-9]+(?= xfailed)' || echo 0)
+          current=$(grep -oP '\*\*Current status: \K[^*]+(?=\*\*)' docs/TESTING.md)
+          wanted="${passed} passed, ${skipped} skipped, ${xfailed} xfailed"
+          echo "line now: '$current'"
+          echo "line want: '$wanted'"
+          if [ "$current" = "$wanted" ]; then
+            echo "OK — baseline line already matches. Nothing to do."
+            exit 0
+          fi
+
+          branch="chore/refresh-test-baseline-${GITHUB_SHA::7}"
+          if gh pr list --head "$branch" --state open --json number | grep -q number; then
+            echo "A refresh PR for this commit is already open."
+            exit 0
+          fi
+
+          # Only the counts move. The parenthetical after the line explains what
+          # the skips are and is maintained by hand — leave it alone.
+          python - "$wanted" <<'PY'
+          import io, re, sys
+          wanted = sys.argv[1]
+          p = "docs/TESTING.md"
+          s = io.open(p, encoding="utf-8").read()
+          s2 = re.sub(r"\*\*Current status: [^*]+\*\*", "**Current status: %s**" % wanted, s, count=1)
+          assert s2 != s, "Current status line not found in docs/TESTING.md"
+          io.open(p, "w", encoding="utf-8", newline="\n").write(s2)
+          PY
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add docs/TESTING.md
+          git commit -m "chore: refresh test baseline to ${passed} passed"
+          git push -u origin "$branch"
+
+          gh pr create \
+            --base dev \
+            --head "$branch" \
+            --title "chore: refresh test baseline to ${passed} passed" \
+            --body "$(cat <<EOF
+          Automated by \`.github/workflows/refresh-test-baseline.yml\` after ${GITHUB_SHA::7} landed on \`dev\`.
+
+          \`docs/TESTING.md\` said **${current}**; the suite on \`dev\` now reports **${wanted}**.
+
+          The CI gate is a floor — it fails only on a regression — but the floor is
+          only useful while it tracks reality, so this PR moves the line.
+          Nothing but the counts changed. Merge it or close it and edit by hand.
+          EOF
+          )"

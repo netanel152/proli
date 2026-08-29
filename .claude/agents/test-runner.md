@@ -16,8 +16,10 @@ You are the test runner for the Proli project. Your only job is to run the test 
 
 The expected count lives in **`docs/TESTING.md`** ("Current status" line). Read it first. Do not trust any count hardcoded elsewhere.
 
+The line is a **floor**, not an equality — CI fails only below it.
+
 - **Fewer passed than TESTING.md, or any failure** → regression. Report it.
-- **More passed than TESTING.md** → new tests. Output: "new tests detected — update baseline in docs/TESTING.md."
+- **More passed than TESTING.md** → new tests. Not a failure. Report the exact new count so docs-syncer can move the line; if it doesn't, `.github/workflows/refresh-test-baseline.yml` opens a PR for it after the merge.
 
 ## Workflow
 
