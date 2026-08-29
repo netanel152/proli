@@ -15,6 +15,7 @@ from app.services.state_manager_service import StateManager
 from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 import pytz
+import re
 
 _IL_TZ = pytz.timezone("Asia/Jerusalem")
 
@@ -160,10 +161,47 @@ async def _handle_completion_check_decline(
     return Messages.Customer.COMPLETION_NOT_YET_ACK
 
 
+def rating_prompt_open_filter(now_utc: datetime | None = None) -> dict:
+    """Mongo sub-filter for a rating prompt that is still live (PRO-122).
+
+    Shared by the deferral guard below and by `handle_customer_rating_text`, so
+    the handler that *defers* and the handler that *acts* can never disagree
+    about which prompts count. Both writers of `waiting_for_rating`
+    (`handle_customer_completion_text` here and `pro_flow._execute_finish`)
+    stamp `completed_at` in the same update, so one cutoff covers both.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=WorkerConstants.RATING_PROMPT_MAX_AGE_HOURS)
+    return {"waiting_for_rating": True, "completed_at": {"$gte": cutoff}}
+
+
+async def _rating_pending(chat_id: str) -> bool:
+    """True when this chat still owes an answer to a *live* 1-5 rating question."""
+    return bool(
+        await leads_collection.find_one(
+            {"chat_id": chat_id, **rating_prompt_open_filter()}, {"_id": 1}
+        )
+    )
+
+
 async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     """Checks if the user confirmed job completion via text."""
     stripped = text.strip()
     normalized = stripped.lower()
+
+    # PRO-122: the completion menu ("1 — כן" / "2 — עדיין לא") shares its digits
+    # with the 1-5 rating scale, and the dispatcher runs this handler *before*
+    # the rating one. A customer holding both a rating prompt and a separate
+    # BOOKED lead would have "1" complete that other job and "2" swallowed as
+    # "not yet" — neither of which is what they answered. A bare digit while a
+    # rating is pending belongs to the rating question; defer to it. The skip
+    # tokens overlap too — `_NOT_YET_TOKENS ∩ SKIP_TOKENS = {"לא", "no"}` — so a
+    # customer meaning "I don't want to rate" would otherwise only ever restart
+    # some booked lead's cooldown, and could never reach the rating skip at all.
+    if (
+        stripped in Messages.Keywords.RATING_OPTIONS or is_skip_token(text)
+    ) and await _rating_pending(chat_id):
+        return None
 
     yes_tokens = {"1", "כן", "כן הסתיים", "כן, הסתיים", "הסתיים", "yes", "done"}
     is_completion = (
@@ -209,20 +247,192 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     return Messages.Customer.COMPLETION_ACK.format(pro_name=pro_name)
 
 
-async def handle_customer_rating_text(chat_id: str, text: str):
-    """Checks if the user sent a rating (1-5)."""
-    text = text.strip()
-    if text not in Messages.Keywords.RATING_OPTIONS:
+# PRO-122: the rating prompt asks for "1-5" but people answer like people —
+# "5 כוכבים", "חמש", "5!", "5/5". Every one of those used to return None and
+# fall through to the dispatcher which, with the context already cleared on
+# completion, greeted the customer afresh and asked their name.
+_HEBREW_RATING_WORDS = {
+    "אחת": 1,
+    "אחד": 1,
+    "שתיים": 2,
+    "שניים": 2,
+    "שתי": 2,
+    "שלוש": 3,
+    "שלושה": 3,
+    "ארבע": 4,
+    "ארבעה": 4,
+    "חמש": 5,
+    "חמישה": 5,
+}
+# Words that mark a number as a *score* rather than a quantity. Without one of
+# these, a digit inside a sentence is left alone: "רחוב הרצל 5", "קומה 2",
+# "3 ימים עברו והוא לא חזר" and "5 דקות" are addresses, floors and durations,
+# and reading any of them as a rating writes a number the customer never gave
+# into the pro's permanent public average — and then persists their *next*
+# message as that pro's public review.
+_RATING_CONTEXT_WORDS = {
+    "כוכב",
+    "כוכבים",
+    "כוכבי",
+    "דירוג",
+    "מדרג",
+    "ציון",
+    "ניקוד",
+    "מתוך",
+    "נותן",
+    "נותנת",
+    "מגיע",
+    "star",
+    "stars",
+    "rating",
+    "score",
+}
+# The whole reply is one 1-5 score and nothing else: "5", "5!", "*5*", "5/5".
+# Anchored at both ends, so "4.5" and "10" fall through to the re-prompt rather
+# than being silently truncated to 4 and 1.
+_BARE_RATING_RE = re.compile(r"^[\s*_~\-\"'.]*([1-5])(?:\s*/\s*5)?[\s*_~\-\"'!?.]*$")
+_DIGIT_RUN_RE = re.compile(r"\d+")
+_STAR_CHARS = "⭐★✩✪✰"
+_PUNCT_TO_STRIP = "!?.,;:*\"'()[]־-"
+
+
+def parse_rating(text: str) -> int | None:
+    """Read a 1-5 rating out of a free-text reply, or None if there isn't one.
+
+    Pure and side-effect free so it can be table-tested. Two deliberate refusals,
+    both for the same reason — a rating is a *permanent* write to a pro's public
+    average, so a wrong guess costs far more than the one message a re-prompt
+    costs:
+
+    * sentiment words ("מצוין", "מעולה") are never mapped onto a number; and
+    * a digit only counts when the reply is nothing but that digit, or when a
+      rating-context word ("כוכבים", "מתוך", "דירוג") marks it as a score.
+    """
+    if not text:
+        return None
+    stripped = text.strip()
+
+    bare = _BARE_RATING_RE.match(stripped)
+    if bare:
+        return int(bare.group(1))
+
+    # "⭐⭐⭐⭐" — stars and nothing else.
+    star_count = sum(stripped.count(char) for char in _STAR_CHARS)
+    if star_count and not stripped.strip(_STAR_CHARS + " " + _PUNCT_TO_STRIP):
+        return star_count if 1 <= star_count <= 5 else None
+
+    words = [word.strip(_PUNCT_TO_STRIP) for word in stripped.lower().split()]
+    has_context = any(word in _RATING_CONTEXT_WORDS for word in words)
+
+    in_range = [
+        run
+        for run in _DIGIT_RUN_RE.findall(stripped)
+        if run in Messages.Keywords.RATING_OPTIONS
+    ]
+    if has_context and in_range:
+        # "4 מתוך 5" — the score is the first in-range number, not the scale.
+        return int(in_range[0])
+
+    hebrew = next(
+        (_HEBREW_RATING_WORDS[word] for word in words if word in _HEBREW_RATING_WORDS),
+        None,
+    )
+    # A Hebrew number word counts on its own ("חמש") or when a context word
+    # backs it ("חמישה כוכבים") — but not inside a sentence that merely happens
+    # to contain one ("בעוד שלוש שעות").
+    if hebrew is not None and (has_context or len(words) == 1):
+        return hebrew
+    return None
+
+
+def is_skip_token(text: str) -> bool:
+    """True for an explicit opt-out of an optional prompt (PRO-122).
+
+    Exact match after strip/lower, never substring: "לא" declines, but
+    "לא היה טוב" is a real (negative) review and must survive.
+    """
+    if not text:
+        return False
+    return (
+        text.strip().lower().strip(_PUNCT_TO_STRIP).strip()
+        in Messages.Keywords.SKIP_TOKENS
+    )
+
+
+async def _release_rating_prompt(lead: dict, reason: str) -> None:
+    """Stop waiting for a rating on this lead, without recording one."""
+    await leads_collection.update_one(
+        {"_id": lead["_id"]}, {"$set": {"waiting_for_rating": False}}
+    )
+    logger.info(f"[Rating] Lead {lead['_id']} — rating prompt released ({reason}).")
+
+
+async def _handle_unparsed_rating(
+    chat_id: str, lead: dict, text: str, has_media: bool = False
+):
+    """A rating is pending but the reply isn't a number — skip, re-prompt, or release."""
+    # An emergency outranks the closing pleasantries. `is_emergency_detected` is
+    # not consulted until *after* this handler runs, so a re-prompt here would
+    # stall "הצפה דחוף" for up to MAX_RATING_REPROMPTS messages. Let it through
+    # on the first one instead.
+    if contains_keyword(text, Messages.Keywords.EMERGENCY_KEYWORDS):
+        await _release_rating_prompt(lead, "emergency keyword")
         return None
 
-    rating = int(text)
+    # A photo of the damage with a caption must reach the media handler, which
+    # runs after this one. Fall through untouched — and don't spend a re-prompt
+    # on it either.
+    if has_media:
+        return None
 
+    if is_skip_token(text):
+        await leads_collection.update_one(
+            {"_id": lead["_id"]},
+            {"$set": {"waiting_for_rating": False, "rating_skipped": True}},
+        )
+        await ContextManager.clear_context(chat_id)
+        logger.info(f"[Rating] Lead {lead['_id']} — customer declined to rate.")
+        return Messages.Customer.RATING_SKIPPED
+
+    reprompts = lead.get("rating_reprompt_count", 0)
+    if reprompts < WorkerConstants.MAX_RATING_REPROMPTS:
+        await leads_collection.update_one(
+            {"_id": lead["_id"]}, {"$inc": {"rating_reprompt_count": 1}}
+        )
+        logger.info(
+            f"[Rating] Lead {lead['_id']} — unreadable rating reply, re-prompting "
+            f"({reprompts + 1}/{WorkerConstants.MAX_RATING_REPROMPTS})."
+        )
+        return Messages.Customer.RATING_REPROMPT
+
+    # Cap reached. `waiting_for_rating` never clears on its own, so holding it
+    # here would re-prompt this customer forever; release it and let the message
+    # reach the dispatcher as it did before this handler existed.
+    await _release_rating_prompt(lead, "re-prompt cap reached")
+    return None
+
+
+async def handle_customer_rating_text(chat_id: str, text: str, has_media: bool = False):
+    """Checks if the user sent a rating (1-5), tolerating how people actually type it.
+
+    The lead is looked up *before* the text is judged: with no rating pending a
+    stray number still falls through untouched, and only a customer who was
+    genuinely asked earns a re-prompt. The lookup is newest-first and bounded to
+    live prompts, so with two unrated jobs the rating lands on the one the
+    customer was actually just asked about rather than on whichever Mongo
+    happened to return.
+    """
     lead = await leads_collection.find_one(
-        {"chat_id": chat_id, "waiting_for_rating": True}
+        {"chat_id": chat_id, **rating_prompt_open_filter()},
+        sort=[("completed_at", -1)],
     )
 
     if not lead:
         return None
+
+    rating = parse_rating(text)
+    if rating is None:
+        return await _handle_unparsed_rating(chat_id, lead, text, has_media)
 
     try:
         pro_id = lead["pro_id"]
@@ -275,6 +485,33 @@ async def handle_customer_review_comment(chat_id: str, text: str):
 
     if not lead:
         return None
+
+    # PRO-122: REVIEW_REQUEST is optional but had no skip path, so "לא" /
+    # "לא תודה" was persisted verbatim as the pro's public review.
+    if is_skip_token(text):
+        # The *score* is still theirs and still counts: the admin analytics
+        # average is computed over `reviews.rating`, so dropping the row would
+        # quietly delete the rating the customer did give. Persist it with an
+        # empty comment — `pro_flow._handle_reviews` only ever displays rows
+        # with non-empty text, so nothing surfaces the blank.
+        if lead.get("pro_id"):
+            await reviews_collection.insert_one(
+                {
+                    "pro_id": lead["pro_id"],
+                    "customer_chat_id": chat_id,
+                    "rating": lead.get("rating_given", 5),
+                    "comment": "",
+                    "created_at": datetime.now(timezone.utc),
+                }
+            )
+        await leads_collection.update_one(
+            {"_id": lead["_id"]}, {"$set": {"waiting_for_review_comment": False}}
+        )
+        await ContextManager.clear_context(chat_id)
+        logger.info(
+            f"📝 Review declined for lead {lead['_id']} — score kept, no comment text."
+        )
+        return Messages.Customer.REVIEW_DECLINED
 
     pro_id = lead.get("pro_id")
     if not pro_id:

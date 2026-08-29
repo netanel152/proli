@@ -9,12 +9,15 @@ from datetime import datetime, timedelta, timezone
 from app.core.constants import LeadStatus, Defaults, WorkerConstants
 from app.core.messages import Messages
 from tests.copy_util import static_prefix, longest_static_chunk
+import app.services.customer_flow
 from app.services.customer_flow import (
     send_customer_completion_check,
     handle_customer_completion_text,
     handle_customer_rating_text,
     handle_customer_review_comment,
     handle_status_query,
+    parse_rating,
+    is_skip_token,
 )
 
 
@@ -425,6 +428,219 @@ async def test_handle_completion_no_booked_lead(flow_db, mock_whatsapp):
     assert result is None
 
 
+# --- PRO-122: completion-menu digits vs. a pending rating -----------------
+# The completion menu ("1 — כן" / "2 — עדיין לא") and the 1-5 rating scale
+# share digits, and the completion handler runs before the rating one. A bare
+# digit must defer to the rating question instead of completing an unrelated
+# BOOKED lead or being swallowed as "not yet".
+
+
+@pytest.mark.asyncio
+async def test_completion_text_one_defers_to_pending_rating(flow_db, mock_whatsapp):
+    chat_id = "972502222301@c.us"
+    booked_lead_id = await _seed_booked_lead(flow_db, chat_id)
+    await flow_db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat_id,
+            "status": LeadStatus.COMPLETED,
+            "waiting_for_rating": True,
+            "completed_at": datetime.now(timezone.utc),
+        }
+    )
+
+    result = await handle_customer_completion_text(chat_id, "1", mock_whatsapp)
+
+    assert result is None
+    booked_lead = await flow_db.leads.find_one({"_id": booked_lead_id})
+    assert booked_lead["status"] == LeadStatus.BOOKED  # untouched
+
+
+@pytest.mark.asyncio
+async def test_completion_text_two_defers_to_pending_rating(flow_db, mock_whatsapp):
+    chat_id = "972502222302@c.us"
+    stale = datetime.now(timezone.utc) - timedelta(hours=12)
+    booked_lead_id = await _seed_booked_lead(
+        flow_db,
+        chat_id,
+        completion_check_sent_count=1,
+        completion_check_sent_at=stale,
+    )
+    await flow_db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat_id,
+            "status": LeadStatus.COMPLETED,
+            "waiting_for_rating": True,
+            "completed_at": datetime.now(timezone.utc),
+        }
+    )
+    seeded = await flow_db.leads.find_one({"_id": booked_lead_id})
+
+    result = await handle_customer_completion_text(chat_id, "2", mock_whatsapp)
+
+    assert result is None  # not the COMPLETION_NOT_YET_ACK path
+    booked_lead = await flow_db.leads.find_one({"_id": booked_lead_id})
+    assert booked_lead["status"] == LeadStatus.BOOKED
+    # Untouched by the (short-circuited) decline path, which would otherwise
+    # bump this to "now" and restart the cooldown.
+    assert booked_lead["completion_check_sent_at"] == seeded["completion_check_sent_at"]
+
+
+@pytest.mark.asyncio
+async def test_completion_text_skip_token_defers_to_pending_rating(
+    flow_db, mock_whatsapp
+):
+    """'לא' means "don't want to rate" here, not "not yet finished" — the
+    decline path (`_NOT_YET_TOKENS ∩ SKIP_TOKENS = {"לא", "no"}`) must not eat
+    it before the rating skip ever gets a chance to run."""
+    chat_id = "972502222308@c.us"
+    stale = datetime.now(timezone.utc) - timedelta(hours=12)
+    booked_lead_id = await _seed_booked_lead(
+        flow_db,
+        chat_id,
+        completion_check_sent_count=1,
+        completion_check_sent_at=stale,
+    )
+    await flow_db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat_id,
+            "status": LeadStatus.COMPLETED,
+            "waiting_for_rating": True,
+            "completed_at": datetime.now(timezone.utc),
+        }
+    )
+
+    result = await handle_customer_completion_text(chat_id, "לא", mock_whatsapp)
+
+    assert result is None
+    booked_lead = await flow_db.leads.find_one({"_id": booked_lead_id})
+    assert booked_lead["status"] == LeadStatus.BOOKED
+
+
+@pytest.mark.asyncio
+async def test_completion_text_one_completes_booked_when_rating_prompt_expired(
+    flow_db, mock_whatsapp
+):
+    """A rating prompt older than RATING_PROMPT_MAX_AGE_HOURS is dead: it must
+    not defer the digit away from a genuinely BOOKED lead."""
+    chat_id = "972502222309@c.us"
+    pro_id = ObjectId()
+    await flow_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "אבי אינסטלציה",
+            "phone_number": "972500000009",
+        }
+    )
+    booked_lead_id = ObjectId()
+    await flow_db.leads.insert_one(
+        {
+            "_id": booked_lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    expired = datetime.now(timezone.utc) - timedelta(
+        hours=WorkerConstants.RATING_PROMPT_MAX_AGE_HOURS + 1
+    )
+    await flow_db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat_id,
+            "status": LeadStatus.COMPLETED,
+            "waiting_for_rating": True,
+            "completed_at": expired,
+        }
+    )
+
+    rating_result = await handle_customer_rating_text(chat_id, "1")
+    assert rating_result is None  # the dead prompt does not swallow the digit
+
+    completion_result = await handle_customer_completion_text(
+        chat_id, "1", mock_whatsapp
+    )
+    assert completion_result is not None
+    booked_lead = await flow_db.leads.find_one({"_id": booked_lead_id})
+    assert booked_lead["status"] == LeadStatus.COMPLETED
+
+
+# --- parse_rating (pure) ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # decorated leading/bare digit
+        ("5", 5),
+        ("5!", 5),
+        ("*5*", 5),
+        ("5/5", 5),
+        (" 5 ", 5),
+        # digit backed by a rating-context word
+        ("5 כוכבים", 5),
+        ("4 מתוך 5", 4),
+        ("דירוג 4", 4),
+        ("אני נותן 5", 5),
+        ("מגיע לו 5 כוכבים", 5),
+        # Hebrew number words
+        ("חמש", 5),
+        ("חמישה כוכבים", 5),
+        ("שלוש", 3),
+        # stars-only reply counts the stars
+        ("⭐⭐⭐⭐", 4),
+        # numbers that are clearly something else (address, floor, duration) -> None
+        ("רחוב הרצל 5", None),
+        ("קומה 2", None),
+        ("דירה 3", None),
+        ("נזילה בקומה 4", None),
+        ("בעוד 3 ימים", None),
+        ("5 דקות", None),
+        ("3 ימים עברו והוא לא חזר אליי", None),
+        ("2 ברזים דולפים אצלי במטבח", None),
+        ("1 בבוקר מחר", None),
+        ("5 שקל", None),
+        # Hebrew number word buried in a sentence, no context word -> None
+        ("בעוד שלוש שעות", None),
+        # never truncate 4.5 to 4, or accept out-of-range digits
+        ("4.5", None),
+        ("10", None),
+        # sentiment words are deliberately not mapped
+        ("מצוין", None),
+        ("", None),
+        ("בין 8 ל9", None),  # two numbers present, neither a lone 1-5
+        ("צריך עוד ארבע שעות של עבודה", None),  # number word in a long sentence
+        ("⭐⭐⭐⭐⭐⭐⭐", None),  # out-of-range star count
+    ],
+)
+def test_parse_rating(text, expected):
+    assert parse_rating(text) == expected
+
+
+# --- is_skip_token (pure) ---------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("לא", True),
+        ("לא תודה", True),
+        ("דלג", True),
+        ("skip", True),
+        ("No", True),
+        ("nope!", True),
+        ("אין צורך", True),
+        # a genuine negative review must survive as a review, not a skip
+        ("לא היה טוב", False),
+    ],
+)
+def test_is_skip_token(text, expected):
+    assert is_skip_token(text) == expected
+
+
 # --- handle_customer_rating_text ---
 
 
@@ -446,6 +662,7 @@ async def test_rating_valid(flow_db, monkeypatch):
             "chat_id": "972507777777@c.us",
             "waiting_for_rating": True,
             "pro_id": pro_id,
+            "completed_at": datetime.now(timezone.utc),
         }
     )
 
@@ -467,15 +684,180 @@ async def test_rating_valid(flow_db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rating_invalid_text(flow_db):
-    result = await handle_customer_rating_text("972501111111@c.us", "great")
+async def test_rating_invalid_text_no_lead_pending_returns_none(flow_db):
+    """An unparseable reply with no rating question outstanding falls through
+    untouched — it is very likely just an unrelated message."""
+    result = await handle_customer_rating_text("972509090909@c.us", "great")
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_rating_invalid_text_reprompts_when_lead_pending(flow_db):
+    """The same unparseable reply, but this chat was actually asked, gets a
+    re-prompt instead of silently falling through — and the lead stays
+    waiting_for_rating so a later, readable reply can still land."""
+    chat_id = "972509040404@c.us"
+    lead_id = ObjectId()
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "waiting_for_rating": True,
+            "pro_id": ObjectId(),
+            "completed_at": datetime.now(timezone.utc),
+        }
+    )
+
+    result = await handle_customer_rating_text(chat_id, "great")
+
+    assert result == Messages.Customer.RATING_REPROMPT
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["waiting_for_rating"] is True
+    assert lead["rating_reprompt_count"] == 1
 
 
 @pytest.mark.asyncio
 async def test_rating_no_waiting_lead(flow_db):
     result = await handle_customer_rating_text("972509010101@c.us", "5")
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_rating_skip_token_declines_and_clears_context(flow_db, monkeypatch):
+    chat_id = "972509050505@c.us"
+    lead_id = ObjectId()
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "waiting_for_rating": True,
+            "pro_id": ObjectId(),
+            "completed_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_ctx = MagicMock()
+    mock_ctx.clear_context = AsyncMock()
+    monkeypatch.setattr(app.services.customer_flow, "ContextManager", mock_ctx)
+
+    result = await handle_customer_rating_text(chat_id, "לא תודה")
+
+    assert result == Messages.Customer.RATING_SKIPPED
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["waiting_for_rating"] is False
+    assert lead["rating_skipped"] is True
+    mock_ctx.clear_context.assert_called_once_with(chat_id)
+
+
+@pytest.mark.asyncio
+async def test_rating_unparseable_at_reprompt_cap_releases_flag(flow_db):
+    """The re-prompt flag never clears on its own; once the cap is hit the
+    handler must release it and hand the message to the dispatcher instead of
+    trapping the customer in an endless re-prompt loop."""
+    chat_id = "972509060606@c.us"
+    lead_id = ObjectId()
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "waiting_for_rating": True,
+            "pro_id": ObjectId(),
+            "rating_reprompt_count": WorkerConstants.MAX_RATING_REPROMPTS,
+            "completed_at": datetime.now(timezone.utc),
+        }
+    )
+
+    result = await handle_customer_rating_text(chat_id, "still not a number")
+
+    assert result is None
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["waiting_for_rating"] is False
+
+
+@pytest.mark.asyncio
+async def test_rating_with_two_pending_leads_lands_on_newest(flow_db):
+    """Two live unrated jobs for the same chat: the rating must land on the one
+    the customer was actually just asked about (newest completed_at), not
+    whichever one Mongo happens to return first."""
+    chat_id = "972509061616@c.us"
+    older_id = ObjectId()
+    newer_id = ObjectId()
+    newer_pro_id = ObjectId()
+    await flow_db.users.insert_one({"_id": newer_pro_id, "business_name": "Newer Pro"})
+    await flow_db.leads.insert_one(
+        {
+            "_id": older_id,
+            "chat_id": chat_id,
+            "waiting_for_rating": True,
+            "pro_id": ObjectId(),
+            "completed_at": datetime.now(timezone.utc) - timedelta(hours=2),
+        }
+    )
+    await flow_db.leads.insert_one(
+        {
+            "_id": newer_id,
+            "chat_id": chat_id,
+            "waiting_for_rating": True,
+            "pro_id": newer_pro_id,
+            "completed_at": datetime.now(timezone.utc) - timedelta(minutes=5),
+        }
+    )
+
+    await handle_customer_rating_text(chat_id, "4")
+
+    older = await flow_db.leads.find_one({"_id": older_id})
+    newer = await flow_db.leads.find_one({"_id": newer_id})
+    assert older["waiting_for_rating"] is True  # untouched
+    assert newer["waiting_for_rating"] is False
+    assert newer["rating_given"] == 4
+
+
+@pytest.mark.asyncio
+async def test_rating_unparsed_emergency_keyword_releases_without_reprompt(flow_db):
+    """An emergency outranks the closing pleasantries: `is_emergency_detected`
+    only runs after this handler, so without this escape hatch "הצפה דחוף"
+    would be stalled behind a re-prompt for up to MAX_RATING_REPROMPTS turns."""
+    chat_id = "972509062020@c.us"
+    lead_id = ObjectId()
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "waiting_for_rating": True,
+            "pro_id": ObjectId(),
+            "completed_at": datetime.now(timezone.utc),
+        }
+    )
+
+    result = await handle_customer_rating_text(chat_id, "הצפה דחוף")
+
+    assert result is None  # falls through to the dispatcher/emergency path
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["waiting_for_rating"] is False
+    assert lead.get("rating_reprompt_count", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_rating_unparsed_with_media_falls_through_without_reprompt(flow_db):
+    """A photo with an unreadable caption must still reach the media handler
+    downstream (step 3) rather than burning a re-prompt on the caption text."""
+    chat_id = "972509062121@c.us"
+    lead_id = ObjectId()
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "waiting_for_rating": True,
+            "pro_id": ObjectId(),
+            "completed_at": datetime.now(timezone.utc),
+        }
+    )
+
+    result = await handle_customer_rating_text(chat_id, "תראו את זה", has_media=True)
+
+    assert result is None
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["waiting_for_rating"] is True  # left pending, untouched
+    assert lead.get("rating_reprompt_count", 0) == 0
 
 
 # --- handle_customer_review_comment ---
@@ -516,6 +898,66 @@ async def test_review_saved(flow_db, monkeypatch):
 async def test_review_no_waiting_lead(flow_db):
     result = await handle_customer_review_comment("972509030303@c.us", "good service")
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_review_comment_skip_token_declines_saving_score_without_comment(
+    flow_db, monkeypatch
+):
+    """Declining the free-text review comment must not throw away the *score*
+    the customer already gave — the admin analytics per-pro average is
+    computed over `reviews.rating`, so dropping the row would silently delete
+    it. The literal decline text must never be persisted as the comment."""
+    chat_id = "972509070707@c.us"
+    pro_id = ObjectId()
+    lead_id = ObjectId()
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "waiting_for_review_comment": True,
+            "pro_id": pro_id,
+            "rating_given": 5,
+        }
+    )
+    mock_ctx = MagicMock()
+    mock_ctx.clear_context = AsyncMock()
+    monkeypatch.setattr(app.services.customer_flow, "ContextManager", mock_ctx)
+
+    result = await handle_customer_review_comment(chat_id, "לא תודה")
+
+    assert result == Messages.Customer.REVIEW_DECLINED
+    review = await flow_db.reviews.find_one({"pro_id": pro_id})
+    assert review is not None
+    assert review["rating"] == 5
+    assert review["comment"] == ""
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["waiting_for_review_comment"] is False
+    mock_ctx.clear_context.assert_called_once_with(chat_id)
+
+
+@pytest.mark.asyncio
+async def test_review_comment_negative_sentence_is_saved_not_skipped(flow_db):
+    """'לא היה טוב' is a genuine negative review, not a decline — is_skip_token
+    only matches the exact opt-out phrases, never a substring of one."""
+    chat_id = "972509080808@c.us"
+    pro_id = ObjectId()
+    lead_id = ObjectId()
+    await flow_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "waiting_for_review_comment": True,
+            "pro_id": pro_id,
+            "rating_given": 2,
+        }
+    )
+
+    result = await handle_customer_review_comment(chat_id, "לא היה טוב")
+
+    assert result == Messages.Customer.REVIEW_SAVED
+    review = await flow_db.reviews.find_one({"pro_id": pro_id, "comment": "לא היה טוב"})
+    assert review is not None
 
 
 # --- handle_status_query ---
