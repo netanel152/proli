@@ -1666,6 +1666,392 @@ async def test_emergency_bypass_address_gate(wf_mocks, monkeypatch, mock_db):
     assert found_emergency_header is True
 
 
+# --- PRO-121: emergency escalation is no longer dropped in holding states ---
+#
+# `is_emergency_text` itself (exact keywords + clitic-prefixable stems, minus
+# negations) is unit-tested directly in tests/test_text_matching.py — cheaper
+# than driving the whole dispatcher for every keyword variant. The two cases
+# below only pin that the dispatcher is wired to that detector at all.
+
+
+def test_emergency_ack_no_longer_promises_summoned_pros():
+    """PRO-121: EMERGENCY_ACK fires on a keyword alone, before any pro is
+    matched — the old copy ("...ומזעיק עכשיו אנשי מקצוע פנויים") promised a
+    match that hadn't happened yet."""
+    assert "מזעיק" not in Messages.Customer.EMERGENCY_ACK
+
+
+@pytest.mark.asyncio
+async def test_emergency_detection_wiring_flags_a_new_lead(wf_mocks, mock_db):
+    """PRO-121 wiring check: a message `is_emergency_text` matches flags the
+    lead created for it. The matching truth table itself lives in
+    test_text_matching.py."""
+    _, _, _, _, mock_lm = wf_mocks
+
+    await process_incoming_message("972501118888@c.us", "דחוף!")
+
+    mock_lm.create_lead_from_dict.assert_called_once()
+    assert mock_lm.create_lead_from_dict.call_args.kwargs["is_emergency"] is True
+
+
+@pytest.mark.asyncio
+async def test_emergency_detection_wiring_ignores_a_non_match(wf_mocks, mock_db):
+    """PRO-121 wiring check: 'קצר' as a substring of 'בקצרה' is one of
+    `is_emergency_text`'s documented non-matches — confirm the dispatcher
+    doesn't flag (or even create) a lead over it, since nothing else on this
+    turn was extracted either (default AI mock returns no city/issue)."""
+    _, _, _, _, mock_lm = wf_mocks
+
+    await process_incoming_message("972501119999@c.us", "תסביר לי בקצרה מה קרה")
+
+    mock_lm.create_lead_from_dict.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("emergency_hold_acked", [False, True])
+async def test_emergency_while_waiting_for_pro_approval(
+    wf_mocks, mock_db, emergency_hold_acked
+):
+    """PRO-121: an emergency keyword typed while parked in
+    AWAITING_PRO_APPROVAL answers with EMERGENCY_WHILE_WAITING once, then
+    throttles on the lead's own `emergency_hold_acked` field. Throttling on
+    `is_emergency` itself instead would be wrong: the mainline case is a lead
+    already flagged at intake that then parks in this hold, so gating on the
+    flag would make this copy unreachable for exactly the customer it targets
+    — they would shout the keyword here and get back the generic soft-hold."""
+    mock_wa, mock_state, _, _, _ = wf_mocks
+    chat_id = "972501112121@c.us"
+    mock_state.get_state = AsyncMock(return_value=UserStates.AWAITING_PRO_APPROVAL)
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.NEW,
+            "city": "ירושלים",
+            # Flagged at intake, already parked here — the mainline case.
+            "is_emergency": True,
+            "emergency_hold_acked": emergency_hold_acked,
+        }
+    )
+
+    await process_incoming_message(chat_id, "יש שריפה, דחוף!")
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["is_emergency"] is True
+    # The hold itself is never released by an emergency declared here — only
+    # answered.
+    mock_state.clear_state.assert_not_called()
+
+    sent_texts = [c.args[1] for c in mock_wa.send_message.call_args_list]
+    if emergency_hold_acked:
+        assert Messages.Customer.STILL_WAITING in sent_texts
+        assert Messages.Customer.EMERGENCY_WHILE_WAITING not in sent_texts
+    else:
+        assert Messages.Customer.EMERGENCY_WHILE_WAITING in sent_texts
+        assert Messages.Customer.STILL_WAITING not in sent_texts
+        assert updated_lead["emergency_hold_acked"] is True
+
+
+@pytest.mark.asyncio
+async def test_emergency_releases_address_gate_when_city_known(wf_mocks, mock_db):
+    """PRO-121: an emergency keyword typed mid address-gate, with a city
+    already on the lead, clears the gate and lets routing continue — it must
+    NOT re-ask for the missing street/floor/apartment parts."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501113131@c.us"
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "city": "תל אביב",
+        }
+    )
+
+    # Mirror StateManager's real Redis-backed behavior: get_state must reflect
+    # the clear_state that _escalate_emergency performs, or the old
+    # AWAITING_ADDRESS handler further down would still fire on the stale value.
+    live_state = {"value": UserStates.AWAITING_ADDRESS}
+
+    async def get_state_effect(_chat_id):
+        return live_state["value"]
+
+    async def clear_state_effect(_chat_id):
+        live_state["value"] = UserStates.IDLE
+
+    mock_state.get_state = AsyncMock(side_effect=get_state_effect)
+    mock_state.clear_state = AsyncMock(side_effect=clear_state_effect)
+
+    await process_incoming_message(chat_id, "יש שריפה בבית!")
+
+    mock_state.clear_state.assert_called_with(chat_id)
+
+    sent_texts = [c.args[1] for c in mock_wa.send_message.call_args_list]
+    assert Messages.Customer.EMERGENCY_ACK in sent_texts
+    assert Messages.Customer.ADDRESS_INVALID not in sent_texts
+    assert Messages.Customer.EMERGENCY_NEED_CITY not in sent_texts
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["is_emergency"] is True
+
+
+@pytest.mark.asyncio
+async def test_emergency_needs_city_when_address_gate_has_no_city(wf_mocks, mock_db):
+    """PRO-121: an emergency typed mid address-gate with no city yet asks for
+    the city alone — never the five-part address gate's own prompt — and the
+    turn is fully answered without reaching the AI dispatcher."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501114141@c.us"
+    mock_state.get_state = AsyncMock(return_value=UserStates.AWAITING_ADDRESS)
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+        }
+    )
+
+    await process_incoming_message(chat_id, "יש הצפה, דחוף!")
+
+    sent_texts = [c.args[1] for c in mock_wa.send_message.call_args_list]
+    assert Messages.Customer.EMERGENCY_NEED_CITY in sent_texts
+    assert Messages.Customer.ADDRESS_INVALID not in sent_texts
+    assert Messages.Customer.EMERGENCY_ACK not in sent_texts
+
+    # The turn is answered entirely inside the escalation branch.
+    mock_ai.analyze_conversation.assert_not_called()
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["is_emergency"] is True
+
+
+@pytest.mark.asyncio
+async def test_emergency_releases_loyalty_confirmation_menu(wf_mocks, mock_db):
+    """PRO-121: an emergency keyword typed against the "want your previous
+    pro?" menu drops the question — a preference menu must not outrank an
+    emergency — and does not re-prompt the loyalty menu."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501115151@c.us"
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.NEW,
+            "city": "חיפה",
+        }
+    )
+
+    live_state = {"value": UserStates.AWAITING_LOYALTY_CONFIRMATION}
+
+    async def get_state_effect(_chat_id):
+        return live_state["value"]
+
+    async def clear_state_effect(_chat_id):
+        live_state["value"] = UserStates.IDLE
+
+    mock_state.get_state = AsyncMock(side_effect=get_state_effect)
+    mock_state.clear_state = AsyncMock(side_effect=clear_state_effect)
+
+    await process_incoming_message(chat_id, "יש לי דחוף, תעזרו")
+
+    mock_state.clear_state.assert_called_with(chat_id)
+
+    sent_texts = [c.args[1] for c in mock_wa.send_message.call_args_list]
+    assert Messages.Customer.LOYALTY_REPROMPT not in sent_texts
+    assert Messages.Customer.EMERGENCY_ACK in sent_texts
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["is_emergency"] is True
+
+
+@pytest.mark.asyncio
+async def test_emergency_expedites_dispatch_without_deal_marker(
+    wf_mocks, monkeypatch, mock_db
+):
+    """PRO-121: once a pro is actually matched, an emergency lead finalizes
+    even though the AI never emitted a [DEAL] marker — waiting for one would
+    stall a "get me someone now" request behind ordinary small talk.
+
+    No lead/pro_id exists yet for this chat_id, so this exercises the Smart
+    Dispatcher Phase specifically, not the assigned-pro fast path (see
+    ``determine_best_pro_mock.assert_called_once()`` below — that call only
+    happens on this branch)."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501116161@c.us"
+
+    pro_doc = {
+        "_id": ObjectId(),
+        "business_name": "Fast Pro",
+        "phone_number": "972500000099",
+        "is_active": True,
+    }
+    determine_best_pro_mock = AsyncMock(return_value=pro_doc)
+    monkeypatch.setattr(
+        app.services.workflow_service, "determine_best_pro", determine_best_pro_mock
+    )
+    mock_finalize = AsyncMock()
+    monkeypatch.setattr(app.services.workflow_service, "_finalize_deal", mock_finalize)
+
+    mock_ai.analyze_conversation.return_value = AIResponse(
+        reply_to_user="בסדר, אני שולח מישהו",
+        extracted_data=ExtractedData(
+            city="חיפה",
+            issue="נזילה",
+            full_address=None,
+            appointment_time=None,
+            street=None,
+            street_number=None,
+            floor=None,
+            apartment=None,
+            customer_name=None,
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+
+    # "דחופה" (not the bare "דחוף" exact keyword) matches only via the
+    # clitic-prefixable stem list — confirms the branch is reached the same
+    # way a real customer's phrasing would trigger it.
+    await process_incoming_message(chat_id, "יש לי נזילה דחופה בחיפה!")
+
+    determine_best_pro_mock.assert_called_once()
+    mock_finalize.assert_called_once()
+    assert mock_finalize.call_args.args[1] == pro_doc
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finalize_fails", [False, True])
+async def test_emergency_expedites_assigned_pro_fast_path(
+    wf_mocks, mock_db, monkeypatch, finalize_fails
+):
+    """PRO-121 (review fix): every route into AWAITING_ADDRESS sets `pro_id`
+    first, so a released emergency actually lands in the assigned-pro fast
+    path (`if existing_pro and active_lead:`), not the Smart Dispatcher Phase
+    below it. That fast path must expedite too: finalize despite
+    `is_deal=False` and withhold the AI's mid-intake reply — unless finalize
+    itself raises, in which case the withheld reply is sent as a fallback so
+    the customer isn't left silent."""
+    mock_wa, mock_state, _, mock_ai, _ = wf_mocks
+    chat_id = f"97250111717{1 if finalize_fails else 0}@c.us"
+
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "Fast Pro",
+            "phone_number": "972500000098",
+            "is_active": True,
+            "role": "professional",
+        }
+    )
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "city": "תל אביב",
+            "pro_id": pro_id,
+        }
+    )
+
+    # Mirror StateManager's real Redis-backed behavior — see the address-gate
+    # tests above for why a plain return_value would be wrong here.
+    live_state = {"value": UserStates.AWAITING_ADDRESS}
+
+    async def get_state_effect(_chat_id):
+        return live_state["value"]
+
+    async def clear_state_effect(_chat_id):
+        live_state["value"] = UserStates.IDLE
+
+    mock_state.get_state = AsyncMock(side_effect=get_state_effect)
+    mock_state.clear_state = AsyncMock(side_effect=clear_state_effect)
+
+    mock_finalize = AsyncMock(
+        side_effect=RuntimeError("boom") if finalize_fails else None
+    )
+    monkeypatch.setattr(app.services.workflow_service, "_finalize_deal", mock_finalize)
+
+    mid_intake_reply = "באיזו קומה הנזילה?"
+    mock_ai.analyze_conversation.return_value = AIResponse(
+        reply_to_user=mid_intake_reply,
+        extracted_data=ExtractedData(
+            city="תל אביב",
+            issue="נזילה",
+            full_address=None,
+            appointment_time=None,
+            street=None,
+            street_number=None,
+            floor=None,
+            apartment=None,
+            customer_name=None,
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+
+    await process_incoming_message(chat_id, "יש הצפה, דחוף!")
+
+    mock_finalize.assert_called_once()
+    assert mock_finalize.call_args.args[1]["_id"] == pro_id
+
+    sent_texts = [c.args[1] for c in mock_wa.send_message.call_args_list]
+    if finalize_fails:
+        assert mid_intake_reply in sent_texts
+    else:
+        assert mid_intake_reply not in sent_texts
+
+
+@pytest.mark.asyncio
+async def test_emergency_while_paused_for_human_pages_once_without_reply(
+    wf_mocks, mock_db, monkeypatch
+):
+    """PRO-121: PAUSED_FOR_HUMAN is deliberately absent from
+    EMERGENCY_HOLDING_STATES — a human already owns the conversation and the
+    bot must not talk over them — but an emergency declared there still flags
+    the lead and pages the operator once, without un-pausing and without
+    answering the customer. A second emergency message does not page again."""
+    mock_wa, mock_state, _, _, _ = wf_mocks
+    chat_id = "972501118181@c.us"
+    mock_state.get_state = AsyncMock(return_value=UserStates.PAUSED_FOR_HUMAN)
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+        }
+    )
+
+    mock_alert = AsyncMock()
+    monkeypatch.setattr(app.services.workflow_service, "send_sos_alert", mock_alert)
+
+    await process_incoming_message(chat_id, "יש שריפה, דחוף!")
+
+    updated_lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated_lead["is_emergency"] is True
+    mock_alert.assert_called_once()
+    mock_wa.send_message.assert_not_called()
+    mock_state.set_state.assert_any_call(
+        chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS
+    )
+
+    # A second emergency message from the same customer does not page again.
+    await process_incoming_message(chat_id, "עדיין דחוף, בבקשה!")
+    mock_alert.assert_called_once()
+
+
 # --- Customer status command routing ---
 
 

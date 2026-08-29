@@ -233,7 +233,10 @@ _DISPATCH_SEQUENCE = [
     ("Pro safety-bypass", "normalized_text in PRO_BUSINESS_KEYWORDS"),
     ("PRO_MODE", "current_state == UserStates.PRO_MODE:"),
     ("Pro onboarding", "current_state in ONBOARDING_STATES"),
-    ("AWAITING_ADDRESS", "current_state == UserStates.AWAITING_ADDRESS"),
+    # PRO-121 re-anchored: `_escalate_emergency` also compares against
+    # AWAITING_ADDRESS, so the state test is no longer unique to this branch.
+    # ADDRESS_INVALID is sent only by the re-entry handler itself.
+    ("AWAITING_ADDRESS", "Messages.Customer.ADDRESS_INVALID"),
     ("Pro registration", "REGISTER_COMMANDS"),
     ("Auto-detect professional", "Auto-detect Professional on first contact"),
     ("Smart Dispatcher", "Smart Dispatcher Phase"),

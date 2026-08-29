@@ -60,7 +60,7 @@ If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatc
 
 ## 3. Deal Finalization (`_finalize_deal`)
 
-When Phase 2 returns `is_deal=True`:
+When Phase 2 returns `is_deal=True` (or the lead is flagged `is_emergency` and a pro has already been matched — PRO-121 finalizes on the spot, without waiting for a `[DEAL]` marker):
 
 1. Create or update lead with `status=new`, `pro_id`, `full_address` (composed), `street`, `street_number`, `city`, `floor`, `apartment`, `issue_type`, `appointment_time`, `appointment_datetime` (parsed to a BSON UTC date via `parse_iso_to_utc`), `media_url`
 2. Set customer state to `AWAITING_PRO_APPROVAL` (customer sees a soft-hold message on next message)
@@ -79,9 +79,9 @@ If the customer is themselves a registered pro, they are **not** returned to `PR
 | `PRO_MODE` | Sender is an active pro | `pro_flow.handle_pro_text_command()` called |
 | `CUSTOMER_MODE` | Pro types `לקוח`, or confirms the intent prompt | Pro treated as customer, context cleared; sticky while their own lead is open |
 | `AWAITING_INTENT_CONFIRMATION` | AI detects pro needs service | Prompt pro to switch modes; `1`/`כן` accepts, `2`/`לא` declines, anything else re-prompts once |
-| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI — unless the sender is a pro using an unambiguous business keyword |
-| `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged, 15m rolling TTL resets |
-| `AWAITING_ADDRESS` | Address missing parts | AI re-extracts parts from next message, state cleared if complete |
+| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI — unless the sender is a pro using an unambiguous business keyword, or an emergency keyword arrives (PRO-121: `EMERGENCY_WHILE_WAITING`, state kept, once per lead) |
+| `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged, 15m rolling TTL resets. An emergency keyword here flags the lead and pages the operator once, without un-pausing or replying (PRO-121) |
+| `AWAITING_ADDRESS` | Address missing parts | AI re-extracts parts from next message, state cleared if complete. An emergency keyword with a known city releases the gate early instead (PRO-121) |
 
 ### SOS / Human Handoff
 

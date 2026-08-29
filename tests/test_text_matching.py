@@ -8,7 +8,7 @@ complete token, or — for multi-word keywords — a complete word sequence.
 
 import pytest
 
-from app.core.text_matching import contains_keyword
+from app.core.text_matching import contains_keyword, is_emergency_text
 from app.core.messages import Messages
 
 CANCEL_KEYWORDS = Messages.Keywords.CANCEL_KEYWORDS
@@ -175,3 +175,40 @@ def test_keyword_mid_word_never_matches():
 
 def test_keyword_as_standalone_word_matches():
     assert contains_keyword("טעות", ["טעות"]) is True
+
+
+# --- PRO-121: is_emergency_text (exact keywords + clitic-prefixable stems,
+# minus negations) — the single detector shared by workflow_service and
+# customer_flow. -------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "השריפה מתפשטת",  # clitic ה + "שריפה"
+        "אני סובל מהצפה בבית",  # clitic מ + "הצפה"
+        "וכשההצפה התחילה",  # stacked clitics ו+כש+ה + "הצפה"
+        "יש לי נזילה דחופה בחיפה!",  # explicit prefixable stem "דחופה"
+        "דחוף!",  # exact stem, punctuation stripped by tokenizing
+        "יש קצר חשמלי",  # exact multi-word EMERGENCY_KEYWORDS entry
+    ],
+)
+def test_is_emergency_text_true_positives(text):
+    assert is_emergency_text(text) is True
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "תסביר בקצרה",  # "קצר" only as a substring of "בקצרה" — bare "קצר"
+        # was deliberately dropped from EMERGENCY_KEYWORDS
+        "רק תיקון קצר",  # "קצר" as the everyday adjective, not a whole-token
+        # emergency keyword
+        "זה לא דחוף, אני יכול לחכות",  # EMERGENCY_EXCLUDE_PHRASES "לא דחוף"
+        "תעזור לי לדחוף את הארון",  # "לדחוף" (the verb "to push") must not
+        # read as a clitic-prefixed "דחוף"
+        "אין סכנה",  # EMERGENCY_EXCLUDE_PHRASES entry
+    ],
+)
+def test_is_emergency_text_true_negatives(text):
+    assert is_emergency_text(text) is False
