@@ -115,6 +115,15 @@ class WorkerConstants:
     SLOT_SEARCH_WINDOW_HOURS = 2
     DEFAULT_CURRENCY = "ILS"
     SOS_TIMEOUT_MINUTES = 60
+    # PRO-162: how long a stuck lead stays quiet after the SOS Reporter has
+    # paged the operator about it once. The Reporter fires every 4 hours and
+    # used to page CRITICAL for *every* lead over SOS_TIMEOUT_MINUTES on every
+    # tick, so a single unresolvable lead produced an unbounded stream of
+    # pages (Sentry PYTHON-Y: 20 fatals over 4 days for one staging lead).
+    # A lead is paged once, then again only after this interval, so a genuinely
+    # forgotten lead still resurfaces without drowning the one guaranteed
+    # out-of-band operator channel.
+    SOS_REPORT_REPAGE_HOURS = 24
     # Max reassignment attempts before the lead is escalated to
     # PENDING_ADMIN_REVIEW for a human to take over (PRO-63 — it is not closed).
     MAX_REASSIGNMENTS = 3

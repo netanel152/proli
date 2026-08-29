@@ -213,6 +213,11 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
                 "reassigned_from": current_pro_id,
                 "reassignment_count": reassignment_count + 1,
             },
+            # PRO-162: same reasoning as the `created_at` reset above. The lead
+            # has a fresh owner, so if it goes stuck *again* that is a new
+            # incident and must be able to page the operator immediately rather
+            # than inherit the previous incident's 24h mute.
+            extra_unset={"admin_reported_at": ""},
             expected_status=lead.get("status"),
         )
         if updated is None:
@@ -432,59 +437,173 @@ async def auto_reject_unassigned_leads():
         logger.error(f"❌ [Janitor] Error: {e}")
 
 
+# A tuple, not a list: this is shared by three call sites here and imported by
+# tests, and it encodes to the same BSON array either way.
+REPORTABLE_STUCK_STATUSES = (
+    LeadStatus.NEW,
+    LeadStatus.CONTACTED,
+    LeadStatus.PENDING_ADMIN_REVIEW,
+)
+
+
+def stuck_lead_report_due_filter(now_utc: datetime | None = None) -> dict:
+    """Mongo sub-filter selecting stuck leads the Reporter may still page about.
+
+    PRO-162. Shared by the Reporter's scheduler query and its per-lead atomic
+    claim below so the two can't drift. ``$or … $exists`` rather than a bare
+    ``$lt``: a lead nobody has been paged about has no ``admin_reported_at``
+    field at all, and ``$lt`` does not match a missing field.
+
+    Deliberately mirrors ``customer_flow.completion_check_due_filter`` — same
+    problem (a periodic job that must not re-fire on the same document every
+    tick), same shape.
+    """
+    now_utc = now_utc or datetime.now(timezone.utc)
+    cutoff = now_utc - timedelta(hours=WorkerConstants.SOS_REPORT_REPAGE_HOURS)
+    return {
+        "$and": [
+            {
+                "$or": [
+                    {"admin_reported_at": {"$exists": False}},
+                    # Explicit rather than implied. Mongo's BSON ordering puts
+                    # null below a date, so `$lt: cutoff` would match a null
+                    # too — but relying on that makes the filter's correctness
+                    # depend on comparison-order trivia that mongomock need not
+                    # reproduce. One clause per case, spelled out.
+                    {"admin_reported_at": None},
+                    {"admin_reported_at": {"$lt": cutoff}},
+                ]
+            }
+        ]
+    }
+
+
 async def send_periodic_admin_report():
     """
     ADMIN REPORTING ("The Reporter"):
     Runs periodically (e.g., every 4 hours).
     Sends a batched summary of leads that are STILL stuck (reassignment failed).
+
+    PRO-162 — pages **once per lead**, not once per tick. Every lead that goes
+    into the digest is first claimed with a conditional ``find_one_and_update``
+    stamping ``admin_reported_at``; the same due filter lives in the claim
+    predicate, so two worker replicas ticking at the same moment cannot both
+    page the same lead, and the next tick skips it entirely. A lead still stuck
+    ``SOS_REPORT_REPAGE_HOURS`` later becomes claimable again, so one nobody
+    ever resolves resurfaces instead of vanishing.
+
+    Before this, a single unresolvable lead paged ``page_critical`` → Sentry →
+    operator email every 4 hours indefinitely (Sentry PYTHON-Y fired 20 times
+    over 4 days for one staging lead) — the same defect class as PRO-77 at a
+    different call site, and how a real page gets missed. ``PENDING_ADMIN_REVIEW``
+    stays *in* the query: unlike the Healer, for which it is a terminal state,
+    telling the operator a human is needed is precisely the Reporter's job. It
+    now says so once rather than forever.
     """
     logger.info("🕵️ [SOS Reporter] Generating admin report...")
 
     timeout_minutes = WorkerConstants.SOS_TIMEOUT_MINUTES
-    threshold_time = datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)
+    now_utc = datetime.now(timezone.utc)
+    threshold_time = now_utc - timedelta(minutes=timeout_minutes)
 
-    # Same query as Healer - if they are still here, it means Healer failed or no one accepted.
+    # Same statuses as the Healer plus PENDING_ADMIN_REVIEW - if they are still
+    # here, the Healer failed, no one accepted, or a human owes the lead work.
     query = {
-        "status": {
-            "$in": [
-                LeadStatus.NEW,
-                LeadStatus.CONTACTED,
-                LeadStatus.PENDING_ADMIN_REVIEW,
-            ]
-        },
+        "status": {"$in": REPORTABLE_STUCK_STATUSES},
         "created_at": {"$lt": threshold_time},
+        **stuck_lead_report_due_filter(now_utc),
     }
 
     try:
         cursor = leads_collection.find(query)
-        stuck_leads = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+        candidates = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
 
-        if not stuck_leads:
-            logger.info("✅ [SOS Reporter] No stuck leads to report.")
-            return
+        # Claim each candidate before reporting it. find_one_and_update returns
+        # the pre-update document (Mongo's default); a None means another
+        # replica ticking concurrently already took this lead, so it is not
+        # ours to page about.
+        #
+        # A stamped lead is muted for SOS_REPORT_REPAGE_HOURS, so between the
+        # stamp and page_operator nothing fallible may run: a raise in there
+        # would silently mute leads nobody was ever told about — strictly worse
+        # than the duplicate paging this fix removes. Hence the per-lead try
+        # (one bad claim must not discard the leads already stamped above) and
+        # the backlog count moved below the page.
+        stuck_leads = []
+        for candidate in candidates:
+            try:
+                claimed = await leads_collection.find_one_and_update(
+                    {
+                        "_id": candidate["_id"],
+                        "status": {"$in": REPORTABLE_STUCK_STATUSES},
+                        **stuck_lead_report_due_filter(now_utc),
+                    },
+                    {"$set": {"admin_reported_at": now_utc}},
+                )
+            except Exception as e:
+                logger.error(
+                    f"❌ [SOS Reporter] Claim failed for lead "
+                    f"{candidate.get('_id')}: {e}"
+                )
+                continue
+            if claimed:
+                stuck_leads.append(claimed)
 
         count = len(stuck_leads)
-        logger.warning(f"🕵️ [SOS Reporter] Found {count} stuck leads.")
 
-        # PRO-88: paged via Sentry, not WhatsApp. The admin's Cloud API service
-        # window is permanently closed, so this batched digest would have needed
-        # its own approved template. Phones are masked to their last 4 digits —
-        # this is a "go look at the panel" signal, not a data export.
-        report_lines = [
-            f"{count} lead(s) stuck for more than {timeout_minutes} minutes:"
-        ]
-        for lead in stuck_leads:
-            local = (lead.get("chat_id") or "").split("@")[0]
-            created_at = lead.get("created_at")
-            report_lines.append(
-                f"- ***{local[-4:]}: {lead.get('issue_type') or 'unknown issue'}"
-                f" in {lead.get('full_address') or 'unknown city'}"
-                f" (waiting since {created_at.strftime('%H:%M') if created_at else '??'})"
+        if not stuck_leads:
+            logger.info("✅ [SOS Reporter] No newly stuck leads to page about.")
+        else:
+            logger.warning(f"🕵️ [SOS Reporter] Found {count} newly stuck leads.")
+
+            # PRO-88: paged via Sentry, not WhatsApp. The admin's Cloud API
+            # service window is permanently closed, so this batched digest would
+            # have needed its own approved template. Phones are masked to their
+            # last 4 digits — this is a "go look at the panel" signal, not a
+            # data export.
+            report_lines = [
+                f"{count} lead(s) stuck for more than {timeout_minutes} minutes:"
+            ]
+            for lead in stuck_leads:
+                local = (lead.get("chat_id") or "").split("@")[0]
+                created_at = lead.get("created_at")
+                # hasattr, not a truthiness check: a legacy or string
+                # created_at must not cost the whole batch its page.
+                since = (
+                    created_at.strftime("%H:%M")
+                    if hasattr(created_at, "strftime")
+                    else "??"
+                )
+                report_lines.append(
+                    f"- ***{local[-4:]}: {lead.get('issue_type') or 'unknown issue'}"
+                    f" in {lead.get('full_address') or 'unknown city'}"
+                    f" (waiting since {since})"
+                )
+            report_lines.append("Open the admin panel to reassign or call.")
+
+            page_operator("\n".join(report_lines))
+            logger.info(f"✅ [SOS Reporter] Paged operator about {count} stuck leads.")
+
+        # PRO-162: the standing backlog is state, not news — it goes to the log,
+        # never the pager (PRO-46 already puts it on the admin Kanban board).
+        # Deliberately after the page and in its own guard: this is a second,
+        # independent Mongo round trip, and scheduler jobs hitting transient
+        # Mongo failures is a documented condition (PRO-112). It must never be
+        # able to mute a lead the operator has not heard about.
+        try:
+            standing = await leads_collection.count_documents(
+                {
+                    "status": {"$in": REPORTABLE_STUCK_STATUSES},
+                    "created_at": {"$lt": threshold_time},
+                }
             )
-        report_lines.append("Open the admin panel to reassign or call.")
-
-        page_operator("\n".join(report_lines))
-        logger.info(f"✅ [SOS Reporter] Paged operator about {count} stuck leads.")
+            if standing > count:
+                logger.warning(
+                    f"🕵️ [SOS Reporter] {standing - count} stuck lead(s) already "
+                    "paged and still open — not re-paged (see admin panel)."
+                )
+        except Exception as e:
+            logger.warning(f"[SOS Reporter] standing-backlog count failed: {e}")
 
     except Exception as e:
         logger.error(f"❌ [SOS Reporter] Error: {e}")
