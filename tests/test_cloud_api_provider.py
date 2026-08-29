@@ -30,7 +30,7 @@ from app.providers.whatsapp.cloud_api import (
     parse_meta_webhook,
     parse_status_events,
 )
-from app.providers.whatsapp.window import _window_key
+from app.providers.whatsapp.window import _window_key, claim_window_page
 
 CHAT_ID = "972501234567@c.us"
 
@@ -121,6 +121,24 @@ def _cloud_provider_env(monkeypatch):
     monkeypatch.setattr(settings, "META_ACCESS_TOKEN", SecretStr("test-token"))
     monkeypatch.setattr(settings, "META_PHONE_NUMBER_ID", "1234567890")
     monkeypatch.setattr(settings, "META_GRAPH_API_VERSION", "v23.0")
+
+
+@pytest.fixture(autouse=True)
+def _reset_local_page_claims():
+    """PRO-172: `claim_window_page`'s Redis-unavailable fallback keeps a
+    module-level `dict[str, float]` (`_LOCAL_PAGE_CLAIMS`) alive for the life
+    of the process — unlike `fake_redis`, nothing resets it between tests.
+    Without this, a test earlier in the run that exercises the fallback
+    (deliberately, via a forced Redis error) leaves a stamp behind that makes
+    a later, unrelated test's "first claim for this chat_id" assertion see a
+    stale claim and fail — exactly the ordering-dependent failure this
+    fixture exists to prevent. Scoped to this file: nothing outside it
+    exercises `claim_window_page` today."""
+    import app.providers.whatsapp.window as window_module
+
+    window_module._LOCAL_PAGE_CLAIMS.clear()
+    yield
+    window_module._LOCAL_PAGE_CLAIMS.clear()
 
 
 async def _open_window(fake_redis, chat_id=CHAT_ID):
@@ -1043,6 +1061,267 @@ async def test_window_closed_page_dedupe_is_per_chat_id(fake_redis):
     ]
 
     assert page_records == ["CRITICAL", "CRITICAL"]
+
+
+# ---------------------------------------------------------------------------
+# 13b. PRO-172 — claim_window_page: the shared daily-claim primitive
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_claim_window_page_true_once_then_false_same_chat_id(fake_redis):
+    assert await claim_window_page(CHAT_ID) is True
+    assert await claim_window_page(CHAT_ID) is False
+    assert await claim_window_page(CHAT_ID) is False
+
+
+@pytest.mark.asyncio
+async def test_claim_window_page_independent_per_chat_id(fake_redis):
+    other_chat_id = "972500001111@c.us"
+
+    assert await claim_window_page(CHAT_ID) is True
+    assert await claim_window_page(other_chat_id) is True
+
+
+@pytest.mark.asyncio
+async def test_claim_window_page_fails_loud_but_bounded_on_redis_error(monkeypatch):
+    """Opposite posture to `is_service_window_open`, but bounded: an
+    unreadable Redis must not swallow the alert (first claim for a fresh
+    chat_id still wins, so a page fires), but it also must not go back to
+    unconditional `True` — a Redis outage makes `is_service_window_open` fail
+    open too, so every send transmits, every one gets rejected 131047, and
+    every rejection reaches this function; unconditional `True` there would
+    be the exact flood this issue is about. The in-process fallback
+    (`_claim_locally`) bounds it to one claim per chat_id per period even
+    while Redis stays down."""
+    import app.providers.whatsapp.window as window_module
+
+    monkeypatch.setattr(
+        window_module,
+        "get_redis_client",
+        AsyncMock(side_effect=Exception("redis down")),
+    )
+
+    assert await window_module.claim_window_page(CHAT_ID) is True
+    assert await window_module.claim_window_page(CHAT_ID) is False
+
+
+@pytest.mark.asyncio
+async def test_claim_window_page_empty_chat_id_pages_once_without_writing_bare_redis_key(
+    fake_redis,
+):
+    """`delivery.py` defaults chat_id to "" when neither the wa_delivery
+    record nor the status event carries one — the least diagnosable loss
+    there is. It must still page once (not go silent — shares the "" bucket
+    by design, so a second unattributable loss within the period is
+    suppressed same as any other repeat), but it must never write the bare
+    `wa:window:page:` prefix as a literal Redis key: that would silence every
+    future unattributable loss for a full day, regardless of which recipient
+    it was actually for."""
+    assert await claim_window_page("") is True
+    assert await claim_window_page("") is False
+
+    assert not await fake_redis.exists("wa:window:page:")
+
+
+@pytest.mark.asyncio
+async def test_local_page_claims_overflow_clears_dict_instead_of_growing_unbounded(
+    monkeypatch,
+):
+    """The in-process fallback dict is bounded — a long Redis outage across
+    many distinct recipients must not grow it forever. Exceeding
+    `_LOCAL_PAGE_CLAIMS_MAX` clears the whole dict rather than evicting one
+    entry at a time, so memory stays bounded even though it costs re-paging
+    everyone once."""
+    import app.providers.whatsapp.window as window_module
+
+    monkeypatch.setattr(
+        window_module,
+        "get_redis_client",
+        AsyncMock(side_effect=Exception("redis down")),
+    )
+    # Seed the dict past the overflow threshold directly — equivalent to many
+    # distinct chat_ids having already claimed, without looping 1000+ awaits.
+    window_module._LOCAL_PAGE_CLAIMS.update(
+        {f"seed-{i}": 0.0 for i in range(window_module._LOCAL_PAGE_CLAIMS_MAX + 1)}
+    )
+
+    assert await window_module.claim_window_page("fresh-chat-id") is True
+
+    assert len(window_module._LOCAL_PAGE_CLAIMS) == 1
+    assert "fresh-chat-id" in window_module._LOCAL_PAGE_CLAIMS
+
+
+# ---------------------------------------------------------------------------
+# 13c. PRO-172 — delivery._retry_as_template shares the claim with
+# cloud_api._window_fallback, so a status-callback storm cannot page
+# unboundedly and the two detection paths cannot double-page the same
+# recipient the same day.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_status_event_window_closed_storm_pages_exactly_once(
+    mock_db, monkeypatch
+):
+    """The headline acceptance criterion: N consecutive 131047 status
+    callbacks for one recipient (a plausible Meta retry storm) must produce
+    exactly one CRITICAL page, not N."""
+    monkeypatch.setattr(delivery, "wa_delivery_collection", mock_db.wa_delivery)
+    page_mock = MagicMock()
+    monkeypatch.setattr(delivery, "page_critical", page_mock)
+
+    wamids = ["wamid.STORM1", "wamid.STORM2", "wamid.STORM3"]
+    for wamid in wamids:
+        await delivery.record_outbound(wamid, CHAT_ID, "text")
+
+    for wamid in wamids:
+        await delivery.apply_status_event(
+            {
+                "wa_message_id": wamid,
+                "status": "failed",
+                "error_code": META_ERROR_WINDOW_CLOSED,
+                "error_title": "window closed",
+            }
+        )
+
+    assert page_mock.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_status_event_window_closed_suppressed_pages_still_log_error_with_wamid(
+    mock_db, monkeypatch
+):
+    """A page that gets suppressed by the daily claim must never become a
+    silent drop — the 2nd/3rd occurrence still logs at ERROR and still names
+    the wamid, so the failure is traceable even without a page."""
+    monkeypatch.setattr(delivery, "wa_delivery_collection", mock_db.wa_delivery)
+    monkeypatch.setattr(delivery, "page_critical", MagicMock())
+
+    wamids = ["wamid.LOG1", "wamid.LOG2"]
+    for wamid in wamids:
+        await delivery.record_outbound(wamid, CHAT_ID, "text")
+
+    async def _apply_both():
+        for wamid in wamids:
+            await delivery.apply_status_event(
+                {
+                    "wa_message_id": wamid,
+                    "status": "failed",
+                    "error_code": META_ERROR_WINDOW_CLOSED,
+                    "error_title": "window closed",
+                }
+            )
+
+    records = await _captured_records_async(_apply_both, level="ERROR")
+    error_records = [
+        (level, message)
+        for level, message in records
+        if "was rejected by Meta" in message
+    ]
+
+    assert len(error_records) == 1
+    assert error_records[0][0] == "ERROR"
+    assert "wamid.LOG2" in error_records[0][1]
+
+
+@pytest.mark.asyncio
+async def test_window_page_claim_shared_between_cloud_api_and_delivery_paths(
+    mock_db, monkeypatch, fake_redis
+):
+    """Pin the point of the fix: `_window_fallback` (pre-send) and
+    `_retry_as_template` (post-send status callback) page against the SAME
+    Redis key. A recipient already paged via one path must not be paged again
+    the same day via the other."""
+    monkeypatch.setattr(delivery, "wa_delivery_collection", mock_db.wa_delivery)
+    page_mock = MagicMock()
+    monkeypatch.setattr(delivery, "page_critical", page_mock)
+
+    provider = CloudAPIProvider()
+    with pytest.raises(ServiceWindowClosedError):
+        await provider.send_text(CHAT_ID, "pre-send block")  # pages via cloud_api
+
+    await delivery.record_outbound("wamid.CROSS1", CHAT_ID, "text")
+    await delivery.apply_status_event(
+        {
+            "wa_message_id": "wamid.CROSS1",
+            "status": "failed",
+            "error_code": META_ERROR_WINDOW_CLOSED,
+            "error_title": "window closed",
+        }
+    )
+
+    # cloud_api's own page_critical import is unpatched here — only
+    # delivery's is — so the pre-send block still paged for real (asserted by
+    # the fact the claim key is now set); the delivery-side mock proves the
+    # *second* path did not also page.
+    page_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_window_page_claim_shared_delivery_then_cloud_api(
+    mock_db, monkeypatch, fake_redis
+):
+    """Same pin, reversed order: the delivery-path page (which is real here)
+    must suppress the subsequent cloud_api pre-send page for the same
+    recipient the same day."""
+    monkeypatch.setattr(delivery, "wa_delivery_collection", mock_db.wa_delivery)
+    await delivery.record_outbound("wamid.CROSS2", CHAT_ID, "text")
+
+    async def _fire_delivery_page():
+        await delivery.apply_status_event(
+            {
+                "wa_message_id": "wamid.CROSS2",
+                "status": "failed",
+                "error_code": META_ERROR_WINDOW_CLOSED,
+                "error_title": "window closed",
+            }
+        )
+
+    first_records = await _captured_records_async(_fire_delivery_page, level="ERROR")
+    first_page_records = [
+        level for level, message in first_records if "was rejected by Meta" in message
+    ]
+    assert first_page_records == ["CRITICAL"]
+
+    provider = CloudAPIProvider()
+
+    async def _second_block():
+        with pytest.raises(ServiceWindowClosedError):
+            await provider.send_text(CHAT_ID, "second, same day")
+
+    second_records = await _captured_records_async(_second_block, level="ERROR")
+    second_page_records = [
+        level for level, message in second_records if "service window closed" in message
+    ]
+    assert second_page_records == ["ERROR"]
+
+
+@pytest.mark.asyncio
+async def test_apply_status_event_window_closed_bookkeeping_persists_regardless_of_paging(
+    mock_db, monkeypatch
+):
+    """The `wa_delivery` upsert (status/error_code) must not depend on
+    whether the claim was won — bookkeeping and paging are independent
+    concerns."""
+    monkeypatch.setattr(delivery, "wa_delivery_collection", mock_db.wa_delivery)
+    monkeypatch.setattr(delivery, "page_critical", MagicMock())
+
+    for wamid in ("wamid.BOOK1", "wamid.BOOK2"):
+        await delivery.record_outbound(wamid, CHAT_ID, "text")
+        await delivery.apply_status_event(
+            {
+                "wa_message_id": wamid,
+                "status": "failed",
+                "error_code": META_ERROR_WINDOW_CLOSED,
+                "error_title": "window closed",
+            }
+        )
+
+    for wamid in ("wamid.BOOK1", "wamid.BOOK2"):
+        doc = await mock_db.wa_delivery.find_one({"wa_message_id": wamid})
+        assert doc["status"] == "failed"
+        assert doc["error_code"] == META_ERROR_WINDOW_CLOSED
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,11 @@ from app.core.logger import logger, page_critical
 from app.core.phone import mask_chat_id as _mask
 from app.providers.whatsapp import template_registry
 
+# Safe at top level: window.py imports nothing from this package. The
+# get_whatsapp import further down is deferred for a different reason —
+# that name is defined in __init__ itself, so it has no submodule fallback.
+from app.providers.whatsapp.window import claim_window_page
+
 
 async def record_outbound(wa_message_id: str, chat_id: str, kind: str) -> None:
     """Remember an accepted send so its status callbacks can be attributed.
@@ -99,7 +104,17 @@ async def _retry_as_template(
     kind = record.get("kind") or "text"
     fallback = template_registry.freeform_fallback(kind)
     if fallback is None:
-        page_critical(
+        # PRO-172: the same condition ``_window_fallback`` reports before the
+        # send — "window closed, no approved fallback" — noticed asynchronously
+        # instead. Sharing that path's per-recipient daily claim means a
+        # recipient is paged once for the condition rather than once per
+        # detection path per occurrence. Losing the claim never means going
+        # quiet: the drop is still reported, at ERROR, wamid included.
+        # The bound is Redis-backed, with a per-process fallback when Redis
+        # cannot answer — deliberately, because that outage is also what makes
+        # these callbacks arrive en masse (see ``claim_window_page``).
+        log = page_critical if await claim_window_page(chat_id) else logger.error
+        log(
             f"WhatsApp {kind} to {_mask(chat_id)} was rejected by Meta with "
             f"error {META_ERROR_WINDOW_CLOSED} (24h service window closed) and "
             "no approved fallback template is registered (PRO-89). The "
