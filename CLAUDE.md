@@ -138,7 +138,9 @@ git push --force-with-lease
 
 **Disjoint file footprints are the whole selection criterion.** Two tracks editing one module spend more time resolving conflicts than the parallelism saves. Some work is never a parallel track: PRO-139 (extracting the dispatcher rewrites what every flow issue touches — it runs alone), the copy chain PRO-164/168/169 (all rewriting `messages.py`/`prompts.py`, serial by construction), and anything labelled `launch-readiness`/`ops-verification`, whose Done criterion is an operator run rather than a merged PR.
 
-Teardown once a track's PR is merged: `git worktree remove <dir> && git worktree prune`.
+Teardown once a track's PR is merged: **`/cleanup-worktrees`** (or `bash scripts/cleanup_worktrees.sh`, `--dry-run` to preview, a name to limit it to one track). It sweeps every worktree whose PR is MERGED, removes the directory, prunes, and deletes the local branch — with `-D`, because `-d` cannot see a squash merge. It refuses to touch a worktree with uncommitted changes, unpushed commits, or an unmerged branch, and prints the reason for each one it skips.
+
+Run it from the main checkout, never from inside a worktree and never as a step of `/take-issue`: on Windows a process's cwd is locked, so a session cannot delete the folder it is running in. That is what leaves the empty, undeletable directories behind.
 
 ### Local Development (run all three in separate terminals)
 
