@@ -168,14 +168,14 @@ class Messages:
             "🚨 *זיהיתי מצב חירום.*\n"
             "סימנתי את הפנייה כדחופה ואני מקצר את התהליך — אשאל רק את מה שהכרחי "
             "כדי לאתר איש מקצוע פנוי בהקדם.\n"
-            "בינתיים, אנא שמור על בטיחות."
+            "בינתיים, חשוב לשמור על בטיחות."
         )
         # PRO-121: an emergency with no city cannot be matched at all, so ask
         # for the city alone — never the full five-part address gate.
         EMERGENCY_NEED_CITY = (
             "🚨 *זיהיתי מצב חירום.*\n"
-            "כדי לאתר עבורך איש מקצוע עכשיו אני צריך רק דבר אחד — *באיזו עיר אתה?*\n"
-            "את שאר הפרטים נשלים אחר כך. בינתיים, אנא שמור על בטיחות."
+            "כדי לאתר עבורך איש מקצוע עכשיו חסר לי רק דבר אחד — *באיזו עיר?*\n"
+            "את שאר הפרטים נשלים אחר כך. בינתיים, חשוב לשמור על בטיחות."
         )
         # PRO-121: the emergency was declared while already holding for a pro's
         # approval. The offer is already out, and flagging the lead halves the
@@ -185,7 +185,7 @@ class Messages:
             "🚨 *סימנתי את הפנייה שלך כדחופה.*\n"
             "איש המקצוע שקיבל את הקריאה מתבקש להגיב מיד, ואם לא תתקבל תשובה "
             "בדקות הקרובות אחפש עבורך מישהו אחר.\n"
-            "בינתיים, אנא שמור על בטיחות."
+            "בינתיים, חשוב לשמור על בטיחות."
         )
         # §7: `monitor_service.check_sla_deflection` clears the pause state and
         # books nothing at all. The old copy offered "אקבע לך שיחה טלפונית"
