@@ -3,7 +3,13 @@ from bson import ObjectId
 
 from app.core.logger import logger
 from app.core.messages import Messages
-from app.core.constants import LeadStatus, UserStates, WorkerConstants, Actor
+from app.core.constants import (
+    LeadStatus,
+    UserStates,
+    WorkerConstants,
+    Actor,
+    Defaults,
+)
 from app.services.lead_manager_service import set_lead_status
 from app.core.config import settings
 from app.core.database import leads_collection, users_collection
@@ -62,8 +68,12 @@ async def _start_wizard(chat_id, state_manager, whatsapp):
     leads_map = {}
 
     for i, lead in enumerate(stuck_leads, 1):
-        city = lead.get("city") or lead.get("full_address") or "עיר לא ידועה"
-        issue = lead.get("issue_type") or "בעיה לא ידועה"
+        city = (
+            lead.get("city")
+            or lead.get("full_address")
+            or Messages.Fallbacks.CITY_UNKNOWN
+        )
+        issue = lead.get("issue_type") or Messages.Fallbacks.ISSUE_UNKNOWN
         created_at = lead.get("created_at")
         if created_at:
             if created_at.tzinfo is None:
@@ -167,7 +177,7 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
         lines = [Messages.Admin.AVAILABLE_PROS_HEADER]
         pros_map = {}
         for i, p in enumerate(pros, 1):
-            name = p.get("business_name", "ללא שם")
+            name = p.get("business_name") or Messages.Fallbacks.PRO_NAME_MISSING
             rating = p.get("social_proof", {}).get("rating", "-")
             lines.append(Messages.Admin.PRO_ROW.format(num=i, name=name, rating=rating))
             pros_map[str(i)] = str(p["_id"])
@@ -249,7 +259,7 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
     )
 
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
-    pro_name = pro.get("business_name") or "איש המקצוע"
+    pro_name = pro.get("business_name") or Defaults.GENERIC_PRO_NAME
 
     # Tri-state: None = the offer was never *attempted* (lead lookup failed),
     # False = attempted and did not reach the pro. Conflating them would blame

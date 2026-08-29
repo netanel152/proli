@@ -394,7 +394,7 @@ After each test, verify in worker logs and database that the expected state chan
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
 | 1 | 972523651414 | "הצילו! יש לי פיצוץ מים בבית בתל אביב" | 1. EMERGENCY_ACK: "🚨 זיהיתי מצב חירום..." <br> 2. Pro persona reply with [DEAL] | Lead `is_emergency` = True |
-| 2 | - | - | Pro (972524828796) receives: "🚨 *קריאת חירום דחופה!* 🚨" | Address gate bypassed even without street/number |
+| 2 | - | - | Pro (972524828796) receives: "🚨 *קריאת חירום דחופה!*" | Address gate bypassed even without street/number |
 | 3 | 972524828796 | "אשר" | Pro gets: "✅ העבודה אושרה!" | Lead status = BOOKED |
 | 4 | - | - | Customer gets pro details | |
 
@@ -407,9 +407,9 @@ After each test, verify in worker logs and database that the expected state chan
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
 | 1 | 972524828796 | "הפסקה" | "☕ הסטטוס שלך שונה ל'בהפסקה'..." | User `is_active` = False |
-| 2 | 972524828796 | "תפריט" | Dashboard shows: "🔴 סטטוס: בהפסקה" | |
+| 2 | 972524828796 | "תפריט" | Dashboard shows: "סטטוס: בהפסקה 🔴" | |
 | 3 | 972524828796 | "זמין" | "🚀 הסטטוס שלך שונה ל'זמין'..." | User `is_active` = True |
-| 4 | 972524828796 | "תפריט" | Dashboard shows: "🟢 סטטוס: זמין" | |
+| 4 | 972524828796 | "תפריט" | Dashboard shows: "סטטוס: זמין 🟢" | |
 
 ---
 
