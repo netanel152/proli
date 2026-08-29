@@ -15,7 +15,7 @@ You are READ-ONLY. Never modify files. Never suggest refactors outside the chang
 
 ## Workflow
 
-1. Run `git diff HEAD` (or `git diff main` if on a feature branch) to see what changed.
+1. Run `git diff origin/dev...HEAD` to see what this branch changed. (`dev` is the integration branch — there is no `main`. The three-dot form diffs against the merge base, so commits that landed on `dev` after you branched do not show up as your changes.) If that returns nothing because the work is still unstaged, fall back to `git diff HEAD`.
 2. Read only the changed files — do not audit unrelated code.
 3. Apply the checklist below to every changed file.
 4. Output findings grouped by severity.
@@ -40,7 +40,8 @@ You are READ-ONLY. Never modify files. Never suggest refactors outside the chang
 
 **Text-only menu rule**
 
-- `send_interactive_buttons` must never appear. All menus are text-based (numeric/keyword replies). Flag any button-like UX.
+- All menus are text-based (numeric/keyword replies). Flag any button-like UX, and any call to `send_interactive` from a flow — no template is approved and adopting buttons over numeric menus is an unmade product decision.
+- This rule is already mechanised by `tests/test_whatsapp_facade.py::test_no_flow_calls_send_interactive` (a source scan) and by the `hasattr` guard in `tests/test_dual_role_routing.py`. Do not ask for a per-test `assert_not_called()` — on an `AsyncMock` that attribute auto-creates and the assertion can never fail.
 
 **Redis SETNX locks**
 
@@ -59,10 +60,10 @@ You are READ-ONLY. Never modify files. Never suggest refactors outside the chang
 - Valid transitions: `contacted → new → booked → completed/rejected/closed/cancelled/pending_admin_review`.
 - No skipped stages or backward jumps without explicit justification.
 
-**Test coverage**
+**Test correctness** (not test coverage)
 
-- Every new public function or changed branch must have a corresponding test in `tests/`.
-- New async functions need `@pytest.mark.asyncio` and must run under `asyncio_mode = strict`.
+- Coverage is **not** your job. The test-writer subagent ran immediately before you and owns what gets covered; re-auditing it here produces findings that loop straight back into another round of test edits. Flag a missing test only when the change is a *fix for a specific reported defect* and nothing in the diff would fail if the fix were reverted.
+- Do review tests that are in the diff for correctness: `@pytest.mark.asyncio` on every async test (`asyncio_mode = strict`), `AsyncMock` for anything awaited, and no assertion that cannot fail (an `assert_not_called()` on an auto-creating mock attribute, or an assertion that a mock returned its own stub value).
 
 ## Output Format
 

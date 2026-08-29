@@ -24,7 +24,8 @@ The line is a **floor**, not an equality — CI fails only below it.
 ## Workflow
 
 1. Read the baseline from `docs/TESTING.md`.
-2. Run: `venv/Scripts/pytest -n auto --tb=short -q`
+2. Run exactly: `venv/Scripts/python.exe -m pytest --tb=short -q`
+   Serially, and with this spelling. Two reasons, both about parity: this is the invocation allowlisted in `.claude/settings.json` (any other spelling prompts for permission), and it is the execution model CI uses. `pytest-xdist` is available (`-n auto`) for ad-hoc local use, but the authoritative run must not use it — an order-dependent test that passes under xdist and fails serially in CI is exactly the failure this avoids, and the whole suite takes ~40s serially, so there is nothing to buy.
 3. If all tests pass at or above baseline: output one line — "<N> passed, <S> skipped. No regressions." (plus the update-baseline note if above).
 4. If any test fails: for each failure output:
    - Test name (full path, e.g. `tests/test_pro_flow.py::test_approve_lead`)
@@ -36,5 +37,4 @@ The line is a **floor**, not an equality — CI fails only below it.
 
 - Never paste full tracebacks. Never modify any file. Never suggest refactors.
 - Keep output under 40 lines total. One finding per failure.
-- If `venv/Scripts/pytest` is not found, try `python -m pytest -n auto` as fallback and note which you used.
-- If `-n auto` fails (pytest-xdist missing), fall back to a plain run and note it.
+- If `venv/Scripts/python.exe` is not found (you are in a worktree, or on a POSIX machine), fall back to `python -m pytest --tb=short -q` and note which you used. Do not add `-n auto` to either.

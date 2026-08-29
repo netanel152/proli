@@ -52,6 +52,8 @@ CODE_REVIEWER = _AGENTS_DIR / "code-reviewer.md"
 # Extend this list only if the agent starts embedding more constants.
 _FLOW_TRACER_EMBEDDED_TTLS = [
     "PAUSE_TTL_SECONDS",
+    "CANCEL_CONFIRM_TTL_SECONDS",
+    "LOYALTY_CONFIRM_TTL_SECONDS",
     "PRO_SEARCH_RATE_LIMIT_SECONDS",
     "SOS_TIMEOUT_MINUTES",
     "STALE_BOOKED_LEAD_HOURS",

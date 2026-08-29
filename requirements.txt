@@ -49,6 +49,7 @@ bcrypt==4.1.2
 # Testing & Dev
 pytest==8.0.0
 pytest-asyncio==0.23.5
+pytest-xdist==3.6.1  # `-n auto` for ad-hoc local runs only; the authoritative run (CI, test-runner) stays serial for order-dependency parity
 mongomock-motor==0.0.26
 fakeredis~=2.37  # PRO-78: in-memory Redis so unit tests never touch a real server
 black==24.1.1

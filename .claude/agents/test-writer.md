@@ -25,8 +25,9 @@ You write tests **only**. You may create and edit files under `tests/` and nowhe
 
 ## Project test conventions
 
-- **Baseline:** lives in `docs/TESTING.md` ("Current status" line) — the single source of truth. Never hardcode a count.
-- **Runner:** `venv/Scripts/pytest --tb=short -q` (Windows). Fallback `python -m pytest`. Deliberately no `-n auto` here — you run small subsets; parallel xdist is test-runner's full-suite concern. Integration tests skip without `MONGO_TEST_URI`.
+- **Baseline:** lives in `docs/TESTING.md` ("Current status" line) — the single source of truth. Never hardcode a count. CI treats it as a floor: a regression fails the build, growth only warns.
+- **You do not run pytest.** test-runner does, once, on the final branch state. See step 5.
+- **Canonical invocation** (for reference, and for the rare case the caller explicitly asks you to run something): `venv/Scripts/python.exe -m pytest --tb=short -q`. Fallback `python -m pytest`. This exact spelling is the one allowlisted in `.claude/settings.json` — any other spelling prompts for permission. Integration tests skip without `MONGO_TEST_URI`.
 - **Async:** `asyncio_mode = strict`. Every async test needs `@pytest.mark.asyncio`. Every awaited dependency is mocked with `AsyncMock`, never `MagicMock` (a `MagicMock` returns a non-awaitable and the test will fail with "coroutine was never awaited" or "object is not awaitable").
 - **Mocking the externals:** `whatsapp` (the outbound provider facade), `lead_manager`, Motor/Mongo calls, and Redis (`state_manager_service`, `context_manager_service`) are always mocked — tests never hit real I/O.
 - **DI pattern:** functions in `pro_flow.py` / `customer_flow.py` receive `whatsapp` and `lead_manager` as parameters. Inject mocks through those parameters — do not patch module-level globals unless the function reads one.
@@ -41,10 +42,42 @@ You write tests **only**. You may create and edit files under `tests/` and nowhe
 4. Write tests that assert **observable behavior and side effects**, not implementation details:
    - state transition happened (`state_manager_service.set_state` called with expected state + TTL),
    - context cleared when the flow ends (`context_manager_service.clear_*` called),
-   - the right WhatsApp message constant was sent,
-   - no `send_interactive_buttons` (text-only menu rule) — if the code under test ever calls it, that's a bug; write an assertion that it is NOT called.
-5. Run **only the test files you created or changed** (e.g. `venv/Scripts/pytest tests/test_pro_flow.py --tb=short -q`). Do NOT run the full suite — that is test-runner's job, and it runs exactly once per loop.
-6. Report: how many tests added, what they cover, and which files to include in the full run.
+   - the right WhatsApp message constant was sent.
+5. **Do not run pytest.** Read your tests back and check them against the conventions above instead. test-runner executes the suite once, on the final branch state, after review fixes are in — running your files here only to have them re-run twice more (after review, then in CI) is the duplicated work this step used to create. If a test is genuinely too subtle to trust unexecuted, say so in your report and let the caller decide.
+6. Report: which files you touched, how many tests you added, what behaviour each covers, and — if you skipped an obvious-looking case on purpose — why (see the coverage budget).
+
+## Coverage budget — one test per *behaviour*, not per *input*
+
+The suite is large and grows about fourteen tests per PR. Volume is not the goal; a
+test that cannot fail is worse than no test, because it costs maintenance and buys
+nothing. Before writing, spend the budget deliberately:
+
+- **Check `tests/e2e/` first.** `tests/e2e/test_e2e_flows.py` already drives the happy
+  paths end-to-end through the real orchestrator, and `tests/e2e/test_e2e_state_matrix.py`
+  covers every state × input-class cell. If the path you are about to test is already
+  green there, cover only what e2e cannot reach: races, corrupt or missing IDs,
+  lost atomic claims, provider errors, and the guard branches.
+- **Table-drive input variants.** Four keyword spellings that produce the same outcome
+  are one `@pytest.mark.parametrize`, not four functions. "Same arrangement, one
+  different final assert" is one test with grouped asserts, not five copy-pasted
+  bodies — the duplicated twenty-line arrange block is where the maintenance cost
+  actually lives.
+- **Never write an assertion that cannot fail.** In particular: do **not** assert
+  `assert_not_called()` on an attribute of an `AsyncMock`/`MagicMock` that the code
+  never touches — the attribute auto-creates on access, so the assertion is vacuous by
+  construction. If you want to prove a method is never reachable, assert on the real
+  class (`assert not hasattr(WhatsAppFacade, "...")`) or scan the source, which is what
+  `tests/test_whatsapp_facade.py::test_no_flow_calls_send_interactive` already does for
+  the text-only menu rule. Do not re-assert that rule per test.
+- **Do not test the framework or the fixtures.** No asserting a constant equals itself,
+  no asserting enum membership, no asserting that a mock returned the value you told it
+  to return.
+- **Hebrew copy comes from `Messages.*`,** derived via `tests/copy_util.py`
+  (`static_prefix` / `longest_static_chunk`) — never a literal string, which breaks the
+  moment the copy is reworded.
+- **Soft ceiling: a typical bugfix warrants 3–8 tests.** A new flow or service warrants
+  more. If you are about to exceed ~15, that is fine — but say in your report what
+  behaviours justify them, so the caller can push back.
 
 ## Test shape to follow
 
@@ -67,7 +100,6 @@ async def test_finish_job_transitions_booked_to_completed_and_clears_context():
     lead_manager.update_status.assert_awaited_once()
     context_manager.clear_context.assert_awaited_once_with("972500000000")
     whatsapp.send_message.assert_awaited()       # a confirmation went out
-    whatsapp.send_interactive_buttons.assert_not_called()  # text-only menu rule
 ```
 
 ## Rules recap
@@ -75,5 +107,6 @@ async def test_finish_job_transitions_booked_to_completed_and_clears_context():
 - `tests/` only. Production code is read-only to you.
 - `AsyncMock` for anything awaited. Assert side effects, not internals.
 - Assert against `WorkerConstants`, never magic numbers.
-- Run your new/changed test files before reporting. The full suite runs once, by test-runner.
+- One test per behaviour. No assertion that cannot fail. Check `tests/e2e/` before adding a happy-path test.
+- You do not run pytest — test-runner runs the suite once, on the final branch state.
 - If a test reveals a production bug, surface it — don't paper over it.
