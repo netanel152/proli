@@ -6,7 +6,7 @@ from app.core.database import (
 )
 from app.core.logger import logger
 from app.core.messages import Messages
-from app.core.text_matching import contains_keyword
+from app.core.text_matching import contains_keyword, is_emergency_text
 from app.core.constants import LeadStatus, Defaults, Actor, WorkerConstants
 from app.core.phone import to_chat_id
 from app.services.lead_manager_service import set_lead_status
@@ -390,7 +390,9 @@ async def _handle_unparsed_rating(
     # not consulted until *after* this handler runs, so a re-prompt here would
     # stall "הצפה דחוף" for up to MAX_RATING_REPROMPTS messages. Let it through
     # on the first one instead.
-    if contains_keyword(text, Messages.Keywords.EMERGENCY_KEYWORDS):
+    # PRO-121: the same detector the dispatcher uses, so the two can never
+    # disagree about what counts as an emergency.
+    if is_emergency_text(text):
         await _release_rating_prompt(lead, "emergency keyword")
         return None
 

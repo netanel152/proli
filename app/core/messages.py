@@ -157,12 +157,35 @@ class Messages:
             "אני מושהה כרגע — ההודעות הבאות יגיעו ממנו."
         )
         BOT_PAUSED_BY_CUSTOMER = "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת."
-        # PRO-121 owns this message's wording; PRO-168 only stripped the
-        # trailing whitespace that used to survive to the phone (§8).
+        # PRO-121: this fires on a keyword, before any pro is matched — and
+        # matching cannot even start without a city. The old copy ("I'm skipping
+        # the rest of the details and summoning available pros right now")
+        # promised both, then the AI carried on asking questions. It now claims
+        # only what is true at this point: the request is flagged urgent and the
+        # intake is being shortened. The "a pro has your call" claim lives in
+        # AWAITING_APPROVAL_TRANSPARENT, which is sent after a real match.
         EMERGENCY_ACK = (
             "🚨 *זיהיתי מצב חירום.*\n"
-            "אני מדלג על שאר הפרטים ומזעיק עכשיו אנשי מקצוע פנויים באזור שלך! "
-            "בינתיים, אנא לשמור על בטיחות."
+            "סימנתי את הפנייה כדחופה ואני מקצר את התהליך — אשאל רק את מה שהכרחי "
+            "כדי לאתר איש מקצוע פנוי בהקדם.\n"
+            "בינתיים, חשוב לשמור על בטיחות."
+        )
+        # PRO-121: an emergency with no city cannot be matched at all, so ask
+        # for the city alone — never the full five-part address gate.
+        EMERGENCY_NEED_CITY = (
+            "🚨 *זיהיתי מצב חירום.*\n"
+            "כדי לאתר עבורך איש מקצוע עכשיו חסר לי רק דבר אחד — *באיזו עיר?*\n"
+            "את שאר הפרטים נשלים אחר כך. בינתיים, חשוב לשמור על בטיחות."
+        )
+        # PRO-121: the emergency was declared while already holding for a pro's
+        # approval. The offer is already out, and flagging the lead halves the
+        # PRO-56 approval SLA — so say what actually happens next instead of
+        # answering with the generic STILL_WAITING.
+        EMERGENCY_WHILE_WAITING = (
+            "🚨 *סימנתי את הפנייה שלך כדחופה.*\n"
+            "איש המקצוע שקיבל את הקריאה מתבקש להגיב מיד, ואם לא תתקבל תשובה "
+            "בדקות הקרובות אחפש עבורך מישהו אחר.\n"
+            "בינתיים, חשוב לשמור על בטיחות."
         )
         # §7: `monitor_service.check_sla_deflection` clears the pause state and
         # books nothing at all. The old copy offered "אקבע לך שיחה טלפונית"
@@ -959,17 +982,52 @@ class Messages:
         PAUSE_COMMANDS = ["חופשה", "הפסקה", "לא זמין"]
         BOT_RESUME_COMMANDS = ["המשך", "resume", "חזור"]
         BOT_PAUSE_COMMANDS = ["השהה", "pause", "hold"]
+        # PRO-121 — emergency detection is now whole-token (`contains_keyword`),
+        # not substring, because the flag short-circuits a holding state rather
+        # than merely tagging a lead: a false positive costs a dropped menu.
+        #
+        # This list is matched *exactly*. Bare "קצר" used to live here and was
+        # deliberately dropped — as a whole token it is the everyday adjective
+        # ("תיקון קצר", "הסבר קצר", "לזמן קצר"), and under the prefix-tolerant
+        # matching below "לדחוף"-style false positives multiply. The unambiguous
+        # electrical phrases replace it.
         EMERGENCY_KEYWORDS = [
-            "דחוף",
-            "פיצוץ",
-            "הצפה",
-            "שריפה",
-            "קצר",
-            "סכנה",
             "מים בכל הבית",
-            "חירום",
+            "קצר חשמלי",
+            "קצר בחשמל",
+            "קצר בלוח",
             "emergency",
             "urgent",
+        ]
+        # PRO-121 — stems matched through up to three leading Hebrew clitics
+        # (ו/ה/ב/ל/מ/ש/כ), so "ההצפה", "מהצפה", "וכשהשריפה" all land. Substring
+        # matching caught these for free; plain whole-token matching would not,
+        # and a false *negative* in a safety detector is the worse failure.
+        EMERGENCY_PREFIXABLE = [
+            "דחוף",
+            "דחופה",
+            "דחופים",
+            "דחיפות",
+            "פיצוץ",
+            "הצפה",
+            "הצפות",
+            "שריפה",
+            "שריפות",
+            "סכנה",
+            "חירום",
+        ]
+        # PRO-121 — removed before matching, the way SOS uses "מנהל עבודה".
+        # Negations ("זה לא דחוף, אני יכול לחכות") must not flag a lead and
+        # halve its SLA; "לדחוף" is the everyday verb "to push", which the
+        # clitic-tolerant match above would otherwise read as "דחוף".
+        EMERGENCY_EXCLUDE_PHRASES = [
+            "לא דחוף",
+            "לא בהול",
+            "לא חירום",
+            "אין סכנה",
+            "לא בסכנה",
+            "לדחוף",
+            "לדחוף את",
         ]
         RATING_OPTIONS = ["1", "2", "3", "4", "5"]
         # PRO-122: an opt-out of the rating / review prompts. Matched by *exact*

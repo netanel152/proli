@@ -22,7 +22,7 @@ from app.core.redis_client import (
     release_chat_lock,
     ChatLockBusyError,
 )
-from app.core.text_matching import contains_keyword
+from app.core.text_matching import contains_keyword, is_emergency_text
 from app.services.matching_service import determine_best_pro
 from app.services.notification_service import send_sos_alert
 from app.services import notification_service
@@ -455,13 +455,201 @@ async def _execute_customer_cancel(booked_lead, chat_id: str) -> None:
             )
 
 
+# PRO-121: the holding states whose handler `return`s unconditionally, so an
+# emergency declared while parked in one used to be swallowed entirely.
+# `_escalate_emergency` either re-answers or releases each of them.
+#
+# Deliberately absent, each for its own reason:
+#   PAUSED_FOR_HUMAN — a live human owns the conversation and the bot must not
+#     talk over them. Handled separately in that branch: the lead is flagged and
+#     the operator paged once, with no customer-facing message and no un-pause.
+#   AWAITING_CANCEL_CONFIRMATION — costs one turn, not an escalation. An
+#     emergency message reads as "not confirmed", so the job is kept, the
+#     transient state clears and the *next* message escalates normally.
+#   AWAITING_RESCHEDULE_TIME — a product call, not an oversight: the customer is
+#     picking a slot, and "דחוף" there almost always means "the earliest one you
+#     have", not a new emergency. Releasing the menu on that word would lose the
+#     slot list far more often than it would catch a real fire.
+#   PRO_MODE / ONBOARDING_* / ADMIN_* — no emergency keyword collides with the
+#     pro or admin vocabularies.
+EMERGENCY_HOLDING_STATES = (
+    UserStates.AWAITING_PRO_APPROVAL,
+    UserStates.AWAITING_ADDRESS,
+    UserStates.AWAITING_LOYALTY_CONFIRMATION,
+    UserStates.AWAITING_NEW_OR_EXISTING,
+)
+
+
+def _inbound_log_text(user_text, media_url) -> str:
+    """The single rendering of an inbound turn for the chat history."""
+    if media_url:
+        return f"{user_text or ''} [MEDIA: {media_url}]"
+    return user_text
+
+
+def _state_label(state) -> str:
+    """Render a state for a log line (PRO-121).
+
+    `StateManager.get_state` returns a plain Redis string on every real path but
+    the *enum member* `UserStates.IDLE` as its default, which f-strings render as
+    "UserStates.IDLE" — the same trap PRO-118 documents for persisted state.
+    """
+    return getattr(state, "value", state)
+
+
+def _emergency_ack_for(city) -> str:
+    """Pick the emergency ack that matches reality (PRO-121).
+
+    Matching is a `$geoNear`/city lookup, so with no city there is nothing to
+    summon anyone with. Promise the shortened intake only when we can act on
+    it; otherwise ask for the one field that unblocks everything.
+    """
+    return (
+        Messages.Customer.EMERGENCY_ACK
+        if city
+        else Messages.Customer.EMERGENCY_NEED_CITY
+    )
+
+
+async def _escalate_emergency(chat_id: str, current_state, user_text: str = ""):
+    """Honour an emergency declared *inside* a holding state (PRO-121).
+
+    `is_emergency_detected` used to be read only where a lead is created or
+    updated, far below every holding branch — so "יש שריפה" typed while waiting
+    for a pro's approval, mid address gate, or against the loyalty menu was
+    answered with the holding question and never reached the lead at all.
+
+    Returns ``(action, deferred_ack)``. ``action`` is ``"handled"`` (the
+    dispatcher must stop here), ``"released"`` (the holding state was cleared,
+    carry on with normal routing) or ``None`` (nothing to escalate — leave the
+    existing branch to answer).
+
+    ``deferred_ack`` is copy the *caller* must send, and only ever accompanies
+    ``"released"``. Sending it here would put a ``"model"`` turn into the
+    history ahead of the ``"user"`` turn that provoked it — the dispatcher logs
+    the inbound further down — and that inverted window is what
+    ``get_chat_history`` hands Gemini. The ``"handled"`` branches answer the
+    turn themselves and log both sides in order, so they send inline.
+    """
+    active_lead = await leads_collection.find_one(
+        {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
+        sort=[("created_at", -1)],
+    )
+    if not active_lead:
+        # No live request to carry the flag. There is still something to fix in
+        # the menu states: AWAITING_NEW_OR_EXISTING in particular is reached with
+        # only a BOOKED lead, and its re-prompt would swallow the emergency
+        # outright. Release them and let intake below create the lead with
+        # is_emergency and send the ack — double-answering here would just add a
+        # second message. AWAITING_PRO_APPROVAL is left alone: with no
+        # NEW/CONTACTED lead that hold is already stale and its reply is harmless.
+        if current_state == UserStates.AWAITING_PRO_APPROVAL:
+            return None, None
+        await StateManager.clear_state(chat_id)
+        logger.info(
+            f"🚑 Emergency released {_state_label(current_state)} for ...{chat_id[-8:]} "
+            "with no "
+            "active lead — routing to intake"
+        )
+        return "released", None
+
+    already_flagged = bool(active_lead.get("is_emergency"))
+    if not already_flagged:
+        await leads_collection.update_one(
+            {"_id": active_lead["_id"]}, {"$set": {"is_emergency": True}}
+        )
+        logger.warning(
+            f"🚑 Emergency declared mid-conversation by ...{chat_id[-8:]} in state "
+            f"{_state_label(current_state)} (lead={active_lead['_id']}) — escalating"
+        )
+
+    if current_state == UserStates.AWAITING_PRO_APPROVAL:
+        # The offer is already with a pro, so the useful action is speed, not a
+        # rematch: monitor_service halves APPROVAL_NUDGE_MINUTES and
+        # APPROVAL_REASSIGN_OFFER_MINUTES for an is_emergency lead, and the flag
+        # is now set.
+        #
+        # Throttled on its own lead field rather than on `already_flagged`: the
+        # mainline emergency is flagged back at intake and *then* parks here, so
+        # gating on the flag transition would make this copy unreachable for
+        # exactly the customer it is written for — they would shout "שריפה!"
+        # and get the generic soft-hold reply, which is the bug this issue is
+        # about. Claimed atomically so two workers can't both answer.
+        claimed = await leads_collection.find_one_and_update(
+            {"_id": active_lead["_id"], "emergency_hold_acked": {"$ne": True}},
+            {"$set": {"emergency_hold_acked": True}},
+        )
+        if not claimed:
+            return None, None
+        await lead_manager.log_message(chat_id, "user", user_text or "")
+        await whatsapp.send_message(chat_id, Messages.Customer.EMERGENCY_WHILE_WAITING)
+        await lead_manager.log_message(
+            chat_id, "model", Messages.Customer.EMERGENCY_WHILE_WAITING
+        )
+        return "handled", None
+
+    if current_state == UserStates.AWAITING_ADDRESS:
+        # The emergency address bypass existed only in _finalize_deal, which
+        # this state never reaches — the re-entry handler kept asking for the
+        # missing parts instead. Release the gate: with a city we already have
+        # everything an emergency dispatch needs.
+        await StateManager.clear_state(chat_id)
+        # `city` OR `full_address`: create_lead_from_dict stores the intake city
+        # as `full_address` and leaves `city` unset (the "Unknown Address"
+        # migration left it that way), so reading `city` alone would ask a
+        # customer who already told us their city where they are.
+        known_city = active_lead.get("city") or active_lead.get("full_address")
+        if known_city:
+            logger.info(
+                f"🚑 Emergency released the address gate for ...{chat_id[-8:]} "
+                f"(city={known_city!r}) — routing to matching"
+            )
+            return "released", (
+                None if already_flagged else Messages.Customer.EMERGENCY_ACK
+            )
+        # No city at all: nothing to match on. Ask for that one field rather
+        # than letting the five-part gate re-ask for street, floor and
+        # apartment. Sent on every pass through here (not just the first),
+        # because it is this turn's only answer.
+        #
+        # This branch answers the turn itself, so the inbound never reaches the
+        # dispatcher's single log_message — record it here, exactly as the
+        # AWAITING_ADDRESS handler it replaces does.
+        await lead_manager.log_message(chat_id, "user", user_text or "")
+        await whatsapp.send_message(chat_id, Messages.Customer.EMERGENCY_NEED_CITY)
+        await lead_manager.log_message(
+            chat_id, "model", Messages.Customer.EMERGENCY_NEED_CITY
+        )
+        return "handled", None
+
+    # AWAITING_LOYALTY_CONFIRMATION / AWAITING_NEW_OR_EXISTING — menu questions
+    # about *preference*, which must not outrank an emergency. Drop the question
+    # and let normal routing find whoever is closest and free.
+    await StateManager.clear_state(chat_id)
+    logger.info(
+        f"🚑 Emergency dropped the {_state_label(current_state)} menu for "
+        f"...{chat_id[-8:]} — "
+        "routing normally"
+    )
+    return "released", (
+        None
+        if already_flagged
+        else _emergency_ack_for(
+            active_lead.get("city") or active_lead.get("full_address")
+        )
+    )
+
+
 async def _process_incoming_message_inner(
     chat_id: str, user_text: str, media_url: str = None
 ):
     normalized_text = (user_text or "").strip().lower()
-    is_emergency_detected = any(
-        kw in normalized_text for kw in Messages.Keywords.EMERGENCY_KEYWORDS
-    )
+    # PRO-121: one shared detector (`customer_flow` calls the same one) — exact
+    # whole-token keywords plus clitic-prefixable stems, minus the negations.
+    # Substring matching read "קצר" out of "בקצרה", which was harmless while the
+    # flag only tagged a lead at creation and is not now that it short-circuits
+    # a holding state.
+    is_emergency_detected = is_emergency_text(normalized_text)
 
     # Get state early — needed to skip global checks for pros
     current_state = await StateManager.get_state(chat_id)
@@ -695,6 +883,40 @@ async def _process_incoming_message_inner(
         await whatsapp.send_message(chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER)
         return
 
+    # PRO-121 — Emergency escalation, hoisted above every holding state.
+    # Each branch below returns unconditionally, and `is_emergency_detected` was
+    # only ever read down at lead creation, so an emergency declared while the
+    # customer was already parked somewhere ("יש שריפה" mid address gate, while
+    # waiting for a pro's approval, against the loyalty menu) was answered with
+    # the holding question and never reached the lead.
+    #
+    # Position is the whole design: after the admin wizard, reset, help, the
+    # rate limiter, the consent gate and the SOS handoff — none of which an
+    # emergency may bypass, and a live human outranks the bot — and before the
+    # first state that would swallow it.
+    emergency_inbound_logged = False
+    if is_emergency_detected and current_state in EMERGENCY_HOLDING_STATES:
+        emergency_action, emergency_ack = await _escalate_emergency(
+            chat_id, current_state, user_text or ""
+        )
+        if emergency_action == "handled":
+            return
+        if emergency_action == "released":
+            current_state = await StateManager.get_state(chat_id)
+            if emergency_ack:
+                # Log the inbound *here*, ahead of the ack, and let step 1 skip
+                # its own log. Two things depend on this placement: the ack must
+                # never precede the turn that provoked it in the AI's history
+                # window, and it must not be lost to an early return further
+                # down (the PENDING_ADMIN_REVIEW short-circuit and the BOOKED
+                # cancel interceptor both sit between here and step 1).
+                await lead_manager.log_message(
+                    chat_id, "user", _inbound_log_text(user_text, media_url)
+                )
+                emergency_inbound_logged = True
+                await whatsapp.send_message(chat_id, emergency_ack)
+                await lead_manager.log_message(chat_id, "model", emergency_ack)
+
     # Soft Hold — customer is waiting for pro approval.
     # A pro who ordered service for themselves parks here for up to an hour
     # (PRO_APPROVAL_TTL_SECONDS), so an unconditional hold would lock them out of
@@ -745,6 +967,48 @@ async def _process_incoming_message_inner(
     # Bot Paused — pro or customer triggered human handoff (auto-expires via Redis TTL)
     if current_state == UserStates.PAUSED_FOR_HUMAN:
         await lead_manager.log_message(chat_id, "user", user_text or "")
+
+        # PRO-121: PAUSED_FOR_HUMAN is deliberately absent from
+        # EMERGENCY_HOLDING_STATES — a human owns this conversation and the bot
+        # must not talk over them. But "a human owns it" only implies "someone
+        # was paged" for the SOS entry; PRO-116's branch-13a "2" path parks the
+        # customer here having merely messaged the assigned pro. An emergency
+        # declared there was logged, rolled the TTL forward and reached nobody,
+        # indefinitely. So: flag the lead and page — once — without un-pausing
+        # and without sending the customer anything.
+        if is_emergency_detected:
+            # Find first, then claim by _id. Folding the "not yet alerted" guard
+            # into the sorted query would make the *second* emergency claim the
+            # next-newest lead instead of no-opping — flagging an unrelated
+            # BOOKED job as an emergency and paging about the wrong one.
+            newest_lead = await leads_collection.find_one(
+                {
+                    "chat_id": chat_id,
+                    "status": {
+                        "$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]
+                    },
+                },
+                sort=[("created_at", -1)],
+            )
+            paused_lead = (
+                await leads_collection.find_one_and_update(
+                    {
+                        "_id": newest_lead["_id"],
+                        "emergency_paused_alerted": {"$ne": True},
+                    },
+                    {"$set": {"is_emergency": True, "emergency_paused_alerted": True}},
+                )
+                if newest_lead
+                else None
+            )
+            if paused_lead:
+                logger.error(
+                    f"🚑 Emergency declared by ...{chat_id[-8:]} while paused for a "
+                    f"human (lead={paused_lead['_id']}) — alerting the operator"
+                )
+                await send_sos_alert(
+                    chat_id, user_text or "", paused_lead.get("pro_id")
+                )
         # Task 2: Reset 15-minute rolling window
         await StateManager.set_state(
             chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS
@@ -1312,13 +1576,24 @@ async def _process_incoming_message_inner(
             f"🔒 PENDING_ADMIN_REVIEW short-circuit for {chat_id} "
             f"(lead={pending_admin_lead['_id']}, ack_sent={should_ack})"
         )
+        # PRO-121: this short-circuit is a 24h hold keyed on lead status, so the
+        # dispatch hoist above can never fire for it — an emergency declared here
+        # would otherwise get STILL_PENDING_REVIEW and reach nobody. Page on the
+        # same 30-minute throttle as the ack so a burst cannot spam the operator.
+        if is_emergency_detected and should_ack:
+            notification_service.page_operator(
+                f"EMERGENCY declared on lead {pending_admin_lead['_id']}, which is "
+                "already PENDING_ADMIN_REVIEW — the customer is behind the 24h "
+                "short-circuit and needs manual routing now"
+            )
         return
 
-    # 1. Log User Message
-    log_text = user_text
-    if media_url:
-        log_text = f"{user_text or ''} [MEDIA: {media_url}]"
-    await lead_manager.log_message(chat_id, "user", log_text)
+    # 1. Log User Message — unless the emergency hoist above already did, in
+    #    which case logging again would duplicate the turn (PRO-116 Q5).
+    if not emergency_inbound_logged:
+        await lead_manager.log_message(
+            chat_id, "user", _inbound_log_text(user_text, media_url)
+        )
 
     # 2. Check for Customer Completion, Rating, or Review
     if user_text:
@@ -1431,10 +1706,11 @@ async def _process_incoming_message_inner(
             await leads_collection.update_one(
                 {"_id": active_lead["_id"]}, {"$set": {"is_emergency": True}}
             )
-            await whatsapp.send_message(chat_id, Messages.Customer.EMERGENCY_ACK)
-            await lead_manager.log_message(
-                chat_id, "model", Messages.Customer.EMERGENCY_ACK
+            ack = _emergency_ack_for(
+                active_lead.get("city") or active_lead.get("full_address")
             )
+            await whatsapp.send_message(chat_id, ack)
+            await lead_manager.log_message(chat_id, "model", ack)
             active_lead["is_emergency"] = True
 
         if media_url:
@@ -1481,11 +1757,26 @@ async def _process_incoming_message_inner(
         is_deal = pro_response_obj.is_deal or bool(
             DEAL_MARKER_RE.search(pro_response_obj.reply_to_user)
         )
+        # PRO-121: this is where an emergency released from the address gate
+        # actually lands. Every route into AWAITING_ADDRESS writes `pro_id`
+        # first — the matching block below does it before _finalize_deal runs,
+        # and so does _accept_loyalty_offer — so `existing_pro` resolves and
+        # this fast path returns long before the dispatcher's expedited branch.
+        # Without the same widening here, releasing the gate only swapped one
+        # unanswered question for another.
+        emergency_expedite = bool(active_lead.get("is_emergency") and not is_deal)
         cleaned_reply = _strip_deal_marker(pro_response_obj.reply_to_user)
-        await whatsapp.send_message(chat_id, cleaned_reply)
-        await lead_manager.log_message(chat_id, "model", cleaned_reply)
+        if emergency_expedite:
+            logger.info(
+                f"🚑 Suppressing mid-intake reply for ...{chat_id[-8:]} — the "
+                f"assigned pro is being asked to approve this turn "
+                f"({len(cleaned_reply)} chars withheld)"
+            )
+        else:
+            await whatsapp.send_message(chat_id, cleaned_reply)
+            await lead_manager.log_message(chat_id, "model", cleaned_reply)
 
-        if is_deal:
+        if is_deal or emergency_expedite:
             try:
                 await _finalize_deal(
                     chat_id,
@@ -1500,6 +1791,11 @@ async def _process_incoming_message_inner(
                 )
             except Exception as e:
                 logger.error(f"Deal finalization failed for {chat_id}: {e}")
+                # The suppressed reply was this turn's only customer-facing
+                # message; finalization failing must not leave them with silence.
+                if emergency_expedite:
+                    await whatsapp.send_message(chat_id, cleaned_reply)
+                    await lead_manager.log_message(chat_id, "model", cleaned_reply)
         return
 
     # 5. Smart Dispatcher Phase (only when no pro assigned yet)
@@ -1614,10 +1910,9 @@ async def _process_incoming_message_inner(
             )
             current_lead_id = active_lead["_id"] if active_lead else None
             if is_emergency_detected:
-                await whatsapp.send_message(chat_id, Messages.Customer.EMERGENCY_ACK)
-                await lead_manager.log_message(
-                    chat_id, "model", Messages.Customer.EMERGENCY_ACK
-                )
+                ack = _emergency_ack_for(extracted_city)
+                await whatsapp.send_message(chat_id, ack)
+                await lead_manager.log_message(chat_id, "model", ack)
         else:
             current_lead_id = active_lead["_id"]
             update_data = {}
@@ -1630,10 +1925,9 @@ async def _process_incoming_message_inner(
 
             if is_emergency_detected and not lead_facts.get("is_emergency"):
                 update_data["is_emergency"] = True
-                await whatsapp.send_message(chat_id, Messages.Customer.EMERGENCY_ACK)
-                await lead_manager.log_message(
-                    chat_id, "model", Messages.Customer.EMERGENCY_ACK
-                )
+                ack = _emergency_ack_for(extracted_city)
+                await whatsapp.send_message(chat_id, ack)
+                await lead_manager.log_message(chat_id, "model", ack)
 
             mongo_ops = {}
             if update_data:
@@ -1665,12 +1959,27 @@ async def _process_incoming_message_inner(
                 {"_id": current_lead_id}, {"$set": extracted_parts}
             )
 
-    # Loyalty Check: offer returning customers their previous pro before running normal matching
+    # PRO-121: is this turn acting on an emergency? Bound once here so the
+    # loyalty gate, the PRO-116 Q1 early-notice suppression and the finalize
+    # call site below all answer the question the same way.
+    lead_is_emergency = bool(
+        is_emergency_detected or (active_lead or {}).get("is_emergency")
+    )
+
+    # Loyalty Check: offer returning customers their previous pro before running
+    # normal matching.
+    #
+    # PRO-121: never for an emergency. LOYALTY_OFFER parks the customer in
+    # AWAITING_LOYALTY_CONFIRMATION — one of the holding states this issue is
+    # about — to ask a question about *preference*. Escalating out of that state
+    # afterwards (the hoisted branch above) is the cure; not entering it while
+    # someone's home is flooding is the prevention.
     if (
         extracted_city
         and extracted_issue
         and extracted_issue != Defaults.UNKNOWN_ISSUE
         and current_lead_id
+        and not lead_is_emergency
     ):
         current_lead_doc = await leads_collection.find_one({"_id": current_lead_id})
         if current_lead_doc and not current_lead_doc.get("loyalty_offered"):
@@ -1734,6 +2043,17 @@ async def _process_incoming_message_inner(
                     f"Lead {current_lead_id} for ...{chat_id[-8:]} requires admin "
                     "review — no pro available"
                 )
+                # PRO-121: a routine coverage gap is deliberately not a page
+                # (see above), but an *emergency* with no pro is the one case
+                # where nobody is coming and nobody has been told. The lead
+                # would otherwise sit behind the 24h PENDING_ADMIN_REVIEW
+                # short-circuit answering STILL_PENDING_REVIEW every 30 min.
+                if lead_is_emergency:
+                    notification_service.page_operator(
+                        f"EMERGENCY lead {current_lead_id} has no available pro "
+                        f"(city={extracted_city!r}, issue={extracted_issue!r}) — "
+                        "PENDING_ADMIN_REVIEW, needs manual routing now"
+                    )
                 await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
                 await lead_manager.log_message(
                     chat_id, "model", Messages.Customer.PENDING_REVIEW
@@ -1788,8 +2108,20 @@ async def _process_incoming_message_inner(
                     or DEAL_MARKER_RE.search(pro_response_obj.reply_to_user)
                 )
             )
-            turn_finalizes = _deal_flagged and bool(
-                pro_response_obj
+            # PRO-121: an emergency finalizes on this turn with no [DEAL]
+            # marker and with an incomplete address (_finalize_deal grants it a
+            # city-only bypass), so deriving this from _deal_flagged alone sent
+            # the pro "אין צורך לפעול עכשיו" milliseconds before the emergency
+            # approval request — telling them to stand down on the one lead
+            # that cannot wait.
+            # The emergency arm is deliberately independent of
+            # `pro_response_obj`: when _build_pro_response raises it is None,
+            # yet the finalize call site below still dispatches on
+            # `lead_is_emergency` — so gating both arms on it would send the
+            # stand-down notice and the emergency approval request back to back.
+            turn_finalizes = lead_is_emergency or (
+                bool(pro_response_obj)
+                and _deal_flagged
                 and is_address_complete(pro_response_obj.extracted_data)[0]
             )
 
@@ -1833,10 +2165,25 @@ async def _process_incoming_message_inner(
     if deal_string_match:
         is_deal = True
 
+    # PRO-121: this turn dispatches the emergency even though the AI did not
+    # close the deal, so its reply is still mid-intake ("איזו קומה?"). Sending it
+    # would contradict EMERGENCY_ACK's promise to ask only what is essential and
+    # then be contradicted in turn by AWAITING_APPROVAL_TRANSPARENT a moment
+    # later. The pro gets the full picture either way — _finalize_deal reads the
+    # lead, not this reply.
+    emergency_expedite = bool(best_pro and lead_is_emergency and not is_deal)
+
     # Send Message to User — cleaned copy, marker must never leak to the customer.
     cleaned_reply = _strip_deal_marker(final_response.reply_to_user)
-    await whatsapp.send_message(chat_id, cleaned_reply)
-    await lead_manager.log_message(chat_id, "model", cleaned_reply)
+    if emergency_expedite:
+        logger.info(
+            f"🚑 Suppressing mid-intake reply for ...{chat_id[-8:]} — emergency "
+            f"dispatches this turn ({len(cleaned_reply)} chars withheld; the text "
+            "is conversation content and stays out of the log)"
+        )
+    else:
+        await whatsapp.send_message(chat_id, cleaned_reply)
+        await lead_manager.log_message(chat_id, "model", cleaned_reply)
 
     # PRO-55: persist the AI's quoted price stickily the moment it's given (STEP 3),
     # so it reaches the pro approval request even though the estimate turn precedes
@@ -1849,7 +2196,18 @@ async def _process_incoming_message_inner(
             {"_id": current_lead_id}, {"$set": {"quoted_price": _qp_clean}}
         )
 
-    if is_deal and best_pro:
+    # PRO-121: an emergency does not wait for the AI to volunteer a [DEAL]
+    # marker. Once a pro is actually matched, finalize on the spot — and only
+    # then does the customer hear that someone has their call
+    # (AWAITING_APPROVAL_TRANSPARENT, sent by _finalize_deal). Its address gate
+    # already grants an emergency a city-only bypass, so the offer goes out with
+    # whatever we have rather than stalling on floor and apartment.
+    if best_pro and (is_deal or lead_is_emergency):
+        if emergency_expedite:
+            logger.warning(
+                f"🚑 Emergency expedited dispatch for ...{chat_id[-8:]} — finalizing "
+                f"without a [DEAL] marker (pro={best_pro['_id']})"
+            )
         try:
             await _finalize_deal(
                 chat_id,
@@ -1864,6 +2222,12 @@ async def _process_incoming_message_inner(
             )
         except Exception as e:
             logger.error(f"Deal finalization failed for {chat_id}: {e}")
+            # Same reasoning as the fast path above: on an expedited emergency
+            # the AI's reply was withheld because _finalize_deal was going to
+            # answer instead. It didn't, so send it rather than say nothing.
+            if emergency_expedite:
+                await whatsapp.send_message(chat_id, cleaned_reply)
+                await lead_manager.log_message(chat_id, "model", cleaned_reply)
 
 
 # --- Private Helpers ---
