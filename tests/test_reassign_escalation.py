@@ -68,11 +68,22 @@ async def _insert_exhausted_lead(mock_db, **overrides):
 
 
 @pytest.mark.asyncio
-async def test_exhausted_reassignment_escalates_not_closes(
+async def test_exhausted_reassignment_escalates_and_stops(
     mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_matching
 ):
-    """The regression PRO-63 exists to prevent: at MAX_REASSIGNMENTS the lead
-    must become PENDING_ADMIN_REVIEW, never CLOSED."""
+    """The whole outcome of hitting MAX_REASSIGNMENTS, in one arrangement.
+
+    This was five tests with an identical three-line arrange and an identical
+    ``await reassign_lead(lead)``, each asserting one facet of the same call.
+    Merged: the facets are not independent — they are one behaviour — and five
+    copies of the arrangement is where the maintenance cost sat.
+
+    PRO-63: at MAX_REASSIGNMENTS the lead becomes PENDING_ADMIN_REVIEW, never
+    CLOSED; the exhaustion check runs BEFORE the customer is told "looking for
+    someone else" (sending CUSTOMER_REASSIGNING and then immediately
+    MAX_REASSIGNMENTS_REACHED is exactly the whiplash PRO-63 removes) and
+    before the geo round, so matching is never awaited at all.
+    """
     monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
     await mock_db.leads.delete_many({})
     lead = await _insert_exhausted_lead(mock_db)
@@ -80,26 +91,28 @@ async def test_exhausted_reassignment_escalates_not_closes(
     result = await reassign_lead(lead)
 
     assert result is False
+
+    # Escalated, not closed.
     updated = await mock_db.leads.find_one({"_id": lead["_id"]})
     assert updated["status"] == LeadStatus.PENDING_ADMIN_REVIEW
     assert updated["escalation_reason"] == "max_reassignments_exhausted"
     assert updated["status"] != LeadStatus.CLOSED
     assert "closed_reason" not in updated
 
-
-@pytest.mark.asyncio
-async def test_exhausted_reassignment_notifies_customer(
-    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_matching
-):
-    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
-    await mock_db.leads.delete_many({})
-    lead = await _insert_exhausted_lead(mock_db)
-
-    await reassign_lead(lead)
-
+    # The customer is told once, and never told a search is under way.
     mock_whatsapp.send_message.assert_any_call(
         lead["chat_id"], Messages.SOS.MAX_REASSIGNMENTS_REACHED
     )
+    for call in mock_whatsapp.send_message.await_args_list:
+        assert call.args[1] != Messages.SOS.CUSTOMER_REASSIGNING
+
+    # The geo round is discarded on this path, so it is never entered.
+    mock_matching.assert_not_awaited()
+
+    # The chat is released.
+    state_mgr, context_mgr = mock_state_and_context
+    state_mgr.clear_state.assert_awaited_once_with(lead["chat_id"])
+    context_mgr.clear_context.assert_awaited_once_with(lead["chat_id"])
 
 
 @pytest.mark.asyncio
@@ -202,57 +215,6 @@ async def test_exhausted_reassignment_survives_admin_alert_failure(
     updated = await mock_db.leads.find_one({"_id": lead["_id"]})
     assert updated["status"] == LeadStatus.PENDING_ADMIN_REVIEW
     assert updated["escalation_reason"] == "max_reassignments_exhausted"
-
-
-@pytest.mark.asyncio
-async def test_exhausted_reassignment_clears_state_and_context(
-    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_matching
-):
-    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
-    await mock_db.leads.delete_many({})
-    lead = await _insert_exhausted_lead(mock_db)
-
-    await reassign_lead(lead)
-
-    state_mgr, context_mgr = mock_state_and_context
-    state_mgr.clear_state.assert_awaited_once_with(lead["chat_id"])
-    context_mgr.clear_context.assert_awaited_once_with(lead["chat_id"])
-
-
-@pytest.mark.asyncio
-async def test_exhausted_reassignment_never_sends_reassigning_message(
-    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_matching
-):
-    """Fix 1 (#1) — the exhaustion check now runs BEFORE the customer is told
-    'looking for someone else'. Sending CUSTOMER_REASSIGNING and then
-    immediately MAX_REASSIGNMENTS_REACHED is exactly the whiplash PRO-63
-    exists to remove."""
-    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
-    await mock_db.leads.delete_many({})
-    lead = await _insert_exhausted_lead(mock_db)
-
-    await reassign_lead(lead)
-
-    for call in mock_whatsapp.send_message.await_args_list:
-        assert call.args[1] != Messages.SOS.CUSTOMER_REASSIGNING
-    mock_whatsapp.send_message.assert_any_call(
-        lead["chat_id"], Messages.SOS.MAX_REASSIGNMENTS_REACHED
-    )
-
-
-@pytest.mark.asyncio
-async def test_exhausted_reassignment_never_calls_matching(
-    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_matching
-):
-    """Fix 1 (#2) — the geo-matching round is discarded on the exhaustion
-    path, so it must never be awaited at all."""
-    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
-    await mock_db.leads.delete_many({})
-    lead = await _insert_exhausted_lead(mock_db)
-
-    await reassign_lead(lead)
-
-    mock_matching.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -695,82 +657,11 @@ def mock_page_operator(monkeypatch):
     return pages
 
 
-@pytest.mark.asyncio
-async def test_reassign_lead_offer_send_failed_escalates_to_pending_review(
-    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_page_operator
-):
-    """PRO-125 — a genuine offer-send failure (closed window / breaker /
-    raised send) must escalate the lead to PENDING_ADMIN_REVIEW with
-    escalation_reason=pro_offer_send_failed rather than pretending the
-    reassignment succeeded."""
-    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
-    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
-    await mock_db.leads.delete_many({})
-    new_pro = {
-        "_id": ObjectId(),
-        "business_name": "אבי",
-        "phone_number": "972500000002",
-    }
-    monkeypatch.setattr(
-        "app.services.matching_service.determine_best_pro",
-        AsyncMock(return_value=new_pro),
-    )
-    monkeypatch.setattr(
-        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=False)
-    )
-    lead = await _insert_exhausted_lead(mock_db, reassignment_count=0)
+async def _arrange_offer_send_failure(mock_db, monkeypatch):
+    """A NEW lead, a matched replacement pro, and an offer that does not land.
 
-    result = await reassign_lead(lead)
-
-    assert result is False
-    updated = await mock_db.leads.find_one({"_id": lead["_id"]})
-    assert updated["status"] == LeadStatus.PENDING_ADMIN_REVIEW
-    assert updated["escalation_reason"] == "pro_offer_send_failed"
-
-
-@pytest.mark.asyncio
-async def test_reassign_lead_offer_send_failed_notifies_customer_pending_review_only(
-    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_page_operator
-):
-    """The customer must get PENDING_REVIEW on this path, never the
-    "we found you a pro" transparent message — that pro never received the
-    offer."""
-    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
-    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
-    await mock_db.leads.delete_many({})
-    new_pro = {
-        "_id": ObjectId(),
-        "business_name": "אבי",
-        "phone_number": "972500000002",
-    }
-    monkeypatch.setattr(
-        "app.services.matching_service.determine_best_pro",
-        AsyncMock(return_value=new_pro),
-    )
-    monkeypatch.setattr(
-        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=False)
-    )
-    lead = await _insert_exhausted_lead(mock_db, reassignment_count=0)
-
-    result = await reassign_lead(lead)
-
-    assert result is False
-    mock_whatsapp.send_message.assert_any_call(
-        lead["chat_id"], Messages.Customer.PENDING_REVIEW
-    )
-    transparent_msg = Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
-        pro_name=new_pro["business_name"]
-    )
-    for call in mock_whatsapp.send_message.await_args_list:
-        assert call.args[1] != transparent_msg
-
-
-@pytest.mark.asyncio
-async def test_reassign_lead_offer_send_failed_never_sends_pro_lost_lead(
-    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_page_operator
-):
-    """The old-pro PRO_LOST_LEAD leg must not fire on this path either — the
-    reassignment itself never landed."""
+    Five tests re-pasted this fifteen-line arrangement to assert one facet each.
+    """
     monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
     monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
     await mock_db.leads.delete_many({})
@@ -792,64 +683,46 @@ async def test_reassign_lead_offer_send_failed_never_sends_pro_lost_lead(
     lead = await _insert_exhausted_lead(
         mock_db, reassignment_count=0, pro_id=old_pro_id
     )
-
-    await reassign_lead(lead)
-
-    for call in mock_whatsapp.send_message.await_args_list:
-        assert call.args[1] != Messages.SOS.PRO_LOST_LEAD
+    return lead, new_pro
 
 
 @pytest.mark.asyncio
-async def test_reassign_lead_offer_send_failed_pages_operator(
+async def test_reassign_lead_offer_send_failed_escalates_and_tells_nobody_it_worked(
     mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_page_operator
 ):
-    """An offer-send failure must page the operator — a human needs to
-    manually reach the pro or reclaim the lead."""
-    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
-    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
-    await mock_db.leads.delete_many({})
-    new_pro = {
-        "_id": ObjectId(),
-        "business_name": "אבי",
-        "phone_number": "972500000002",
-    }
-    monkeypatch.setattr(
-        "app.services.matching_service.determine_best_pro",
-        AsyncMock(return_value=new_pro),
-    )
-    monkeypatch.setattr(
-        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=False)
-    )
-    lead = await _insert_exhausted_lead(mock_db, reassignment_count=0)
+    """PRO-125 — the whole outcome of an offer that never reached the pro.
 
-    await reassign_lead(lead)
+    A genuine send failure (closed 24h window / breaker / raised send, all of
+    which PRO-159 made ``notify_pro_new_lead`` report honestly) must escalate
+    rather than pretend the reassignment succeeded: nobody may be told a pro was
+    found, the old pro must not be told they lost the lead, an operator is paged
+    so a human can reach the pro or reclaim the lead, and the chat is released.
+    """
+    lead, new_pro = await _arrange_offer_send_failure(mock_db, monkeypatch)
 
+    result = await reassign_lead(lead)
+
+    assert result is False
+
+    updated = await mock_db.leads.find_one({"_id": lead["_id"]})
+    assert updated["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert updated["escalation_reason"] == "pro_offer_send_failed"
+
+    # The customer hears PENDING_REVIEW — never "we found you אבי".
+    mock_whatsapp.send_message.assert_any_call(
+        lead["chat_id"], Messages.Customer.PENDING_REVIEW
+    )
+    transparent_msg = Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
+        pro_name=new_pro["business_name"]
+    )
+    sent = [call.args[1] for call in mock_whatsapp.send_message.await_args_list]
+    assert transparent_msg not in sent
+    # ...and the old pro is not told they lost a lead that never moved.
+    assert Messages.SOS.PRO_LOST_LEAD not in sent
+
+    # A human has to pick this up.
     assert len(mock_page_operator) == 1
     assert str(lead["_id"]) in mock_page_operator[0]
-
-
-@pytest.mark.asyncio
-async def test_reassign_lead_offer_send_failed_clears_state_and_context(
-    mock_db, monkeypatch, mock_whatsapp, mock_state_and_context, mock_page_operator
-):
-    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
-    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
-    await mock_db.leads.delete_many({})
-    new_pro = {
-        "_id": ObjectId(),
-        "business_name": "אבי",
-        "phone_number": "972500000002",
-    }
-    monkeypatch.setattr(
-        "app.services.matching_service.determine_best_pro",
-        AsyncMock(return_value=new_pro),
-    )
-    monkeypatch.setattr(
-        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=False)
-    )
-    lead = await _insert_exhausted_lead(mock_db, reassignment_count=0)
-
-    await reassign_lead(lead)
 
     state_mgr, context_mgr = mock_state_and_context
     state_mgr.clear_state.assert_awaited_once_with(lead["chat_id"])

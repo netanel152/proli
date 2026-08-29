@@ -27,28 +27,28 @@ Input classes
 | state | keyword | free | offtopic | wrong | emoji | silence | interrupt | race |
 |---|---|---|---|---|---|---|---|---|
 | `idle` | "אני המערכת החכמה של Proli" | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | silent | N/A[race] |
-| `awaiting_consent` | → idle, "אפשר להתחיל" | "ברוכים הבאים ל-Proli" | "ברוכים הבאים ל-Proli" | "ברוכים הבאים ל-Proli" | "ברוכים הבאים ל-Proli" | TTL ≤ 14400s | → idle, "לא נשמור מידע עליך" | N/A[race] |
-| `customer_mode` | "מה הכתובת" | "מאיפה בדיוק" | "במה אפשר לעזור" | "ראיתי את התמונה" | "לעזור" | TTL ≤ 14400s | → pro_mode | N/A[race] |
+| `awaiting_consent` | → idle, "אפשר להתחיל" | "ברוכים הבאים ל-Proli" | N/A[same-reprompt] | "ברוכים הבאים ל-Proli" | N/A[same-reprompt] | N/A[ttl-class] | → idle, "לא נשמור מידע עליך" | N/A[race] |
+| `customer_mode` | "מה הכתובת" | "מאיפה בדיוק" | "במה אפשר לעזור" | "ראיתי את התמונה" | "לעזור" | N/A[ttl-class] | → pro_mode | N/A[race] |
 | `awaiting_address` | → idle, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "עוד פרטים לכתובת" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
-| `awaiting_pro_approval` | → awaiting_pro_approval, "מאתרים עבורך איש מקצוע זמין" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | "אצל איש המקצוע לאישור" | TTL ≤ 3600s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
-| `paused_for_human` | silent | silent | silent | silent | silent | TTL ≤ 900s | "מעביר אותך לנציג אנושי" | N/A[race] |
-| `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | "בחר מספר תור חוקי" | TTL ≤ 14400s | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
-| `awaiting_loyalty_confirmation` | → awaiting_pro_approval, "עם הפרטים, ואעדכן אותך ברגע שיאשר" | → idle, "אחפש עבורך את איש המקצוע הפנוי" | "לא בטוח שהבנתי" | "לא בטוח שהבנתי" | "לא בטוח שהבנתי" | TTL ≤ 300s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
-| `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | "אנא השב 1 (בעיה חדשה) או 2" | TTL ≤ 14400s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
-| `awaiting_cancel_confirmation` | → idle, "ביטלתי את העבודה" | → idle, "העבודה נשארת כמתוכנן" | → idle, "העבודה נשארת כמתוכנן" | → idle, "העבודה נשארת כמתוכנן" | → idle, "העבודה נשארת כמתוכנן" | TTL ≤ 300s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
-| `pro_mode` | "פקודות המערכת" | "פקודות המערכת" | "פקודות המערכת" | N/A[pro-text-only] | "פקודות המערכת" | TTL ≤ 14400s | "פקודות המערכת" | N/A[race] |
-| `awaiting_intent_confirmation` | → customer_mode, "עברת למצב לקוח" | "בוא ננסה שוב" | "בוא ננסה שוב" | N/A[pro-text-only] | "בוא ננסה שוב" | TTL ≤ 300s | → idle, "ממשיכים כרגיל" | N/A[race] |
-| `pro_selecting_job_to_finish` | N/A[defect-finish] | N/A[defect-finish] | N/A[defect-finish] | N/A[pro-text-only] | N/A[defect-finish] | TTL ≤ 14400s | N/A[defect-finish] | N/A[race] |
-| `pro_selecting_job_to_cancel` | N/A[defect-cancel] | N/A[defect-cancel] | N/A[defect-cancel] | N/A[pro-text-only] | N/A[defect-cancel] | TTL ≤ 14400s | N/A[defect-cancel] | N/A[race] |
+| `awaiting_pro_approval` | → awaiting_pro_approval, "מאתרים עבורך איש מקצוע זמין" | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | TTL ≤ 3600s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
+| `paused_for_human` | silent | silent | N/A[same-reprompt] | silent | N/A[same-reprompt] | TTL ≤ 900s | "מעביר אותך לנציג אנושי" | N/A[race] |
+| `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "בחר מספר תור חוקי" | N/A[same-reprompt] | "בחר מספר תור חוקי" | N/A[same-reprompt] | N/A[ttl-class] | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
+| `awaiting_loyalty_confirmation` | → awaiting_pro_approval, "עם הפרטים, ואעדכן אותך ברגע שיאשר" | → idle, "אחפש עבורך את איש המקצוע הפנוי" | N/A[same-reprompt] | "לא בטוח שהבנתי" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
+| `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "אנא השב 1 (בעיה חדשה) או 2" | N/A[same-reprompt] | "אנא השב 1 (בעיה חדשה) או 2" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
+| `awaiting_cancel_confirmation` | → idle, "ביטלתי את העבודה" | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | TTL ≤ 300s | → paused_for_human, "מעביר אותך לנציג אנושי" | N/A[race] |
+| `pro_mode` | "פקודות המערכת" | "פקודות המערכת" | N/A[same-reprompt] | N/A[pro-text-only] | "פקודות המערכת" | N/A[ttl-class] | "פקודות המערכת" | N/A[race] |
+| `awaiting_intent_confirmation` | → customer_mode, "עברת למצב לקוח" | "בוא ננסה שוב" | N/A[same-reprompt] | N/A[pro-text-only] | "בוא ננסה שוב" | N/A[ttl-class] | → idle, "ממשיכים כרגיל" | N/A[race] |
+| `pro_selecting_job_to_finish` | N/A[defect-finish] | N/A[defect-finish] | N/A[defect-finish] | N/A[pro-text-only] | N/A[defect-finish] | N/A[ttl-class] | N/A[defect-finish] | N/A[race] |
+| `pro_selecting_job_to_cancel` | N/A[defect-cancel] | N/A[defect-cancel] | N/A[defect-cancel] | N/A[pro-text-only] | N/A[defect-cancel] | N/A[ttl-class] | N/A[defect-cancel] | N/A[race] |
 | `pro_awaiting_final_price` | N/A[defect-price] | N/A[defect-price] | N/A[defect-price] | N/A[pro-text-only] | N/A[defect-price] | TTL ≤ 600s | N/A[defect-price] | N/A[race] |
-| `onboarding_name` | → onboarding_type, "סוג המקצוע" | → onboarding_type, "סוג המקצוע" | "בין 2 ל-100 תווים" | N/A[pro-text-only] | "בין 2 ל-100 תווים" | TTL ≤ 14400s | → idle, "ההרשמה בוטלה" | N/A[race] |
-| `onboarding_type` | → onboarding_areas, "ערים/אזורים" | → onboarding_areas, "ערים/אזורים" | "שלח מספר 1-7" | N/A[pro-text-only] | "שלח מספר 1-7" | TTL ≤ 14400s | → idle, "ההרשמה בוטלה" | N/A[race] |
-| `onboarding_areas` | → onboarding_prices, "המחירים" | → onboarding_prices, "המחירים" | "לא זיהיתי ערים" | N/A[pro-text-only] | → onboarding_prices, "המחירים" | TTL ≤ 14400s | → idle, "ההרשמה בוטלה" | N/A[race] |
-| `onboarding_prices` | → onboarding_confirm, "סיכום הפרופיל שלך" | → onboarding_confirm, "סיכום הפרופיל שלך" | → onboarding_confirm, "סיכום הפרופיל שלך" | N/A[pro-text-only] | → onboarding_confirm, "סיכום הפרופיל שלך" | TTL ≤ 14400s | → idle, "ההרשמה בוטלה" | N/A[race] |
-| `onboarding_confirm` | → idle, "הפרופיל שלך נשלח לאישור" | "השב *אשר* לשליחה" | "השב *אשר* לשליחה" | N/A[pro-text-only] | "השב *אשר* לשליחה" | TTL ≤ 14400s | → idle, "ההרשמה בוטלה" | N/A[race] |
-| `admin_selecting_lead` | → admin_selecting_action, "למי להעביר" | "מספר לא חוקי" | "מספר לא חוקי" | N/A[admin-menu] | "מספר לא חוקי" | TTL ≤ 900s | → idle, "בוטל" | N/A[race] |
-| `admin_selecting_action` | → admin_selecting_pro, "אנשי מקצוע פנויים" | "אפשרות לא חוקית" | "אפשרות לא חוקית" | N/A[admin-menu] | "אפשרות לא חוקית" | TTL ≤ 900s | → idle, "בוטל" | N/A[race] |
-| `admin_selecting_pro` | → idle, "הליד הועבר" | "מספר לא חוקי" | "מספר לא חוקי" | N/A[admin-menu] | "מספר לא חוקי" | TTL ≤ 900s | → idle, "בוטל" | N/A[race] |
+| `onboarding_name` | → onboarding_type, "סוג המקצוע" | → onboarding_type, "סוג המקצוע" | "בין 2 ל-100 תווים" | N/A[pro-text-only] | "בין 2 ל-100 תווים" | N/A[ttl-class] | → idle, "ההרשמה בוטלה" | N/A[race] |
+| `onboarding_type` | → onboarding_areas, "ערים/אזורים" | → onboarding_areas, "ערים/אזורים" | "שלח מספר 1-7" | N/A[pro-text-only] | "שלח מספר 1-7" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `onboarding_areas` | → onboarding_prices, "המחירים" | → onboarding_prices, "המחירים" | "לא זיהיתי ערים" | N/A[pro-text-only] | → onboarding_prices, "המחירים" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `onboarding_prices` | → onboarding_confirm, "סיכום הפרופיל שלך" | → onboarding_confirm, "סיכום הפרופיל שלך" | N/A[same-reprompt] | N/A[pro-text-only] | → onboarding_confirm, "סיכום הפרופיל שלך" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `onboarding_confirm` | → idle, "הפרופיל שלך נשלח לאישור" | "השב *אשר* לשליחה" | N/A[same-reprompt] | N/A[pro-text-only] | "השב *אשר* לשליחה" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `admin_selecting_lead` | → admin_selecting_action, "למי להעביר" | "מספר לא חוקי" | N/A[same-reprompt] | N/A[admin-menu] | "מספר לא חוקי" | N/A[ttl-class] | → idle, "בוטל" | N/A[race] |
+| `admin_selecting_action` | → admin_selecting_pro, "אנשי מקצוע פנויים" | "אפשרות לא חוקית" | N/A[same-reprompt] | N/A[admin-menu] | "אפשרות לא חוקית" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `admin_selecting_pro` | → idle, "הליד הועבר" | "מספר לא חוקי" | N/A[same-reprompt] | N/A[admin-menu] | "מספר לא חוקי" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 
 N/A legend
 ~~~~~~~~~~
@@ -59,6 +59,9 @@ N/A legend
 * ``pro-text-only`` — Pro-side commands are a text menu; a pro never sends the bot media.
 * ``race`` — State-independent. The per-chat Redis lock is taken before any state is read (workflow_service.py:219), so every state behaves identically; proven once in test_a_second_message_mid_flight_is_deferred_not_dropped.
 * ``resting`` — IDLE is the resting state — there is nothing to expire.
+* ``same-exit`` — A reset keyword exits through one handler per wizard, not one per step. Kept on the wizard's first step; see _COLLAPSED.
+* ``same-reprompt`` — This row answers free/offtopic/wrong/emoji with one identical re-prompt. Kept two cells covering the input paths that actually differ (AI text, and media or emoji); see _COLLAPSED.
+* ``ttl-class`` — A `silence` cell asserts a TTL bound on a state the arranger set, so it proves StateManager.set_state honours a TTL — not anything about this state or input class. Kept once per distinct TTL value; see _COLLAPSED.
 
 Reading a cell: ``→ state`` is the state the FSM must land in, ``"…"`` is a
 fragment of the Hebrew the participant must receive, and ``silent`` means nothing
@@ -133,6 +136,20 @@ NA_REASONS = {
         "Pro-side commands are a text menu; a pro never sends the bot media."
     ),
     "admin-menu": "The admin wizard is a text-only numeric menu.",
+    "ttl-class": (
+        "A `silence` cell asserts a TTL bound on a state the arranger set, so it "
+        "proves StateManager.set_state honours a TTL — not anything about this "
+        "state or input class. Kept once per distinct TTL value; see _COLLAPSED."
+    ),
+    "same-reprompt": (
+        "This row answers free/offtopic/wrong/emoji with one identical re-prompt. "
+        "Kept two cells covering the input paths that actually differ (AI text, "
+        "and media or emoji); see _COLLAPSED."
+    ),
+    "same-exit": (
+        "A reset keyword exits through one handler per wizard, not one per step. "
+        "Kept on the wizard's first step; see _COLLAPSED."
+    ),
     "defect-finish": (
         "DEFECT: PRO_SELECTING_JOB_TO_FINISH is unreachable through the "
         "orchestrator — the PRO_BUSINESS_KEYWORDS bypass overwrites the state to "
@@ -842,6 +859,95 @@ MATRIX: dict[str, dict] = {
     },
     # ------------------------------------------------- declared but unreachable
 }
+
+# ---------------------------------------------------------------- collapsing
+#
+# Some cells were asserting something another cell in the same row or column had
+# already proven. They are collapsed here rather than edited into the literal
+# above, so that what was dropped — and on what argument — stays readable next to
+# the rows it applies to. This is the same reasoning that already N/As the whole
+# ``race`` column: state-independent, proven once.
+#
+# Nothing product-facing is given up. Every distinct *outcome* still has at least
+# one executing cell; what goes is the second, third and fourth cell asserting
+# that same outcome.
+_COLLAPSED: dict[str, list[tuple[str, str]]] = {
+    # A `silence` cell asserts `0 < ttl <= max` on a state the *arranger* just
+    # set — so it is a property of StateManager.set_state honouring a TTL, not of
+    # the state or the input class. Keep one cell per distinct TTL value
+    # (14400 default, 3600, 900, 600, 300) and drop the repeats.
+    "ttl-class": [
+        (UserStates.AWAITING_CONSENT, "silence"),
+        (UserStates.CUSTOMER_MODE, "silence"),
+        (UserStates.AWAITING_RESCHEDULE_TIME, "silence"),
+        (UserStates.AWAITING_LOYALTY_CONFIRMATION, "silence"),
+        (UserStates.AWAITING_NEW_OR_EXISTING, "silence"),
+        (UserStates.PRO_MODE, "silence"),
+        (UserStates.AWAITING_INTENT_CONFIRMATION, "silence"),
+        (UserStates.PRO_SELECTING_JOB_TO_FINISH, "silence"),
+        (UserStates.PRO_SELECTING_JOB_TO_CANCEL, "silence"),
+        (UserStates.ONBOARDING_NAME, "silence"),
+        (UserStates.ONBOARDING_TYPE, "silence"),
+        (UserStates.ONBOARDING_AREAS, "silence"),
+        (UserStates.ONBOARDING_PRICES, "silence"),
+        (UserStates.ONBOARDING_CONFIRM, "silence"),
+        (UserStates.ADMIN_SELECTING_LEAD, "silence"),
+        (UserStates.ADMIN_SELECTING_ACTION, "silence"),
+        (UserStates.ADMIN_SELECTING_PRO, "silence"),
+    ],
+    # These rows answer `free`, `offtopic`, `wrong` and `emoji` with one identical
+    # re-prompt. What actually differs between those four is the input *path*:
+    # AI-interpreted text vs. media vs. a non-linguistic token. Keep two cells per
+    # row covering the paths that differ — `free` plus whichever of `wrong`
+    # (media) or `emoji` is still executing — and drop the rest.
+    "same-reprompt": [
+        (UserStates.AWAITING_CONSENT, "offtopic"),
+        (UserStates.AWAITING_CONSENT, "emoji"),
+        (UserStates.AWAITING_PRO_APPROVAL, "offtopic"),
+        (UserStates.AWAITING_PRO_APPROVAL, "emoji"),
+        (UserStates.PAUSED_FOR_HUMAN, "offtopic"),
+        (UserStates.PAUSED_FOR_HUMAN, "emoji"),
+        (UserStates.AWAITING_RESCHEDULE_TIME, "offtopic"),
+        (UserStates.AWAITING_RESCHEDULE_TIME, "emoji"),
+        (UserStates.AWAITING_NEW_OR_EXISTING, "offtopic"),
+        (UserStates.AWAITING_NEW_OR_EXISTING, "emoji"),
+        (UserStates.AWAITING_CANCEL_CONFIRMATION, "offtopic"),
+        (UserStates.AWAITING_CANCEL_CONFIRMATION, "emoji"),
+        (UserStates.AWAITING_LOYALTY_CONFIRMATION, "offtopic"),
+        (UserStates.AWAITING_LOYALTY_CONFIRMATION, "emoji"),
+        # `wrong` is already N/A on these (pro/admin menus take no media), so the
+        # surviving pair is `free` + `emoji`.
+        (UserStates.PRO_MODE, "offtopic"),
+        (UserStates.AWAITING_INTENT_CONFIRMATION, "offtopic"),
+        (UserStates.ONBOARDING_PRICES, "offtopic"),
+        (UserStates.ONBOARDING_CONFIRM, "offtopic"),
+        (UserStates.ADMIN_SELECTING_LEAD, "offtopic"),
+        (UserStates.ADMIN_SELECTING_ACTION, "offtopic"),
+        (UserStates.ADMIN_SELECTING_PRO, "offtopic"),
+    ],
+    # A reset keyword mid-wizard exits through one handler per wizard, not one per
+    # step: all five ONBOARDING_* steps answer "ההרשמה בוטלה" and all three
+    # ADMIN_SELECTING_* steps answer "בוטל". Keep the first step of each wizard.
+    # The four states that exit to PAUSED_FOR_HUMAN are deliberately NOT collapsed
+    # — each reaches that handler through a different dispatch branch, and branch
+    # ordering is the recurring defect class here.
+    "same-exit": [
+        (UserStates.ONBOARDING_TYPE, "interrupt"),
+        (UserStates.ONBOARDING_AREAS, "interrupt"),
+        (UserStates.ONBOARDING_PRICES, "interrupt"),
+        (UserStates.ONBOARDING_CONFIRM, "interrupt"),
+        (UserStates.ADMIN_SELECTING_ACTION, "interrupt"),
+        (UserStates.ADMIN_SELECTING_PRO, "interrupt"),
+    ],
+}
+
+for _reason, _cells in _COLLAPSED.items():
+    for _state, _input_class in _cells:
+        assert not MATRIX[_state][_input_class].na, (
+            f"{_state} x {_input_class} is already N/A — collapsing it hides why"
+        )
+        MATRIX[_state][_input_class] = Cell(na=_reason)
+
 
 ARRANGERS = {
     UserStates.IDLE: arrange_idle,
