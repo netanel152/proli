@@ -1726,55 +1726,57 @@ async def test_status_command_skipped_in_pro_mode(wf_mocks, monkeypatch):
 # --- PRO-44: [DEAL:...] marker must never reach the customer ---
 
 
-def test_strip_deal_marker_removes_marker_preserves_surrounding_text():
-    """Marker embedded mid-string is stripped, surrounding customer-facing text kept."""
-    raw = "מעולה, נקבע! [DEAL: 10:00 | הרצל 10 | נזילה] נתראה מחר!"
-    cleaned = _strip_deal_marker(raw)
+def test_strip_deal_marker():
+    """One pure function, six input shapes — a table, not six test names.
 
-    assert "[DEAL" not in cleaned
-    assert "מעולה, נקבע!" in cleaned
-    assert "נתראה מחר!" in cleaned
+    The last case documents current behaviour rather than a requirement: a
+    malformed marker with no closing ']' is not matched by the non-greedy regex,
+    so it is left in place.
+    """
+    cases = [
+        # (label, raw, expected fragments present, fragments absent, exact)
+        (
+            "marker mid-string, surrounding text kept",
+            "מעולה, נקבע! [DEAL: 10:00 | הרצל 10 | נזילה] נתראה מחר!",
+            ["מעולה, נקבע!", "נתראה מחר!"],
+            None,
+        ),
+        (
+            "more than one marker is fully stripped, not just the first",
+            "התחלה [DEAL: A] אמצע [DEAL: B] סוף",
+            ["התחלה", "אמצע", "סוף"],
+            None,
+        ),
+        (
+            "surrounding whitespace trimmed",
+            "   שלום, מה שלומך?   ",
+            [],
+            "שלום, מה שלומך?",
+        ),
+        (
+            "no marker at all: trimmed, otherwise untouched",
+            "  אין כאן שום סימון מיוחד  ",
+            [],
+            "אין כאן שום סימון מיוחד",
+        ),
+        ("empty string", "", [], ""),
+        ("None — the `text or ''` guard", None, [], ""),
+        (
+            "unclosed bracket is left in place (documented behaviour)",
+            "סיימנו [DEAL: no closing bracket",
+            [],
+            "סיימנו [DEAL: no closing bracket",
+        ),
+    ]
 
-
-def test_strip_deal_marker_trims_extra_whitespace():
-    """Leading/trailing whitespace around the text must be trimmed."""
-    raw = "   שלום, מה שלומך?   "
-    cleaned = _strip_deal_marker(raw)
-
-    assert cleaned == "שלום, מה שלומך?"
-
-
-def test_strip_deal_marker_no_marker_returns_text_unchanged():
-    """Text with no marker at all is returned trimmed but otherwise untouched."""
-    raw = "  אין כאן שום סימון מיוחד  "
-    cleaned = _strip_deal_marker(raw)
-
-    assert cleaned == "אין כאן שום סימון מיוחד"
-    assert "[DEAL" not in cleaned
-
-
-def test_strip_deal_marker_removes_multiple_markers():
-    """More than one marker in the same string is fully stripped, not just the first."""
-    raw = "התחלה [DEAL: A] אמצע [DEAL: B] סוף"
-    cleaned = _strip_deal_marker(raw)
-
-    assert "[DEAL" not in cleaned
-    assert "התחלה" in cleaned and "אמצע" in cleaned and "סוף" in cleaned
-
-
-def test_strip_deal_marker_handles_empty_and_none_input():
-    """Empty string and None (the `text or \"\"` guard) both return ''."""
-    assert _strip_deal_marker("") == ""
-    assert _strip_deal_marker(None) == ""
-
-
-def test_strip_deal_marker_unclosed_bracket_is_not_stripped():
-    """Documents current behavior: a malformed marker with no closing ']'
-    is not matched by the non-greedy regex, so it is left in place."""
-    raw = "סיימנו [DEAL: no closing bracket"
-    cleaned = _strip_deal_marker(raw)
-
-    assert cleaned == raw
+    for label, raw, present, exact in cases:
+        cleaned = _strip_deal_marker(raw)
+        if exact is not None:
+            assert cleaned == exact, f"{label}: got {cleaned!r}"
+        else:
+            assert "[DEAL" not in cleaned, f"{label}: marker survived in {cleaned!r}"
+        for fragment in present:
+            assert fragment in cleaned, f"{label}: lost {fragment!r} from {cleaned!r}"
 
 
 @pytest.mark.asyncio

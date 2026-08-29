@@ -9,13 +9,17 @@ command points at a script that exists, every MCP server declares the fields its
 transport needs, and every slash command carries the frontmatter that makes it
 discoverable. Adding a hook, a server or a command is expected; pointing one at
 a path that isn't there is not.
+
+Each rule is **one** test that collects every offender, rather than one test per
+hook / server / command file. Both shapes catch the same breakage, but the
+parametrized shape grew the suite by a test every time somebody added a slash
+command, and reported thirteen passes for a single rule — while a failure named
+only the first file it hit.
 """
 
 import json
 import re
 from pathlib import Path
-
-import pytest
 
 _ROOT = Path(__file__).resolve().parents[1]
 _CLAUDE = _ROOT / ".claude"
@@ -29,15 +33,8 @@ def _load(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-# --- The files parse at all ---------------------------------------------------
-
-
-def test_settings_json_parses():
-    assert isinstance(_load(_SETTINGS), dict)
-
-
-def test_mcp_json_parses():
-    assert isinstance(_load(_MCP), dict)
+# There is deliberately no standalone "the JSON parses" test: every test below
+# calls `_load()`, so a malformed file fails them all with the json error.
 
 
 # --- MCP servers --------------------------------------------------------------
@@ -86,23 +83,29 @@ def _hook_commands():
                     yield hook["command"]
 
 
-def test_settings_declares_hooks():
-    assert list(_hook_commands()), "settings.json declares no command hooks"
-
-
-@pytest.mark.parametrize("command", list(_hook_commands()))
-def test_every_hook_command_points_at_a_file_that_exists(command):
+def test_every_hook_command_points_at_a_file_that_exists():
     """A hook whose script is missing is a per-tool-call error on every session."""
-    referenced = re.findall(r"\.claude/hooks/([A-Za-z0-9_.-]+)", command)
-    assert referenced, f"hook command references no .claude/hooks script: {command}"
-    for script in referenced:
-        assert (_HOOKS / script).is_file(), f"missing hook script: {script}"
+    commands = list(_hook_commands())
+    assert commands, "settings.json declares no command hooks"
 
-    # run-hook.sh takes the real hook as its argument — check that too.
-    for script in re.findall(r"run-hook\.sh\"?\s+([A-Za-z0-9_.-]+\.py)", command):
-        assert (
-            _HOOKS / script
-        ).is_file(), f"run-hook.sh dispatches to a missing {script}"
+    broken = []
+    for command in commands:
+        referenced = re.findall(r"\.claude/hooks/([A-Za-z0-9_.-]+)", command)
+        if not referenced:
+            broken.append(f"{command}: references no .claude/hooks script")
+            continue
+        broken += [
+            f"{command}: missing hook script {name}"
+            for name in referenced
+            if not (_HOOKS / name).is_file()
+        ]
+        # run-hook.sh takes the real hook as its argument — check that too.
+        broken += [
+            f"{command}: run-hook.sh dispatches to a missing {name}"
+            for name in re.findall(r'run-hook\.sh"?\s+([A-Za-z0-9_.-]+\.py)', command)
+            if not (_HOOKS / name).is_file()
+        ]
+    assert not broken, "broken hook commands:\n  " + "\n  ".join(broken)
 
 
 def test_hook_commands_use_the_project_dir_variable():
@@ -123,17 +126,20 @@ def test_hook_scripts_are_not_orphaned():
 # --- Slash commands -----------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "command_file", sorted(_COMMANDS.glob("*.md")), ids=lambda p: p.name
-)
-def test_every_command_has_a_description(command_file):
+def test_every_command_has_a_description():
     """Without frontmatter a command shows up unlabelled in the picker."""
-    text = command_file.read_text(encoding="utf-8")
-    assert text.startswith("---\n"), f"{command_file.name}: no frontmatter block"
-    frontmatter = text.split("---\n", 2)[1]
-    assert re.search(
-        r"^description:\s*\S", frontmatter, re.MULTILINE
-    ), f"{command_file.name}: frontmatter has no description"
+    offenders = []
+    for command_file in sorted(_COMMANDS.glob("*.md")):
+        text = command_file.read_text(encoding="utf-8")
+        if not text.startswith("---\n"):
+            offenders.append(f"{command_file.name}: no frontmatter block")
+            continue
+        frontmatter = text.split("---\n", 2)[1]
+        if not re.search(r"^description:\s*\S", frontmatter, re.MULTILINE):
+            offenders.append(f"{command_file.name}: frontmatter has no description")
+    assert not offenders, "slash commands missing a description:\n  " + "\n  ".join(
+        offenders
+    )
 
 
 # --- Permissions --------------------------------------------------------------
