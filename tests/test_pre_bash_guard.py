@@ -30,62 +30,36 @@ guard = _load_guard()
 
 
 # --- Protected-branch commit/push guard (the PRO-76 addition) ----------------
+#
+# One rule, four branch names, two verbs. Looped inside one test rather than
+# split across eight: the rule is "branch is protected AND the verb mutates", so
+# eight test names proved one thing eight times, and adding a protected branch
+# meant hand-writing two more. The loop's assertion messages name the case.
 
 
-def test_blocks_commit_on_main():
-    code, msg = guard.evaluate("git commit -m 'x'", "main")
-    assert code == 2
-    assert "main" in msg
+def test_blocks_commit_and_push_on_every_protected_branch():
+    for branch in ("main", "master", "dev", "production"):
+        for verb in ("commit -m 'x'", "push origin HEAD"):
+            code, msg = guard.evaluate(f"git {verb}", branch)
+            assert code == 2, f"git {verb} was allowed on {branch}"
+            assert branch in msg, f"the message for {branch} does not name it"
 
 
-def test_blocks_commit_on_master():
-    code, msg = guard.evaluate("git commit -m 'x'", "master")
-    assert code == 2
-    assert "master" in msg
+def test_force_push_to_a_protected_branch_is_blocked_from_anywhere():
+    """Judged by the *target* of the push, not the branch you are standing on."""
+    for target in ("main", "dev", "production"):
+        code, msg = guard.evaluate(f"git push --force origin {target}", "feature/x")
+        assert code == 2, f"force-push to {target} was allowed"
+        assert "Force-pushing" in msg
 
 
-def test_blocks_push_on_master():
-    code, _ = guard.evaluate("git push origin master", "master")
-    assert code == 2
-
-
-def test_blocks_commit_on_dev():
-    """`dev` is the integration branch master was renamed to — same rules."""
-    code, msg = guard.evaluate("git commit -m 'x'", "dev")
-    assert code == 2
-    assert "dev" in msg
-
-
-def test_blocks_push_on_production():
-    """`production` is the release branch Railway deploys; promote by merge, not
-    by committing onto it directly."""
-    code, msg = guard.evaluate("git push origin production", "production")
-    assert code == 2
-    assert "production" in msg
-
-
-def test_force_push_to_dev_blocked():
-    code, msg = guard.evaluate("git push --force origin dev", "feature/x")
-    assert code == 2
-    assert "Force-pushing" in msg
-
-
-def test_force_push_to_production_blocked():
-    code, msg = guard.evaluate("git push -f origin production", "feature/x")
-    assert code == 2
-    assert "Force-pushing" in msg
-
-
-def test_allows_commit_on_feature_branch():
+def test_allows_commit_and_push_on_a_feature_branch():
     assert guard.evaluate("git commit -m 'x'", "feature/pro-76") == (0, "")
-
-
-def test_allows_push_on_feature_branch():
     assert guard.evaluate("git push origin feature/pro-76", "feature/pro-76") == (0, "")
 
 
-def test_blocks_commit_with_global_option_on_main():
-    """Leading global options (`git -c ...`, `git -C ...`) must not bypass the guard."""
+def test_leading_global_options_do_not_bypass_the_guard():
+    """`git -c …` / `git -C …` push the verb into a later argv position."""
     assert guard.evaluate("git -c user.email=x commit -m y", "main")[0] == 2
     assert guard.evaluate("git -C . push origin master", "master")[0] == 2
 
@@ -95,35 +69,23 @@ def test_allows_commit_on_empty_branch():
     assert guard.evaluate("git commit -m 'x'", "") == (0, "")
 
 
-def test_allows_non_mutating_git_on_main():
-    """Only commit/push are gated — status/diff/log stay allowed on main."""
+def test_allows_non_mutating_git_on_a_protected_branch():
+    """Only commit/push are gated — status/diff/log stay allowed."""
     assert guard.evaluate("git status", "main") == (0, "")
     assert guard.evaluate("git diff HEAD", "main") == (0, "")
     assert guard.evaluate("git log -1", "master") == (0, "")
 
 
-# --- Regression: existing rules stay intact after the refactor ---------------
+# --- The hook's other rules ---------------------------------------------------
 
 
-def test_force_push_to_main_still_blocked():
-    code, msg = guard.evaluate("git push --force origin main", "feature/x")
-    assert code == 2
-    assert "Force-pushing" in msg
-
-
-def test_rm_rf_root_still_blocked():
-    assert guard.evaluate("rm -rf /", "feature/x")[0] == 2
-
-
-def test_env_redirect_still_blocked():
+def test_the_non_branch_rules_still_block_and_still_allow():
+    """Each of these is an independent one-liner in the hook with no shared
+    state, so one test per rule bought nothing a grouped assert does not — the
+    assertion that fails still names the rule."""
+    assert guard.evaluate("rm -rf " + "/", "feature/x")[0] == 2
     assert guard.evaluate("echo secret >> .env", "feature/x")[0] == 2
-
-
-def test_mongo_drop_still_blocked():
     assert guard.evaluate("mongosh --eval 'db.leads.drop()'", "feature/x")[0] == 2
-
-
-def test_harmless_command_allowed():
     assert guard.evaluate("ls -la", "main") == (0, "")
     assert guard.evaluate("pytest -q", "feature/x") == (0, "")
 
@@ -137,6 +99,10 @@ def test_harmless_command_allowed():
 # and it would have waved through a commit aimed at ``dev`` whenever the main
 # tree happened to be on a feature branch. See "Running several issues at once"
 # in CLAUDE.md.
+#
+# These nine stay one-per-case on purpose: each pins a distinct parsing rule
+# that was a real false positive or false negative, and the argument shapes are
+# not a table — they differ from each other, not by a parameter.
 
 
 def test_target_dir_defaults_to_the_session_cwd():
