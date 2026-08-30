@@ -365,7 +365,7 @@ python scripts/generate_admin_hash.py
 | `META_PHONE_NUMBER_ID` | — | Not secret. Graph API phone-number node id; required once `WHATSAPP_PROVIDER=cloud` and `WHATSAPP_DRY_RUN` is not `true` |
 | `META_GRAPH_API_VERSION` | `v23.0` | Graph API version pinned in every outbound request URL |
 | `ENVIRONMENT` | `development` | One of `development` \| `staging` \| `production` — any other value raises at startup. `staging` and `production` are both "prod-like": JSON logs + PII masking on stdout, `diagnose=False`, and `MONGO_URI` required by the admin panel. `production` additionally blocks `scripts/seed_db.py` |
-| `LOG_LEVEL` | `INFO` | Loguru log level |
+| `LOG_LEVEL` | `INFO` | Loguru log level. Staging and production run `WARNING`, so a quiet worker's happy path emits nothing — an empty Railway log stream is not evidence of a broken service. The scheduler's boot line (`[Scheduler] First runs: …`, PRO-176) is deliberately emitted at WARNING so the job schedule stays visible at that level |
 | `MAX_CHAT_HISTORY` | `20` | Max messages stored per chat in Redis |
 | `AI_MODELS` | Flash Lite 3.1, Flash 3.5, Flash 2.5, Flash 1.5 | Gemini model fallback chain |
 | `BACKUP_S3_BUCKET` | — | Bucket for the nightly backup — **required on the production worker only** (PRO-127: the job is not scheduled at all in staging/development, so it does not need this there; PRO-111: the nightly job fails without it in production) |
