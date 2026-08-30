@@ -10,7 +10,8 @@ site). This guide says **how it reads**. A message that violates a rule here is 
 comment, exactly like a message that violates §10.
 
 Program: PRO-164. The rewrite that applies this guide across the catalog is PRO-168; the
-AI-prompt pass is PRO-169.
+AI-prompt pass, covering `app/core/prompts.py` and `admin_panel/core/utils.py`'s
+`generate_system_prompt`, landed in PRO-169.
 
 ---
 

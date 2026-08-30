@@ -16,6 +16,7 @@ from app.services.workflow_service import (
     process_incoming_message,
     _strip_deal_marker,
     _build_pro_response,
+    DEAL_MARKER_RE,
 )
 from app.services.ai_engine_service import AIResponse, ExtractedData
 import app.services.workflow_service
@@ -2167,6 +2168,26 @@ def test_strip_deal_marker():
             assert "[DEAL" not in cleaned, f"{label}: marker survived in {cleaned!r}"
         for fragment in present:
             assert fragment in cleaned, f"{label}: lost {fragment!r} from {cleaned!r}"
+
+
+def test_strip_deal_marker_also_strips_urgent_tag_and_it_is_not_a_deal_signal():
+    """PRO-169: pros approved before the copy rewrite keep a stored persona
+    that still asks the model to open with a literal "[URGENT]" tag - nothing
+    ever parsed it, so it reached the customer verbatim. It is stripped at the
+    same seam as [DEAL:...], but checked separately because DEAL_MARKER_RE.search()
+    doubles as the fallback deal-detection signal, and an emergency tag must
+    never be mistaken for a closed deal.
+    """
+    combined = (
+        "[URGENT] לסגור את השיבר הראשי מיד. "
+        "[DEAL: מחר | תל אביב | נזילה]"
+    )
+    assert _strip_deal_marker(combined) == "לסגור את השיבר הראשי מיד."
+
+    only_urgent = "[URGENT]   יש דליפה בבית.   "
+    assert _strip_deal_marker(only_urgent) == "יש דליפה בבית."
+
+    assert DEAL_MARKER_RE.search("[URGENT] טקסט") is None
 
 
 @pytest.mark.asyncio
