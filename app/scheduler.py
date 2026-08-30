@@ -687,10 +687,15 @@ def start_scheduler():
     # PRO-176 — say when each job first runs. Starvation of the long jobs was
     # invisible (worker healthy, /health green, Sentry showing only the
     # *absence* of pages); this line lets Railway logs show the schedule.
+    # WARNING, not INFO, on purpose: staging (and production) run
+    # LOG_LEVEL=WARNING, which drops every INFO line before stdout — the
+    # line shipped at INFO and was unobservable on the very platform it was
+    # written for. One line per boot is an operational signal, not noise,
+    # and the loguru→Sentry bridge forwards ERROR only, so it never pages.
     # A paused job (or a trigger with no next fire) has next_run_time=None;
     # this line runs inside ARQ's startup, so it must never be the thing that
     # crash-loops the worker.
-    logger.info(
+    logger.warning(
         "[Scheduler] First runs: "
         + ", ".join(
             f"{job.id} @ "
