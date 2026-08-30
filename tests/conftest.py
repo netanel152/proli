@@ -221,10 +221,11 @@ def patch_dependencies(request, monkeypatch, mock_db):
     )
     monkeypatch.setattr(app.services.data_management_service, "slots_collection", slots)
 
-    # Patch Audit Service Collections
-    import app.services.audit_service
-
-    monkeypatch.setattr(app.services.audit_service, "audit_log_collection", audit_log)
+    # PRO-142 removed app/services/audit_service.py — a complete async audit
+    # implementation production never called, whose only references were its
+    # own tests and this patch. The audit trail is the admin panel's, and
+    # runs through the sync `admin_panel/core/audit_queries` instead, which
+    # takes its collection as a parameter and needs no patching here.
 
     # Patch Scheduling Service Collections
     import app.services.scheduling_service

@@ -214,6 +214,30 @@ TRANS = {
         # Audit Log
         "audit_log_title": "יומן פעולות",
         "no_audit_entries": "אין רשומות ביומן הפעולות.",
+        "audit_no_matches": (
+            "אין רשומות התואמות את הסינון. אפשר להרחיב את טווח התאריכים "
+            "או לנקות את שדות הסינון."
+        ),
+        "audit_tz_note": "כל התאריכים והשעות בשעון ישראל.",
+        "audit_filter_subject": "מזהה או שם",
+        "audit_filter_subject_ph": "מזהה ליד / מקצוען / טלפון",
+        "audit_dates_inverted": "התאריך ההתחלתי מאוחר מהסופי — לא יימצאו רשומות.",
+        "audit_filter_user": "משתמש",
+        "audit_filter_user_ph": "שם משתמש של מנהל",
+        "audit_filter_action": "פעולה",
+        "audit_filter_action_ph": "לדוגמה: delete_lead",
+        "audit_filter_since": "מתאריך",
+        "audit_filter_until": "עד תאריך",
+        "audit_page_size": "שורות בעמוד",
+        "audit_prev_page": "הקודם",
+        "audit_next_page": "הבא",
+        # Bidi: the ASCII hyphen and slash are load-bearing. UBA rule W4
+        # absorbs a *single, unspaced* separator between two European
+        # numbers into one LTR run, so "51-100" stays in order. An en-dash
+        # (–) is not absorbed and the numbers reorder to "100 – 51"; spaces
+        # around the slash do the same to the page numbers.
+        "audit_showing": "מציג רשומות {a}-{b} מתוך {n}",
+        "audit_page_of": "עמוד {p}/{q}",
         "audit_col_time": "זמן",
         "audit_col_user": "משתמש",
         "audit_col_action": "פעולה",
@@ -524,6 +548,27 @@ TRANS = {
         # Audit Log
         "audit_log_title": "Audit Log",
         "no_audit_entries": "No audit log entries yet.",
+        "audit_no_matches": (
+            "No entries match these filters. Try widening the date range "
+            "or clearing the filter fields."
+        ),
+        "audit_tz_note": "All dates and times are in Israel time (Asia/Jerusalem).",
+        "audit_filter_subject": "ID or name",
+        "audit_filter_subject_ph": "lead / pro id, phone",
+        "audit_dates_inverted": (
+            "The From date is after the To date, so nothing can match."
+        ),
+        "audit_filter_user": "User",
+        "audit_filter_user_ph": "admin username",
+        "audit_filter_action": "Action",
+        "audit_filter_action_ph": "e.g. delete_lead",
+        "audit_filter_since": "From",
+        "audit_filter_until": "To",
+        "audit_page_size": "Rows per page",
+        "audit_prev_page": "Previous",
+        "audit_next_page": "Next",
+        "audit_showing": "Showing {a}-{b} of {n}",
+        "audit_page_of": "page {p}/{q}",
         "audit_col_time": "Time",
         "audit_col_user": "User",
         "audit_col_action": "Action",
