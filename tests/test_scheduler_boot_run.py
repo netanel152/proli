@@ -130,14 +130,27 @@ async def test_short_interval_job_unaffected_by_boot_run():
 @pytest.mark.asyncio
 async def test_start_scheduler_logs_first_runs_for_long_jobs(monkeypatch):
     """AC3 — the boot-time log line names every long job with an ISO
-    timestamp, so Railway logs make the schedule observable."""
+    timestamp, so Railway logs make the schedule observable.
+
+    Captured at WARNING: staging/production run ``LOG_LEVEL=WARNING``, so an
+    INFO line never reaches stdout there — which is exactly how the first
+    version of this line shipped unobservable. Pinning the level here keeps
+    the schedule visible on the platform it was written for."""
     logged = []
-    monkeypatch.setattr(sched.logger, "info", lambda msg, *a, **k: logged.append(msg))
+    monkeypatch.setattr(
+        sched.logger, "warning", lambda msg, *a, **k: logged.append(msg)
+    )
+    # An INFO capture must stay empty of the boot line — the whole point.
+    info_logged = []
+    monkeypatch.setattr(
+        sched.logger, "info", lambda msg, *a, **k: info_logged.append(msg)
+    )
 
     scheduler = sched.start_scheduler()
     try:
         boot_lines = [m for m in logged if m.startswith("[Scheduler] First runs:")]
         assert len(boot_lines) == 1
+        assert not [m for m in info_logged if m.startswith("[Scheduler] First runs:")]
         line = boot_lines[0]
         for job_id, _ in LONG_JOB_IDS_BY_POSITION:
             assert re.search(
