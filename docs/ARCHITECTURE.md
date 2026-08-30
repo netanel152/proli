@@ -80,6 +80,7 @@ Customer (WhatsApp)
 - Analytics (lead funnel, daily volume, pro performance, median NEW→BOOKED time, contacted→booked conversion rate)
 - RBAC: Owner / Editor / Viewer roles with audit logging
 - Bilingual Hebrew/English with RTL support
+- Auto-refresh (PRO-141): a client-side timer (`streamlit-autorefresh`), not a blocking sleep — it pauses while a `st.data_editor` holds unsaved rows (`admin_panel/core/refresh.py`)
 
 **Security:** Cookie-based auth with bcrypt password hashing and `secrets.token_hex(32)` session tokens, server-side validated on every request.
 

@@ -43,6 +43,10 @@ pytz==2024.1
 # Admin Panel (Streamlit)
 streamlit==1.31.1
 extra-streamlit-components==0.1.71
+# PRO-141 — client-side auto-refresh timer. st.fragment(run_every=...) would
+# be the modern answer but needs Streamlit >= 1.37; this component works
+# against the 1.31.1 pin above (it requires only streamlit >= 0.75).
+streamlit-autorefresh==1.0.1
 pandas==2.2.0
 bcrypt==4.1.2
 
