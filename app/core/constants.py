@@ -138,6 +138,12 @@ class WorkerConstants:
         24  # Auto-reject CONTACTED leads with no pro after this
     )
     MAX_PRO_REMINDERS = 3  # Max reminder messages sent to a pro for a stale booked lead
+    # PRO-176 — the nudger also runs once shortly after every worker boot, so
+    # the count cap alone no longer bounds *rate*: on a deploy-heavy day three
+    # boots minutes apart would burn all MAX_PRO_REMINDERS at once. A lead is
+    # re-nudged only once this many hours have passed since its last reminder
+    # (= the job's own interval, so steady-state cadence is unchanged).
+    STALE_LEAD_REMINDER_COOLDOWN_HOURS = 4
     # Customer-side equivalent of MAX_PRO_REMINDERS. The stale-job monitor re-runs
     # every 30 min and a BOOKED lead stays selectable for the whole 6–24h Tier-2
     # window, so without a cap + cooldown every open lead re-sent the completion
@@ -237,6 +243,18 @@ class WorkerConstants:
     SCHEDULER_MONGO_AUTH_TRIP_THRESHOLD = 3
     SCHEDULER_MONGO_AUTH_WINDOW_SECONDS = 1800  # 30 min rolling count window
     SCHEDULER_MONGO_AUTH_REALERT_SECONDS = 3600  # re-page hourly while broken
+    # PRO-176 — an IntervalTrigger job's first run is one full interval after
+    # scheduler.start(), and the in-memory job store forgets the countdown on
+    # every restart. On a deploy-heavy day (17 merges on 2026-08-29, longest
+    # gap 3h30) the 4h/6h jobs therefore never ran at all. The long-interval
+    # jobs now run once shortly after boot: DELAY leaves room for the boot
+    # Mongo/Redis probes (PRO-153) to settle; STAGGER spaces the long jobs'
+    # first runs so a boot does not fire all of them in the same second.
+    # MISFIRE_GRACE lets a tick that came due while the event loop was busy
+    # run late rather than be dropped (APScheduler's default grace is 1s).
+    SCHEDULER_BOOT_RUN_DELAY_SECONDS = 60
+    SCHEDULER_BOOT_RUN_STAGGER_SECONDS = 45
+    SCHEDULER_LONG_JOB_MISFIRE_GRACE_SECONDS = 600
     # ADMIN_PHONE moved to config.py / env var
 
 
