@@ -84,17 +84,37 @@ async def test_a_missing_fixture_surfaces_in_flow_instead_of_faking_an_answer(wo
 
 @pytest.mark.asyncio
 async def test_a_recorded_response_drives_a_real_flow(world):
-    """End-to-end through the fixture file rather than a scripted turn: the
-    committed dispatcher response is enough to create a lead and route it."""
+    """End-to-end through the fixture file rather than scripted turns.
+
+    Two recorded turns, because the dispatcher prompt forbids extracting the
+    issue on the customer's first message (PRO-169 re-record: the model now
+    obeys that rule, where the pre-PRO-169 recording did not). Turn one is the
+    greeting question; turn two carries the answer that completes city + issue
+    and routes the lead to a pro."""
+    from app.core.constants import LeadStatus
+
     await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
 
     await world.send("יש לי נזילה מתחת לכיור בתל אביב")
 
+    first = world.recorder.assert_text_to(world.customer, "איך קוראים לך")
+    assert first.body.startswith("👋"), "one emoji, leading (COPY_STYLE_GUIDE §4)"
+    lead = await world.lead()
+    # A city-only turn may open a CONTACTED shell whose issue_type is the
+    # placeholder default — what must not be there is the real issue.
+    assert lead is None or "נזילה" not in (
+        lead.get("issue_type") or ""
+    ), "the first message must not extract the issue — the prompt says so"
+
+    await world.send("דנה. הנזילה מתחת לכיור במטבח, התחילה הבוקר")
+
     lead = await world.lead()
     assert lead is not None
+    assert lead["status"] == LeadStatus.CONTACTED
     assert lead["city"] == "תל אביב" or lead["full_address"] == "תל אביב"
-    assert lead["issue_type"] == "נזילה מתחת לכיור"
-    world.recorder.assert_text_to(world.customer, "כמה זמן זה כבר ככה")
+    assert "נזילה" in lead["issue_type"]
+    assert lead["pro_id"] == pro["_id"], "city + issue is enough to route"
 
 
 @pytest.mark.asyncio

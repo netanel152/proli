@@ -62,6 +62,15 @@ _IL_TZ = pytz.timezone("Asia/Jerusalem")
 # deal-detection signal. It must never reach the customer.
 DEAL_MARKER_RE = re.compile(r"\[DEAL:.*?\]", re.DOTALL)
 
+# PRO-169: personas generated before that fix asked the model to open an
+# emergency reply with a literal "[URGENT]" tag that nothing ever parsed, so it
+# reached the customer verbatim. Approved pros keep the persona stored on their
+# document at approval time, so the tag can still be emitted until PRO-177
+# regenerates them. Stripped at the same seam as the deal marker — and kept as
+# a *separate* pattern, because DEAL_MARKER_RE.search() doubles as the
+# fallback deal-detection signal and an emergency tag must never count as one.
+URGENT_TAG_RE = re.compile(r"\[URGENT\]")
+
 # PRO-55: a price quote is a plain number or number-range. The value is
 # AI-extracted from a conversation that contains customer-controlled text and is
 # rendered verbatim into the pro's trust-critical approval message, so it must be
@@ -88,6 +97,7 @@ def _strip_deal_marker(text: str) -> str:
     this only cleans the copy that gets sent/logged.
     """
     cleaned = DEAL_MARKER_RE.sub("", text or "")
+    cleaned = URGENT_TAG_RE.sub("", cleaned)
     return re.sub(r"\s{2,}", " ", cleaned).strip()
 
 

@@ -57,7 +57,7 @@ class ExtractedData(BaseModel):
 
 class AIResponse(BaseModel):
     reply_to_user: str = Field(
-        description="The response message to be sent to the user (in Hebrew)."
+        description="The reply sent to the user on WhatsApp, in Hebrew, written to the STYLE rules of the system prompt."
     )
     transcription: Optional[str] = Field(
         description="Full text transcription if the user sent an audio message."
