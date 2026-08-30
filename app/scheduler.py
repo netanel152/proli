@@ -537,6 +537,39 @@ def _on_job_error(event) -> None:
         logger.warning(f"[Scheduler] Sentry job-error capture failed: {e}")
 
 
+def first_run_at(position: int, now: datetime | None = None) -> datetime:
+    """When a long-interval job should first run after boot (PRO-176).
+
+    ``position`` is the job's slot in the boot stagger (0, 1, 2 …); slot *n*
+    runs ``SCHEDULER_BOOT_RUN_DELAY_SECONDS + n × SCHEDULER_BOOT_RUN_STAGGER_SECONDS``
+    after ``now``. ``now`` is injectable so tests can pin a fake clock; it
+    defaults to the scheduler's own timezone so the value APScheduler stores
+    is tz-aware and comparable with its ``next_run_time``.
+    """
+    base = now if now is not None else datetime.now(IL_TZ)
+    return base + timedelta(
+        seconds=WorkerConstants.SCHEDULER_BOOT_RUN_DELAY_SECONDS
+        + position * WorkerConstants.SCHEDULER_BOOT_RUN_STAGGER_SECONDS
+    )
+
+
+# Registration kwargs shared by the long-interval jobs (PRO-176). Without an
+# explicit ``next_run_time`` an IntervalTrigger's first run is one full
+# interval after ``scheduler.start()``, and the in-memory job store forgets
+# that countdown on every restart — so any deploy cadence shorter than the
+# interval starves the job silently. Each long job gets a distinct boot slot
+# via ``first_run_at``; ``coalesce`` + a real ``misfire_grace_time`` make a
+# tick that came due while the loop was busy run once, late, rather than be
+# dropped (APScheduler's default grace is 1s).
+def _long_job_kwargs(position: int) -> dict:
+    return {
+        "next_run_time": first_run_at(position),
+        "coalesce": True,
+        "misfire_grace_time": WorkerConstants.SCHEDULER_LONG_JOB_MISFIRE_GRACE_SECONDS,
+        "replace_existing": True,
+    }
+
+
 def start_scheduler():
     scheduler = AsyncIOScheduler(timezone=IL_TZ)
 
@@ -572,20 +605,21 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # Job 4: SOS Admin Reporter (Wrapped)
+    # Job 4: SOS Admin Reporter (Wrapped) — every 4h, plus once at boot (PRO-176)
     scheduler.add_job(
         run_sos_reporter,
         IntervalTrigger(hours=4),
         id="sos_admin_reporter",
-        replace_existing=True,
+        **_long_job_kwargs(0),
     )
 
-    # Job 5: Lead Janitor — auto-reject unassigned CONTACTED leads (every 6 hours)
+    # Job 5: Lead Janitor — auto-reject unassigned CONTACTED leads (every 6
+    # hours, plus once at boot — PRO-176)
     scheduler.add_job(
         run_lead_janitor,
         IntervalTrigger(hours=6),
         id="lead_janitor",
-        replace_existing=True,
+        **_long_job_kwargs(2),
     )
 
     # Job 6: Weekly Slot Regeneration (Sunday 01:00 Israel time)
@@ -630,12 +664,13 @@ def start_scheduler():
         replace_existing=True,
     )
 
-    # Job 9: Stale Lead Nudger — remind pros to close old active jobs (every 4 hours)
+    # Job 9: Stale Lead Nudger — remind pros to close old active jobs (every 4
+    # hours, plus once at boot — PRO-176)
     scheduler.add_job(
         run_stale_lead_nudger,
         IntervalTrigger(hours=4),
         id="stale_lead_nudger",
-        replace_existing=True,
+        **_long_job_kwargs(1),
     )
 
     # Job 10: WhatsApp account deauth watchdog — page on-call if the account
@@ -649,4 +684,22 @@ def start_scheduler():
 
     scheduler.start()
     logger.info("🚀 APScheduler Started with all jobs!")
+    # PRO-176 — say when each job first runs. Starvation of the long jobs was
+    # invisible (worker healthy, /health green, Sentry showing only the
+    # *absence* of pages); this line lets Railway logs show the schedule.
+    # A paused job (or a trigger with no next fire) has next_run_time=None;
+    # this line runs inside ARQ's startup, so it must never be the thing that
+    # crash-loops the worker.
+    logger.info(
+        "[Scheduler] First runs: "
+        + ", ".join(
+            f"{job.id} @ "
+            + (
+                job.next_run_time.isoformat(timespec="seconds")
+                if job.next_run_time
+                else "paused"
+            )
+            for job in scheduler.get_jobs()
+        )
+    )
     return scheduler

@@ -129,6 +129,9 @@ class TestSchedulerJobErrorListener:
             def start(self):
                 pass
 
+            def get_jobs(self):
+                return []
+
         monkeypatch.setattr(scheduler_module, "AsyncIOScheduler", FakeScheduler)
         scheduler_module.start_scheduler()
 

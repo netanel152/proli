@@ -1009,8 +1009,16 @@ async def remind_stale_booked_leads():
         hours=WorkerConstants.STALE_BOOKED_LEAD_HOURS
     )
 
-    # Query for BOOKED leads older than 24 hours with reminders < max
-    # We use $and to ensure both the time threshold and the reminder count are checked
+    # PRO-176 — this job now also fires once shortly after every worker boot,
+    # so a count cap alone would let three deploys minutes apart send all
+    # MAX_PRO_REMINDERS at once. The cooldown restores "at most one reminder
+    # per interval" regardless of how often the worker restarts.
+    reminder_cooldown = datetime.now(timezone.utc) - timedelta(
+        hours=WorkerConstants.STALE_LEAD_REMINDER_COOLDOWN_HOURS
+    )
+
+    # Query for BOOKED leads older than 24 hours with reminders < max and no
+    # reminder inside the cooldown. $and so every predicate applies together.
     query = {
         "status": LeadStatus.BOOKED,
         "$and": [
@@ -1024,6 +1032,12 @@ async def remind_stale_booked_leads():
                 "$or": [
                     {"reminders_sent": {"$exists": False}},
                     {"reminders_sent": {"$lt": WorkerConstants.MAX_PRO_REMINDERS}},
+                ]
+            },
+            {
+                "$or": [
+                    {"last_reminder_at": {"$exists": False}},
+                    {"last_reminder_at": {"$lt": reminder_cooldown}},
                 ]
             },
         ],

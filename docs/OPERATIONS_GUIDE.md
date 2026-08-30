@@ -105,10 +105,10 @@ The **SOS Healer** (every 10 min; PRO-73: business hours + `sos_healer_active` t
 4. If found → reassigns the lead, notifies both pros, clears customer state (a failed offer to the new pro escalates the lead to `PENDING_ADMIN_REVIEW` and pages the operator instead of reporting success)
 5. If not found → sets lead to `PENDING_ADMIN_REVIEW`, sends customer a `PENDING_REVIEW` message, clears context
 
-The **Stale Lead Nudger** (every 4 h) finds leads in `BOOKED` status older than 24 hours:
+The **Stale Lead Nudger** (every 4 h, plus once shortly after worker boot — PRO-176) finds leads in `BOOKED` status older than 24 hours:
 1. Sends a reminder to the professional to close the job if finished.
 2. Helps prevent `MAX_PRO_LOAD` (3) issues by ensuring completed jobs are cleared from the system.
-3. Limits reminders to `MAX_PRO_REMINDERS` (3) per lead.
+3. Limits reminders to `MAX_PRO_REMINDERS` (3) per lead, and skips a lead reminded within the last `STALE_LEAD_REMINDER_COOLDOWN_HOURS` (4) so the boot run can't burn all 3 reminders across a few quick deploys.
 
 The **SLA Monitor** (every 5 min; PRO-73: business hours + `sla_monitor_active` toggle, default OFF) checks chats in the `PAUSED_FOR_HUMAN` state:
 1. If 15 minutes of silence pass, the bot sends `Messages.Customer.SLA_DEFLECTION_MESSAGE` and `check_sla_deflection` clears the pause state — no callback is booked.
