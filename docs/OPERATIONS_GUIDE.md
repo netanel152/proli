@@ -183,7 +183,7 @@ Access at `http://localhost:8501` (local) or via nginx proxy at port 8080 (Docke
 | Editor | Edit leads, professionals, schedules |
 | Viewer | Read-only dashboard |
 
-Manage admins under **Settings → Admin Users** (Owner only). All actions are logged to the audit log.
+Manage admins under **Settings → Admin Users** (Owner only). All actions are logged to the audit log; the viewer there is paginated (25/50/100/200 per page) and filterable by subject, user, action, and date range (dates cut on Israel time, matching the displayed timestamps).
 
 **Fallback auth:** If no admins exist in the DB, the system accepts the `ADMIN_PASSWORD` env var.
 
