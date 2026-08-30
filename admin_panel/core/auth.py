@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from pymongo import MongoClient
 from app.core.logger import logger
 from app.core.config import settings
+from admin_panel.core.audit_queries import write_audit_entry
 from admin_panel.core.config import TRANS
 from admin_panel.core.rbac import AdminRole
 import certifi
@@ -95,18 +96,16 @@ _sessions_col = _sync_db.admin_sessions
 
 
 def _log_audit_sync(username: str, action: str, details: dict | None = None):
-    """Synchronous audit log for admin panel actions."""
-    try:
-        _audit_col.insert_one(
-            {
-                "admin_user": username,
-                "action": action,
-                "details": details or {},
-                "timestamp": datetime.utcnow(),
-            }
-        )
-    except Exception as e:
-        logger.error(f"Audit log write failed: {e}")
+    """Synchronous audit log for admin panel actions.
+
+    The insert itself lives in ``admin_panel/core/audit_queries`` (PRO-142)
+    so it can be tested against mongomock; this keeps the collection handle
+    and the call-site-facing name. Fail-open behaviour is documented there.
+
+    Returns whether the entry was written, so a call site that cares can
+    distinguish "logged" from "lost". No current caller checks.
+    """
+    return write_audit_entry(_audit_col, username, action, details)
 
 
 def log_audit(action: str, details: dict | None = None):

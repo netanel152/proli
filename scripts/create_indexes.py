@@ -75,7 +75,20 @@ INDEX_SPECS = [
     ("Slots", slots_collection, [("pro_id", ASCENDING)], {}),
     ("Slots", slots_collection, [("pro_id", ASCENDING), ("start_time", ASCENDING)], {}),
     # --- Audit Log ---
-    ("Audit Log", audit_log_collection, [("timestamp", DESCENDING)], {}),
+    # PRO-142: compound, and the `_id` half is not optional. The viewer
+    # pages with skip/limit and sorts `[("timestamp", -1), ("_id", -1)]` —
+    # `_id` breaks ties so an entry cannot land on two pages or none. An
+    # index only serves a sort whose key is a *prefix* of it, so a
+    # timestamp-only index would leave every page doing a blocking
+    # in-memory sort, and that path errors at the 32MB find-sort limit
+    # rather than spilling to disk. This supersedes the timestamp-only
+    # index it replaces, which was a prefix of this one.
+    (
+        "Audit Log",
+        audit_log_collection,
+        [("timestamp", DESCENDING), ("_id", DESCENDING)],
+        {},
+    ),
     ("Audit Log", audit_log_collection, [("admin_user", ASCENDING)], {}),
     # --- Consent ---
     ("Consent", consent_collection, [("chat_id", ASCENDING)], {"unique": True}),
