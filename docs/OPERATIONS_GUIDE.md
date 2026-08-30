@@ -192,6 +192,7 @@ Manage admins under **Settings → Admin Users** (Owner only). All actions are l
 - Edit lead fields directly in the data table
 - Change status, assigned pro, issue details
 - Click **Save Changes** to persist to MongoDB
+- **Auto-refresh** (sidebar toggle, PRO-141): a client-side timer, so the page stays clickable between ticks — unlike the old sleep-based refresh, it does not freeze the panel. It pauses itself (and shows "refresh paused — unsaved table edits") while the leads table has uncommitted edits, so a tick can't discard work in progress.
 
 ### Professional Management
 

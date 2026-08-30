@@ -933,6 +933,18 @@ def load_css(lang_code, T):
             border-radius: 50%;
             background-color: var(--success);
             animation: pulse 2s infinite;
+            /* The paused label is far longer than "Live"; without this the
+               flex row squashes the dot into an oval in a narrow sidebar. */
+            flex-shrink: 0;
+        }}
+
+        /* PRO-141: auto-refresh is suspended while a table has unsaved
+           edits, so the same row has to be able to say "paused" rather
+           than "live". Colour is not the only carrier — the label beside
+           it changes too. */
+        .refresh-dot--paused {{
+            background-color: var(--warning);
+            animation: none;
         }}
 
         @keyframes pulse {{
