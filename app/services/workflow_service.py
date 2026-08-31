@@ -23,6 +23,12 @@ from app.core.redis_client import (
     ChatLockBusyError,
 )
 from app.core.text_matching import contains_keyword, is_emergency_text
+from app.services.dispatch_guards import (
+    HANDLED,
+    DispatchContext,
+    GuardDeps,
+    run_guard_chain,
+)
 from app.services.matching_service import determine_best_pro
 from app.services.notification_service import send_sos_alert
 from app.services import notification_service
@@ -654,126 +660,45 @@ async def _process_incoming_message_inner(
     chat_id: str, user_text: str, media_url: str = None
 ):
     normalized_text = (user_text or "").strip().lower()
-    # PRO-121: one shared detector (`customer_flow` calls the same one) — exact
-    # whole-token keywords plus clitic-prefixable stems, minus the negations.
-    # Substring matching read "קצר" out of "בקצרה", which was harmless while the
-    # flag only tagged a lead at creation and is not now that it short-circuits
-    # a holding state.
-    is_emergency_detected = is_emergency_text(normalized_text)
 
-    # Get state early — needed to skip global checks for pros
-    current_state = await StateManager.get_state(chat_id)
-
-    # Admin routing wizard — must come before all other checks so the admin-as-pro
-    # isn't trapped by consent, SOS, or paused-for-human gates.
-    admin_chat_id = to_chat_id(settings.ADMIN_PHONE)
-    if chat_id == admin_chat_id:
-        if (user_text and user_text.strip() == "ניהול") or (
-            current_state or ""
-        ).startswith("admin_"):
-            from app.services import admin_flow
-            from app.core.redis_client import get_redis_client
-
-            redis_client = await get_redis_client()
-            await admin_flow.handle_admin_message(
-                chat_id,
-                user_text,
-                current_state,
-                StateManager,
-                redis_client,
-                whatsapp,
-                None,
-            )
-            return
-
-    # Global Reset Check (skip for pros — they use "תפריט" to show their menu)
-    if (
-        normalized_text in Messages.Keywords.RESET_COMMANDS
-        and current_state != UserStates.PRO_MODE
-    ):
-        # Deliberately silent (operator decision, 2026-08-27): no confirmation
-        # message — the customer's next message simply starts a fresh
-        # conversation. The old RESET_SUCCESS confirmation was removed with it.
-        await StateManager.clear_state(chat_id)
-        await ContextManager.clear_context(chat_id)
-        return
-
-    # Help / menu — send info without touching state or context
-    _help_words = Messages.Keywords.HELP_COMMANDS + Messages.Keywords.MENU_COMMANDS
-    if normalized_text in _help_words and current_state != UserStates.PRO_MODE:
-        await whatsapp.send_message(chat_id, Messages.Customer.HELP_INFO)
-        return
-
-    # PRO-21 — per-customer abuse / cost protection. Pros and the admin are exempt;
-    # is_exempt is reused below to gate the daily AI-call cap at each AI call site.
-    is_exempt = current_state == UserStates.PRO_MODE or chat_id == to_chat_id(
-        settings.ADMIN_PHONE
+    # PRO-179 (PRO-139 slice A1): the head of the dispatch is an ordered guard
+    # chain, defined as data in app/services/dispatch_guards.py. The ordering is
+    # the contract — PRO-121's "position is the whole design" — and is now pinned
+    # by a test instead of by the sequence these clauses happened to be written in.
+    ctx = DispatchContext(
+        chat_id=chat_id,
+        user_text=user_text,
+        media_url=media_url,
+        normalized_text=normalized_text,
+        # PRO-121: one shared detector (`customer_flow` calls the same one) —
+        # exact whole-token keywords plus clitic-prefixable stems, minus the
+        # negations. Substring matching read "קצר" out of "בקצרה", which was
+        # harmless while the flag only tagged a lead at creation and is not now
+        # that it short-circuits a holding state.
+        is_emergency_detected=is_emergency_text(normalized_text),
+        # Get state early — needed to skip global checks for pros
+        current_state=await StateManager.get_state(chat_id),
     )
-    if not is_exempt:
-        phone = strip_suffix(chat_id)
-        is_exempt = bool(
-            await users_collection.find_one(
-                {"phone_number": {"$in": [phone, chat_id]}, "role": "professional"}
-            )
-        )
+    deps = GuardDeps(
+        whatsapp=whatsapp,
+        state_manager=StateManager,
+        context_manager=ContextManager,
+        users_collection=users_collection,
+        security=SecurityService,
+        settings=settings,
+    )
 
-    if not is_exempt:
-        allowed = await SecurityService.check_sliding_window(
-            chat_id,
-            WorkerConstants.INBOUND_RATE_LIMIT_MAX,
-            WorkerConstants.INBOUND_RATE_LIMIT_WINDOW_SECONDS,
-        )
-        if not allowed:
-            trips = await SecurityService.record_trip(
-                chat_id, WorkerConstants.INBOUND_RATE_LIMIT_WINDOW_SECONDS
-            )
-            logger.warning(
-                f"⛔ Inbound rate limit hit for ...{chat_id[-8:]} (trip {trips})"
-            )
-            if trips >= WorkerConstants.RATE_LIMIT_ABUSE_TRIP_THRESHOLD:
-                logger.error(
-                    f"🚨 Possible abuse: ...{chat_id[-8:]} tripped the rate limit {trips}x"
-                )
-            await whatsapp.send_message(chat_id, Messages.Errors.RATE_LIMITED)
-            return
+    if await run_guard_chain(ctx, deps) is HANDLED:
+        return
 
-    # Zero-Touch: transient confirmation after intent was detected in pro_flow
-    if current_state == UserStates.AWAITING_INTENT_CONFIRMATION:
-        if normalized_text == "1" or normalized_text in ("כן", "yes"):
-            # set_state (not clear_state) leaves state_meta alive on its own 4h TTL,
-            # so retire the re-prompt flag by hand or the next prompt inherits it.
-            meta = await StateManager.get_metadata(chat_id) or {}
-            meta.pop("intent_reprompted", None)
-            await StateManager.set_metadata(chat_id, meta)
-            await StateManager.set_state(chat_id, UserStates.CUSTOMER_MODE)
-            await ContextManager.clear_context(chat_id)
-            await whatsapp.send_message(chat_id, Messages.Pro.SWITCHED_TO_CUSTOMER)
-            return
-        if normalized_text == "2" or normalized_text in ("לא", "no"):
-            await StateManager.clear_state(chat_id)
-            await whatsapp.send_message(chat_id, Messages.Pro.SWITCH_CANCELLED)
-            return
-        # Unmatched reply: re-prompt once before giving up. Clearing the state on
-        # the first miss dumped the pro back to the dashboard mid-question, which
-        # read as the bot ignoring them. A cry for a human still gets out on the
-        # first try — the SOS handler runs further down the dispatch.
-        meta = await StateManager.get_metadata(chat_id) or {}
-        asking_for_human = contains_keyword(
-            normalized_text,
-            Messages.Keywords.SOS_COMMANDS,
-            Messages.Keywords.SOS_EXCLUDE_PHRASES,
-        )
-        if not asking_for_human and not meta.get("intent_reprompted"):
-            meta["intent_reprompted"] = True
-            await StateManager.set_metadata(chat_id, meta)
-            await StateManager.set_state(
-                chat_id, UserStates.AWAITING_INTENT_CONFIRMATION, ttl=300
-            )
-            await whatsapp.send_message(chat_id, Messages.Pro.INTENT_REPROMPT)
-            return
-        # Second miss: clear transient state and fall through to normal routing
-        await StateManager.clear_state(chat_id)
-        current_state = await StateManager.get_state(chat_id)
+    # Read the shared locals back out. The guards mutate them on the way past —
+    # the rate limiter resolves `is_exempt` (still read at the three daily
+    # AI-cap call sites below), and zero-touch's second miss clears state and
+    # refreshes `current_state` before falling through — so the rest of this
+    # function must take the post-chain values, not the pre-chain ones.
+    is_emergency_detected = ctx.is_emergency_detected
+    current_state = ctx.current_state
+    is_exempt = ctx.is_exempt
 
     # Consent Check (skip for professionals — they're added by admin)
 
