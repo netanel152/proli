@@ -35,9 +35,12 @@ It renders differently per environment, because the sinks differ:
 grep 'trace=9448970be26b' logs/proli.log
 # docker-compose — same column, on stdout
 docker-compose logs worker | grep 'trace=9448970be26b'
-# staging / production — structured JSON on stdout
-#   filter on "trace_id": "9448970be26b" in Railway's log search
+# staging / production — structured JSON on stdout, trace_id a top-level
+# field (PRO-184) — search Railway's log search for:
+#   @trace_id:9448970be26b
 ```
+
+`@level:error` / `@level:warn` work the same way against the `level` field.
 
 A line logged outside a request or a task — a scheduler tick, a startup
 line — shows `trace=-`. That is a line nobody minted an id for, not a bug.
