@@ -220,10 +220,15 @@ _DISPATCH_SEQUENCE = [
     ("AWAITING_INTENT_CONFIRMATION", "INTENT_REPROMPT"),
     ("Consent gate", "Consent.ACCEPTED"),
     ("Politeness interceptor", "YOU_ARE_WELCOME"),
-    ("Customer status pull", "reply = await _handle_status_query"),
+    # PRO-180 re-anchored: the guard resolves the helper through the module
+    # (`wf._handle_status_query`), so the bare-name call is gone.
+    ("Customer status pull", "reply = await wf._handle_status_query"),
     ("SOS / human handoff", "BOT_PAUSED_BY_CUSTOMER"),
     ("AWAITING_PRO_APPROVAL soft hold", "STILL_WAITING"),
-    ("PAUSED_FOR_HUMAN", "current_state == UserStates.PAUSED_FOR_HUMAN"),
+    # PRO-180 re-anchored (this one and AWAITING_LOYALTY_CONFIRMATION below):
+    # the state-keyed guards open with an early-return `!=` comparison instead
+    # of the inline block's `==`.
+    ("PAUSED_FOR_HUMAN", "current_state != UserStates.PAUSED_FOR_HUMAN"),
     # PRO-118's AWAITING_CANCEL_CONFIRMATION handler sits between these two;
     # like PRO-116's 13a it is documented as a sub-lettered line (11a) which
     # this guard's `^\d+\.` label regex deliberately does not read.
@@ -233,7 +238,7 @@ _DISPATCH_SEQUENCE = [
     ),
     (
         "AWAITING_LOYALTY_CONFIRMATION",
-        "current_state == UserStates.AWAITING_LOYALTY_CONFIRMATION",
+        "current_state != UserStates.AWAITING_LOYALTY_CONFIRMATION",
     ),
     # PRO-118 re-anchored: the cancel execution (with CANCELLED_ACTIVE_LEAD)
     # moved into the module-level _execute_customer_cancel helper; the prompt
