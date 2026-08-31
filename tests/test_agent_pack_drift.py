@@ -198,6 +198,16 @@ def test_flow_tracer_embedded_ttls_match_constants():
 
 _WORKFLOW_SERVICE = _REPO_ROOT / "app" / "services" / "workflow_service.py"
 
+# PRO-179 (PRO-139 slice A1): the head of the dispatch was extracted into an
+# ordered guard chain in its own module, so the sequence this guard pins now
+# spans two files. They are concatenated in *execution* order — the guard chain
+# runs first, then the remainder of `_process_incoming_message_inner` — which
+# keeps the property being guarded (the order branches are evaluated in) exactly
+# as it was, rather than weakening it to a per-file check. Later slices (A2/A3)
+# move more branches across the same seam and need no further change here.
+_DISPATCH_GUARDS = _REPO_ROOT / "app" / "services" / "dispatch_guards.py"
+_DISPATCH_SOURCES = (_DISPATCH_GUARDS, _WORKFLOW_SERVICE)
+
 # (branch label as it appears bolded in flow-tracer.md, unique source anchor).
 # Anchors are chosen to occur exactly once in workflow_service.py inside their
 # branch; the label is the first bold span on the matching numbered doc line
@@ -245,23 +255,69 @@ _DISPATCH_SEQUENCE = [
 
 def test_dispatch_anchors_unique_and_ordered_in_source():
     """Each dispatch anchor occurs exactly once and in the listed order in code."""
-    lines = _WORKFLOW_SERVICE.read_text(encoding="utf-8").splitlines()
+    # Concatenated in execution order; `origin` keeps the failure message able to
+    # name which file an ambiguous anchor was found in.
+    lines = []
+    for path in _DISPATCH_SOURCES:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            lines.append((path.name, line))
+
     positions = []
     for label, anchor in _DISPATCH_SEQUENCE:
-        hits = [i for i, line in enumerate(lines) if anchor in line]
+        hits = [i for i, (_origin, line) in enumerate(lines) if anchor in line]
         assert len(hits) == 1, (
             f"dispatch anchor for {label!r} ({anchor!r}) must occur exactly once "
-            f"in workflow_service.py; found {len(hits)}. Pick a more specific anchor "
-            f"in _DISPATCH_SEQUENCE."
+            f"across {', '.join(p.name for p in _DISPATCH_SOURCES)}; found "
+            f"{len(hits)} at {[lines[i][0] for i in hits]}. Pick a more specific "
+            f"anchor in _DISPATCH_SEQUENCE."
         )
         positions.append((label, hits[0]))
 
     source_order = [label for label, _ in sorted(positions, key=lambda p: p[1])]
     expected_order = [label for label, _ in _DISPATCH_SEQUENCE]
     assert source_order == expected_order, (
-        "dispatch branches appear in a different order in workflow_service.py than "
+        "dispatch branches are evaluated in a different order than "
         f"_DISPATCH_SEQUENCE declares.\n  source: {source_order}\n  expected: "
         f"{expected_order}\nUpdate flow-tracer.md and _DISPATCH_SEQUENCE to match code."
+    )
+
+
+def test_guard_chain_runs_in_source_definition_order():
+    """The guard chain's execution order must match its definition order.
+
+    This is what licenses the test above. For the branches still inline in
+    `workflow_service.py`, source position *is* execution order. For the ones
+    extracted into `dispatch_guards.py` it is not: they execute in `GUARD_CHAIN`
+    order, which is independent of where the functions happen to be defined. So
+    reordering `GUARD_CHAIN` alone would change real dispatch order while the
+    anchor scan above saw nothing move.
+
+    Pinning the two together closes that gap and keeps the concatenated-source
+    scan an honest proxy for execution order as A2/A3 migrate more branches.
+    """
+    from app.services import dispatch_guards
+
+    source = _DISPATCH_GUARDS.read_text(encoding="utf-8").splitlines()
+
+    chain_names = [guard.__name__ for _label, guard in dispatch_guards.GUARD_CHAIN]
+    definition_lines = {}
+    for name in chain_names:
+        hits = [
+            i for i, line in enumerate(source) if line.startswith(f"async def {name}(")
+        ]
+        assert len(hits) == 1, (
+            f"guard {name!r} must be defined exactly once in dispatch_guards.py; "
+            f"found {len(hits)}"
+        )
+        definition_lines[name] = hits[0]
+
+    by_definition = sorted(chain_names, key=lambda n: definition_lines[n])
+    assert chain_names == by_definition, (
+        "GUARD_CHAIN order does not match the order the guards are defined in "
+        "dispatch_guards.py. Either reorder the definitions to match the chain, or "
+        "if the execution order change is intentional, update _DISPATCH_SEQUENCE "
+        "and flow-tracer.md to match.\n"
+        f"  chain:      {chain_names}\n  definitions: {by_definition}"
     )
 
 

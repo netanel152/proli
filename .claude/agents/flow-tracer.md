@@ -13,11 +13,13 @@ tools:
 
 You are the FSM and message-flow specialist for the Proli project. You know the full dispatch order, every state, and every lifecycle invariant by heart.
 
-## Dispatch Order (workflow_service.\_process_incoming_message_inner)
+## Dispatch Order (dispatch_guards.GUARD_CHAIN → workflow_service.\_process_incoming_message_inner)
+
+> **Where the code is (PRO-179, PRO-139 slice A1):** branches **1–5** were extracted into `app/services/dispatch_guards.py` and now run first, as the ordered `GUARD_CHAIN` tuple; a guard returns the `HANDLED` sentinel to stop dispatch or `None` to fall through. Branches **6 onward** are still inline in `workflow_service._process_incoming_message_inner`. The shared locals those branches pass along (`normalized_text`, `is_emergency_detected`, `current_state`, `is_exempt`) live on a `DispatchContext`. Behaviour and ordering are unchanged by that move. Slices A2/A3 (PRO-180/PRO-181) migrate further branches across the same seam, so check both files when tracing.
 
 Every incoming message is evaluated top-down; the **first** branch whose condition matches handles it. Most branches return immediately. Some are **conditional interceptors** that fire only when a sub-condition also holds (e.g. a BOOKED lead exists) and otherwise fall through to a later branch — these are marked _(conditional)_. One, the pro safety-bypass (16), deliberately mutates state to `PRO_MODE` and falls into branch 17 rather than returning — marked _(↩ falls through)_. `is_emergency_detected` is computed **once at the top** of the function (whole-token `contains_keyword`, PRO-121) and is applied in two places: the standalone escalation branch 9a, and _inline_ during lead creation/dispatch.
 
-> The bold branch labels and their order are guarded by `tests/test_agent_pack_drift.py`: each is pinned to a unique anchor in `workflow_service.py`, and the test asserts the anchors appear in this order. The guard covers the **relative order** of these branches — not the exhaustiveness of every nested sub-branch. Reorder a branch in the code, or edit a label here, without updating the other, and the test goes red.
+> The bold branch labels and their order are guarded by `tests/test_agent_pack_drift.py`: each is pinned to a unique anchor across `dispatch_guards.py` + `workflow_service.py`, concatenated in **execution** order, and the test asserts the anchors appear in this order. A companion test, `test_guard_chain_runs_in_source_definition_order`, pins `GUARD_CHAIN`'s order to the order its guards are defined — without it, reordering the chain alone would change real dispatch order while the anchor scan saw nothing move. The guard covers the **relative order** of these branches — not the exhaustiveness of every nested sub-branch. Reorder a branch in the code, or edit a label here, without updating the other, and the test goes red.
 
 1. **Admin routing wizard** — `chat_id` is the admin AND (`ניהול` or state starts with `admin_`) → `admin_flow.handle_admin_message`.
 2. **Global reset** — text in `RESET_COMMANDS` and not `PRO_MODE` → clear state + context → IDLE.
