@@ -16,6 +16,7 @@ import pytest
 
 import app.services.admin_flow as admin_flow_module
 import app.services.dispatch_guards as dispatch_guards
+import app.services.workflow_service as workflow_service
 from app.core.constants import UserStates, WorkerConstants
 from app.core.messages import Messages
 from app.core.phone import to_chat_id
@@ -25,9 +26,13 @@ from app.services.dispatch_guards import (
     DispatchContext,
     GuardDeps,
     guard_admin_wizard,
+    guard_booked_cancel_reschedule,
+    guard_cancel_confirmation,
+    guard_emergency_hoist,
     guard_global_reset,
     guard_help_menu,
     guard_inbound_rate_limit,
+    guard_loyalty_confirmation,
     guard_zero_touch_intent,
     run_guard_chain,
 )
@@ -82,14 +87,72 @@ def deps():
 
 
 def test_guard_chain_order_is_pinned():
-    """PRO-121: position is the whole design. A reorder must fail the build."""
+    """PRO-121/PRO-180: position is the whole design. A reorder must fail the build."""
     assert [name for name, _guard in GUARD_CHAIN] == [
         "admin_wizard",
         "global_reset",
         "help_menu",
         "inbound_rate_limit",
         "zero_touch_intent",
+        "consent_gate",
+        "politeness",
+        "customer_status_pull",
+        "sos_human_handoff",
+        "emergency_hoist",
+        "pro_approval_soft_hold",
+        "paused_for_human",
+        "cancel_confirmation",
+        "reschedule_selection",
+        "loyalty_confirmation",
+        "new_or_existing",
+        "booked_cancel_reschedule",
     ]
+
+
+def test_emergency_hoist_position_is_pinned():
+    """PRO-121 ("position is the whole design"), pinned explicitly for PRO-180:
+    `emergency_hoist` must run after `sos_human_handoff` (a live human outranks
+    the bot) and before every holding-state guard it exists to hoist above.
+    """
+    names = [name for name, _guard in GUARD_CHAIN]
+    sos_index = names.index("sos_human_handoff")
+    hoist_index = names.index("emergency_hoist")
+    assert hoist_index > sos_index
+
+    for holding_guard in (
+        "pro_approval_soft_hold",
+        "paused_for_human",
+        "cancel_confirmation",
+        "reschedule_selection",
+        "loyalty_confirmation",
+        "new_or_existing",
+    ):
+        assert hoist_index < names.index(holding_guard), holding_guard
+
+
+def test_emergency_holding_states_membership_is_pinned():
+    """The other half of the PRO-121 invariant: *which* states the hoist covers.
+
+    The exclusions are as deliberate as the inclusions (PRO-180):
+    - AWAITING_RESCHEDULE_TIME — product call: "דחוף" mid slot-pick means "the
+      earliest slot you have"; releasing would lose the menu.
+    - PAUSED_FOR_HUMAN — a live human owns the conversation; the paused guard
+      has its own emergency flag-and-page path instead.
+    - AWAITING_CANCEL_CONFIRMATION — a destructive-action prompt must not be
+      short-circuited out from under the customer.
+    """
+    assert workflow_service.EMERGENCY_HOLDING_STATES == (
+        UserStates.AWAITING_PRO_APPROVAL,
+        UserStates.AWAITING_ADDRESS,
+        UserStates.AWAITING_LOYALTY_CONFIRMATION,
+        UserStates.AWAITING_NEW_OR_EXISTING,
+    )
+    for excluded in (
+        UserStates.AWAITING_RESCHEDULE_TIME,
+        UserStates.PAUSED_FOR_HUMAN,
+        UserStates.AWAITING_CANCEL_CONFIRMATION,
+    ):
+        assert excluded not in workflow_service.EMERGENCY_HOLDING_STATES, excluded
 
 
 @pytest.mark.asyncio
@@ -445,3 +508,201 @@ async def test_zero_touch_sos_reply_falls_through_without_reprompting(deps):
     deps.state_manager.clear_state.assert_awaited_once_with(ctx.chat_id)
     deps.state_manager.set_state.assert_not_awaited()
     deps.whatsapp.send_message.assert_not_awaited()
+
+
+# --------------------------------------------------------------------------
+# guard_emergency_hoist (PRO-180 slice of PRO-121)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_emergency_hoist_released_logs_inbound_before_ack_and_falls_through(
+    deps, monkeypatch
+):
+    """PRO-121: the inbound turn must be logged ahead of the deferred ack, the
+    state re-read for the pipeline below, and the message still falls through
+    to normal routing (the holding state was cleared, not answered here).
+    """
+    order = []
+
+    async def fake_escalate(chat_id, current_state, user_text):
+        return "released", "ack!"
+
+    async def fake_log_message(chat_id, role, text):
+        order.append(("log", role, text))
+
+    async def fake_send_message(chat_id, text):
+        order.append(("send", text))
+
+    monkeypatch.setattr(workflow_service, "_escalate_emergency", fake_escalate)
+    monkeypatch.setattr(workflow_service.lead_manager, "log_message", fake_log_message)
+    deps.whatsapp.send_message = fake_send_message
+    deps.state_manager.get_state = AsyncMock(return_value=UserStates.CUSTOMER_MODE)
+
+    ctx = make_ctx(
+        user_text="יש שריפה",
+        current_state=UserStates.AWAITING_ADDRESS,
+        is_emergency_detected=True,
+    )
+
+    result = await guard_emergency_hoist(ctx, deps)
+
+    assert result is None
+    assert ctx.current_state == UserStates.CUSTOMER_MODE
+    assert ctx.emergency_inbound_logged is True
+    assert order == [
+        ("log", "user", "יש שריפה"),
+        ("send", "ack!"),
+        ("log", "model", "ack!"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emergency_hoist_handled_returns_handled(deps, monkeypatch):
+    async def fake_escalate(chat_id, current_state, user_text):
+        return "handled", None
+
+    monkeypatch.setattr(workflow_service, "_escalate_emergency", fake_escalate)
+    ctx = make_ctx(
+        current_state=UserStates.AWAITING_LOYALTY_CONFIRMATION,
+        is_emergency_detected=True,
+    )
+
+    result = await guard_emergency_hoist(ctx, deps)
+
+    assert result is HANDLED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "current_state, is_emergency_detected",
+    [
+        (UserStates.IDLE, True),  # not one of the holding states
+        (UserStates.AWAITING_ADDRESS, False),  # no emergency detected
+    ],
+)
+async def test_emergency_hoist_falls_through_without_escalating(
+    deps, monkeypatch, current_state, is_emergency_detected
+):
+    mock_escalate = AsyncMock()
+    monkeypatch.setattr(workflow_service, "_escalate_emergency", mock_escalate)
+    ctx = make_ctx(
+        current_state=current_state, is_emergency_detected=is_emergency_detected
+    )
+
+    result = await guard_emergency_hoist(ctx, deps)
+
+    assert result is None
+    mock_escalate.assert_not_awaited()
+
+
+# --------------------------------------------------------------------------
+# guard_loyalty_confirmation (PRO-119)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_loyalty_confirmation_double_miss_releases_to_normal_routing(
+    deps, monkeypatch
+):
+    deps.state_manager.get_metadata = AsyncMock(
+        return_value={"loyalty_reprompted": True}
+    )
+    deps.state_manager.get_state = AsyncMock(return_value=UserStates.IDLE)
+    fake_leads = AsyncMock()
+    fake_leads.find_one = AsyncMock(return_value=None)
+    monkeypatch.setattr(workflow_service, "leads_collection", fake_leads)
+    ctx = make_ctx(
+        normalized_text="מה זה",
+        current_state=UserStates.AWAITING_LOYALTY_CONFIRMATION,
+    )
+
+    result = await guard_loyalty_confirmation(ctx, deps)
+
+    assert result is None
+    deps.state_manager.clear_state.assert_awaited_once_with(ctx.chat_id)
+    deps.state_manager.get_state.assert_awaited_once_with(ctx.chat_id)
+    assert ctx.current_state == UserStates.IDLE
+    deps.whatsapp.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_loyalty_confirmation_first_miss_reprompts_with_ttl(deps, monkeypatch):
+    deps.state_manager.get_metadata = AsyncMock(return_value={})
+    fake_leads = AsyncMock()
+    fake_leads.find_one = AsyncMock(return_value=None)
+    monkeypatch.setattr(workflow_service, "leads_collection", fake_leads)
+    monkeypatch.setattr(workflow_service.lead_manager, "log_message", AsyncMock())
+    ctx = make_ctx(
+        normalized_text="מה זה",
+        current_state=UserStates.AWAITING_LOYALTY_CONFIRMATION,
+    )
+
+    result = await guard_loyalty_confirmation(ctx, deps)
+
+    assert result is HANDLED
+    deps.state_manager.set_state.assert_awaited_once_with(
+        ctx.chat_id,
+        UserStates.AWAITING_LOYALTY_CONFIRMATION,
+        ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
+    )
+
+
+# --------------------------------------------------------------------------
+# guard_cancel_confirmation (PRO-118)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancel_confirmation_unmatched_reply_restores_resume_state(deps):
+    deps.state_manager.get_metadata = AsyncMock(
+        return_value={
+            "cancel_confirm_lead_id": "605c5f3d3b1f2b0011a1b2c3",
+            "cancel_confirm_resume_state": "awaiting_address",
+        }
+    )
+    ctx = make_ctx(
+        normalized_text="מה?",
+        current_state=UserStates.AWAITING_CANCEL_CONFIRMATION,
+    )
+
+    result = await guard_cancel_confirmation(ctx, deps)
+
+    assert result is HANDLED
+    deps.state_manager.clear_state.assert_awaited_once_with(ctx.chat_id)
+    deps.state_manager.set_state.assert_awaited_once_with(
+        ctx.chat_id, "awaiting_address"
+    )
+    deps.whatsapp.send_message.assert_awaited_once_with(
+        ctx.chat_id, Messages.Customer.CANCEL_ABORTED
+    )
+
+
+# --------------------------------------------------------------------------
+# guard_booked_cancel_reschedule (PRO-118)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_booked_cancel_reschedule_cancel_arms_confirmation_with_ttl(
+    deps, monkeypatch
+):
+    fake_leads = AsyncMock()
+    fake_leads.find_one = AsyncMock(
+        return_value={"_id": "lead1", "status": "booked", "pro_id": None}
+    )
+    monkeypatch.setattr(workflow_service, "leads_collection", fake_leads)
+    ctx = make_ctx(
+        user_text="אני רוצה לבטל",
+        normalized_text="אני רוצה לבטל",
+        current_state=UserStates.IDLE,
+    )
+
+    result = await guard_booked_cancel_reschedule(ctx, deps)
+
+    assert result is HANDLED
+    deps.state_manager.set_state.assert_awaited_once_with(
+        ctx.chat_id,
+        UserStates.AWAITING_CANCEL_CONFIRMATION,
+        ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
+    )
