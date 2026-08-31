@@ -130,11 +130,11 @@ def test_pii_filter_also_scrubs_address(monkeypatch):
 
 
 def test_pii_filter_scrubs_string_extras_not_just_message():
-    # PRO-174: serialize=True (the prod sink) emits record["extra"] verbatim
-    # into the JSON line, and PRO-174 makes logger.contextualize the house
-    # pattern for binding extras like chat_id — so an unscrubbed extra would
-    # route a raw phone number past every scrubber in this module. Bools
-    # (_stdlib, sentry_skip) must pass through untouched.
+    # PRO-174: _railway_json_sink (the prod sink) hoists record["extra"]
+    # verbatim into the JSON line, and PRO-174 makes logger.contextualize the
+    # house pattern for binding extras like chat_id — so an unscrubbed extra
+    # would route a raw phone number past every scrubber in this module.
+    # Bools (_stdlib, sentry_skip) must pass through untouched.
     record = {
         "message": "hello",
         "extra": {

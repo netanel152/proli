@@ -209,7 +209,13 @@ def test_setup_logging_prod_like_branch_for_staging_and_production(
     assert add_mock.call_count == 1
     (stdout_call,) = add_mock.call_args_list
 
-    assert stdout_call.kwargs.get("serialize") is True
+    # PRO-184: the prod-like sink is the explicit callable, not serialize=True
+    # — loguru's serializer nests everything under `record` and has no
+    # top-level `message`/`level`, which Railway's log pipeline cannot read.
+    import app.core.logger as logmod
+
+    assert stdout_call.args[0] is logmod._railway_json_sink
+    assert "serialize" not in stdout_call.kwargs
     assert "colorize" not in stdout_call.kwargs
 
     # No call adds a file sink pointed at logs/proli.log (the dev-only sink).
@@ -227,7 +233,10 @@ def test_setup_logging_dev_branch_not_taken_for_prod_like(monkeypatch):
 
     assert add_mock.call_count == 2
     stdout_call, file_call = add_mock.call_args_list
-    # Dev branch: colorize=True, no serialize kwarg at all.
+    # PRO-184: neither branch passes `serialize` any more, so that is no
+    # longer what distinguishes them. The dev branch registers `sys.stdout`
+    # itself with `_dev_format` + `colorize=True`; the prod-like branch (see
+    # the test above) registers the `_railway_json_sink` callable instead.
     assert stdout_call.kwargs.get("colorize") is True
     assert "serialize" not in stdout_call.kwargs
 
