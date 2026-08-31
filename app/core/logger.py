@@ -1,7 +1,9 @@
 import sys
 import os
 import re
+import json
 import logging
+import traceback
 import uuid
 from loguru import logger
 from app.core.config import settings
@@ -141,23 +143,68 @@ def scrub(message: str) -> str:
     return mask_address(mask_pii(redact_secrets(message)))
 
 
+def _scrub_value(value, _depth: int = 0):
+    """Scrub every string reachable inside a bound extra, container included.
+
+    PRO-184 widened this from the flat `isinstance(value, str)` check the
+    original filter used. That check was true of every extra `app/` actually
+    binds today — `trace_id` (str), `_stdlib`/`sentry_skip` (bool) — but a
+    single `logger.bind(lead=lead_doc)` puts a raw phone number and a Hebrew
+    street address past every scrubber in this module, and the prod sink now
+    hoists extras to the top level, which is exactly where Railway indexes
+    them as queryable attributes. The gap was latent under `serialize=True`
+    too; hoisting is what raises the stakes.
+
+    Numbers, bools and `None` are returned unchanged so a numeric extra stays
+    numeric and Railway's numeric comparisons (`@duration_ms:>500`) keep
+    working. Anything else — an arbitrary object that `json.dumps(default=str)`
+    would render — is rendered here instead, so the rendering is scrubbed
+    rather than the object slipping past as a string nobody looked at.
+
+    `_depth` bounds the walk: a self-referential extra would otherwise recurse
+    until the interpreter gives up, and a filter that raises takes the log
+    line with it. Past the limit the value is rendered and scrubbed flat.
+    """
+    if isinstance(value, str):
+        return scrub(value)
+    if isinstance(value, bool) or isinstance(value, (int, float)) or value is None:
+        return value
+    if _depth >= _MAX_SCRUB_DEPTH:
+        return scrub(str(value))
+    if isinstance(value, dict):
+        return {k: _scrub_value(v, _depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_scrub_value(v, _depth + 1) for v in value]
+    return scrub(str(value))
+
+
+# Deep enough for a lead document, shallow enough that a cyclic extra cannot
+# outrun it. Cycles are also caught by the sink's serialization fallback; this
+# is the first of the two guards, not the only one.
+_MAX_SCRUB_DEPTH = 6
+
+
 def _pii_filter(record):
     """Loguru sink filter: scrub every record before any sink writes it.
 
-    Bound extras are scrubbed too, not just the message. `serialize=True`
-    emits `record["extra"]` verbatim into the prod JSON line, and PRO-174
-    makes `logger.contextualize` the house pattern — so the next person to
-    bind `chat_id=chat_id` would route a raw phone number straight past every
-    scrubber in this module. Strings only; `_stdlib` and `sentry_skip` are
-    bools and pass through untouched.
+    Bound extras are scrubbed too, not just the message. The prod sink emits
+    `record["extra"]` into the JSON line, and PRO-174 makes
+    `logger.contextualize` the house pattern — so the next person to bind
+    `chat_id=chat_id` would route a raw phone number straight past every
+    scrubber in this module. `_stdlib` and `sentry_skip` are bools and pass
+    through untouched; see `_scrub_value` for the non-string cases.
     """
     record["message"] = scrub(record["message"])
     # `.get`, not `record["extra"]`: a sink filter is handed whatever the
     # caller built, and a bare `{"message": ...}` record must scrub rather
     # than raise — a filter that throws takes the log line with it.
     for key, value in (record.get("extra") or {}).items():
-        if isinstance(value, str):
-            record["extra"][key] = scrub(value)
+        scrubbed = _scrub_value(value)
+        # Assign only on change: `_stdlib`/`sentry_skip` and numeric extras
+        # come back identical, and rewriting them would churn the dict every
+        # sink shares.
+        if scrubbed is not value:
+            record["extra"][key] = scrubbed
     return True
 
 
@@ -286,6 +333,125 @@ class InterceptHandler(logging.Handler):
         )
 
 
+# PRO-184: extras that exist to steer this module's own plumbing and mean
+# nothing to an operator reading logs. `_stdlib` and `sentry_skip` are dropped
+# from the emitted payload only — they stay on `record["extra"]`, which is
+# where `app/core/sentry.py` reads them to decide what reaches Sentry.
+_INTERNAL_EXTRAS = frozenset({"_stdlib", "sentry_skip"})
+
+# The keys Railway reads plus the two this sink adds. Extras never overwrite
+# them (a stray `logger.bind(level=…)` must not displace the severity field),
+# and they are what the serialization fallback keeps when the extras cannot be
+# encoded.
+_RESERVED_PAYLOAD_KEYS = ("message", "level", "level_name", "logger", "time")
+
+
+def _railway_json_sink(message) -> None:
+    """Emit one flat JSON line in the shape Railway's log pipeline reads.
+
+    PRO-174 shipped `serialize=True` for this sink, which was the reasonable
+    choice and the wrong one. Loguru's serializer emits ``{"text": …,
+    "record": {…}}`` — the message lives at ``record.message`` and the level at
+    ``record.level.name``, with **no** top-level ``message``, ``msg`` or
+    ``level``. Railway parses any valid single-line JSON and reads exactly
+    those keys: ``message`` becomes the body shown in the Log Explorer,
+    ``level`` drives severity, everything else becomes an ``@name:value``
+    attribute. Finding neither, it rendered every one of our lines with an
+    **empty body** and matched nothing on ``@level:`` or on a substring
+    search — including, provably, the ``[Scheduler] First runs:`` boot line
+    that `app/scheduler.py` emits at WARNING once per boot precisely so an
+    operator can see it.
+
+    The consequence worth naming: PRO-174's whole purpose was the `trace_id`
+    correlation id, and nesting put it at ``record.extra.trace_id``, so the
+    one query it existed to enable — ``@trace_id:<id>`` across a conversation
+    turn — matched zero rows. Hoisting `extra` to the top level is what makes
+    that work, and is why this is a flat object rather than a tidier nested
+    one.
+
+    Both level fields are deliberate. Railway normalizes ``level`` to the
+    closest of debug/info/warn/error, which collapses CRITICAL into ``error``
+    — and CRITICAL is not a synonym for ERROR here, it is the level
+    `page_critical` uses to page a human (PRO-113). ``level`` keeps
+    ``@level:error`` working; ``level_name`` keeps the distinction the
+    normalization destroys.
+
+    Emitting a line is unconditional: every serialization failure degrades to
+    a smaller line rather than raising, because loguru's `catch=True` rescue
+    both loses the line and prints the whole record — `extra` included — to
+    stderr as unparseable text. See the fallback at the bottom.
+    """
+    record = message.record
+
+    payload = {
+        # Scrubbed already: `_pii_filter` runs before any sink and rewrites
+        # `record["message"]` and every bound extra in place, so both this and
+        # the hoisted extras below are redacted text. The traceback is the one
+        # thing it does not reach, and is scrubbed here.
+        "message": record["message"],
+        "level": record["level"].name.lower(),
+        "level_name": record["level"].name,
+        "logger": f"{record['name']}:{record['function']}:{record['line']}",
+        "time": record["time"].isoformat(),
+    }
+
+    # Bound extras become queryable attributes — `trace_id` above all. Written
+    # after the fixed keys and filtered to skip them, so a stray
+    # `logger.bind(level=…)` cannot displace the field Railway reads.
+    for key, value in (record.get("extra") or {}).items():
+        if key in _INTERNAL_EXTRAS or key in payload:
+            continue
+        payload[key] = value
+
+    # The traceback rode in serialize's `text` field before, where nothing
+    # scrubbed it — the filter covers the message and bound extras, not this.
+    # This sink is what puts it in the payload explicitly, so it goes through
+    # the same scrubber on the way rather than arriving as the one unredacted
+    # string on the line.
+    #
+    # `exc.value is not None`, not `exc is not None`: for a `logger.exception()`
+    # with no active exception — reachable through `InterceptHandler` too, since
+    # stdlib `exc_info=True` outside a handler yields `(None, None, None)` —
+    # loguru sets a RecordException of three Nones rather than None itself, and
+    # formatting that produces the string "NoneType: None" on every such line.
+    exc = record.get("exception")
+    if exc is not None and exc.value is not None:
+        payload["exception"] = scrub(
+            "".join(traceback.format_exception(exc.type, exc.value, exc.traceback))
+        )
+
+    # `allow_nan=False`: the default emits bare `NaN`/`Infinity`, which are not
+    # JSON. A strict parser rejects the whole line, and Railway falls back to
+    # treating it as plain text — the blank-body failure this sink exists to
+    # fix, arriving through a different door.
+    #
+    # The fallback exists because `default=str` only rescues unserializable
+    # *leaves*. A cyclic extra, a non-str dict key or a deep nest still raises,
+    # and an unrescued raise here is worse than a dropped line: loguru's
+    # `catch=True` prints its own multi-line report to stderr with the record —
+    # `extra` included — dumped verbatim, which is both unparseable and the one
+    # place an extra appears without passing through the filter. Better to emit
+    # the five fields Railway actually reads and say the extras were lost.
+    try:
+        line = json.dumps(payload, ensure_ascii=False, default=str, allow_nan=False)
+    except (TypeError, ValueError, RecursionError):
+        line = json.dumps(
+            {key: payload[key] for key in _RESERVED_PAYLOAD_KEYS if key in payload}
+            | {"extras_error": "unserializable"},
+            ensure_ascii=False,
+            default=str,
+        )
+
+    # loguru's StreamSink flushes after every write; a callable sink does not,
+    # so this restores it. `PYTHONUNBUFFERED=1` in the Dockerfile makes it a
+    # no-op for the deployed image, but that leaves the sink silently depending
+    # on an env var set two files away — outside the image (a bare
+    # `python -m app.worker`, a non-Docker runner) stdout to a pipe is
+    # block-buffered and the tail of the log dies with the process.
+    sys.stdout.write(line + "\n")
+    sys.stdout.flush()
+
+
 def _dev_format(record) -> str:
     """Format template for the development sinks, as a callable.
 
@@ -293,8 +459,8 @@ def _dev_format(record) -> str:
     has to render ``{extra[trace_id]}``, and that placeholder raises
     ``KeyError`` on every line emitted outside a ``contextualize`` block —
     a scheduler tick, a startup line, anything no entry point minted an id
-    for. The prod sink needs none of this: ``serialize`` emits whatever
-    extras are bound and simply omits the ones that are not.
+    for. The prod sink needs none of this: `_railway_json_sink` builds its
+    payload from the record and simply omits an extra that was never bound.
 
     Without this the correlation id existed only in staging and production:
     the dev stdout format named no extras and the dev file sink used
@@ -333,18 +499,24 @@ def setup_logging():
     is_prod_like = settings.is_prod_like
 
     if is_prod_like:
-        # Structured JSON logging for staging/production. `serialize=True`,
-        # not a hand-rolled formatter: it already emits every bound extra
-        # under `record.extra`, which is what carries the PRO-174 `trace_id`
-        # into the JSON line. (The `json_formatter` that used to sit in this
-        # module built that field by hand and was never wired to any sink —
-        # dead since it was written; deleted in PRO-174.)
+        # Structured JSON logging for staging/production, through an explicit
+        # sink rather than `serialize=True` (PRO-184). Loguru's serializer
+        # nests everything under `record`, which is valid JSON that Railway
+        # parses and cannot read — no top-level `message` or `level` means a
+        # blank body in the Log Explorer and zero matches on `@level:`,
+        # substring search, or PRO-174's `@trace_id:`. `_railway_json_sink`
+        # emits the flat shape those queries need; its docstring carries the
+        # detail.
+        #
+        # `format` is unused by a callable sink that reads `.record` directly,
+        # but loguru still renders it, so it stays minimal — and must not be
+        # `_dev_format`, whose `{extra[trace_id]}` placeholder is exactly the
+        # KeyError that template exists to avoid.
         logger.add(
-            sys.stdout,
+            _railway_json_sink,
             format="{message}",
             level=settings.LOG_LEVEL,
             filter=_pii_filter,
-            serialize=True,
         )
     else:
         # Human-readable for development
