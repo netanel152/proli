@@ -38,9 +38,9 @@ Input classes
 | `awaiting_cancel_confirmation` | → idle, "ביטלתי את העבודה" | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | TTL ≤ 300s | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
 | `pro_mode` | "*מה אפשר לעשות עכשיו:*" | "*מה אפשר לעשות עכשיו:*" | N/A[same-reprompt] | N/A[pro-text-only] | "*מה אפשר לעשות עכשיו:*" | N/A[ttl-class] | "*מה אפשר לעשות עכשיו:*" | N/A[race] |
 | `awaiting_intent_confirmation` | → customer_mode, "עברת למצב לקוח" | "🤔 לא הבנתי. לעבור למצב לקוח?" | N/A[same-reprompt] | N/A[pro-text-only] | "🤔 לא הבנתי. לעבור למצב לקוח?" | N/A[ttl-class] | → idle, "ממשיכים כרגיל" | N/A[race] |
-| `pro_selecting_job_to_finish` | N/A[defect-finish] | N/A[defect-finish] | N/A[defect-finish] | N/A[pro-text-only] | N/A[defect-finish] | N/A[ttl-class] | N/A[defect-finish] | N/A[race] |
-| `pro_selecting_job_to_cancel` | N/A[defect-cancel] | N/A[defect-cancel] | N/A[defect-cancel] | N/A[pro-text-only] | N/A[defect-cancel] | N/A[ttl-class] | N/A[defect-cancel] | N/A[race] |
-| `pro_awaiting_final_price` | N/A[defect-price] | N/A[defect-price] | N/A[defect-price] | N/A[pro-text-only] | N/A[defect-price] | TTL ≤ 600s | N/A[defect-price] | N/A[race] |
+| `pro_selecting_job_to_finish` | → pro_awaiting_final_price, "✅ עודכן שהעבודה הסתיימה. תודה!" | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
+| `pro_selecting_job_to_cancel` | → idle, "✅ העבודה בוטלה. הלקוח עודכן." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
+| `pro_awaiting_final_price` | → idle, "💰 נרשם:" | → idle, "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל." | → idle, "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל." | N/A[pro-text-only] | → idle, "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל." | TTL ≤ 600s | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
 | `onboarding_name` | → onboarding_type, "סוג המקצוע" | → onboarding_type, "סוג המקצוע" | "שם העסק חייב להיות באורך 2 עד 100 תווים. אפשר לנסות שוב:" | N/A[pro-text-only] | "שם העסק חייב להיות באורך 2 עד 100 תווים. אפשר לנסות שוב:" | N/A[ttl-class] | → idle, "ההרשמה בוטלה" | N/A[race] |
 | `onboarding_type` | → onboarding_areas, "👍 באילו *ערים או אזורים* אתה עובד?" | → onboarding_areas, "👍 באילו *ערים או אזורים* אתה עובד?" | "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע (אינסטלטור, חשמלאי וכו')." | N/A[pro-text-only] | "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע (אינסטלטור, חשמלאי וכו')." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 | `onboarding_areas` | → onboarding_prices, "המחירים" | → onboarding_prices, "המחירים" | "לא זיהיתי ערים" | N/A[pro-text-only] | → onboarding_prices, "המחירים" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
@@ -53,9 +53,6 @@ Input classes
 N/A legend
 ~~~~~~~~~~
 * ``admin-menu`` — The admin wizard is a text-only numeric menu.
-* ``defect-cancel`` — DEFECT: same bypass as defect-finish. test_pro_cancellation_releases_the_right_slot has to call pro_flow directly to reach this state at all.
-* ``defect-finish`` — DEFECT: PRO_SELECTING_JOB_TO_FINISH is unreachable through the orchestrator — the PRO_BUSINESS_KEYWORDS bypass overwrites the state to PRO_MODE before pro_flow reads it. See test_pro_can_select_which_job_to_finish (xfail) in test_e2e_flows.py.
-* ``defect-price`` — DEFECT: PRO_AWAITING_FINAL_PRICE is absent from workflow_service's dispatch, so the reply falls through to the customer dispatcher. See test_pro_final_price_is_recorded (xfail) in test_e2e_flows.py.
 * ``pro-text-only`` — Pro-side commands are a text menu; a pro never sends the bot media.
 * ``race`` — State-independent. The per-chat Redis lock is taken before any state is read (workflow_service.py:219), so every state behaves identically; proven once in test_a_second_message_mid_flight_is_deferred_not_dropped.
 * ``resting`` — IDLE is the resting state — there is nothing to expire.
@@ -108,6 +105,10 @@ _DASHBOARD_LAST_LINE = Messages.Pro.PRO_DASHBOARD_HEADER.split("\n")[-1]
 _INTENT_REPROMPT_LINE = Messages.Pro.INTENT_REPROMPT.split("\n")[0]
 _ASK_AREAS_LINE = Messages.Onboarding.ASK_AREAS.split("\n")[0]
 _CONFIRM_REPROMPT_LINE = Messages.Onboarding.CONFIRM_REPROMPT.split("\n")[0]
+_FINISH_ASK_PRICE_LINE = Messages.Pro.FINISH_SUCCESS_ASK_PRICE.split("\n")[0]
+_FINAL_PRICE_RECORDED_PREFIX = static_prefix(Messages.Pro.FINAL_PRICE_RECORDED)
+_STATUS_PAUSED_LINE = Messages.Pro.STATUS_PAUSED.split("\n")[0]
+_INVALID_JOB_SELECTION = Messages.Pro.INVALID_JOB_SELECTION
 
 
 @dataclass
@@ -166,21 +167,6 @@ NA_REASONS = {
     "same-exit": (
         "A reset keyword exits through one handler per wizard, not one per step. "
         "Kept on the wizard's first step; see _COLLAPSED."
-    ),
-    "defect-finish": (
-        "DEFECT: PRO_SELECTING_JOB_TO_FINISH is unreachable through the "
-        "orchestrator — the PRO_BUSINESS_KEYWORDS bypass overwrites the state to "
-        "PRO_MODE before pro_flow reads it. See test_pro_can_select_which_job_to_"
-        "finish (xfail) in test_e2e_flows.py."
-    ),
-    "defect-cancel": (
-        "DEFECT: same bypass as defect-finish. test_pro_cancellation_releases_the_"
-        "right_slot has to call pro_flow directly to reach this state at all."
-    ),
-    "defect-price": (
-        "DEFECT: PRO_AWAITING_FINAL_PRICE is absent from workflow_service's "
-        "dispatch, so the reply falls through to the customer dispatcher. See "
-        "test_pro_final_price_is_recorded (xfail) in test_e2e_flows.py."
     ),
 }
 
@@ -711,34 +697,80 @@ MATRIX: dict[str, dict] = {
         ),
         "race": Cell(na=RACE_NA),
     },
+    # PRO-186 lit this row up. Every cell below used to be N/A[defect-finish]:
+    # the state could not be driven through the orchestrator at all, because the
+    # keyword bypass overwrote it with PRO_MODE before pro_flow read it.
     UserStates.PRO_SELECTING_JOB_TO_FINISH: {
-        "keyword": Cell(na="defect-finish"),
-        "free": Cell(na="defect-finish"),
-        "offtopic": Cell(na="defect-finish"),
+        "keyword": Cell(
+            send="1",
+            expect_state=UserStates.PRO_AWAITING_FINAL_PRICE,
+            expect=(_FINISH_ASK_PRICE_LINE,),
+        ),
+        "free": Cell(send="נראה לי הראשונה", expect=(_INVALID_JOB_SELECTION,)),
+        "offtopic": Cell(send="מה קורה", expect=(_INVALID_JOB_SELECTION,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
-        "emoji": Cell(na="defect-finish"),
+        "emoji": Cell(send="👍", expect=(_INVALID_JOB_SELECTION,)),
         "silence": Cell(max_ttl=14400),
-        "interrupt": Cell(na="defect-finish"),
+        # PRO-186's escape hatch: an unrelated pro command abandons the prompt
+        # and runs, instead of bouncing off INVALID_JOB_SELECTION forever.
+        "interrupt": Cell(
+            send="הפסקה",
+            expect_state=UserStates.IDLE,
+            expect=(_STATUS_PAUSED_LINE,),
+        ),
         "race": Cell(na=RACE_NA),
     },
     UserStates.PRO_SELECTING_JOB_TO_CANCEL: {
-        "keyword": Cell(na="defect-cancel"),
-        "free": Cell(na="defect-cancel"),
-        "offtopic": Cell(na="defect-cancel"),
+        "keyword": Cell(
+            send="1",
+            expect_state=UserStates.IDLE,
+            expect=(Messages.Pro.CANCEL_SUCCESS,),
+        ),
+        "free": Cell(send="נראה לי הראשונה", expect=(_INVALID_JOB_SELECTION,)),
+        "offtopic": Cell(send="מה קורה", expect=(_INVALID_JOB_SELECTION,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
-        "emoji": Cell(na="defect-cancel"),
+        "emoji": Cell(send="👍", expect=(_INVALID_JOB_SELECTION,)),
         "silence": Cell(max_ttl=14400),
-        "interrupt": Cell(na="defect-cancel"),
+        "interrupt": Cell(
+            send="הפסקה",
+            expect_state=UserStates.IDLE,
+            expect=(_STATUS_PAUSED_LINE,),
+        ),
         "race": Cell(na=RACE_NA),
     },
+    # Every non-command reply here clears the state: the lead is already
+    # COMPLETED, so the price ask is optional and must never trap the pro.
     UserStates.PRO_AWAITING_FINAL_PRICE: {
-        "keyword": Cell(na="defect-price"),
-        "free": Cell(na="defect-price"),
-        "offtopic": Cell(na="defect-price"),
+        "keyword": Cell(
+            send="450",
+            expect_state=UserStates.IDLE,
+            expect=(_FINAL_PRICE_RECORDED_PREFIX,),
+        ),
+        # Two numbers — a range is not an unambiguous price (_parse_final_price).
+        "free": Cell(
+            send="בין 300 ל-400",
+            expect_state=UserStates.IDLE,
+            expect=(Messages.Pro.FINAL_PRICE_INVALID,),
+        ),
+        "offtopic": Cell(
+            send="מה קורה",
+            expect_state=UserStates.IDLE,
+            expect=(Messages.Pro.FINAL_PRICE_INVALID,),
+        ),
         "wrong": Cell(na=PRO_MEDIA_NA),
-        "emoji": Cell(na="defect-price"),
+        "emoji": Cell(
+            send="👍",
+            expect_state=UserStates.IDLE,
+            expect=(Messages.Pro.FINAL_PRICE_INVALID,),
+        ),
         "silence": Cell(max_ttl=600),
-        "interrupt": Cell(na="defect-price"),
+        # PRO-123's escape hatch, now actually reachable (PRO-186): a real
+        # command is not swallowed as a price.
+        "interrupt": Cell(
+            send="הפסקה",
+            expect_state=UserStates.IDLE,
+            expect=(_STATUS_PAUSED_LINE,),
+        ),
         "race": Cell(na=RACE_NA),
     },
     UserStates.ONBOARDING_NAME: {

@@ -51,6 +51,13 @@ def _is_pro_command(text: str) -> bool:
     return any(text in getattr(Messages.Keywords, name) for name in _PRO_COMMAND_LISTS)
 
 
+# PRO-186 sentinel: "the pro abandoned this prompt by typing a real command —
+# dispatch it normally". Distinct from the tri-state return contract of
+# `handle_pro_text_command`, where None already means "no match, send the help
+# menu" and would therefore swallow the command instead of running it.
+_ABANDON_PROMPT = object()
+
+
 def _normalize(text: str) -> str:
     """Normalize quotes and whitespace so commands like דו"ח match regardless of quote variant."""
     # Replace all quote variants with standard ASCII double-quote
@@ -85,7 +92,13 @@ async def handle_pro_text_command(
         UserStates.PRO_SELECTING_JOB_TO_FINISH,
         UserStates.PRO_SELECTING_JOB_TO_CANCEL,
     ):
-        return await _handle_job_selection(chat_id, text, pro, whatsapp, current_state)
+        selection = await _handle_job_selection(
+            chat_id, text, pro, whatsapp, current_state
+        )
+        if selection is not _ABANDON_PROMPT:
+            return selection
+        # PRO-186: a real command, not an answer — the prompt was abandoned and
+        # already cleared. Fall through so the command actually runs.
 
     # State: awaiting the final charged price after a job was completed (PRO-33).
     # The lead is already COMPLETED — this only records final_price, never gates.
@@ -275,6 +288,24 @@ async def _handle_job_selection(chat_id, text, pro, whatsapp, current_state):
     mapping = meta.get(context_key, {})
 
     if text not in mapping:
+        # PRO-186: before PRO-186 this state was unreachable, so a pro who typed
+        # a command here (a lead offer arrives mid-selection and they answer
+        # *אשר*) was silently snapped to PRO_MODE by the orchestrator's keyword
+        # bypass. Now that the state survives, the same reply would bounce off
+        # INVALID_JOB_SELECTION forever — so honour the command and drop the
+        # prompt, exactly as PRO-123 does for the final-price prompt.
+        #
+        # Order matters: this is checked *after* the mapping, because the valid
+        # answers here ("1", "2", "3") are themselves pro commands. Testing
+        # `_is_pro_command` first would make every selection abandon the prompt
+        # and re-open the defect this ticket closes.
+        if _is_pro_command(text):
+            await StateManager.clear_state(chat_id)
+            logger.info(
+                f"Pro {pro['_id']} sent command {text!r} while choosing a job — "
+                "abandoning the selection prompt and handling the command."
+            )
+            return _ABANDON_PROMPT
         return Messages.Pro.INVALID_JOB_SELECTION
 
     lead_id = mapping[text]
