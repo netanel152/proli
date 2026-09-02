@@ -246,7 +246,9 @@ _DISPATCH_SEQUENCE = [
     ("BOOKED cancel / reschedule interceptor", "Customer.CANCEL_CONFIRM_PROMPT"),
     ("Explicit customer-mode switch", "CUSTOMER_MODE_COMMANDS"),
     ("Pro safety-bypass", "normalized_text in PRO_BUSINESS_KEYWORDS"),
-    ("PRO_MODE", "current_state == UserStates.PRO_MODE:"),
+    # PRO-186 re-anchored: the branch no longer tests PRO_MODE alone — it takes
+    # every state pro_flow owns, including the three prompts it holds open.
+    ("PRO_MODE", "current_state in PRO_DISPATCH_STATES:"),
     ("Pro onboarding", "current_state in ONBOARDING_STATES"),
     # PRO-121 re-anchored: `_escalate_emergency` also compares against
     # AWAITING_ADDRESS, so the state test is no longer unique to this branch.

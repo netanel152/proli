@@ -1292,18 +1292,16 @@ async def test_text_fallback_routing_still_honours_exclusions(world):
     ), "an excluded pro (or one pending approval) was routed the lead"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT found by this harness: PRO_SELECTING_JOB_TO_FINISH is unreachable "
-        "through the orchestrator. workflow_service's PRO_BUSINESS_KEYWORDS bypass "
-        "(line ~686) sees the bare digit, overwrites the state to PRO_MODE, and only "
-        "then calls pro_flow — which re-reads the state and no longer sees the "
-        "selection state. So '1' runs _handle_approve instead of picking job 1."
-    ),
-)
 @pytest.mark.asyncio
 async def test_pro_can_select_which_job_to_finish(world):
+    """PRO-186 fix verification (was xfail DEFECT until this landed).
+
+    The bare digit is an ambiguous pro keyword, so workflow_service's
+    PRO_BUSINESS_KEYWORDS bypass used to overwrite PRO_SELECTING_JOB_TO_FINISH
+    with PRO_MODE before pro_flow re-read it — and "1" ran approve instead of
+    finishing job 1. The bypass now yields to every state in
+    PRO_DISPATCH_STATES.
+    """
     await world.standard_cast()
     pro = world.pros[R.PRO_PRIMARY]
     pro_chat = world.pro_chat(R.PRO_PRIMARY)
@@ -1318,18 +1316,45 @@ async def test_pro_can_select_which_job_to_finish(world):
     assert (await world.lead_by_id(first["_id"]))["status"] == LeadStatus.COMPLETED
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "DEFECT found by this harness: PRO_AWAITING_FINAL_PRICE is not in "
-        "workflow_service's dispatch. Only PRO_MODE routes to pro_flow, so the pro's "
-        "price reply falls through to the *customer* dispatcher — it burns a Gemini "
-        "call, answers a pro as if they were a customer, and PRO-33's final_price / "
-        "commission_amount can never be captured in production."
-    ),
-)
+@pytest.mark.asyncio
+async def test_a_pro_command_abandons_the_job_selection_prompt(world):
+    """PRO-186: an offer that lands mid-selection is still answerable.
+
+    Making the state survive the orchestrator created a trap that could not
+    exist while it didn't: every non-matching reply returns INVALID_JOB_SELECTION
+    and keeps the state, so a pro answering an incoming lead offer with *אשר*
+    would bounce off the prompt forever. The prompt yields to a real command
+    instead — the same escape PRO-123 gave the final-price prompt.
+
+    Checked after the selection mapping, never before it: "1"/"2"/"3" are
+    themselves pro commands, so testing the command list first would abandon
+    the prompt on every valid answer and re-open the defect PRO-186 closed.
+    """
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    await world.booked_job(pro)
+    await world.booked_job(pro, chat_id=R.chat(R.CUSTOMER_B))
+
+    await world.send("סיימתי", chat_id=pro_chat)
+    await world.assert_state(UserStates.PRO_SELECTING_JOB_TO_FINISH, chat_id=pro_chat)
+
+    offered = await world.awaiting_approval_job(pro)
+    await world.send("אשר", chat_id=pro_chat)
+
+    assert (await world.lead_by_id(offered["_id"]))["status"] == LeadStatus.BOOKED
+    assert await world.state(pro_chat) != UserStates.PRO_SELECTING_JOB_TO_FINISH
+
+
 @pytest.mark.asyncio
 async def test_pro_final_price_is_recorded(world):
+    """PRO-186 fix verification (was xfail DEFECT until this landed).
+
+    PRO_AWAITING_FINAL_PRICE was absent from workflow_service's dispatch, which
+    routed only PRO_MODE to pro_flow — so the pro's price reply reached the
+    *customer* dispatcher, burned a Gemini call, and PRO-33's final_price /
+    commission_amount were never written.
+    """
     await world.standard_cast()
     pro = world.pros[R.PRO_PRIMARY]
     pro_chat = world.pro_chat(R.PRO_PRIMARY)

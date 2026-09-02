@@ -138,8 +138,13 @@ process_incoming_message(chat_id, text, media_url)
         │         a pro-as-customer parks here up to 1h and must still run their business)
         │      └─ otherwise send STILL_WAITING, return
         │
-        ├─ State == PRO_MODE?
+        ├─ State == PRO_MODE, or a prompt pro_flow itself is holding open
+        │  (PRO_SELECTING_JOB_TO_FINISH / PRO_SELECTING_JOB_TO_CANCEL /
+        │  PRO_AWAITING_FINAL_PRICE — PRO_DISPATCH_STATES, PRO-186)?
         │      └─ handle_pro_text_command(pro, text)
+        │            (a real pro command typed mid-prompt abandons the prompt —
+        │             checked after the selection mapping, since "1"/"2"/"3"
+        │             are themselves pro commands — and dispatches normally)
         │            ├─ "אשר" / "1" → lead BOOKED, clear customer state (strict scope check)
         │            ├─ "השהה" / "pause" → customer PAUSED_FOR_HUMAN (TTL 900 s)
         │            ├─ "דחה" / "2" → lead REJECTED (way-station) then handed to reassign_lead:
@@ -169,12 +174,17 @@ process_incoming_message(chat_id, text, media_url)
         │      └─ set CUSTOMER_MODE, clear context, send SWITCHED_TO_CUSTOMER, return
         │         (deterministic — never routed through the AI intent detector)
         │
-        ├─ Registered pro types a PRO_BUSINESS_KEYWORDS word while not in PRO_MODE?
+        ├─ Registered pro types a PRO_BUSINESS_KEYWORDS word while in none of
+        │  PRO_DISPATCH_STATES?
         │      └─ Safety Bypass → snap back to PRO_MODE
         │      └─ except AMBIGUOUS_PRO_KEYWORDS (bare digits, אשר/דחה, ...) when a
         │         customer-side question is actually open (AWAITING_RESCHEDULE_TIME,
         │         AWAITING_LOYALTY_CONFIRMATION, or a pending rating/review prompt) —
         │         mid-reschedule a "3" is a slot pick, not a job approval
+        │      └─ a pro already inside one of pro_flow's own prompts is not
+        │         stranded, so the bypass must not fire there (PRO-186) — it used
+        │         to overwrite PRO_SELECTING_JOB_TO_FINISH, making "1" run approve
+        │         instead of finishing job 1
         │
         ├─ Phone matches active pro? → set PRO_MODE, handle pro flow
         │      └─ unless the pro has an open lead of their own (_get_active_customer_lead)
