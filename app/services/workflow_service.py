@@ -154,6 +154,23 @@ AMBIGUOUS_PRO_KEYWORDS = {kw for kw in PRO_BUSINESS_KEYWORDS if kw.isdigit()} | 
 # The rest bypass unconditionally — no customer-side prompt ever expects them.
 PRO_ONLY_KEYWORDS = PRO_BUSINESS_KEYWORDS - AMBIGUOUS_PRO_KEYWORDS
 
+# PRO-186: states in which *pro_flow* is holding a question open. They are pro
+# states, not customer ones, so two things must treat them exactly like PRO_MODE:
+# the keyword bypass below (which used to snap them to PRO_MODE, destroying the
+# very state pro_flow was about to read — a bare "1" answered the job list by
+# running approve instead) and the dispatch branch (which never routed
+# PRO_AWAITING_FINAL_PRICE at all, so the pro's price reply reached the *customer*
+# dispatcher and PRO-33's final_price could never be captured).
+PRO_HOLDING_STATES = (
+    UserStates.PRO_SELECTING_JOB_TO_FINISH,
+    UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+    UserStates.PRO_AWAITING_FINAL_PRICE,
+)
+
+# Every state whose message belongs to pro_flow. PRO_MODE is the resting state;
+# the rest are transient prompts it opened and is waiting on.
+PRO_DISPATCH_STATES = (UserStates.PRO_MODE,) + PRO_HOLDING_STATES
+
 # States in which the *customer* side of the conversation is holding a numbered
 # question open, so a bare digit belongs to it rather than to the pro dashboard.
 CUSTOMER_PROMPT_STATES = (
@@ -731,9 +748,15 @@ async def _process_incoming_message_inner(
     # even if they're currently in CUSTOMER_MODE — snap them back to PRO_MODE first.
     # Ambiguous keywords (bare digits, אשר/דחה, ...) yield to a customer-side question
     # that is actually open: mid-reschedule, a "3" is a slot pick, not a job approval.
+    #
+    # PRO-186: the bypass rescues a pro stranded on the *customer* side; a pro
+    # already inside one of pro_flow's own prompts is not stranded. Overwriting
+    # PRO_SELECTING_JOB_TO_FINISH here is what made the job list unanswerable —
+    # pro_flow re-reads the state and saw PRO_MODE, so "1" ran approve. Hence
+    # PRO_DISPATCH_STATES rather than PRO_MODE alone.
     if normalized_text in PRO_BUSINESS_KEYWORDS:
         is_pro_doc = await _is_registered_pro(chat_id)
-        if is_pro_doc and current_state != UserStates.PRO_MODE:
+        if is_pro_doc and current_state not in PRO_DISPATCH_STATES:
             defer_to_customer_flow = normalized_text in AMBIGUOUS_PRO_KEYWORDS and (
                 await _customer_prompt_pending(chat_id, current_state)
             )
@@ -746,8 +769,8 @@ async def _process_incoming_message_inner(
                 await StateManager.set_state(chat_id, UserStates.PRO_MODE)
                 current_state = UserStates.PRO_MODE
 
-    # Handle Pro Mode
-    if current_state == UserStates.PRO_MODE:
+    # Handle Pro Mode — and every prompt pro_flow is holding open (PRO-186).
+    if current_state in PRO_DISPATCH_STATES:
         pro_resp = await _handle_pro_cmd(
             chat_id, user_text, whatsapp, lead_manager, ai=ai
         )

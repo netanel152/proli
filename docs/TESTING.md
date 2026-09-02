@@ -2,7 +2,7 @@
 
 The test suite uses `pytest` with `pytest-asyncio` in strict mode (`asyncio_mode = strict`). All unit tests use `mongomock_motor` (in-memory MongoDB) — no real database or external API required.
 
-**Current status: 1622 passed, 102 skipped, 2 xfailed** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 96 skips are cells of the PRO-83 state × input matrix, each carrying a documented reason from `NA_REASONS` and still visible in the generated table. Most are deliberate: a cell is N/A when another cell already proves the same thing — the whole `race` column, the `ttl-class`/`same-reprompt`/`same-exit` collapses. 15 are not by design: `defect-finish`, `defect-cancel` and `defect-price` are dark because of the same tracked product defects the strict xfails document below.)
+**Current status: 1640 passed, 87 skipped** (integration tests skipped when `MONGO_TEST_URI` is not set. The remaining 81 skips are cells of the PRO-83 state × input matrix, each carrying a documented reason from `NA_REASONS` and still visible in the generated table. **All 81 are now deliberate** — a cell is N/A when another cell already proves the same thing: the whole `race` column, the `ttl-class`/`same-reprompt`/`same-exit` collapses, and `pro-text-only`/`admin-menu` for input types those menus never receive. PRO-186 lit up the last 15 that were not by design: `defect-finish`, `defect-cancel` and `defect-price` are gone, along with the two strict xfails that documented the same defect.)
 
 > This line is the **single source of truth** for the test baseline. Agents and commands under `.claude/` read the count from here. CI enforces it as a **floor**, not an equality: the "Guard — test baseline floor" step in `.github/workflows/tests.yml` fails the build when the passed count is **below** this line (a regression), and posts a `::warning` when it is above (tests were added — normal, and no longer a merge blocker; requiring equality meant two branches that both added tests could not merge in either order). Bump the line in your PR if it is convenient; otherwise `.github/workflows/refresh-test-baseline.yml` opens a `chore: refresh test baseline` PR after the change lands on `dev`, so the floor keeps tracking reality — a floor left far below the real count would hide a regression underneath it.
 
@@ -283,13 +283,21 @@ python -m tests.e2e.test_e2e_state_matrix
 
 ### Defects it found
 
-Two `xfail(strict=True)` tests document behaviour the system should have and does
-not. Strict mode turns each into a hard failure the moment it is fixed — which is
-exactly how the third one left this table: PRO-123 fixed the reverse-match
-fallback, `test_text_fallback_routing_still_honours_exclusions` started passing,
-and it is now an ordinary regression test.
+**The table is empty — every defect this harness found has been fixed.** It is kept
+because the mechanism is the point: a defect is pinned as an `xfail(strict=True)`
+test asserting the behaviour the system *should* have, and strict mode turns that
+test into a hard failure the moment somebody fixes it. Nothing has to remember to
+come back and re-enable it.
 
-| Test | Defect |
-|---|---|
-| `test_pro_can_select_which_job_to_finish` | `PRO_SELECTING_JOB_TO_FINISH` is unreachable through the orchestrator — the `PRO_BUSINESS_KEYWORDS` bypass overwrites the state to `PRO_MODE` before `pro_flow` reads it, so "1" runs approve instead of picking job 1. |
-| `test_pro_final_price_is_recorded` | `PRO_AWAITING_FINAL_PRICE` is absent from the dispatch, so PRO-33's `final_price` / `commission_amount` can never be captured in production. |
+That has now happened three times. PRO-123 fixed the reverse-match fallback and
+`test_text_fallback_routing_still_honours_exclusions` started passing. PRO-186 then
+fixed the two below together — they were one defect wearing two faces, the pro
+holding states having no seat in `workflow_service`'s dispatch:
+
+| Test | Defect it pinned | Fixed by |
+|---|---|---|
+| `test_pro_can_select_which_job_to_finish` | `PRO_SELECTING_JOB_TO_FINISH` was unreachable through the orchestrator — the `PRO_BUSINESS_KEYWORDS` bypass overwrote the state with `PRO_MODE` before `pro_flow` read it, so "1" ran approve instead of picking job 1. | PRO-186 |
+| `test_pro_final_price_is_recorded` | `PRO_AWAITING_FINAL_PRICE` was absent from the dispatch, so the pro's price reply reached the *customer* dispatcher and PRO-33's `final_price` / `commission_amount` could never be captured in production. | PRO-186 |
+
+Both are now ordinary regression tests, and the 15 matrix cells that were dark for
+the same reason (`defect-finish`, `defect-cancel`, `defect-price`) are live.
