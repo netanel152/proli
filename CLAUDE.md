@@ -128,7 +128,9 @@ Five things that setup does **not** do for you:
 
 **Launching tracks with Windows Terminal: `wt` eats semicolons.** `;` is `wt`'s own command separator, so `wt … pwsh -NoExit -Command "$env:X='1'; claude …"` is silently truncated at the first `;` and you get a bare shell with no Claude in it — tabs open, titles look right, nothing runs. Put the whole launch in a `.ps1` and run `pwsh -NoExit -File <script>` so no semicolon ever reaches the `wt` line.
 
-**Merges no longer have to be serialized.** `docs/TESTING.md`'s `Current status: N passed` used to be enforced as an *equality* — the guard failed below **and** above — so two open PRs that both added tests wrote conflicting counts and whichever merged second failed as a stale baseline. The guard is now a **floor**: below the line is a regression and fails the build; above it posts a `::warning` and passes, and `.github/workflows/refresh-test-baseline.yml` opens a `chore: refresh test baseline` PR once the change is on `dev`. Two branches that both add tests can now merge in either order.
+**Merges no longer have to be serialized.** `docs/TESTING.md`'s `Current status: N passed` used to be enforced as an *equality* — the guard failed below **and** above — so two open PRs that both added tests wrote conflicting counts and whichever merged second failed as a stale baseline. The guard is now a **floor**: below the line is a regression and fails the build; above it posts a `::warning` and passes, and `.github/workflows/refresh-test-baseline.yml` moves the line once the change is on `dev`. Two branches that both add tests can now merge in either order.
+
+**That refresh job cannot actually open its PR in this repo**, and has never been observed doing so: `gh pr create` returns *"GitHub Actions is not permitted to create or approve pull requests"* because **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests** is off. It pushes the `chore/refresh-test-baseline-<sha>` branch and then goes red at the last step. The workflow's own header treats that red run as the signal to bump the line by hand, which works — but it means a red 🔢 run on `dev` says *"the line drifted"*, not *"the tests broke"*, and the branch it pushed is left dangling. Turning the setting on makes the job do what the sentence above promises.
 
 Still rebase before pushing — the *content* of `docs/TESTING.md` (and every other file) conflicts normally:
 
@@ -191,7 +193,7 @@ pytest -m integration
 pytest -v
 ```
 
-Expected baseline lives in `docs/TESTING.md` ("Current status" line) — the single source of truth for the pass/skip count, enforced as a **floor** by the "Guard — test baseline floor" CI step: fewer passed than the line fails the build, more passed posts a warning and passes. Bumping the line in the same PR is welcome; if you don't, `refresh-test-baseline.yml` opens a PR to move it after the merge. Integration tests are skipped without `MONGO_TEST_URI`.
+Expected baseline lives in `docs/TESTING.md` ("Current status" line) — the single source of truth for the pass/skip count, enforced as a **floor** by the "Guard — test baseline floor" CI step: fewer passed than the line fails the build, more passed posts a warning and passes. Bumping the line in the same PR is welcome; if you don't, `refresh-test-baseline.yml` runs on `dev` after the merge and goes red until somebody moves it (it cannot open its own PR — see the note above). Integration tests are skipped without `MONGO_TEST_URI`.
 
 Canonical run is `pytest` inside the project virtualenv (PRO-50, pinned `pydantic`/`pydantic-core`/`pydantic-settings` for deterministic resolution). Unit tests need neither a real MongoDB (in-memory `mongomock`) nor a real Redis (in-memory `fakeredis`, PRO-78) — no external services required.
 

@@ -57,16 +57,40 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Compare the *counts*, not the string. pytest omits a clause whose
+          # count is zero ("1640 passed, 87 skipped" once the last xfail is
+          # fixed), so a human who bumps the line by pasting pytest's own
+          # summary writes a line this job used to read as drifted — it rebuilt
+          # `wanted` with an unconditional ", 0 xfailed" and then went red
+          # trying to open a PR that changed nothing but punctuation. That is
+          # exactly what happened on 290e624 (PRO-186 retired the last two
+          # xfails). Reading three integers off each side makes the shape of
+          # the line irrelevant.
+          counts() {
+            printf '%s %s %s' \
+              "$(echo "$1" | grep -oP '\b\K[0-9]+(?= passed)'            || echo 0)" \
+              "$(echo "$1" | grep -oP '\b\K[0-9]+(?= skipped)'           || echo 0)" \
+              "$(echo "$1" | grep -oP '\b\K[0-9]+(?= xfailed)'           || echo 0)"
+          }
+
           summary=$(grep -oP '^\d+ passed.*' pytest-output.txt | tail -1)
           passed=$(echo "$summary"  | grep -oP '\b\K[0-9]+(?= passed)')
           skipped=$(echo "$summary" | grep -oP '\b\K[0-9]+(?= skipped)' || echo 0)
           xfailed=$(echo "$summary" | grep -oP '\b\K[0-9]+(?= xfailed)' || echo 0)
           current=$(grep -oP '\*\*Current status: \K[^*]+(?=\*\*)' docs/TESTING.md)
-          wanted="${passed} passed, ${skipped} skipped, ${xfailed} xfailed"
-          echo "line now: '$current'"
-          echo "line want: '$wanted'"
-          if [ "$current" = "$wanted" ]; then
-            echo "OK — baseline line already matches. Nothing to do."
+
+          # Written the way pytest prints it, so the line and the summary a
+          # contributor copies from their terminal are the same string.
+          # `if`, not `[ … ] && …`: the runner shell is `bash -e`, where a
+          # standalone `A && B` whose A is false exits the whole step.
+          wanted="${passed} passed"
+          if [ "$skipped" -gt 0 ]; then wanted="${wanted}, ${skipped} skipped"; fi
+          if [ "$xfailed" -gt 0 ]; then wanted="${wanted}, ${xfailed} xfailed"; fi
+
+          echo "line now: '$current'  -> counts: $(counts "$current")"
+          echo "line want: '$wanted'  -> counts: $(counts "$summary")"
+          if [ "$(counts "$current")" = "$(counts "$summary")" ]; then
+            echo "OK — baseline line already matches on counts. Nothing to do."
             exit 0
           fi
 
