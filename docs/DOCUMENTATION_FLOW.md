@@ -4,9 +4,9 @@
 
 ```
 CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
-              ↓       ↓
-          REJECTED  CANCELLED
-            ↓  ↑
+              ↓    ↑  ↓
+          REJECTED |  CANCELLED
+            ↓  ↑    └── customer reports a no-show (PRO-45) → reassigned to a new pro → NEW
             │  └── reassigned to a new pro → NEW
     PENDING_ADMIN_REVIEW
 ```
@@ -15,12 +15,12 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 |--------|----------|------------|
 | `contacted` | AI extracts city + issue, opens conversation | Dispatcher (Phase 1) |
 | `new` | Pro matched and approval message sent | `_finalize_deal` |
-| `booked` | Pro approves via text ("אשר"/"1") | `_handle_approve` in `pro_flow.py` |
+| `booked` | Pro approves via text ("אשר"/"1") — also not terminal: a customer reporting a no-show (option *3* on the completion check, PRO-45) claims the lead and hands it to `reassign_lead`, which reopens it as `new` under the next pro or escalates it | `_handle_approve` in `pro_flow.py` |
 | `completed` | Pro or customer confirms work done | `customer_flow.py` |
 | `rejected` | Pro rejects via text ("דחה"/"2") — a way-station, not terminal: `_handle_reject` claims it then hands off to `monitor_service.reassign_lead`, which reopens the lead as `new` under the next pro or escalates it (PRO-117) | `_handle_reject` in `pro_flow.py` |
 | `cancelled` | Customer cancels — a cancel keyword on a BOOKED job first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit | `workflow_service.py` |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h | `admin_flow.py` / `monitor_service.py` |
-| `pending_admin_review` | No replacement pro found at any radius, `MAX_REASSIGNMENTS` exhausted, or a rejected lead's rematch itself fails | `monitor_service.py` / `workflow_service.py` / `pro_flow.py` |
+| `pending_admin_review` | No replacement pro found at any radius, `MAX_REASSIGNMENTS` exhausted, or a rejected/no-show lead's rematch itself fails (PRO-45: `escalation_reason: "no_show_reassign_failed"`) | `monitor_service.py` / `workflow_service.py` / `pro_flow.py` / `customer_flow.py` |
 
 Each transition is appended to the lead's `status_history` array (`{status, at, by}`) via `set_lead_status()`, the single writer for lead status in `lead_manager_service.py`.
 

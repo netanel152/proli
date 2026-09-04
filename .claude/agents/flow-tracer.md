@@ -55,7 +55,7 @@ Every incoming message is evaluated top-down; the **first** branch whose conditi
 
 `contacted → new → booked → completed / rejected / closed / cancelled / pending_admin_review`
 
-`pending_admin_review` is a holding state, not terminal. Since PRO-117, `rejected` is a way-station, not terminal either: a pro's reject immediately hands the lead to `reassign_lead`, which reopens it as `new` under the next pro or escalates it to `pending_admin_review` — the one sanctioned backward transition. Otherwise no backward transitions.
+`pending_admin_review` is a holding state, not terminal. Since PRO-117, `rejected` is a way-station, not terminal either: a pro's reject immediately hands the lead to `reassign_lead`, which reopens it as `new` under the next pro or escalates it to `pending_admin_review` — a sanctioned backward transition. Since PRO-45, `booked → new` is a second one: a customer reporting a no-show hands the lead to the same `reassign_lead`. Otherwise no backward transitions.
 
 ## Context-Clearing Triggers
 

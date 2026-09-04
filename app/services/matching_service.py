@@ -201,6 +201,11 @@ async def determine_best_pro(
             return None
 
         # 4. Final Selection — sort by composite score (rating + slots - no-shows)
+        #
+        # PRO-45: the no-show term is live. `no_show_count` is written by
+        # `customer_flow._handle_no_show_report` when a customer reports that a
+        # pro never arrived — until that landed the field stayed 0 forever and
+        # this penalty could never fire for anyone.
         def candidate_score(c):
             slot_bonus = 10 if c.get("has_slots", True) else 0
             no_show_penalty = c.get("no_shows", 0) * 0.5
@@ -288,6 +293,14 @@ async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:
 
     # A pro who already rejected this lead must not be able to claim it back.
     if pro["_id"] in (lead.get("rejected_by") or []):
+        return False
+
+    # PRO-45: nor may the pro the customer just reported for not showing up.
+    # The common no-show sequence — rematch finds nobody, lead parks in
+    # PENDING_ADMIN_REVIEW — leaves `pro_id` on the reported pro, and the
+    # `מצא` claim re-arms `no_show_reported_at` for the new owner. Without
+    # this the same pair could loop: reclaim, no-show again, reclaim.
+    if lead.get("no_show_reported_at") and lead.get("pro_id") == pro["_id"]:
         return False
 
     wanted = required_profession(lead)

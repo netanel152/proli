@@ -168,6 +168,7 @@ def patch_dependencies(request, monkeypatch, mock_db):
     monkeypatch.setattr(app.services.customer_flow, "users_collection", users)
     monkeypatch.setattr(app.services.customer_flow, "leads_collection", leads)
     monkeypatch.setattr(app.services.customer_flow, "reviews_collection", reviews)
+    monkeypatch.setattr(app.services.customer_flow, "slots_collection", slots)
 
     import app.services.pro_flow
 
@@ -341,6 +342,7 @@ async def integration_db(monkeypatch):
     monkeypatch.setattr(app.services.customer_flow, "users_collection", users)
     monkeypatch.setattr(app.services.customer_flow, "leads_collection", leads)
     monkeypatch.setattr(app.services.customer_flow, "reviews_collection", reviews)
+    monkeypatch.setattr(app.services.customer_flow, "slots_collection", slots)
 
     import app.services.pro_flow
 
