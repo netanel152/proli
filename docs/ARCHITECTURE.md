@@ -194,7 +194,7 @@ process_incoming_message(chat_id, text, media_url)
         │
         └─ Customer flow:
                ├─ log message
-               ├─ customer_flow checks (completion/rating/review)
+               ├─ customer_flow checks (completion/no-show/rating/review)
                ├─ media handling (image bytes / audio+video URL)
                │
                ├─ Phase 1 — Dispatcher AI (last 5 turns = 10 messages)
@@ -288,9 +288,9 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 
 ```
 CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
-                ↓                ↓
-            REJECTED       CANCELLED
-              ↓  ↑
+                ↓     ↑  ↓
+            REJECTED  |  CANCELLED
+              ↓  ↑     └── customer reports a no-show (PRO-45) → reassigned to a new pro → NEW
               │  └── reassigned to a new pro → NEW
        PENDING_ADMIN_REVIEW  (no replacement pro found, or the reassign itself failed)
 ```
@@ -299,7 +299,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 |--------|---------|
 | `contacted` | AI opened a conversation, no pro assigned yet |
 | `new` | Pro matched and sent approval request |
-| `booked` | Pro approved, appointment slot locked |
+| `booked` | Pro approved, appointment slot locked — also not terminal: a customer reporting a no-show (`customer_flow._handle_no_show_report`, PRO-45) claims the lead, releases the slot, and hands it to `reassign_lead`, which reopens it as `new` under the next pro or escalates to `pending_admin_review` |
 | `completed` | Work done, awaiting customer rating |
 | `rejected` | Pro declined — a way-station, not terminal: `reassign_lead` immediately either reopens the lead as `new` under the next pro or escalates to `pending_admin_review` (PRO-117) |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h |

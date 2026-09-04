@@ -94,6 +94,10 @@ async def test_valid_pick_reschedules_and_notifies_pro(reschedule_env):
     assert new_slot["is_taken"] is True
     assert old_slot["is_taken"] is False
     assert lead["booked_slot_id"] == new_slot_id
+    # PRO-45: the datetime moves with the booking, not just the display
+    # string -- otherwise a job moved from Monday to Friday would still read
+    # as past-due to the no-show report's "has the appointment come due" gate.
+    assert lead["appointment_datetime"] == new_slot["start_time"]
     assert lead["rescheduled_count"] == 1
     mock_state.clear_state.assert_awaited_once_with("customer@c.us")
     # Customer success + pro notification both sent

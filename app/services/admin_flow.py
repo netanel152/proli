@@ -255,7 +255,15 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
         # `created_at` reset — the lead has a fresh owner, so a future stuck
         # period is a new incident and must be able to page the operator rather
         # than inherit the previous one's mute.
-        extra_unset={"escalation_reason": "", "admin_reported_at": ""},
+        # PRO-45: `no_show_reported_at` re-arms for the same reason. The common
+        # sequence is a no-show whose rematch found nobody, so the lead reaches
+        # the admin still carrying the stamp — left in place, the pro assigned
+        # here could never be reported for a no-show on this lead.
+        extra_unset={
+            "escalation_reason": "",
+            "admin_reported_at": "",
+            "no_show_reported_at": "",
+        },
     )
 
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})

@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
+from datetime import datetime, timezone
 from app.core.constants import ISRAEL_CITIES_COORDS
 from app.services.matching_service import (
     determine_best_pro,
@@ -357,6 +358,38 @@ async def test_geo_sorts_by_rating(mock_matching_dependencies):
     assert result == pro_high
 
 
+@pytest.mark.asyncio
+async def test_geo_no_show_penalty_deprioritizes_higher_rated_pro(
+    mock_matching_dependencies,
+):
+    """PRO-45: `no_show_count` is now a real signal on `candidate_score`
+    (`rating - no_shows * 0.5`). A pro with enough recorded no-shows must lose
+    to a lower-rated pro with a clean record, or the field the customer-flow
+    handler now writes still can't move a routing decision."""
+    mock_users, mock_leads = mock_matching_dependencies
+
+    pro_high_but_flaky = {
+        "_id": ObjectId(),
+        "business_name": "High Rating, Flaky",
+        "social_proof": {"rating": 5.0},
+        "no_show_count": 6,  # penalty 3.0 -> effective 2.0
+    }
+    pro_low_but_reliable = {
+        "_id": ObjectId(),
+        "business_name": "Lower Rating, Reliable",
+        "social_proof": {"rating": 3.0},  # no no-shows -> effective 3.0
+    }
+
+    mock_users.aggregate = _mock_users_aggregate(
+        [pro_high_but_flaky, pro_low_but_reliable]
+    )
+    mock_leads.aggregate = _mock_leads_aggregate({})
+
+    result = await determine_best_pro(location="Tel Aviv")
+
+    assert result == pro_low_but_reliable
+
+
 # ---------------------------------------------------------------------------
 # is_pro_eligible_for_lead / required_profession (PRO-123)
 #
@@ -424,6 +457,24 @@ async def test_is_pro_eligible_for_lead_pro_state_and_load_gates(eligible_env):
 
     mock_leads.count_documents = AsyncMock(return_value=WorkerConstants.MAX_PRO_LOAD)
     assert await is_pro_eligible_for_lead(baseline, lead) is False
+
+
+@pytest.mark.asyncio
+async def test_is_pro_eligible_for_lead_no_show_gate_is_scoped_to_reported_pro(
+    eligible_env,
+):
+    """PRO-45: the pro named on the lead when `no_show_reported_at` is set must
+    not reclaim their own lead through the מצא search -- but the guard is
+    scoped to that pro specifically, not the lead as a whole: a different
+    (replacement) pro is still eligible for the same lead."""
+    baseline = _pro(location={"type": "Point", "coordinates": [34.7818, 32.0853]})
+    other_pro = _pro(location={"type": "Point", "coordinates": [34.7818, 32.0853]})
+    reported_lead = _lead(
+        no_show_reported_at=datetime.now(timezone.utc), pro_id=baseline["_id"]
+    )
+
+    assert await is_pro_eligible_for_lead(baseline, reported_lead) is False
+    assert await is_pro_eligible_for_lead(other_pro, reported_lead) is True
 
 
 @pytest.mark.asyncio

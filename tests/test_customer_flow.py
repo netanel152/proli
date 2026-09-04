@@ -8,8 +8,10 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 from app.core.constants import LeadStatus, Defaults, WorkerConstants
 from app.core.messages import Messages
+from app.core.phone import to_chat_id
 from tests.copy_util import static_prefix, longest_static_chunk
 import app.services.customer_flow
+from app.services import monitor_service
 from app.services.customer_flow import (
     send_customer_completion_check,
     handle_customer_completion_text,
@@ -235,6 +237,326 @@ async def test_decline_reply_ignored_when_no_check_was_sent(flow_db, mock_whatsa
     result = await handle_customer_completion_text(chat_id, "2", mock_whatsapp)
 
     assert result is None
+
+
+# --- PRO-45: "3 / איש המקצוע לא הגיע" no-show report ----------------------
+#
+# `no_show_count` was structurally dead until this landed: `candidate_score`
+# in matching_service has always subtracted `no_shows * 0.5`, but nothing
+# ever incremented the field. These tests pin the one production writer it
+# now has (`_handle_no_show_report`, reached only through the completion
+# check's "3" reply or an unprompted "לא הגיע").
+
+
+@pytest.fixture
+def mock_reassign(monkeypatch):
+    """`_handle_no_show_report` hands the lead to `monitor_service.reassign_lead`
+    (imported locally inside the function) -- patch the attribute on the real
+    module object, not on `customer_flow`, which never binds the name.
+
+    Also stubs `page_operator` (bound directly into `customer_flow` via
+    `from ... import page_operator`, so nothing else patches it): every
+    no-show report pages the operator, and without a stub each of these tests
+    fires a real `page_critical` -- harmless without SENTRY_DSN, but a
+    locally configured run would page a human from a test."""
+    mock = AsyncMock(return_value=True)
+    monkeypatch.setattr(monitor_service, "reassign_lead", mock)
+    monkeypatch.setattr(app.services.customer_flow, "page_operator", MagicMock())
+    return mock
+
+
+async def _seed_booked_lead_with_pro(db, chat_id: str, **extra):
+    pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": pro_id,
+            "business_name": "דני חשמלאי",
+            "phone_number": "972509999999",
+        }
+    )
+    slot_id = ObjectId()
+    await db.slots.insert_one({"_id": slot_id, "is_taken": True})
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "booked_slot_id": slot_id,
+            "created_at": datetime.now(timezone.utc) - timedelta(hours=8),
+            **extra,
+        }
+    )
+    return lead_id, pro_id, slot_id
+
+
+@pytest.mark.asyncio
+async def test_no_show_digit_reports_and_drives_every_side_effect(
+    flow_db, mock_whatsapp, mock_reassign
+):
+    """The bare '3', on a lead that was actually nudged, is the whole PRO-45
+    chain: penalty recorded, slot freed, old pro told, reassignment handed
+    off with notify_old_pro=False (this is not "no response"), and the
+    customer gets the receipt copy."""
+    chat_id = "972502222410@c.us"
+    lead_id, pro_id, slot_id = await _seed_booked_lead_with_pro(
+        flow_db,
+        chat_id,
+        completion_check_sent_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+
+    result = await handle_customer_completion_text(chat_id, "3", mock_whatsapp)
+
+    assert result == Messages.Customer.NO_SHOW_ACK
+
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["no_show_reported_at"] is not None
+    # The claim $unsets the pointer to the slot it is about to release -- the
+    # lead survives (unlike every other slot release in the codebase), so a
+    # later cancel/reschedule must not free a slot the old pro may since have
+    # re-sold.
+    assert "booked_slot_id" not in lead
+
+    pro = await flow_db.users.find_one({"_id": pro_id})
+    assert pro["no_show_count"] == 1  # scheduling_service.record_no_show, for real
+
+    slot = await flow_db.slots.find_one({"_id": slot_id})
+    assert slot["is_taken"] is False
+
+    mock_whatsapp.send_message.assert_called_once_with(
+        to_chat_id("972509999999"), Messages.Pro.CUSTOMER_REPORTED_NO_SHOW
+    )
+
+    mock_reassign.assert_awaited_once()
+    reassign_args = mock_reassign.await_args
+    assert reassign_args.args[0]["_id"] == lead_id
+    assert reassign_args.kwargs["notify_old_pro"] is False
+
+
+@pytest.mark.asyncio
+async def test_no_show_digit_ignored_without_nudge(
+    flow_db, mock_whatsapp, mock_reassign
+):
+    """The bare '3' stays as narrow as the '2' decline: without a completion
+    check actually sent, a stray '3' in some other numeric menu must not
+    cancel a live booked job."""
+    chat_id = "972502222411@c.us"
+    lead_id, pro_id, _ = await _seed_booked_lead_with_pro(flow_db, chat_id)
+
+    result = await handle_customer_completion_text(chat_id, "3", mock_whatsapp)
+
+    assert result is None
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert "no_show_reported_at" not in lead
+    pro = await flow_db.users.find_one({"_id": pro_id})
+    assert pro.get("no_show_count", 0) == 0
+    mock_reassign.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_show_digit_stale_nudge_ignored(flow_db, mock_whatsapp, mock_reassign):
+    """Presence of `completion_check_sent_at` is not enough on its own -- the
+    field is stamped once, never expires and is never unset, so without
+    `NO_SHOW_REPORT_MAX_AGE_HOURS` a stray '3' from that chat would stay armed
+    for the rest of the booking's life. Same trap PRO-122 closed for the
+    rating prompt."""
+    chat_id = "972502222415@c.us"
+    stale = datetime.now(timezone.utc) - timedelta(
+        hours=WorkerConstants.NO_SHOW_REPORT_MAX_AGE_HOURS + 1
+    )
+    lead_id, pro_id, _ = await _seed_booked_lead_with_pro(
+        flow_db, chat_id, completion_check_sent_at=stale
+    )
+
+    result = await handle_customer_completion_text(chat_id, "3", mock_whatsapp)
+
+    assert result is None
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert "no_show_reported_at" not in lead
+    pro = await flow_db.users.find_one({"_id": pro_id})
+    assert pro.get("no_show_count", 0) == 0
+    mock_reassign.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "suffix, text",
+    [("20", "לא הגיע"), ("21", "איש המקצוע לא הגיע")],
+)
+async def test_no_show_written_form_reports_when_appointment_due(
+    flow_db, mock_whatsapp, mock_reassign, suffix, text
+):
+    """Unlike the digit, the written forms carry no menu ambiguity, so they
+    need no completion-check nudge -- but they do need the appointment to
+    have actually come due."""
+    chat_id = f"9725022224{suffix}@c.us"
+    past = datetime.now(timezone.utc) - timedelta(hours=1)
+    lead_id, pro_id, _ = await _seed_booked_lead_with_pro(
+        flow_db, chat_id, appointment_datetime=past
+    )
+
+    result = await handle_customer_completion_text(chat_id, text, mock_whatsapp)
+
+    assert result == Messages.Customer.NO_SHOW_ACK
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["no_show_reported_at"] is not None
+    pro = await flow_db.users.find_one({"_id": pro_id})
+    assert pro["no_show_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_no_show_written_form_future_appointment_not_due(
+    flow_db, mock_whatsapp, mock_reassign
+):
+    """'לא הגיע' about a job booked for later must not tear the booking down
+    before the appointment has even happened."""
+    chat_id = "972502222422@c.us"
+    future = datetime.now(timezone.utc) + timedelta(hours=2)
+    lead_id, pro_id, _ = await _seed_booked_lead_with_pro(
+        flow_db, chat_id, appointment_datetime=future
+    )
+
+    result = await handle_customer_completion_text(chat_id, "לא הגיע", mock_whatsapp)
+
+    assert result is None
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert "no_show_reported_at" not in lead
+    pro = await flow_db.users.find_one({"_id": pro_id})
+    assert pro.get("no_show_count", 0) == 0
+    mock_reassign.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chat_suffix, has_live_nudge, expect_report",
+    [("23", True, True), ("24", False, False)],
+)
+async def test_no_show_written_form_asap_falls_back_to_live_nudge(
+    flow_db, mock_whatsapp, mock_reassign, chat_suffix, has_live_nudge, expect_report
+):
+    """An ASAP lead carries no `appointment_datetime` at all, so the written
+    form leans on the same live-nudge evidence the digit uses -- it is not a
+    free pass just because there was never a scheduled time to compare against."""
+    chat_id = f"9725022224{chat_suffix}@c.us"
+    extra = {}
+    if has_live_nudge:
+        extra["completion_check_sent_at"] = datetime.now(timezone.utc) - timedelta(
+            minutes=5
+        )
+    lead_id, _, _ = await _seed_booked_lead_with_pro(flow_db, chat_id, **extra)
+
+    result = await handle_customer_completion_text(chat_id, "לא הגיע", mock_whatsapp)
+
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    if expect_report:
+        assert result == Messages.Customer.NO_SHOW_ACK
+        assert lead["no_show_reported_at"] is not None
+    else:
+        assert result is None
+        assert "no_show_reported_at" not in lead
+
+
+@pytest.mark.asyncio
+async def test_no_show_second_report_is_idempotent(
+    flow_db, mock_whatsapp, mock_reassign
+):
+    """The claim requires `no_show_reported_at` to be absent -- a second '3'
+    (a double tap, or two worker replicas) must not cost the pro a second
+    penalty or trigger a second rematch."""
+    chat_id = "972502222412@c.us"
+    already_reported = datetime.now(timezone.utc) - timedelta(minutes=1)
+    _, pro_id, _ = await _seed_booked_lead_with_pro(
+        flow_db,
+        chat_id,
+        completion_check_sent_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+        no_show_reported_at=already_reported,
+    )
+    await flow_db.users.update_one({"_id": pro_id}, {"$set": {"no_show_count": 1}})
+
+    result = await handle_customer_completion_text(chat_id, "3", mock_whatsapp)
+
+    assert result is None
+    pro = await flow_db.users.find_one({"_id": pro_id})
+    assert pro["no_show_count"] == 1  # unchanged — not incremented again
+    mock_reassign.assert_not_awaited()
+    mock_whatsapp.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_show_substring_is_not_a_false_positive(
+    flow_db, mock_whatsapp, mock_reassign
+):
+    """PRO-118's lesson, reapplied: matching is an exact set, never a
+    substring, so a plumbing complaint that happens to contain the phrase
+    ('water didn't arrive at the boiler') can't cancel the job it describes."""
+    chat_id = "972502222413@c.us"
+    lead_id, _, _ = await _seed_booked_lead_with_pro(flow_db, chat_id)
+
+    result = await handle_customer_completion_text(
+        chat_id, "המים לא הגיעו לדוד", mock_whatsapp
+    )
+
+    assert result is None
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert "no_show_reported_at" not in lead
+    mock_reassign.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_show_digit_defers_to_pending_rating(
+    flow_db, mock_whatsapp, mock_reassign
+):
+    """PRO-122's guard at the top of the caller runs before PRO-45's branch:
+    a bare '3' answering a live 1-5 rating question must not be read as a
+    no-show report on some other booked lead."""
+    chat_id = "972502222414@c.us"
+    lead_id, _, _ = await _seed_booked_lead_with_pro(
+        flow_db,
+        chat_id,
+        completion_check_sent_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+    await flow_db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat_id,
+            "status": LeadStatus.COMPLETED,
+            "waiting_for_rating": True,
+            "completed_at": datetime.now(timezone.utc),
+        }
+    )
+
+    result = await handle_customer_completion_text(chat_id, "3", mock_whatsapp)
+
+    assert result is None
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert "no_show_reported_at" not in lead  # BOOKED lead untouched
+    mock_reassign.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_show_reassign_raises_escalates_to_pending_admin_review(
+    flow_db, mock_whatsapp, mock_reassign
+):
+    """A raised `reassign_lead` must not leave the lead BOOKED under a pro who
+    was just told the job was taken away, with its slot already released and
+    `no_show_reported_at` blocking any second report -- it escalates to
+    PENDING_ADMIN_REVIEW instead."""
+    chat_id = "972502222416@c.us"
+    mock_reassign.side_effect = RuntimeError("boom")
+    lead_id, _, _ = await _seed_booked_lead_with_pro(
+        flow_db,
+        chat_id,
+        completion_check_sent_at=datetime.now(timezone.utc) - timedelta(minutes=5),
+    )
+
+    result = await handle_customer_completion_text(chat_id, "3", mock_whatsapp)
+
+    # The report itself still succeeded — the receipt copy is unconditional.
+    assert result == Messages.Customer.NO_SHOW_ACK
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert lead["escalation_reason"] == "no_show_reassign_failed"
 
 
 # --- handle_customer_completion_text ---

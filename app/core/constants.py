@@ -148,7 +148,10 @@ class WorkerConstants:
     # every 30 min and a BOOKED lead stays selectable for the whole 6–24h Tier-2
     # window, so without a cap + cooldown every open lead re-sent the completion
     # check on every tick (once per open lead, per tick).
-    MAX_CUSTOMER_COMPLETION_CHECKS = 2  # Max completion checks per booked lead
+    # Per *booking*, not per lead: `reassign_lead` clears the counters when the
+    # lead gets a fresh owner (PRO-45), so a lead reassigned MAX_REASSIGNMENTS
+    # times can be nudged this many times about each pro in turn.
+    MAX_CUSTOMER_COMPLETION_CHECKS = 2
     CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS = 6  # Min gap between two auto checks
     # PRO-122: how many times an unparseable reply to the 1-5 rating prompt is
     # re-prompted before `waiting_for_rating` is released. The flag never clears
@@ -161,6 +164,18 @@ class WorkerConstants:
     # customer types -- landing a rating on the wrong (long-closed) job and
     # leaving the current one uncompleted.
     RATING_PROMPT_MAX_AGE_HOURS = 48
+    # PRO-45: how long the completion check stays answerable by the bare "3"
+    # ("איש המקצוע לא הגיע"). Exactly the reasoning above, and it matters more
+    # here than it does for a rating: `completion_check_sent_at` is stamped
+    # 6-24h after the lead is created, never expires and is never unset, so
+    # without a window a job booked for next week would have every stray "3"
+    # from that chat read as "the pro never arrived" — releasing the slot,
+    # taking the job away and permanently penalising a pro who has not yet
+    # been given a chance to show up. `record_no_show` only ever increments.
+    # Note the "2 / עדיין לא" decline restarts `completion_check_sent_at` to
+    # push the cooldown forward, so answering "not yet" also keeps "3" live for
+    # another window — the customer did just answer that menu.
+    NO_SHOW_REPORT_MAX_AGE_HOURS = 48
     STALE_BOOKED_LEAD_HOURS = 24  # Threshold for considering a booked lead "stale"
     GEO_RADIUS_STEPS = [
         10000,

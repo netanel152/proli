@@ -280,10 +280,24 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
             # page. A new pro is a new wait, so both re-arm here — otherwise a
             # customer who declares an emergency against the *replacement* pro
             # gets the generic soft-hold reply and nobody is paged.
+            #
+            # PRO-45 rides it too: `no_show_reported_at` is what stops one
+            # report from costing a pro two no-shows, and it is scoped to the
+            # pro who was booked at the time. Left in place it would silently
+            # exempt the *replacement* pro — a customer stood up twice could
+            # only ever report the first one.
+            # `completion_check_*` go with them: the Tier-2 nudge belongs to a
+            # booking, not to a lead. Carried over, a count already at
+            # MAX_CUSTOMER_COMPLETION_CHECKS means the new pro's job is never
+            # nudged at all — and after PRO-45 that also withholds the menu the
+            # safe no-show report is answered from.
             extra_unset={
                 "admin_reported_at": "",
                 "emergency_hold_acked": "",
                 "emergency_paused_alerted": "",
+                "no_show_reported_at": "",
+                "completion_check_sent_at": "",
+                "completion_check_sent_count": "",
             },
             expected_status=lead.get("status"),
         )

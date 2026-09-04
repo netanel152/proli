@@ -35,7 +35,8 @@ class Messages:
             "היי 👋 רק לוודא שהכל תקין עם השירות מ{pro_name}.\n"
             "העבודה הסתיימה?\n"
             "*1* — כן, הסתיים\n"
-            "*2* — עדיין לא"
+            "*2* — עדיין לא\n"
+            "*3* — איש המקצוע לא הגיע"
         )
         COMPLETION_ACK = (
             "🙌 מעולה, שמחתי לשמוע.\n"
@@ -45,6 +46,13 @@ class Messages:
             "👍 אין בעיה, לא אטריד יותר בינתיים.\n"
             "כשהעבודה תסתיים אפשר לכתוב לי כאן *סיימתי* ונמשיך משם."
         )
+        # PRO-45: answer to option *3*. It is a receipt for the report and
+        # nothing else. `reassign_lead` runs before this reaches the customer
+        # and messages them itself on every branch — a replacement search, a
+        # pending-review notice, or the exhausted-attempts message — and the
+        # dispatcher sends this one *last*, so any disposition claimed here
+        # would overwrite whichever of those just landed.
+        NO_SHOW_ACK = "🙏 מצטערים שאיש המקצוע לא הגיע. רשמנו את הדיווח."
         RATING_THANKS = "⭐ תודה רבה על הדירוג!"
         # PRO-122: the closing question used to accept only an exact "1"-"5".
         # Anything else fell through to the dispatcher, which — context already
@@ -388,6 +396,13 @@ class Messages:
             "אם סיימת אותה — אפשר לכתוב *סיימתי* כדי לשחרר מקום לעבודות חדשות."
         )
         CUSTOMER_REPORTED_COMPLETION = "👍 הלקוח דיווח שהעבודה הסתיימה. הסטטוס עודכן."
+        # PRO-45: replaces `SOS.PRO_LOST_LEAD` ("הועברה עקב חוסר מענה") for this
+        # path — the lead is taken away for a reason the pro is entitled to be
+        # told accurately, and "no response" is not that reason.
+        CUSTOMER_REPORTED_NO_SHOW = (
+            "⚠️ הלקוח דיווח שלא הגעת לעבודה שנקבעה.\n"
+            "הבקשה הועברה להמשך טיפול והדיווח נרשם."
+        )
         APPROVE_SUCCESS = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
         CALENDAR_UPDATE_SUCCESS = "\nהיומן עודכן בהצלחה."
         NO_PENDING_APPROVE = "לא מצאתי עבודה חדשה לאישור."

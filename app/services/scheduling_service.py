@@ -173,9 +173,21 @@ async def get_available_slots(pro_id: str, date: datetime | None = None, limit: 
 # --- No-Show Tracking ---
 
 async def record_no_show(pro_id) -> int:
-    """
-    Increment no-show count for a pro. Returns new count.
-    Called when a Tier 3 stale lead is detected.
+    """Increment a pro's no-show count. Returns the new count.
+
+    PRO-45: called from exactly one place —
+    ``customer_flow._handle_no_show_report``, when a customer answers the
+    completion check to say the pro never arrived. That is the whole
+    definition of a no-show here: a customer said so.
+
+    It is deliberately **not** driven by Tier-3 staleness, which this
+    docstring claimed for months while nothing called the function at all.
+    An unclosed ticket says the conversation went quiet; it says nothing
+    about whether anyone showed up at the door, and a pro who did the job
+    and simply never closed the thread must not be penalised for it.
+
+    Not idempotent — this is a ``$inc``. The caller claims the lead
+    atomically (``no_show_reported_at``) so one report costs one no-show.
     """
     oid = ObjectId(pro_id) if isinstance(pro_id, str) else pro_id
     result = await users_collection.find_one_and_update(
