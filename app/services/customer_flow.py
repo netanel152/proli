@@ -8,8 +8,10 @@ from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.text_matching import contains_keyword, is_emergency_text
 from app.core.constants import LeadStatus, Defaults, Actor, WorkerConstants
-from app.core.phone import to_chat_id
+from app.core.phone import to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
+from app.services.notification_service import page_operator
+from app.services.scheduling_service import record_no_show
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
 from bson import ObjectId
@@ -161,6 +163,217 @@ async def _handle_completion_check_decline(
     return Messages.Customer.COMPLETION_NOT_YET_ACK
 
 
+# PRO-45: the third answer to the completion check, and the only production
+# writer `no_show_count` has ever had. `matching_service.candidate_score` has
+# always subtracted `no_shows * 0.5` from a candidate, but nothing incremented
+# the field, so the penalty was structurally dead — no pro could be
+# deprioritised for standing a customer up.
+#
+# A no-show here means exactly one thing: *the customer said the pro never
+# arrived*. It is never inferred. An unclosed ticket is a Tier-3 staleness
+# signal about the conversation, not a statement about whether anyone showed up
+# at the door, and conflating the two would penalise a pro who did the job and
+# simply never closed the thread.
+#
+# Exact-set matching, never `contains_keyword` — PRO-118's lesson. A substring
+# match on "לא הגיע" fires on "המים לא הגיעו לדוד", which is a plumbing
+# complaint, and would cancel the very job the customer is describing.
+_NO_SHOW_TOKENS = {
+    "איש המקצוע לא הגיע",
+    "המקצוען לא הגיע",
+    "לא הגיע",
+    "לא הגיעה",
+    "הוא לא הגיע",
+    "היא לא הגיעה",
+    "no show",
+    "no-show",
+}
+_NO_SHOW_DIGIT = "3"
+
+
+async def _handle_no_show_report(
+    chat_id: str, stripped: str, normalized: str, whatsapp
+):
+    """Answer "3 / איש המקצוע לא הגיע" to a completion check (PRO-45).
+
+    Records the no-show against the pro, frees the slot nobody used, tells the
+    pro why the job left them, pages the operator, and hands the lead to
+    ``reassign_lead`` — the PRO-117 shape, so a customer who was stood up gets
+    another pro instead of being left holding a booking nobody honoured.
+
+    **Both readings are gated, because everything this does is one-way.**
+    ``record_no_show`` only ever increments — nothing in the codebase decrements
+    it — so a false positive costs a named pro 0.5 in ``candidate_score``
+    forever, on top of releasing the slot and taking the job away.
+
+    The bare digit is an answer to a menu, so it needs the menu to have been
+    asked *recently*: ``completion_check_sent_at`` present and no older than
+    ``NO_SHOW_REPORT_MAX_AGE_HOURS``. Presence alone is not enough — the field
+    is stamped 6-24h after the lead is created, never expires and is never
+    unset, so it would arm every stray "3" from that chat for the life of the
+    booking. That is exactly the trap PRO-122 closed for the rating prompt with
+    ``RATING_PROMPT_MAX_AGE_HOURS``, and it bites harder here: a "3" typed
+    during free-text intake, into an ``AWAITING_RESCHEDULE_TIME`` menu whose 4h
+    state TTL has lapsed, or after the loyalty guard's double-miss release, all
+    reach this handler.
+
+    The written forms are unprompted, so they need the appointment to have
+    *happened*: "לא הגיע" about a job booked for next Tuesday, typed on Monday,
+    is not a no-show report. A lead with no ``appointment_datetime`` (ASAP)
+    falls back to the same live-nudge evidence the digit uses.
+
+    Matching is exact-set, never ``contains_keyword`` (PRO-118).
+
+    Ordering note: the PRO-122 guard at the top of the caller defers a bare
+    digit to a live rating prompt, so "3" answering a 1-5 question never reaches
+    this branch.
+    """
+    from app.services import monitor_service
+
+    is_digit = stripped == _NO_SHOW_DIGIT
+    if not is_digit and not (
+        normalized in _NO_SHOW_TOKENS or stripped in _NO_SHOW_TOKENS
+    ):
+        return None
+
+    now = datetime.now(timezone.utc)
+    # A completion check is only answerable while it is live — see the class
+    # docstring above and `WorkerConstants.NO_SHOW_REPORT_MAX_AGE_HOURS`.
+    live_nudge = {
+        "completion_check_sent_at": {
+            "$gte": now - timedelta(hours=WorkerConstants.NO_SHOW_REPORT_MAX_AGE_HOURS)
+        }
+    }
+    claim = {
+        "chat_id": chat_id,
+        "status": LeadStatus.BOOKED,
+        # `record_no_show` is a `$inc`, so the claim is what makes one report
+        # cost the pro exactly one no-show. Two worker replicas, or a customer
+        # tapping "3" twice, cannot both win this update.
+        "no_show_reported_at": {"$exists": False},
+    }
+    if is_digit:
+        claim.update(live_nudge)
+    else:
+        # Unprompted: only about an appointment that has already come due. An
+        # ASAP lead carries no `appointment_datetime`, so it leans on the same
+        # live-nudge evidence that the job was expected to be over by now.
+        claim["$or"] = [
+            {"appointment_datetime": {"$lte": now}},
+            {"appointment_datetime": {"$exists": False}, **live_nudge},
+        ]
+
+    lead = await leads_collection.find_one_and_update(
+        claim,
+        {
+            "$set": {"no_show_reported_at": now},
+            # The slot is released below, so the pointer to it must go with it.
+            # Every other release in the codebase either terminates the lead or
+            # immediately re-points this field; here the lead survives, and the
+            # replacement pro's approval only overwrites it when a booking
+            # actually succeeds. Left dangling, a later cancel or reschedule
+            # would free a slot the old pro may since have sold to someone else.
+            "$unset": {"booked_slot_id": ""},
+        },
+        sort=[("created_at", -1)],
+    )
+    if not lead:
+        return None
+
+    pro_id = lead.get("pro_id")
+    logger.warning(
+        f"[NoShow] Customer reported a no-show for lead {lead['_id']} "
+        f"(pro {pro_id}) — recording and reassigning."
+    )
+
+    # 1. The penalty finally has a writer.
+    if pro_id:
+        try:
+            await record_no_show(pro_id)
+        except Exception as e:
+            # Never abort the reassignment over the bookkeeping half: the
+            # customer still needs another pro whether or not the counter moved.
+            logger.error(f"Failed to record no-show for pro {pro_id}: {e}")
+
+    # 2. Free the slot nobody used — same release `pro_flow._execute_cancel`
+    #    performs, so the pro's calendar does not keep an hour that was never
+    #    worked.
+    if lead.get("booked_slot_id"):
+        try:
+            await slots_collection.update_one(
+                {"_id": lead["booked_slot_id"]},
+                {"$set": {"is_taken": False}},
+            )
+        except Exception as e:
+            logger.error(f"Failed to release slot for lead {lead['_id']}: {e}")
+
+    # 3. Tell the pro, best-effort. `reassign_lead` is called with
+    #    `notify_old_pro=False` below because its `PRO_LOST_LEAD` copy says
+    #    "הועברה עקב חוסר מענה", which is not what happened here.
+    if pro_id:
+        pro = await users_collection.find_one({"_id": pro_id})
+        if pro and pro.get("phone_number"):
+            try:
+                await whatsapp.send_message(
+                    to_chat_id(pro["phone_number"]),
+                    Messages.Pro.CUSTOMER_REPORTED_NO_SHOW,
+                )
+            except Exception as e:
+                logger.error(f"Failed to notify pro {pro_id} of no-show report: {e}")
+
+    # 4. Page the operator. A no-show is a trust incident against a named pro
+    #    and the 4-hourly Reporter is far too slow to be the first they hear of
+    #    it. PII rules as everywhere else (PRO-173): last-4 only, city not
+    #    street, the lead id is the admin-panel lookup key.
+    try:
+        local_phone = to_local_phone(chat_id) or ""
+        page_operator(
+            f"Customer reported a pro no-show — customer ***{local_phone[-4:]}, "
+            f"pro={pro_id}, issue={lead.get('issue_type') or 'unknown'}, "
+            f"city={monitor_service.page_safe_city(lead)}, lead={lead['_id']}. "
+            "Lead handed to reassignment."
+        )
+    except Exception as e:
+        logger.error(f"Failed to page operator for no-show on lead {lead['_id']}: {e}")
+
+    # 5. Rematch. Every branch inside `reassign_lead` messages the customer
+    #    itself — a replacement search, an escalation, or the exhausted-attempts
+    #    notice — so the acknowledgement returned below is only ever the receipt
+    #    for the report, never the promise of a new pro.
+    try:
+        await monitor_service.reassign_lead(lead, notify_old_pro=False)
+    except Exception as e:
+        logger.error(f"Reassignment after no-show failed for lead {lead['_id']}: {e}")
+        # Never leave a BOOKED lead owned by the pro we have just told it was
+        # taken from them, with its slot released and `no_show_reported_at`
+        # blocking any second report. `reassign_lead` owns this transition on
+        # every path it completes; this covers the one where it raises.
+        try:
+            escalated = await set_lead_status(
+                lead["_id"],
+                LeadStatus.PENDING_ADMIN_REVIEW,
+                Actor.SYSTEM,
+                extra_set={"escalation_reason": "no_show_reassign_failed"},
+                expected_status=LeadStatus.BOOKED,
+            )
+            if escalated is None:
+                # `reassign_lead` moved the status before it raised, so the
+                # lead already has a better answer than this one (NEW under
+                # the replacement pro, or PENDING_ADMIN_REVIEW from its own
+                # escalation). Leave it.
+                logger.info(
+                    f"⏭️ Lead {lead['_id']} already moved by another caller — "
+                    "no-show rollback not applied."
+                )
+        except Exception as escalate_err:
+            logger.error(
+                f"Failed to escalate lead {lead['_id']} after a raised "
+                f"no-show reassignment: {escalate_err}"
+            )
+
+    return Messages.Customer.NO_SHOW_ACK
+
+
 def rating_prompt_open_filter(now_utc: datetime | None = None) -> dict:
     """Mongo sub-filter for a rating prompt that is still live (PRO-122).
 
@@ -225,6 +438,14 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     )
 
     if not is_completion:
+        # PRO-45 before the decline path: "3" is in neither token set, so the
+        # two cannot collide, but a no-show is the more consequential reading of
+        # a completion-check answer and is resolved first.
+        no_show_resp = await _handle_no_show_report(
+            chat_id, stripped, normalized, whatsapp
+        )
+        if no_show_resp:
+            return no_show_resp
         return await _handle_completion_check_decline(chat_id, stripped, normalized)
 
     lead = await leads_collection.find_one(
@@ -616,6 +837,12 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         {
             "$set": {
                 "appointment_time": new_time,
+                # PRO-45: the datetime moves with the booking. Only the display
+                # string used to be rewritten here, so a job moved from Monday to
+                # Friday kept Monday's `appointment_datetime` — and the no-show
+                # report's "has the appointment come due" gate would have read
+                # Tuesday's "לא הגיע" as true while the job was four days away.
+                "appointment_datetime": chosen_slot["start_time"],
                 "booked_slot_id": slot_id,
                 "rescheduled_at": datetime.now(timezone.utc),
                 "rescheduled_count": lead.get("rescheduled_count", 0) + 1,
