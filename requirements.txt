@@ -56,6 +56,7 @@ pytest-asyncio==0.23.5
 pytest-xdist==3.6.1  # `-n auto` for ad-hoc local runs only; the authoritative run (CI, test-runner) stays serial for order-dependency parity
 mongomock-motor==0.0.26
 fakeredis~=2.37  # PRO-78: in-memory Redis so unit tests never touch a real server
+PyYAML~=6.0  # PRO-183: tests/test_promote_workflow.py parses the promote workflow. CI installs only this file, so a test-only dep declared in requirements-dev.txt would silently never run there.
 black==24.1.1
 flake8==7.0.0
 watchdog==3.0.0
