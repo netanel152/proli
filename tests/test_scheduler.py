@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch, call
 from datetime import datetime, timedelta
@@ -7,9 +9,12 @@ from app.scheduler import (
     monitor_unfinished_jobs,
     send_daily_reminders,
     run_daily_backup,
+    run_backup_freshness_watchdog,
     BACKUP_FAILURE_COUNT_KEY,
+    BACKUP_WATCHDOG_SEED_KEY,
+    BACKUP_STALE_ALERT_KEY,
 )
-from app.core.constants import LeadStatus, WorkerConstants
+from app.core.constants import BACKUP_LAST_SUCCESS_KEY, LeadStatus, WorkerConstants
 from app.core.messages import Messages
 import app.scheduler as scheduler_module
 
@@ -413,18 +418,35 @@ async def test_run_daily_backup_success_deletes_counter_no_error_or_critical(
     )
     # Seed a stale failure streak — success must clear it.
     await fake_redis.set(BACKUP_FAILURE_COUNT_KEY, "3")
+    # PRO-185: seed the watchdog's own bookkeeping too — a success must clear
+    # both, not just the PRO-111 failure counter.
+    await fake_redis.set(BACKUP_WATCHDOG_SEED_KEY, "123")
+    await fake_redis.set(BACKUP_STALE_ALERT_KEY, "1")
 
     mock_logger = MagicMock()
     monkeypatch.setattr(scheduler_module, "logger", mock_logger)
     mock_page_critical = MagicMock()
     monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
 
+    before = time.time()
     await run_daily_backup()
+    after = time.time()
 
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) is None
+    assert await fake_redis.get(BACKUP_WATCHDOG_SEED_KEY) is None
+    assert await fake_redis.get(BACKUP_STALE_ALERT_KEY) is None
     mock_logger.error.assert_not_called()
     mock_page_critical.assert_not_called()
     mock_logger.info.assert_called()
+
+    # PRO-185: the freshness record itself — a parseable unix timestamp,
+    # written with NO TTL (an expired key would be indistinguishable from
+    # "never ran"). Written via str(int(time.time())) — whole-second
+    # truncation, so the stored value can read up to ~1s earlier than
+    # `before`.
+    raw_success = await fake_redis.get(BACKUP_LAST_SUCCESS_KEY)
+    assert int(before) <= float(raw_success) <= after
+    assert await fake_redis.ttl(BACKUP_LAST_SUCCESS_KEY) == -1
 
 
 @pytest.mark.asyncio
@@ -682,3 +704,230 @@ async def test_run_daily_backup_corrupted_counter_resets_then_recovers_streak(
     assert await fake_redis.get(BACKUP_FAILURE_COUNT_KEY) == "2"
     mock_page_critical.assert_called_once()
     mock_logger.error.assert_not_called()
+
+
+# --- PRO-185: backup freshness watchdog ------------------------------------
+#
+# run_backup_freshness_watchdog reads BACKUP_LAST_SUCCESS_KEY (written by
+# run_daily_backup's success branch, tested above) and pages when it is
+# absent-and-stale-since-first-seen, or present-but-too-old. Timestamps are
+# seeded relative to the real time.time() rather than freezing the clock —
+# the assertions only care about hour-scale age, which real wall-clock time
+# resolves comfortably.
+#
+# Post-review the watchdog also falls back to a durable Mongo mirror
+# (`settings.backup_state`, written by run_daily_backup's success branch)
+# whenever Redis's record is absent OR stale. `mock_db` is module-scoped
+# (one shared mongomock db per test file — see conftest.py), so every test
+# below that can reach `_durable_last_success()` clears the mirror doc
+# first: otherwise a doc left behind by an earlier test (e.g. the success
+# test above, or the fresh-mirror test below) would silently change which
+# branch a later test takes. Only the "Redis unreachable" and "unusable
+# value" tests never reach Mongo at all, so they skip `mock_db`.
+
+
+@pytest.mark.asyncio
+async def test_backup_watchdog_no_key_seeds_first_seen_and_stays_quiet(
+    monkeypatch, fake_redis, mock_db
+):
+    """Cold start: no last_success recorded yet, in Redis or the Mongo
+    mirror. The watchdog must not page on day one — it stamps the first
+    observation and waits."""
+    await mock_db.settings.delete_many({"_id": scheduler_module.BACKUP_STATE_DOC_ID})
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
+
+    before = time.time()
+    await run_backup_freshness_watchdog()
+    after = time.time()
+
+    mock_page_critical.assert_not_called()
+    mock_logger.error.assert_not_called()
+    seed = await fake_redis.get(BACKUP_WATCHDOG_SEED_KEY)
+    assert seed is not None
+    # SET NX writes str(int(now)) — whole-second truncation, so the stored
+    # seed can read up to ~1s earlier than `before`.
+    assert int(before) <= float(seed) <= after
+
+
+@pytest.mark.asyncio
+async def test_backup_watchdog_no_key_and_seed_older_than_max_age_pages(
+    monkeypatch, fake_redis, mock_db
+):
+    """Absence alone is never enough — only an absence (in both Redis and
+    the Mongo mirror) that has stood for longer than BACKUP_MAX_AGE_HOURS
+    pages."""
+    await mock_db.settings.delete_many({"_id": scheduler_module.BACKUP_STATE_DOC_ID})
+    stale_seed = time.time() - (WorkerConstants.BACKUP_MAX_AGE_HOURS + 1) * 3600
+    await fake_redis.set(BACKUP_WATCHDOG_SEED_KEY, str(int(stale_seed)))
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
+
+    await run_backup_freshness_watchdog()
+
+    mock_page_critical.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_backup_watchdog_recent_success_stays_quiet(
+    monkeypatch, fake_redis, mock_db
+):
+    """A backup 6h old is squarely inside the 48h window — no page. Fresh by
+    Redis alone, so the mirror is never consulted; cleared anyway per the
+    file-level note above."""
+    await mock_db.settings.delete_many({"_id": scheduler_module.BACKUP_STATE_DOC_ID})
+    await fake_redis.set(BACKUP_LAST_SUCCESS_KEY, str(int(time.time() - 6 * 3600)))
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
+
+    await run_backup_freshness_watchdog()
+
+    mock_page_critical.assert_not_called()
+    mock_logger.error.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backup_watchdog_stale_success_pages_once_and_sets_dedup_ttl(
+    monkeypatch, fake_redis, mock_db
+):
+    """A backup 50h old is past the 48h threshold, and no fresher mirror
+    exists to rescue it — pages, and the dedup key is written with a TTL
+    close to BACKUP_STALE_REALERT_HOURS."""
+    await mock_db.settings.delete_many({"_id": scheduler_module.BACKUP_STATE_DOC_ID})
+    await fake_redis.set(BACKUP_LAST_SUCCESS_KEY, str(int(time.time() - 50 * 3600)))
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
+
+    await run_backup_freshness_watchdog()
+
+    mock_page_critical.assert_called_once()
+    ttl = await fake_redis.ttl(BACKUP_STALE_ALERT_KEY)
+    realert_seconds = WorkerConstants.BACKUP_STALE_REALERT_HOURS * 3600
+    assert realert_seconds - 60 <= ttl <= realert_seconds
+
+
+@pytest.mark.asyncio
+async def test_backup_watchdog_redis_stale_but_durable_mirror_fresh_stays_quiet(
+    monkeypatch, fake_redis, mock_db
+):
+    """Redis's copy can lag the Mongo mirror (a failed Redis write, a
+    restore from an old snapshot) — a success recorded in either store
+    counts, so a 60h-old Redis key must not page when the mirror is only
+    5h old."""
+    await fake_redis.set(BACKUP_LAST_SUCCESS_KEY, str(int(time.time() - 60 * 3600)))
+    await mock_db.settings.update_one(
+        {"_id": scheduler_module.BACKUP_STATE_DOC_ID},
+        {"$set": {"last_success": datetime.now(pytz.utc) - timedelta(hours=5)}},
+        upsert=True,
+    )
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
+
+    await run_backup_freshness_watchdog()
+
+    mock_page_critical.assert_not_called()
+    mock_logger.info.assert_called()
+
+
+@pytest.mark.asyncio
+async def test_backup_watchdog_future_dated_mirror_is_ignored_still_pages(
+    monkeypatch, fake_redis, mock_db
+):
+    """A future-dated mirror value (clock skew beyond tolerance, or a
+    hand-written doc) must not win the stale-Redis merge — the same
+    pre-1970/future rule `_parse_unix_ts` applies to Redis applies to the
+    mirror. A 60h-old Redis key still pages even though the mirror doc
+    exists."""
+    await fake_redis.set(BACKUP_LAST_SUCCESS_KEY, str(int(time.time() - 60 * 3600)))
+    await mock_db.settings.update_one(
+        {"_id": scheduler_module.BACKUP_STATE_DOC_ID},
+        {"$set": {"last_success": datetime.now(pytz.utc) + timedelta(hours=1)}},
+        upsert=True,
+    )
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
+
+    await run_backup_freshness_watchdog()
+
+    mock_page_critical.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_backup_watchdog_second_tick_inside_realert_window_does_not_repage(
+    monkeypatch, fake_redis, mock_db
+):
+    """Two ticks while still stale must page once, not once per tick — the
+    PRO-162 dedup lesson applied to this watchdog too."""
+    await mock_db.settings.delete_many({"_id": scheduler_module.BACKUP_STATE_DOC_ID})
+    await fake_redis.set(BACKUP_LAST_SUCCESS_KEY, str(int(time.time() - 50 * 3600)))
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
+
+    await run_backup_freshness_watchdog()
+    await run_backup_freshness_watchdog()
+
+    assert mock_page_critical.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_backup_watchdog_corrupted_value_logs_error_no_page(
+    monkeypatch, fake_redis
+):
+    """An unreadable value must not be silently treated as fresh or stale —
+    it's surfaced (ERROR) and left for the next successful backup to fix."""
+    await fake_redis.set(BACKUP_LAST_SUCCESS_KEY, "garbage")
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
+
+    await run_backup_freshness_watchdog()
+
+    mock_logger.error.assert_called_once()
+    mock_page_critical.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_backup_watchdog_redis_unavailable_fails_open(monkeypatch):
+    """Redis itself being down must not page about backups — that would
+    misreport an infrastructure outage as a stale backup."""
+    import app.core.redis_client as redis_client_module
+
+    monkeypatch.setattr(
+        redis_client_module,
+        "get_redis_client",
+        AsyncMock(side_effect=Exception("redis down")),
+    )
+
+    mock_logger = MagicMock()
+    monkeypatch.setattr(scheduler_module, "logger", mock_logger)
+    mock_page_critical = MagicMock()
+    monkeypatch.setattr(scheduler_module, "page_critical", mock_page_critical)
+
+    # Must not raise.
+    await run_backup_freshness_watchdog()
+
+    mock_logger.warning.assert_called()
+    mock_page_critical.assert_not_called()

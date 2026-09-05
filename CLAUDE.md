@@ -214,7 +214,7 @@ Entry point for inbound WhatsApp webhooks. Its only job is to validate the incom
 
 ### Process 2: ARQ Worker (`app/worker.py` + `app/core/arq_worker.py`)
 
-Picks up `process_message_task` jobs from Redis and calls `workflow_service.process_incoming_message`. Also hosts APScheduler for periodic jobs (SOS healer every 10 mins, stale monitor every 30 mins, stale lead nudger every 4h, daily agenda at 08:00 Israel time, pro-approval SLA check every 5 mins, WhatsApp instance deauth watchdog every 2 mins); the three long-interval jobs (SOS Reporter, stale lead nudger, lead janitor) also run once shortly after boot so a deploy cadence shorter than their interval can't starve them (PRO-176).
+Picks up `process_message_task` jobs from Redis and calls `workflow_service.process_incoming_message`. Also hosts APScheduler for periodic jobs (SOS healer every 10 mins, stale monitor every 30 mins, stale lead nudger every 4h, daily agenda at 08:00 Israel time, pro-approval SLA check every 5 mins, WhatsApp instance deauth watchdog every 2 mins, backup freshness watchdog every hour — production only, PRO-185); the four long-interval jobs (SOS Reporter, stale lead nudger, lead janitor, backup freshness watchdog) also run once shortly after boot so a deploy cadence shorter than their interval can't starve them (PRO-176).
 
 ### Process 3: Streamlit Admin Panel (`admin_panel/`)
 
@@ -284,6 +284,10 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 - `WorkerConstants.SCHEDULER_BOOT_RUN_DELAY_SECONDS = 60`: delay before the first boot run of a long-interval scheduler job, to let boot-time Mongo/Redis probes settle (PRO-176)
 - `WorkerConstants.SCHEDULER_BOOT_RUN_STAGGER_SECONDS = 45`: spacing between each long-interval job's boot run so they don't all fire in the same second (PRO-176)
 - `WorkerConstants.SCHEDULER_LONG_JOB_MISFIRE_GRACE_SECONDS = 600`: misfire grace time on the long-interval scheduler jobs, so a tick that comes due while the loop is busy runs late instead of being dropped (PRO-176)
+- `WorkerConstants.BACKUP_MAX_AGE_HOURS = 48`: how stale the last recorded success must be before the freshness watchdog pages — the other half of PRO-111's failure-triggered escalation, covering paths where the backup job never runs at all (PRO-185). `run_daily_backup` records success in two places on a zero exit: `backup:last_success` (no TTL) in Redis, the primary, and a durable mirror in Mongo (`settings.backup_state`) that the watchdog and `/health` fall back to when Redis's key is absent or stale — a no-TTL, rarely-read key is exactly what `allkeys-lru` eviction reaps first, and the two writes are independent fail-open blocks so Redis can lag the mirror
+- `WorkerConstants.BACKUP_WATCHDOG_INTERVAL_MINUTES = 60`: how often `run_backup_freshness_watchdog` runs (production only; also fires once shortly after boot via the PRO-176 boot-run slot)
+- `WorkerConstants.BACKUP_STALE_REALERT_HOURS = 24`: re-page cadence while backups stay stale, deduped via `backup:stale_alert` (SET NX EX)
+- `WorkerConstants.BACKUP_CLOCK_SKEW_TOLERANCE_SECONDS = 300`: how far `backup:last_success` may read in the future (worker clock writes it, API/worker clocks read it) before the watchdog/`/health` treat it as unusable instead of skew
 - `ISRAEL_CITIES_COORDS`: static dict mapping Hebrew/English city names to `[lon, lat]` for geo queries
 
 ### Testing Conventions
