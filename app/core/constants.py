@@ -103,6 +103,13 @@ class UserStates(str, Enum):
     AWAITING_CANCEL_CONFIRMATION = "awaiting_cancel_confirmation"
 
 
+# PRO-185 — unix timestamp of the last successful nightly backup. Written by
+# `scheduler.run_daily_backup` on a zero exit, read by the worker watchdog and
+# by the authenticated `/health` `checks.backup` block. Lives here rather than
+# in scheduler.py so the API never has to import the scheduler to read it.
+BACKUP_LAST_SUCCESS_KEY = "backup:last_success"
+
+
 class WorkerConstants:
     MAX_PRO_LOAD = 3
     DB_QUERY_LIMIT = 100
@@ -248,6 +255,26 @@ class WorkerConstants:
     # logs CRITICAL, which is the Sentry paging threshold. Counter lives in
     # Redis (`backup:consecutive_failures`), cleared on the first success.
     BACKUP_FAILURE_ESCALATION_THRESHOLD = 2
+    # PRO-185 — backup *freshness* watchdog, the other half of PRO-111. That
+    # escalation is failure-triggered: it needs the job to run and fail. Every
+    # path where the job never runs at all — worker down at 02:00, a misfired
+    # cron tick, a stale scheduler lock — is silent, and silence is also what
+    # a healthy night looks like. The watchdog pages when the last recorded
+    # success (`backup:last_success`, written with NO TTL so an expired key
+    # can never masquerade as "never ran") is older than this.
+    BACKUP_MAX_AGE_HOURS = 48
+    # How often the watchdog looks. Hourly is ample against a 48h threshold,
+    # and it also runs once shortly after boot (PRO-176 boot slot).
+    BACKUP_WATCHDOG_INTERVAL_MINUTES = 60
+    # Re-page cadence while the condition stands: once per window via
+    # `backup:stale_alert` SET NX EX, not once per tick — the PRO-162 lesson
+    # and the WA_STATE_REALERT_MINUTES precedent.
+    BACKUP_STALE_REALERT_HOURS = 24
+    # A `backup:last_success` written by the worker is read by the API in
+    # another container; sub-second NTP skew right after a backup would
+    # otherwise read as "in the future" and flip /health to "unknown" (and
+    # the watchdog to an ERROR line) until the clocks agreed again.
+    BACKUP_CLOCK_SKEW_TOLERANCE_SECONDS = 300
     # PRO-112 — Mongo auth failures on scheduler jobs are a *config* failure
     # (rotated/deleted DB user), not a data condition: left at ERROR they
     # accumulate silently while the worker is effectively dead. This many auth

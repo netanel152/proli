@@ -4,9 +4,10 @@ import hmac
 import os
 
 from fastapi import APIRouter, Request, Response, status
+import math
 
 from app.core.config import settings
-from app.core.constants import LeadStatus, WorkerConstants
+from app.core.constants import BACKUP_LAST_SUCCESS_KEY, LeadStatus, WorkerConstants
 from app.core.database import check_db_connection, leads_collection
 from app.core.logger import logger
 from app.core.redis_client import get_redis_client
@@ -14,6 +15,40 @@ from app.providers.whatsapp import get_whatsapp
 import time
 
 router = APIRouter(prefix="/health", tags=["Health"])
+
+
+async def _durable_backup_ts() -> float | None:
+    """PRO-185: last successful backup from the Mongo mirror
+    (`settings.backup_state.last_success`), as a unix timestamp; None when
+    absent or unreachable. Resolved at call time so a test that patches
+    `app.core.database.settings_collection` is honoured."""
+    from app.core import database as _db
+
+    try:
+        doc = await _db.settings_collection.find_one(
+            {"_id": "backup_state"}, {"last_success": 1}
+        )
+    except Exception as e:
+        logger.warning(f"Health Check: backup durable record unreadable: {e}")
+        return None
+    value = (doc or {}).get("last_success")
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    try:
+        ts = value.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return None
+    # Same rule as the watchdog's helper: pre-1970 or future beyond skew
+    # tolerance is a hand-written value, not a timestamp.
+    if (
+        ts <= 0
+        or ts > time.time() + WorkerConstants.BACKUP_CLOCK_SKEW_TOLERANCE_SECONDS
+    ):
+        return None
+    return ts
+
 
 _start_time = time.time()
 
@@ -49,6 +84,9 @@ async def health_check(request: Request, response: Response):
     infrastructure map, not a liveness signal.
     """
     whatsapp = get_whatsapp()
+    # Decided once, up front: it also gates work whose result an
+    # unauthenticated caller would never see (the PRO-185 mirror lookup).
+    detail_ok = _detail_authorized(request)
 
     # MongoDB Check
     mongo_up = False
@@ -65,6 +103,11 @@ async def health_check(request: Request, response: Response):
     redis_latency = None
     worker_status = "unknown"
     worker_heartbeat = None
+    # PRO-185: backup freshness. "unknown" until Redis answers — a Redis
+    # outage must not read as either fresh or stale.
+    backup_status = "unknown"
+    backup_last_success = None
+    backup_age_hours = None
     try:
         redis = await get_redis_client()
         t0 = time.time()
@@ -81,6 +124,77 @@ async def health_check(request: Request, response: Response):
             worker_status = "up" if hb_age < 120 else "stale"
         else:
             worker_status = "no_heartbeat"
+
+        # PRO-185: when did a backup last land? This is the half of the
+        # freshness watchdog that an in-app job cannot provide — a caller
+        # reading /health from outside sees a dead worker, a misconfigured
+        # environment that never registered the job, or a stale lock, all
+        # of which are invisible from inside the process. Redis first, then
+        # the durable Mongo mirror the backup job writes alongside it — a
+        # no-TTL key is still an eviction/restart casualty, so absence in
+        # Redis is not evidence of "never", and a present-but-stale key can
+        # lag a fresher mirror (the two writes are independent). Absent in
+        # both → "never".
+        #
+        # The mirror lookup is a Mongo round-trip on the *public* liveness
+        # path if done unconditionally — the Docker HEALTHCHECK and the
+        # PRO-155 staging poller would pay for a field they never see. So it
+        # runs only for a caller that will actually be shown `checks`.
+        raw_backup = await redis.get(BACKUP_LAST_SUCCESS_KEY)
+        last_ts = None
+        mirror_consulted = False
+        if raw_backup is not None:
+            try:
+                last_ts = float(
+                    raw_backup.decode()
+                    if isinstance(raw_backup, bytes)
+                    else str(raw_backup)
+                )
+                # Same rule as scheduler._parse_unix_ts: only a finite,
+                # positive value is a timestamp. Without this, "0" or "-5"
+                # would report "stale" since 1970 here and ERROR there.
+                if not math.isfinite(last_ts) or last_ts <= 0:
+                    raise ValueError("not a usable timestamp")
+            except ValueError:
+                last_ts = None
+                backup_status = "unknown"
+        elif detail_ok:
+            last_ts = await _durable_backup_ts()
+            mirror_consulted = True
+            if last_ts is None:
+                backup_status = "never"
+        else:
+            backup_status = "never"
+        if last_ts is not None:
+            try:
+                now = time.time()
+                if (
+                    detail_ok
+                    and not mirror_consulted
+                    and (now - last_ts) / 3600 > WorkerConstants.BACKUP_MAX_AGE_HOURS
+                ):
+                    # Redis says stale — a success recorded in either store
+                    # is a success, so let a fresher mirror win.
+                    durable = await _durable_backup_ts()
+                    if durable is not None and durable > last_ts:
+                        last_ts = durable
+                age_hours = (now - last_ts) / 3600
+                if last_ts > now + WorkerConstants.BACKUP_CLOCK_SKEW_TOLERANCE_SECONDS:
+                    # A timestamp in the future beyond clock-skew tolerance
+                    # (a manual write) would read "fresh" forever. Unknown is
+                    # the honest answer.
+                    raise ValueError("last_success is in the future")
+                backup_last_success = datetime.fromtimestamp(
+                    last_ts, tz=timezone.utc
+                ).isoformat()
+                backup_age_hours = round(age_hours, 1)
+                backup_status = (
+                    "fresh"
+                    if age_hours <= WorkerConstants.BACKUP_MAX_AGE_HOURS
+                    else "stale"
+                )
+            except (ValueError, OverflowError, OSError):
+                backup_status = "unknown"
     except Exception as e:
         logger.error(f"Health Check: Redis failed: {e}")
 
@@ -127,6 +241,25 @@ async def health_check(request: Request, response: Response):
             "status": worker_status,
             "last_heartbeat": worker_heartbeat,
         },
+        # PRO-185. `enabled` tells a synthetic monitor (PRO-17) whether
+        # "never" is an alarm or just staging, where backups are not
+        # scheduled at all (PRO-127). Freshness is deliberately NOT folded
+        # into the top-level `status`: a stale backup is an operator page,
+        # not a liveness failure, and the Docker HEALTHCHECK must not
+        # restart a healthy API over it.
+        "backup": {
+            "status": backup_status,
+            "last_success": backup_last_success,
+            "age_hours": backup_age_hours,
+            "max_age_hours": WorkerConstants.BACKUP_MAX_AGE_HOURS,
+            "enabled": settings.is_production,
+            # Railway's own environment name — the one value an operator
+            # cannot mistype. If this says production while `enabled` is
+            # false, the app is misconfigured (the PRO-96 shape) and "never"
+            # IS the alarm. PRO-96's boot cross-check closes most of that,
+            # but is exempt when the platform variable is absent.
+            "platform_environment": os.environ.get("RAILWAY_ENVIRONMENT_NAME"),
+        },
         "whatsapp": {
             "status": whatsapp_status,
             "state": whatsapp_state,
@@ -143,7 +276,7 @@ async def health_check(request: Request, response: Response):
         "status": "healthy" if is_critical_up else "unhealthy",
         "uptime_seconds": uptime_seconds,
     }
-    if _detail_authorized(request):
+    if detail_ok:
         body["checks"] = checks
         # PRO-155: the commit this container was built from (injected by
         # Railway; None elsewhere). The verify-staging-deploy workflow compares

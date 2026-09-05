@@ -28,12 +28,15 @@ Checks the health of all external dependencies (MongoDB, Redis, the WhatsApp pro
     "mongodb": {"status": "up", "latency_ms": 4.2},
     "redis": {"status": "up", "latency_ms": 1.1},
     "worker": {"status": "up", "last_heartbeat": "1715000000.0"},
+    "backup": {"status": "fresh", "last_success": "2026-09-05T00:12:34+00:00", "age_hours": 4.1, "max_age_hours": 48, "enabled": true, "platform_environment": "production"},
     "whatsapp": {"status": "up", "state": "authorized", "provider": "cloud", "transmits": true}
   }
 }
 ```
 
 `whatsapp.status` is `up` (provider reports `authorized`), `degraded` (either the configured provider cannot transmit at all — e.g. `dryrun` — or a transmitting provider reports `yellowCard`), or `down` (not authorized/blocked/unreachable). `whatsapp.state` is the raw value returned by the provider's `get_state()` (PRO-86; was the legacy vendor's raw `stateInstance` value). `whatsapp.provider` is the configured provider's name and `whatsapp.transmits` is whether it can reach a real handset.
+
+`backup` (PRO-185) reports the nightly backup's freshness, independent of the escalation in `docs/OPERATIONS_GUIDE.md`: `status` is `fresh`/`stale` (against `max_age_hours`), `never` (no successful backup recorded in either Redis or its Mongo mirror, `settings.backup_state`), or `unknown` (both stores unreachable, the stored value non-finite or `<= 0`, or `last_success` beyond clock-skew tolerance in the future). `last_success`/`age_hours` are `null` unless `status` is `fresh` or `stale`. `enabled` mirrors `settings.is_production` — the nightly backup and its watchdog are production-only, so `never` on staging is expected, not an alarm. `platform_environment` is Railway's `RAILWAY_ENVIRONMENT_NAME` (`null` outside Railway) — if it reads `production` while `enabled` is `false`, that is the PRO-96 misconfiguration and `never` **is** the alarm. This freshness value does not affect the top-level `status`.
 
 **Response (503 Service Unavailable, authenticated):**
 ```json
