@@ -23,13 +23,15 @@ import functools
 import re
 from pymongo.errors import OperationFailure, ServerSelectionTimeoutError
 from app.core.config import settings
-from app.core.constants import LeadStatus, WorkerConstants
+from app.core.constants import BACKUP_LAST_SUCCESS_KEY, LeadStatus, WorkerConstants
 from app.core.phone import to_chat_id, strip_suffix
 from app.core.datetime_utils import within_business_hours
+import math
 import os
+import time
 import pytz
 from app.services.scheduling_service import regenerate_all_templates
-from app.core.logger import logger, page_critical
+from app.core.logger import logger, page_critical, redact_secrets
 from app.core.redis_client import with_scheduler_lock
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")
@@ -314,6 +316,28 @@ async def run_slot_regeneration():
 # a failure streak must survive until a success actually clears it.
 BACKUP_FAILURE_COUNT_KEY = "backup:consecutive_failures"
 
+# PRO-185 — the watchdog's own two keys. `BACKUP_LAST_SUCCESS_KEY` itself
+# lives in app/core/constants.py because /health reads it too.
+#
+# `first_seen` is the cold-start guard: an absent `last_success` must not
+# page on day one (fresh Redis, first deploy after this shipped, Redis wiped),
+# but it also must not stay silent forever — so the first observation of
+# absence is stamped (SET NX, no TTL) and absence is escalated only once that
+# stamp is older than BACKUP_MAX_AGE_HOURS. Cleared by the first success.
+BACKUP_WATCHDOG_SEED_KEY = "backup:watchdog_first_seen"
+# Re-page dedup, SET NX EX for BACKUP_STALE_REALERT_HOURS — the
+# `wa:instance:last_alert` shape. Cleared by the first success so a recovery
+# re-arms the page immediately rather than waiting out the window.
+BACKUP_STALE_ALERT_KEY = "backup:stale_alert"
+# Review (PRO-185): "no TTL" is not "durable". A no-TTL, rarely-read key is
+# exactly what an `allkeys-lru` eviction reaps first, and a Redis restart
+# without persistence drops it along with the cold-start seed — so a Redis
+# that recycled more often than every 48h would restart the watchdog's clock
+# each time and a broken job would never page. Redis stays the primary
+# (cheap, replica-shared); the same success is mirrored into Mongo, and both
+# the watchdog and /health fall back to it when Redis has no key.
+BACKUP_STATE_DOC_ID = "backup_state"
+
 
 async def _report_backup_failure(detail: str) -> None:
     """PRO-111 escalation: a single failed nightly run is ERROR (transient blip);
@@ -382,9 +406,29 @@ async def run_daily_backup():
                 from app.core.redis_client import get_redis_client
 
                 redis = await get_redis_client()
-                await redis.delete(BACKUP_FAILURE_COUNT_KEY)
+                # PRO-185: the freshness record. NO TTL — an expired key is
+                # indistinguishable from "never ran", and the watchdog reads
+                # absence as cold-start, not as stale.
+                await redis.set(BACKUP_LAST_SUCCESS_KEY, str(int(time.time())))
+                await redis.delete(
+                    BACKUP_FAILURE_COUNT_KEY,
+                    BACKUP_WATCHDOG_SEED_KEY,
+                    BACKUP_STALE_ALERT_KEY,
+                )
             except Exception as e:
-                logger.warning(f"[Scheduler] Backup failure counter reset skipped: {e}")
+                logger.warning(
+                    f"[Scheduler] Backup bookkeeping skipped: {redact_secrets(str(e))}"
+                )
+            try:
+                await settings_collection.update_one(
+                    {"_id": BACKUP_STATE_DOC_ID},
+                    {"$set": {"last_success": datetime.now(pytz.utc)}},
+                    upsert=True,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"[Scheduler] Backup durable record skipped: {redact_secrets(str(e))}"
+                )
         else:
             # Tail only — enough to diagnose without dumping a full trace into
             # every log line. loguru sinks write to stdout (app/core/logger.py),
@@ -393,16 +437,233 @@ async def run_daily_backup():
             # Belt-and-braces (PRO-94): this feeds a CRITICAL that reaches
             # Sentry — scrub every known secret BEFORE truncating, so a secret
             # straddling the 500-char cut can't slip through half-redacted.
-            from app.core.logger import redact_secrets
-
             tail = redact_secrets(result.stderr.strip() or result.stdout.strip())
             await _report_backup_failure(
                 f"exit={result.returncode}, output: {tail[-500:]}"
             )
     except Exception as e:
-        from app.core.logger import redact_secrets
-
         await _report_backup_failure(redact_secrets(f"{e}"))
+
+
+def _parse_unix_ts(raw) -> float | None:
+    """A Redis value → unix timestamp, or None if it is not one.
+
+    Review (PRO-185): `float()` happily parses "inf" and "nan". An `inf`
+    would make `now - inf <= max_age` true forever — a permanently "fresh"
+    backup — and `nan` pages with "nan h ago". Only a finite, positive value
+    is a timestamp.
+    """
+    if raw is None:
+        return None
+    try:
+        text = raw.decode() if isinstance(raw, bytes) else str(raw)
+        value = float(text)
+    except (ValueError, TypeError, UnicodeDecodeError):
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
+async def _durable_last_success() -> float | None:
+    """Unix timestamp of the last successful backup from the Mongo mirror.
+
+    None means "no usable record" — absent, unreadable, Mongo unreachable,
+    or a value that is not a timestamp by the same rule `_parse_unix_ts`
+    applies to Redis (pre-1970, or in the future beyond clock-skew
+    tolerance). The rule lives here so both call sites — the absent-key
+    fallback and the stale-Redis merge — get it without repeating it; a
+    future-dated mirror value would otherwise win the merge and read fresh
+    forever. On the absent-Redis path a None falls through to the
+    cold-start clock rather than being treated as fresh."""
+    try:
+        doc = await settings_collection.find_one(
+            {"_id": BACKUP_STATE_DOC_ID}, {"last_success": 1}
+        )
+    except Exception as e:
+        logger.warning(
+            f"[Scheduler] Backup durable record unreadable: {redact_secrets(str(e))}"
+        )
+        return None
+    value = (doc or {}).get("last_success")
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None:
+        # motor decodes BSON datetimes as naive UTC (no tz_aware on the
+        # client), so this is a label, not a conversion.
+        value = value.replace(tzinfo=pytz.utc)
+    try:
+        ts = value.timestamp()
+    except (OverflowError, OSError, ValueError):
+        # A hand-written datetime.min in that field; not a timestamp.
+        return None
+    if (
+        ts <= 0
+        or ts > time.time() + WorkerConstants.BACKUP_CLOCK_SKEW_TOLERANCE_SECONDS
+    ):
+        return None
+    return ts
+
+
+@with_scheduler_lock("run_backup_freshness_watchdog", ttl=300)
+async def run_backup_freshness_watchdog():
+    """PRO-185: page when the last successful backup is too old — whatever
+    the reason.
+
+    PRO-111's escalation only fires when `run_daily_backup` runs and fails.
+    A worker that is down at 02:00, a misfired cron tick, a stale scheduler
+    lock: none of those increments the failure counter, so none pages, and
+    the operator's evidence that backups are healthy is the absence of an
+    alert — which a dead job also produces. This job checks *freshness*
+    instead of *failure*.
+
+    Posture, in order:
+
+    * Redis unreachable → WARNING and return. Fail-open, like
+      `_report_backup_failure`: the job never crashes and never pages about
+      its own infrastructure being down.
+    * `backup:last_success` absent → cold start. Stamp the first observation
+      (SET NX, no TTL) and stay quiet until that stamp is itself older than
+      BACKUP_MAX_AGE_HOURS. Day one is silent; a broken job behind a wiped
+      Redis still pages after 48h rather than never.
+    * value unreadable → ERROR (Sentry visibility, no page). A corrupted
+      timestamp must not silently disable the watchdog, and must not be
+      "repaired" to now either — that would fake freshness.
+    * age within threshold → quiet.
+    * age over threshold → `page_critical`, deduped to once per
+      BACKUP_STALE_REALERT_HOURS via SET NX EX (PRO-162).
+
+    Two stores hold the record: Redis first, then the Mongo mirror
+    `settings.backup_state`. Redis alone is not durable enough for this — a
+    no-TTL key is an eviction candidate and a restart without persistence
+    drops it — and a watchdog that restarted its 48h clock on every Redis
+    recycle could stay silent forever over a broken job. The mirror is
+    consulted whenever Redis's answer would be "absent" *or* "stale": the
+    two writes are independent fail-open blocks, so Redis can lag the
+    mirror (a failed Redis write, a restore from an old snapshot), and a
+    success recorded in either store is a success. The common path stays
+    Redis-only.
+
+    What this cannot see: a dead worker (it *is* the worker), and the PRO-96
+    case where production is misconfigured as non-production and neither
+    the backup nor this job is registered. Both are visible only to an
+    external caller through `/health`'s authenticated `checks.backup` block
+    — which is why that block also carries `platform_environment`
+    (Railway's own, un-mistypable name): a monitor must not read
+    `enabled: false` as "just staging" when the platform says production.
+    """
+    from app.core.redis_client import get_redis_client
+
+    max_age = WorkerConstants.BACKUP_MAX_AGE_HOURS * 3600
+    now = time.time()
+    stale_detail = None
+
+    try:
+        redis = await get_redis_client()
+        raw = await redis.get(BACKUP_LAST_SUCCESS_KEY)
+
+        if raw is None:
+            # Redis has no record. Before starting a cold-start clock, ask the
+            # durable mirror — a Redis wipe must not turn a 60h-old backup
+            # into "unknown, check again in 48h".
+            durable = await _durable_last_success()
+            if durable is not None:
+                if now - durable <= max_age:
+                    logger.info(
+                        "[Scheduler] Backup watchdog: Redis has no record but the "
+                        f"durable one is {(now - durable) / 3600:.1f}h old — fresh."
+                    )
+                    return
+                stale_detail = (
+                    f"last successful backup was {(now - durable) / 3600:.0f}h ago "
+                    "(from the durable record; Redis holds none)"
+                )
+            else:
+                seeded_now = await redis.set(
+                    BACKUP_WATCHDOG_SEED_KEY, str(int(now)), nx=True
+                )
+                raw_seed = await redis.get(BACKUP_WATCHDOG_SEED_KEY)
+                seed = _parse_unix_ts(raw_seed)
+                if raw_seed is not None and seed is None:
+                    # Corrupt, not raced. The write above is NX and the only
+                    # DEL is on a success that, on this path, never comes —
+                    # so an unreadable seed would silence the watchdog for
+                    # good. Repair it rather than stay quiet.
+                    logger.error(
+                        f"[Scheduler] Backup watchdog: {BACKUP_WATCHDOG_SEED_KEY} "
+                        "unreadable — reseeding the cold-start clock."
+                    )
+                    await redis.set(BACKUP_WATCHDOG_SEED_KEY, str(int(now)))
+                    return
+                if seed is None or now - seed < max_age:
+                    # Only the first observation is worth a WARNING line
+                    # (production runs LOG_LEVEL=WARNING); the hourly
+                    # repeats would be ~48 identical lines per cold start.
+                    log = logger.warning if seeded_now else logger.info
+                    log(
+                        "[Scheduler] Backup watchdog: no successful backup "
+                        "recorded yet — will page if none lands within "
+                        f"{WorkerConstants.BACKUP_MAX_AGE_HOURS}h of first observation."
+                    )
+                    return
+                stale_detail = (
+                    "no successful backup is recorded in Redis or the durable "
+                    "mirror, and the watchdog has been watching for "
+                    f"{(now - seed) / 3600:.0f}h"
+                )
+        else:
+            last = _parse_unix_ts(raw)
+            if (
+                last is None
+                or last > now + WorkerConstants.BACKUP_CLOCK_SKEW_TOLERANCE_SECONDS
+            ):
+                # Unreadable, non-finite, or in the future beyond clock-skew
+                # tolerance (a manual write): none of these can be judged, and
+                # "repairing" to now would fake freshness. ERROR reaches
+                # Sentry as visibility without paging. The foreign value is
+                # truncated before it lands in a Sentry-visible line.
+                logger.error(
+                    f"[Scheduler] Backup watchdog: {BACKUP_LAST_SUCCESS_KEY} holds "
+                    f"an unusable value ({str(raw)[:64]!r}) — freshness cannot be "
+                    "judged. Inspect Redis; the next successful backup overwrites it."
+                )
+                return
+            if now - last > max_age:
+                # Redis says stale. It is written first and in its own
+                # fail-open block, so it can lag the mirror — a failed Redis
+                # write, or a restore from an old snapshot, leaves it stale
+                # while Mongo is current. Either store's success counts.
+                durable = await _durable_last_success()
+                if durable is not None and durable > last:
+                    last = durable
+            age_h = (now - last) / 3600
+            if now - last <= max_age:
+                logger.info(
+                    f"[Scheduler] Backup watchdog: last success {age_h:.1f}h ago — fresh."
+                )
+                return
+            stale_detail = f"last successful backup was {age_h:.0f}h ago"
+
+        # Stale. Page once per re-alert window, not once per hourly tick.
+        realert = WorkerConstants.BACKUP_STALE_REALERT_HOURS * 3600
+        is_new_alert = await redis.set(BACKUP_STALE_ALERT_KEY, "1", ex=realert, nx=True)
+        if not is_new_alert:
+            logger.warning(
+                f"[Scheduler] Backups still stale ({stale_detail}) — already paged "
+                f"within the last {WorkerConstants.BACKUP_STALE_REALERT_HOURS}h."
+            )
+            return
+    except Exception as e:
+        logger.warning(
+            "[Scheduler] Backup watchdog skipped — Redis unavailable: "
+            f"{redact_secrets(str(e))}"
+        )
+        return
+
+    page_critical(
+        f"🚨 [Scheduler] Backups are stale: {stale_detail} "
+        f"(threshold {WorkerConstants.BACKUP_MAX_AGE_HOURS}h). No durable backup "
+        "is landing — check the worker was up at 02:00 IL, the daily_backup "
+        "job is registered (production only), and scripts/backup.py --upload-s3."
+    )
 
 
 @with_scheduler_lock("run_sos_reporter", ttl=14000)
@@ -641,6 +902,23 @@ def start_scheduler():
             CronTrigger(hour=2, minute=0, timezone=IL_TZ),
             id="daily_backup",
             replace_existing=True,
+            # PRO-185: the PRO-176 treatment this cron never got — a tick that
+            # comes due while *this process's* loop is busy runs late instead
+            # of being dropped. A redeploy across 02:00 still skips the night
+            # entirely (MemoryJobStore, see above); that is what the freshness
+            # watchdog catches, not this.
+            coalesce=True,
+            misfire_grace_time=WorkerConstants.SCHEDULER_LONG_JOB_MISFIRE_GRACE_SECONDS,
+        )
+        # Job 7b: Backup freshness watchdog (PRO-185) — production-only for
+        # the same reason as the backup itself: staging is not meant to back
+        # up, so it must never page about backups being stale there. Hourly,
+        # plus once shortly after boot, so a deploy is followed by a check.
+        scheduler.add_job(
+            run_backup_freshness_watchdog,
+            IntervalTrigger(minutes=WorkerConstants.BACKUP_WATCHDOG_INTERVAL_MINUTES),
+            id="backup_freshness_watchdog",
+            **_long_job_kwargs(3),
         )
     else:
         logger.info(
