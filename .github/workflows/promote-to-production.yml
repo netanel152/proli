@@ -1,5 +1,19 @@
 name: 🚢 Promote dev → production
 
+# PRO-183: the run list is the surface people actually scan, and it shows only
+# the workflow name and the conclusion — a skipped verification and a real one
+# were both just "success". `run-name` is the one lever that changes that line,
+# so an unverified promotion says so where it will be seen. A `::warning::`
+# annotation (emitted below as well) never reaches the list.
+#
+# Note the indentation: every line of this folded scalar sits at the same
+# column. A more-indented continuation line is kept literal by YAML rather than
+# folded, which would leave a newline inside the `${{ }}` expression.
+run-name: >-
+  ${{ inputs.dry_run == true && '🔍 Dry run — nothing will change'
+  || (inputs.skip_reason != '' && '⚠️ UNVERIFIED promotion requested — deploy not confirmed'
+  || '🚢 Promote dev → production') }}
+
 # The release path. Fast-forwards `production` to `dev` and then proves the
 # deploy actually landed.
 #
@@ -21,10 +35,10 @@ on:
         description: "Preview only — show what would be promoted, change nothing."
         type: boolean
         default: false
-      skip_deploy_check:
-        description: "Push the ref but do not wait for the deploy (use only if the health URL is unreachable)."
-        type: boolean
-        default: false
+      skip_reason:
+        description: "Leave EMPTY to verify the deploy (almost always right). To skip verification, type why — e.g. 'health URL returning 502 since 09:00'."
+        type: string
+        default: ""
 
 permissions:
   contents: write
@@ -76,6 +90,67 @@ jobs:
           git log --no-merges --format='%h %s' "$PROD".."$DEV" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
 
+      # PRO-183: the skip decision is resolved here rather than inline in each
+      # `if:`, because a GitHub expression cannot trim a string — and an
+      # untrimmed `inputs.skip_reason != ''` would accept a single space, which
+      # is exactly as frictionless as the checkbox this replaces.
+      #
+      # This step is deliberately UNCONDITIONAL. A skipped step's outputs are
+      # the empty string, so an `if:` here that ever evaluated false would make
+      # `verify` read '' — and verification would switch itself off silently,
+      # which is this issue's own failure mode. For the same reason every
+      # consumer gates on `!= 'false'` rather than `== 'true'`: anything
+      # unexpected lands on *verify*, never on *skip*.
+      - name: Resolve the verification decision
+        id: gate
+        env:
+          SKIP_REASON: ${{ inputs.skip_reason }}
+        run: |
+          set -euo pipefail
+
+          # `${#var}` counts characters only under a UTF-8 locale, and a
+          # GitHub-hosted runner does not guarantee one. Without this the
+          # minimum below is measured in *bytes*, so a Hebrew reason would be
+          # held to roughly half the bar an English one is — the lenient
+          # direction, and a different rule for the operator who writes Hebrew.
+          export LC_ALL=C.UTF-8
+
+          # A reason has to say something. Ten characters is about two words —
+          # enough that it cannot be typed by reflex, and it lands in the run
+          # record for whoever reads this release later.
+          MIN_REASON_CHARS=10
+
+          RAW="${SKIP_REASON:-}"
+          TRIMMED="$(printf '%s' "$RAW" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+
+          if [ -z "$RAW" ]; then
+            echo "verify=true" >> "$GITHUB_OUTPUT"
+            echo "reason=" >> "$GITHUB_OUTPUT"
+            echo "Deploy verification: ON (no skip reason given)."
+            exit 0
+          fi
+
+          if [ "${#TRIMMED}" -lt "$MIN_REASON_CHARS" ]; then
+            echo "::error::skip_reason is ${#TRIMMED} character(s); at least $MIN_REASON_CHARS are required."
+            echo "::error::Skipping the deploy verification means this release ships unproven, which is"
+            echo "::error::the PRO-128 failure mode. Say why in a sentence, or leave the field empty"
+            echo "::error::and let the promotion verify itself. Nothing has been pushed."
+            exit 1
+          fi
+
+          # A *fixed* heredoc delimiter is injectable by the very text this
+          # field exists to collect: a reason containing the delimiter line
+          # would close `reason` early and let the rest be parsed as further
+          # outputs. Randomised per run so operator text cannot forge it.
+          DELIM="PRO183_EOF_$(openssl rand -hex 8)"
+          echo "verify=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "reason<<$DELIM"
+            printf '%s\n' "$TRIMMED"   # not `echo`: a reason starting with `-` is an option to echo
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Deploy verification: OFF — reason: %s\n' "$TRIMMED"
+
       - name: Assert dev's CI is green
         if: steps.refs.outputs.noop == 'false'
         env:
@@ -115,15 +190,22 @@ jobs:
 
       - name: Record pre-promotion uptime
         id: before
-        if: steps.refs.outputs.noop == 'false' && inputs.dry_run == false && inputs.skip_deploy_check == false
+        if: steps.refs.outputs.noop == 'false' && inputs.dry_run == false && steps.gate.outputs.verify != 'false'
         run: |
           set -euo pipefail
           # Captured so the verification step can tell a genuinely new container
           # from the one already running: a restart resets uptime_seconds.
           BODY=$(curl -fsS --max-time 20 "$HEALTH_URL" || echo '{}')
-          UP=$(echo "$BODY" | jq -r '.uptime_seconds // 0')
-          echo "uptime=$UP" >> "$GITHUB_OUTPUT"
-          echo "pre-promotion uptime_seconds=$UP"
+          # PRO-183: "no reading" and "uptime 0" must not collapse into the same
+          # value. This used to record 0 on an unreachable endpoint, and the
+          # verification below waits for `uptime < BEFORE` — never true against
+          # 0, so a production that *did* restart still burned the full 10
+          # minutes and then reported that it never restarted. That path used to
+          # be rare; making verification the default is exactly what would have
+          # made it common.
+          UP=$(echo "$BODY" | jq -r '.uptime_seconds // empty')
+          echo "uptime=${UP:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "pre-promotion uptime_seconds=${UP:-unknown}"
 
       - name: Dry run — stop here
         if: inputs.dry_run == true
@@ -137,11 +219,49 @@ jobs:
           git push origin '${{ steps.refs.outputs.dev }}':refs/heads/production
           echo "production -> ${{ steps.refs.outputs.dev }}"
 
+      # PRO-183: runs only when the hatch was used, and only after the ref has
+      # actually moved — so it describes what happened rather than what was
+      # requested. Between this, the `run-name` above and the absence of the
+      # ✅ line in the summary, an unverified release cannot present itself as
+      # a completed promotion.
+      - name: Say plainly that this release was NOT verified
+        if: steps.refs.outputs.noop == 'false' && inputs.dry_run == false && steps.gate.outputs.verify == 'false'
+        # Both values reach the script through `env:` rather than `${{ }}`
+        # interpolation: the reason is operator-typed text, and a `${{ }}` in a
+        # `run:` body is substituted before bash ever parses the line.
+        env:
+          SKIP_REASON: ${{ steps.gate.outputs.reason }}
+          PROMOTED_SHA: ${{ steps.refs.outputs.dev }}
+        run: |
+          set -euo pipefail
+          # A workflow annotation is one line — anything after a newline would
+          # be emitted as an unrelated log line instead. %0A is the documented
+          # escape; the step summary below keeps the reason in its real shape.
+          echo "::warning::production was NOT verified — the ref moved, the deploy is unconfirmed. Reason: ${SKIP_REASON//$'\n'/%0A}"
+          {
+            echo "### ⚠️ Deploy verification SKIPPED"
+            echo
+            echo "The ref was moved to \`${PROMOTED_SHA}\`, but **nothing checked that production restarted or is healthy.** This release is unproven."
+            echo
+            echo "**Reason given:**"
+            echo
+            # Prefixed line by line, so a multi-line reason stays inside the
+            # blockquote instead of the second line escaping it.
+            printf '%s\n' "$SKIP_REASON" | sed 's/^/> /'
+            echo
+            echo "Confirm by hand before treating it as live — Railway → each production service → Deployments, and \`curl\` the health URL for an \`uptime_seconds\` consistent with a fresh start."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verify the deploy actually landed
-        if: steps.refs.outputs.noop == 'false' && inputs.dry_run == false && inputs.skip_deploy_check == false
+        if: steps.refs.outputs.noop == 'false' && inputs.dry_run == false && steps.gate.outputs.verify != 'false'
+        # `BEFORE_UPTIME` comes through `env:` rather than `${{ }}`: it is the
+        # one interpolated value in this job that originates outside the repo —
+        # `jq` over the health endpoint's own JSON.
+        env:
+          BEFORE_UPTIME: ${{ steps.before.outputs.uptime }}
         run: |
           set -uo pipefail
-          BEFORE='${{ steps.before.outputs.uptime }}'
+          BEFORE="${BEFORE_UPTIME:-unknown}"
           DEADLINE=$(( SECONDS + 600 ))
 
           echo "Waiting for production to restart and report healthy (up to 10 min)..."
@@ -150,11 +270,28 @@ jobs:
             if [ -n "$BODY" ]; then
               STATUS=$(echo "$BODY" | jq -r '.status // "unknown"')
               UP=$(echo "$BODY" | jq -r '.uptime_seconds // 999999')
-              # uptime lower than before == the process restarted == new deploy.
-              if [ "$STATUS" = "healthy" ] && awk "BEGIN{exit !($UP < $BEFORE)}"; then
-                echo "$BODY" | jq .
-                echo "::notice::Promotion verified — production restarted and is healthy."
-                exit 0
+              if [ "$STATUS" = "healthy" ]; then
+                # No pre-promotion reading, so a restart cannot be *proven*:
+                # `uptime < BEFORE` has nothing to compare against. Waiting out
+                # the deadline would only turn "could not check" into the wrong
+                # sentence ("it never restarted"). Report what is actually
+                # known, and do not claim the ✅ below.
+                if [ "$BEFORE" = "unknown" ]; then
+                  echo "$BODY" | jq .
+                  echo "::warning::production is healthy, but the restart could NOT be proven — the pre-promotion probe got no reading, so this uptime may belong to the old container. Confirm by hand."
+                  echo "### ⚠️ Deploy healthy but UNPROVEN — no pre-promotion baseline" >> "$GITHUB_STEP_SUMMARY"
+                  exit 0
+                fi
+                # uptime lower than before == the process restarted == new deploy.
+                if awk "BEGIN{exit !($UP < $BEFORE)}"; then
+                  echo "$BODY" | jq .
+                  echo "::notice::Promotion verified — production restarted and is healthy."
+                  # PRO-183: say it in the summary too, so a verified promotion
+                  # and a skipped one are told apart by what each *says*, not by
+                  # one of them being silent.
+                  echo "### ✅ Deploy verified — production restarted and is healthy" >> "$GITHUB_STEP_SUMMARY"
+                  exit 0
+                fi
               fi
               echo "  status=$STATUS uptime=$UP (was $BEFORE) — still waiting"
             else
