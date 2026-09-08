@@ -24,24 +24,57 @@ jobs:
   stop-railway:
     runs-on: ubuntu-latest
     steps:
+      # The comparison is trimmed and case-folded. On 2026-09-08 three runs in
+      # a row were refused on `'production '` — a phone keyboard appends a
+      # space after a word, which the box shows as nothing at all — so the
+      # operator saw a workflow that "did not work" at exactly the moment it
+      # was needed. Trailing whitespace and letter case carry no intent here;
+      # the check exists to prove they meant *this* environment, and it still
+      # does. Both values reach the script through `env:` rather than `${{ }}`
+      # so free text typed into `confirm` is data, never shell.
       - name: Confirm the target
+        id: confirm
+        env:
+          TARGET_ENV: ${{ inputs.target_env }}
+          CONFIRM: ${{ inputs.confirm }}
         run: |
           set -euo pipefail
-          if [ "${{ inputs.confirm }}" != "${{ inputs.target_env }}" ]; then
-            echo "::error::Confirmation '${{ inputs.confirm }}' does not match target '${{ inputs.target_env }}'. Refusing to stop anything."
+          TARGET="$(printf '%s' "${TARGET_ENV:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+          TYPED="$(printf '%s' "${CONFIRM:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
+
+          case "$TARGET" in
+            staging|production) ;;
+            *)
+              echo "::error::Unknown target environment '${TARGET_ENV:-}'. Refusing to stop anything."
+              exit 1
+              ;;
+          esac
+
+          if [ -z "$TYPED" ]; then
+            echo "::error::The confirm box is empty. Type '$TARGET' to stop $TARGET. Refusing to stop anything."
             exit 1
           fi
-          echo "Confirmed: stopping ${{ inputs.target_env }}."
+
+          if [ "$TYPED" != "$TARGET" ]; then
+            echo "::error::Confirmation '${CONFIRM:-}' does not match target '$TARGET'. Refusing to stop anything."
+            exit 1
+          fi
+
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Confirmed: stopping $TARGET."
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      - name: Stop Services in ${{ inputs.target_env }}
+      # Keyed on the confirm step's *normalised* output, not the raw input, so
+      # the token and the environment name can never disagree with what was
+      # just confirmed.
+      - name: Stop Services in ${{ steps.confirm.outputs.target }}
         env:
-          RAILWAY_TOKEN: ${{ inputs.target_env == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
+          RAILWAY_TOKEN: ${{ steps.confirm.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
           # Explicit rather than relying on the token's default environment, so a
           # mis-scoped token cannot take down the environment you did not pick.
-          RAILWAY_ENV: ${{ inputs.target_env == 'production' && 'Production' || 'Staging' }}
+          RAILWAY_ENV: ${{ steps.confirm.outputs.target == 'production' && 'Production' || 'Staging' }}
         run: |
           set -uo pipefail
           echo "Stopping services in $RAILWAY_ENV..."
