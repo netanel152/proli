@@ -43,6 +43,19 @@ One-time migration. Finds all leads with `full_address = "Unknown Address"` (a l
 python scripts/migrate_unknown_address.py
 ```
 
+### `check_pro_service_areas.py`
+
+Backfill check for the pro-approval geocode validation. Geocodes every active pro's `service_areas` through the routing pipeline (static dict → Redis cache → Google) and prints, per pro, which areas resolved (✓), which Google does not know (✗ — correct them in the admin panel) and which could not be checked because the geocoder was unavailable (?). Dry run by default.
+
+```bash
+python scripts/check_pro_service_areas.py                       # report only
+python scripts/check_pro_service_areas.py --include-inactive    # also paused pros
+python scripts/check_pro_service_areas.py --apply               # write `location` where missing + verdict fields
+python scripts/check_pro_service_areas.py --apply --overwrite-location
+```
+
+Exit `0` when every checked pro resolves, `1` when some pro needs a correction (or resolves but carries no `location` — re-run with `--apply`), `2` when the geocoder was unavailable for at least one area. Needs `REDIS_URL` and `GOOGLE_MAPS_API_KEY` for anything outside `ISRAEL_CITIES_COORDS`; without the key nothing is ever marked *unresolved*.
+
 ### `create_indexes.py`
 
 Creates MongoDB indexes for query performance. Run once when setting up a new environment.
