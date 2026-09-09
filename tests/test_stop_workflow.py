@@ -1,18 +1,17 @@
-"""Coverage for `.github/workflows/stop_railway_services.yml`'s confirm step.
+"""Coverage for `.github/workflows/stop_railway_services.yml`.
 
-On 2026-09-08 the workflow refused three runs in a row because the operator's
-phone keyboard had appended a space after the environment name — `'production '`
-against `'production'` — and the check compared the raw strings byte for byte.
-The confirm box exists to prove the operator meant *this* environment; trailing
-whitespace and letter case say nothing about that, so the step now trims and
-case-folds before comparing, and reads both inputs through `env:` rather than
-interpolating free text into the shell.
+The workflow takes no inputs: the branch it is run from is the target — `dev`
+stops staging, `production` stops production, anything else refuses. This
+replaced a dropdown-plus-confirm-box that refused four operator runs in a row
+on 2026-09-08 (a phone keyboard's trailing space, then the other environment's
+name typed into the box).
 
-Same shape as `tests/test_promote_workflow.py`: the step's shell is extracted
-verbatim from the parsed YAML and executed under `bash`, so these tests run the
-real script; a few structural assertions pin the ways the fix could silently
-regress (the inputs moving back into `${{ }}`, the stop step keying on the raw
-input instead of the normalised output).
+Same shape as `tests/test_promote_workflow.py`: the resolve step's shell is
+extracted verbatim from the parsed YAML and executed under `bash`, so these
+tests run the real script; a few structural assertions pin the ways the shape
+could silently regress (inputs creeping back, the stop step keying on the raw
+branch name instead of the resolved output, a branch reaching the shell
+through `${{ }}`).
 """
 
 import os
@@ -55,22 +54,21 @@ def _parse_github_output(path):
 
 
 @pytest.fixture(scope="module")
-def confirm_script(tmp_path_factory):
-    step = _find_step(_load_workflow(), "confirm")
-    script_path = tmp_path_factory.mktemp("stop-confirm") / "confirm.sh"
+def resolve_script(tmp_path_factory):
+    step = _find_step(_load_workflow(), "target")
+    script_path = tmp_path_factory.mktemp("stop-resolve") / "resolve.sh"
     script_path.write_text(step["run"], encoding="utf-8")
     return script_path
 
 
-def _run_confirm(confirm_script, tmp_path, target_env, confirm):
+def _run_resolve(resolve_script, tmp_path, ref_name):
     output_path = tmp_path / "github_output"
     output_path.write_text("", encoding="utf-8")
     env = dict(os.environ)
-    env["TARGET_ENV"] = target_env
-    env["CONFIRM"] = confirm
+    env["REF_NAME"] = ref_name
     env["GITHUB_OUTPUT"] = str(output_path)
     proc = subprocess.run(
-        ["bash", str(confirm_script)],
+        ["bash", str(resolve_script)],
         env=env,
         capture_output=True,
         text=True,
@@ -79,51 +77,38 @@ def _run_confirm(confirm_script, tmp_path, target_env, confirm):
     return proc, _parse_github_output(output_path)
 
 
-# --- Behavioural: run the real "Confirm the target" shell ---
+# --- Behavioural: run the real "Resolve the target from the branch" shell ---
 
 
 @pytest.mark.parametrize(
-    "target_env, confirm",
+    "ref_name, target",
     [
-        pytest.param("production", "production", id="exact-production"),
-        pytest.param("staging", "staging", id="exact-staging"),
-        # The 2026-09-08 failure: a phone keyboard's trailing space.
-        pytest.param("production", "production ", id="trailing-space"),
-        pytest.param("production", "  production", id="leading-space"),
-        pytest.param("production", "\tproduction\n", id="tab-and-newline"),
-        pytest.param("production", "Production", id="capitalised"),
-        pytest.param("staging", "STAGING ", id="upper-and-trailing-space"),
+        pytest.param("dev", "staging", id="dev-stops-staging"),
+        pytest.param("production", "production", id="production-stops-production"),
     ],
 )
-def test_confirm_accepts_the_target_modulo_whitespace_and_case(
-    confirm_script, tmp_path, target_env, confirm
-):
-    proc, output = _run_confirm(confirm_script, tmp_path, target_env, confirm)
+def test_the_branch_is_the_target(resolve_script, tmp_path, ref_name, target):
+    proc, output = _run_resolve(resolve_script, tmp_path, ref_name)
 
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert output.get("target") == target_env
+    assert output.get("target") == target
     assert "::error::" not in proc.stdout
 
 
 @pytest.mark.parametrize(
-    "target_env, confirm",
+    "ref_name",
     [
-        # Typing the *other* environment's name is the mistake the box guards.
-        pytest.param("staging", "production", id="wrong-env"),
-        pytest.param("production", "staging ", id="wrong-env-trailing-space"),
-        pytest.param("production", "", id="empty"),
-        pytest.param("production", "   ", id="whitespace-only"),
-        pytest.param("production", "prod", id="prefix"),
-        pytest.param("production", "productionn", id="typo"),
-        pytest.param("production", "yes", id="affirmative-word"),
-        # Inner whitespace is not trimmed — it is not a trailing-space slip.
-        pytest.param("production", "pro duction", id="inner-space"),
+        pytest.param("main", id="old-default-branch-name"),
+        pytest.param("master", id="pre-rename-name"),
+        pytest.param("staging", id="environment-name-is-not-a-branch"),
+        pytest.param("feature/stop-services-by-branch", id="feature-branch"),
+        pytest.param("Production", id="case-is-not-forgiven"),
+        pytest.param("production ", id="whitespace-is-not-forgiven"),
+        pytest.param("", id="empty"),
     ],
 )
-def test_confirm_refuses_anything_that_is_not_the_target(
-    confirm_script, tmp_path, target_env, confirm
-):
-    proc, output = _run_confirm(confirm_script, tmp_path, target_env, confirm)
+def test_any_other_branch_refuses(resolve_script, tmp_path, ref_name):
+    proc, output = _run_resolve(resolve_script, tmp_path, ref_name)
 
     assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     assert "Refusing to stop anything." in proc.stdout
@@ -131,51 +116,42 @@ def test_confirm_refuses_anything_that_is_not_the_target(
     assert "target" not in output
 
 
-def test_confirm_refuses_an_unknown_target_even_when_echoed_back(
-    confirm_script, tmp_path
-):
-    # `target_env` is a dropdown, so this cannot happen through the UI; it
-    # pins that a matching pair of strings is not enough on its own.
-    proc, output = _run_confirm(confirm_script, tmp_path, "development", "development")
-
-    assert proc.returncode == 1, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert "Unknown target environment" in proc.stdout
-    assert "target" not in output
-
-
-def test_confirm_treats_typed_text_as_data_not_shell(confirm_script, tmp_path):
+def test_branch_name_is_data_not_shell(resolve_script, tmp_path):
     marker = tmp_path / "injected"
-    payload = f'production"; touch "{marker}"; echo "'
-    proc, output = _run_confirm(confirm_script, tmp_path, "production", payload)
+    payload = f'dev"; touch "{marker}"; echo "'
+    proc, output = _run_resolve(resolve_script, tmp_path, payload)
 
     assert proc.returncode == 1
-    assert not marker.exists(), "confirm text was executed as shell"
+    assert not marker.exists(), "branch name was executed as shell"
     assert "target" not in output
 
 
-# --- Structural: pin the shape of the fix ---
+# --- Structural: pin the shape ---
 
 
-def test_inputs_reach_the_confirm_step_through_env_not_expressions():
-    step = _find_step(_load_workflow(), "confirm")
-
-    assert step["env"]["TARGET_ENV"] == "${{ inputs.target_env }}"
-    assert step["env"]["CONFIRM"] == "${{ inputs.confirm }}"
-    # Free text interpolated into `run:` is a shell-injection hole, and it is
-    # how the raw, untrimmed string got compared in the first place.
-    assert "${{ inputs.confirm }}" not in step["run"]
-    assert "${{ inputs.target_env }}" not in step["run"]
+def test_workflow_takes_no_inputs():
+    # The whole point: nothing to choose, nothing to type. An input creeping
+    # back is the 2026-09-08 failure class returning.
+    dispatch = _load_workflow()[True]["workflow_dispatch"]
+    assert not dispatch or "inputs" not in dispatch
 
 
-def test_stop_step_keys_on_the_confirmed_target_not_the_raw_input():
+def test_branch_reaches_the_resolve_step_through_env_not_expressions():
+    step = _find_step(_load_workflow(), "target")
+
+    assert step["env"]["REF_NAME"] == "${{ github.ref_name }}"
+    assert "${{" not in step["run"]
+
+
+def test_stop_step_keys_on_the_resolved_target_not_the_branch():
     doc = _load_workflow()
     stop_steps = [s for s in _steps(doc) if "railway down" in s.get("run", "")]
     assert len(stop_steps) == 1, "expected exactly one step that runs `railway down`"
     stop = stop_steps[0]
 
     for key in ("RAILWAY_TOKEN", "RAILWAY_ENV"):
-        assert "steps.confirm.outputs.target" in stop["env"][key]
-        assert "inputs.target_env" not in stop["env"][key]
+        assert "steps.target.outputs.target" in stop["env"][key]
+        assert "github.ref_name" not in stop["env"][key]
     # Both environments stay reachable — the token/env pair is selected, not fixed.
     assert "RAILWAY_TOKEN_PRODUCTION" in stop["env"]["RAILWAY_TOKEN"]
     assert "RAILWAY_TOKEN_STAGING" in stop["env"]["RAILWAY_TOKEN"]
@@ -183,8 +159,12 @@ def test_stop_step_keys_on_the_confirmed_target_not_the_raw_input():
     assert "'Staging'" in stop["env"]["RAILWAY_ENV"]
 
 
-def test_confirm_input_has_no_default():
-    # A default would let the dropdown alone confirm itself.
-    inputs = _load_workflow()[True]["workflow_dispatch"]["inputs"]
-    assert inputs["confirm"]["required"] is True
-    assert "default" not in inputs["confirm"]
+def test_run_name_names_the_target_and_is_a_single_line():
+    # The run-list line is the only place the operator sees the target before
+    # the job runs. A folded scalar with more-indented continuation lines keeps
+    # a newline inside the `${{ }}` expression (the PRO-183 lesson).
+    run_name = _load_workflow()["run-name"]
+    assert "\n" not in run_name
+    assert "PRODUCTION" in run_name
+    assert "staging" in run_name
+    assert "github.ref_name" in run_name
