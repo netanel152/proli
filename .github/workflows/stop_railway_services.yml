@@ -1,80 +1,60 @@
 name: 🛑 Stop Railway Proli Services
 
 # `railway down` removes a service's active deployment — the environment stops
-# serving. On production that is an outage, triggered by a dropdown, so the job
-# asks for the environment name to be typed back before it will run.
+# serving. There is nothing to choose and nothing to type: the branch you run
+# the workflow from IS the target. `dev` stops staging (dev auto-deploys to
+# staging), `production` stops production. Any other branch refuses, so a
+# feature branch can never take an environment down. The run-list line names
+# the target before anything happens.
+#
+# The confirm box this replaced (2026-09-08) refused four runs in a row — a
+# phone keyboard's trailing space, then the wrong word typed into it — so the
+# operator saw a workflow that did not work at exactly the moment it was
+# needed. The "which environment" decision is now made by which branch the
+# operator picks in the Run-workflow dropdown, a choice that cannot be
+# misspelled.
+
+run-name: >-
+  ${{ github.ref_name == 'production' && '🛑 Stop PRODUCTION (api, worker, admin)' || (github.ref_name == 'dev' && '🛑 Stop staging (api, worker, admin)' || '🛑 Refused — run from dev (staging) or production') }}
 
 on:
   workflow_dispatch:
-    inputs:
-      target_env:
-        description: "Select environment to stop."
-        required: true
-        default: "staging"
-        type: choice
-        options:
-          - staging
-          - production
-      confirm:
-        description: "Type the environment name again to confirm (staging / production)."
-        required: true
-        type: string
 
 jobs:
   stop-railway:
     runs-on: ubuntu-latest
     steps:
-      # The comparison is trimmed and case-folded. On 2026-09-08 three runs in
-      # a row were refused on `'production '` — a phone keyboard appends a
-      # space after a word, which the box shows as nothing at all — so the
-      # operator saw a workflow that "did not work" at exactly the moment it
-      # was needed. Trailing whitespace and letter case carry no intent here;
-      # the check exists to prove they meant *this* environment, and it still
-      # does. Both values reach the script through `env:` rather than `${{ }}`
-      # so free text typed into `confirm` is data, never shell.
-      - name: Confirm the target
-        id: confirm
+      # The branch name reaches the script through `env:`, never `${{ }}`
+      # inside `run:`, and only the two known names resolve to a target.
+      - name: Resolve the target from the branch
+        id: target
         env:
-          TARGET_ENV: ${{ inputs.target_env }}
-          CONFIRM: ${{ inputs.confirm }}
+          REF_NAME: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          TARGET="$(printf '%s' "${TARGET_ENV:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
-          TYPED="$(printf '%s' "${CONFIRM:-}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')"
-
-          case "$TARGET" in
-            staging|production) ;;
+          case "${REF_NAME:-}" in
+            dev)        TARGET=staging ;;
+            production) TARGET=production ;;
             *)
-              echo "::error::Unknown target environment '${TARGET_ENV:-}'. Refusing to stop anything."
+              echo "::error::Run this workflow from 'dev' to stop staging or from 'production' to stop production. Branch '${REF_NAME:-}' maps to nothing. Refusing to stop anything."
               exit 1
               ;;
           esac
-
-          if [ -z "$TYPED" ]; then
-            echo "::error::The confirm box is empty. Type '$TARGET' to stop $TARGET. Refusing to stop anything."
-            exit 1
-          fi
-
-          if [ "$TYPED" != "$TARGET" ]; then
-            echo "::error::Confirmation '${CONFIRM:-}' does not match target '$TARGET'. Refusing to stop anything."
-            exit 1
-          fi
-
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
-          echo "Confirmed: stopping $TARGET."
+          echo "Branch '$REF_NAME' → stopping $TARGET."
 
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      # Keyed on the confirm step's *normalised* output, not the raw input, so
+      # Keyed on the resolve step's output, not on the branch name again, so
       # the token and the environment name can never disagree with what was
-      # just confirmed.
-      - name: Stop Services in ${{ steps.confirm.outputs.target }}
+      # just resolved.
+      - name: Stop Services in ${{ steps.target.outputs.target }}
         env:
-          RAILWAY_TOKEN: ${{ steps.confirm.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
+          RAILWAY_TOKEN: ${{ steps.target.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
           # Explicit rather than relying on the token's default environment, so a
           # mis-scoped token cannot take down the environment you did not pick.
-          RAILWAY_ENV: ${{ steps.confirm.outputs.target == 'production' && 'Production' || 'Staging' }}
+          RAILWAY_ENV: ${{ steps.target.outputs.target == 'production' && 'Production' || 'Staging' }}
         run: |
           set -uo pipefail
           echo "Stopping services in $RAILWAY_ENV..."
