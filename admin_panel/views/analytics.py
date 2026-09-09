@@ -293,11 +293,14 @@ def view_analytics(T):
         if types:
             x_col, y_col = T["chart_type"], T["chart_count"]
             df = pd.DataFrame(types).rename(columns={"type": x_col, "count": y_col})
-            # The query emits profession codes plus "unassigned" for leads
-            # with no pro; both are shown in the operator's language.
+            # The query emits profession codes plus "unassigned" for a pro
+            # document with no `type` (it already filters out leads with no
+            # pro); both are shown in the operator's language.
             df[x_col] = df[x_col].map(
                 lambda t: (
-                    T["unknown_pro"] if t == "unassigned" else profession_label(T, t)
+                    T["chart_type_unknown"]
+                    if t == "unassigned"
+                    else profession_label(T, t)
                 )
             )
             st.bar_chart(df, x=x_col, y=y_col, color="#2563EB")
@@ -370,8 +373,8 @@ def view_analytics(T):
                 st.metric(T["finops_total_tokens"], f"{total_tokens:,}")
                 # Rough Flash Lite 2.5 estimate, in USD — the currency the
                 # API bills in, so the "$" is not a localization gap.
-                est_cost = round(total_tokens / 1_000_000 * 0.15, 4)
-                st.info(T["finops_est_cost"].replace("{cost}", str(est_cost)))
+                est_cost = total_tokens / 1_000_000 * 0.15
+                st.info(T["finops_est_cost"].replace("{cost}", f"{est_cost:.4f}"))
 
             st.markdown(f"### {T['finops_distribution']}")
             x_col, y_col = T["finops_col_pro"], T["finops_col_tokens"]

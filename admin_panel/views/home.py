@@ -300,9 +300,22 @@ def view_leads_dashboard(T):
             # editor and the Edit form (`_chat_id`, `_display_name`,
             # `_details`), not operator-facing data — they duplicate
             # visible columns in the export.
+            # PRO-61: the raw `status` twin is dropped (the label column is
+            # the operator-facing one) and the headers are the table's own
+            # localized column titles rather than frame column names.
             csv = (
                 leads_df.drop(
                     columns=[c for c in leads_df.columns if c.startswith("_")]
+                    + ["status"]
+                )
+                .rename(
+                    columns={
+                        "date": T["col_date"],
+                        "client": T["col_client"],
+                        "professional": T["col_pro"],
+                        "details_summary": T["col_details"],
+                        "status_label": T["col_status"],
+                    }
                 )
                 .to_csv(index=False)
                 .encode("utf-8-sig")
