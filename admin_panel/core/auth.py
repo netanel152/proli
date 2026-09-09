@@ -283,10 +283,7 @@ def check_password(cookies):
                         f"Admin login locked out: {identifier} ({seconds_left}s remaining)"
                     )
                     st.error(
-                        T_auth.get(
-                            "login_locked",
-                            f"Too many failed attempts. Try again in {minutes_left} minute(s).",
-                        )
+                        T_auth["login_locked"].replace("{minutes}", str(minutes_left))
                     )
                 else:
                     auth_result = None

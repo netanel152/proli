@@ -72,7 +72,10 @@ with st.sidebar:
     username = st.session_state.get("admin_username", "")
     role = st.session_state.get("admin_role", "")
     if username:
-        st.caption(f"{username} · {role}")
+        # PRO-61: the RBAC role is a code (`owner`/`editor`/`viewer`); show
+        # the operator its name in their language.
+        role_label = T.get(f"role_{role}") or role
+        st.caption(f"{username} · {role_label}")
 
     st.markdown("")
 

@@ -51,6 +51,13 @@ EDITOR_COLUMNS = [
     "client",
     "professional",
     "details_summary",
+    # PRO-61: the status the operator sees and edits, as a *label* in their
+    # language. `st.column_config.SelectboxColumn` has no `format_func`, so
+    # the only way to show "נקבעה פגישה" instead of "booked" is for the cell
+    # to hold the label; `status` stays as the raw, hidden, authoritative
+    # value (the Kanban groups by it, the pill CSS class is keyed by it) and
+    # the save path maps the edited label back through `status_by_label`.
+    "status_label",
     "status",
     "_chat_id",
     # PRO-163: the *raw* display name behind the composed `client` cell,
@@ -112,7 +119,7 @@ def client_label(lead):
     return strip_suffix(lead.get("chat_id") or "")
 
 
-def build_lead_row(lead, *, pro_map_id_to_name, unknown_pro_label):
+def build_lead_row(lead, *, pro_map_id_to_name, unknown_pro_label, status_labels=None):
     """One lead document -> one row of the leads-editor frame.
 
     PRO-163. Extracted from ``views/home.py``'s ``get_leads_data`` closure,
@@ -131,6 +138,10 @@ def build_lead_row(lead, *, pro_map_id_to_name, unknown_pro_label):
 
     Same move as ``save_lead_edits`` (PRO-161) and the PRO-140/PRO-158 query
     extractions: streamlit-free, so it has a test.
+
+    ``status_labels`` (PRO-61) is ``{status: localized label}`` for the
+    editable ``status_label`` twin column; a status it does not cover is shown
+    as its raw value, never capitalised into fake English.
     """
     issue_type = lead.get("issue_type", lead.get("issue", lead.get("details", "")))
     appointment_time = lead.get("appointment_time", lead.get("time_preference", "?"))
@@ -159,6 +170,7 @@ def build_lead_row(lead, *, pro_map_id_to_name, unknown_pro_label):
         display_details = f"{issue_type} | {appointment_time} | {full_address}"
 
     pro_name = pro_map_id_to_name.get(lead.get("pro_id"), unknown_pro_label)
+    status = lead.get("status", "N/A")
 
     return {
         "id": str(lead["_id"]),
@@ -167,7 +179,8 @@ def build_lead_row(lead, *, pro_map_id_to_name, unknown_pro_label):
         "_display_name": (lead.get("display_name") or ""),
         "professional": pro_name,
         "details_summary": display_details,
-        "status": lead.get("status", "N/A"),
+        "status_label": (status_labels or {}).get(status, status),
+        "status": status,
         "_chat_id": lead["chat_id"],
     }
 
@@ -254,13 +267,30 @@ def _resolve_lead_id(edited_df, row_idx):
     return lead_id
 
 
-def _build_update_payload(changed_data, *, pro_map_name_to_id, unknown_pro_label):
+def _build_update_payload(
+    changed_data, *, pro_map_name_to_id, unknown_pro_label, status_by_label=None
+):
     """Translate one editor row's changed cells into a ``$set`` payload."""
     payload = {}
 
     for column, field in _SIMPLE_FIELDS.items():
         if column in changed_data:
             payload[field] = changed_data[column]
+
+    if "status_label" in changed_data:
+        # PRO-61: the operator picked a *label*; only a label the map knows
+        # becomes a status. An unknown one (a stale frame from before a
+        # language switch) is dropped rather than written verbatim as a
+        # status nobody else in the app would recognise.
+        label = changed_data["status_label"]
+        status = (status_by_label or {}).get(label)
+        if status is None:
+            logger.warning(
+                f"[LeadsEditor] Ignoring status label {label!r} — not in the "
+                f"current language's status map."
+            )
+        else:
+            payload["status"] = status
 
     if "details_summary" in changed_data:
         # The editor shows one composed summary cell; the lead document keeps
@@ -289,6 +319,7 @@ def save_lead_edits(
     pro_map_name_to_id,
     unknown_pro_label,
     audit=None,
+    status_by_label=None,
 ):
     """Apply the leads editor's edits, resolving row identity safely.
 
@@ -303,6 +334,8 @@ def save_lead_edits(
         audit: optional ``callable(action, details)`` for the audit log. The
             real one reads ``st.session_state``, so it is injected rather than
             imported — this module stays streamlit-free.
+        status_by_label: ``{localized label: status}`` for the ``status_label``
+            column (PRO-61); ``labels.status_by_label(T)`` in the view.
 
     Returns:
         ``{"updated": int, "skipped": int, "skipped_rows": list[dict]}``.
@@ -345,6 +378,7 @@ def save_lead_edits(
             changed_data,
             pro_map_name_to_id=pro_map_name_to_id,
             unknown_pro_label=unknown_pro_label,
+            status_by_label=status_by_label,
         )
         if not payload:
             _skip(idx, SKIP_NO_CHANGE)

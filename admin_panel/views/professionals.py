@@ -9,6 +9,7 @@ from admin_panel.core.utils import (
     generate_system_prompt,
 )
 from admin_panel.core.auth import log_audit, get_current_role
+from admin_panel.core.labels import PROFESSION_TYPES, profession_label
 from admin_panel.core.rbac import can_edit, has_permission
 import re
 
@@ -109,9 +110,7 @@ def render_pro_list(T):
                 verified_badge = " ✅" if p.get("is_verified") else ""
                 st.markdown(f"**{status_dot} {p['business_name']}{verified_badge}**")
 
-                pro_type = T.get(
-                    f"type_{p.get('type', 'general')}", p.get("type", "general")
-                ).capitalize()
+                pro_type = profession_label(T, p.get("type", "general"))
                 st.caption(f"{pro_type} · {p.get('phone_number', '')}")
 
                 areas = ", ".join(p.get("service_areas", []))
@@ -181,7 +180,8 @@ def render_pro_form(T, pro_data=None):
     )
     st.header(header)
 
-    if st.button(f"← {T.get('back_to_list', 'Back to list')}"):
+    # The arrow lives in the translation: → is "back" in RTL, ← in LTR.
+    if st.button(T["back_to_list"]):
         st.session_state.pro_view_mode = "list"
         st.session_state.pro_to_edit = None
         st.rerun()
@@ -204,15 +204,9 @@ def render_pro_form(T, pro_data=None):
                 value=pro_data.get("license_number", "") if is_edit else "",
             )
         with c2:
-            ptype_options = [
-                "plumber",
-                "electrician",
-                "handyman",
-                "locksmith",
-                "painter",
-                "cleaner",
-                "general",
-            ]
+            # PRO-61: the onboarding catalog's codes, so the panel cannot
+            # offer a profession the bot cannot name (or vice versa).
+            ptype_options = list(PROFESSION_TYPES)
             default_type = pro_data.get("type", "general") if is_edit else "general"
             ptype_index = (
                 ptype_options.index(default_type)
@@ -223,7 +217,7 @@ def render_pro_form(T, pro_data=None):
                 T["new_type"],
                 ptype_options,
                 index=ptype_index,
-                format_func=lambda x: T.get(f"type_{x}", x.capitalize()),
+                format_func=lambda x: profession_label(T, x),
             )
 
             c_active, c_verified = st.columns(2)
@@ -385,15 +379,13 @@ def render_pending_approvals(T):
 
     for p in pending:
         pro_id = str(p["_id"])
-        pro_type_label = T.get(
-            f"type_{p.get('type', 'general')}", p.get("type", "general")
-        ).capitalize()
+        pro_type_label = profession_label(T, p.get("type", "general"))
 
         with st.container(border=True):
             c_info, c_actions = st.columns([3, 1])
 
             with c_info:
-                st.markdown(f"**🟡 {p.get('business_name', 'Unknown')}**")
+                st.markdown(f"**🟡 {p.get('business_name') or T['unnamed_pro']}**")
                 st.caption(f"{pro_type_label} · {p.get('phone_number', '')}")
                 st.markdown(
                     f"<span style='font-size:0.85rem;'>{T.get('new_areas', 'Areas')}: {', '.join(p.get('service_areas', []))}</span>",
@@ -441,11 +433,16 @@ def render_pending_approvals(T):
                                 {"pro_id": pro_id, "name": p.get("business_name")},
                             )
                             _notify_pro_approved(p.get("phone_number"))
-                            st.success(f"{p.get('business_name')} approved!")
+                            st.success(
+                                T["pro_approved"].replace(
+                                    "{name}",
+                                    str(p.get("business_name") or T["unnamed_pro"]),
+                                )
+                            )
                             st.cache_data.clear()
                             st.rerun()
                         except Exception as e:
-                            st.error(f"Error approving: {e}")
+                            st.error(T["error_approve_pro"].replace("{error}", str(e)))
 
                     if st.button(
                         T.get("reject_btn", "Reject"),

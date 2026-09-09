@@ -1,6 +1,8 @@
 import streamlit as st
 import html
 
+from admin_panel.core.labels import lead_status_label
+
 # Status color mapping for Kanban and pills
 STATUS_COLORS = {
     # Amber "needs a human" — deliberately distinct from contacted's orange and
@@ -975,7 +977,7 @@ def render_chat_bubble(text, role, timestamp, T):
 def render_status_pill(status, T):
     """Render an HTML status pill badge."""
     colors = STATUS_COLORS.get(status, STATUS_COLORS["new"])
-    label = T.get(status, status.capitalize())
+    label = lead_status_label(T, status)
     icon = colors.get("icon", "circle")
     return f'<span class="status-pill-{status}"><span class="material-symbols-rounded" style="font-size:0.9rem">{icon}</span> {label}</span>'
 
@@ -984,7 +986,7 @@ def render_kanban_card(lead, T):
     """Render a single Kanban card as HTML."""
     client = lead.get("client", "?")
     details = lead.get("details_summary", "")
-    pro = lead.get("professional", T.get("unknown_pro", "Unassigned"))
+    pro = lead.get("professional", T["unknown_pro"])
     date = lead.get("date")
     date_str = date.strftime("%d/%m %H:%M") if date else ""
 
@@ -1021,7 +1023,7 @@ def render_kanban_card(lead, T):
 def render_kanban_column(status, leads, T):
     """Render a full Kanban column with header and cards."""
     colors = STATUS_COLORS.get(status, STATUS_COLORS["new"])
-    label = T.get(status, status.capitalize())
+    label = lead_status_label(T, status)
     count = len(leads)
 
     cards_html = "".join(render_kanban_card(l, T) for l in leads)

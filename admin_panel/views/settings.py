@@ -172,19 +172,19 @@ def view_system_settings(T):
             mon_active = col_sos1.checkbox(
                 T.get("stale_mon_active", "Stale Job Monitor"),
                 value=config.get("stale_monitor_active", True),
-                help="Checks for booked jobs that haven't been completed.",
+                help=T["help_stale_mon"],
             )
 
             healer_active = col_sos2.checkbox(
                 T.get("sos_healer_active", "SOS Auto-Healer"),
                 value=config.get("sos_healer_active", True),
-                help="Automatically reassigns leads that Pros ignored.",
+                help=T["help_sos_healer"],
             )
 
             reporter_active = col_sos3.checkbox(
                 T.get("sos_reporter_active", "SOS Admin Reporter"),
                 value=config.get("sos_reporter_active", True),
-                help="Sends batched reports of stuck leads to Admin WhatsApp.",
+                help=T["help_sos_reporter"],
             )
 
             if can_edit_settings(role):
