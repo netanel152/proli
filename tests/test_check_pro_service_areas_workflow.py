@@ -248,13 +248,198 @@ def test_check_step_does_not_pass_an_environment_flag_to_railway():
     step = _find_step(doc, "check")
     run = step["run"]
 
-    railway_run = next(
-        line for line in run.splitlines() if line.strip().startswith("railway run")
+    # The command lives in the CMD array now, built once and reused for the
+    # RAILWAY_API_TOKEN retry.
+    cmd_line = next(
+        line for line in run.splitlines() if line.strip().startswith("CMD=(railway run")
     )
-    assert "--environment" not in railway_run
+    assert "--environment" not in cmd_line
     # The resolved target still selects the token and names the environment
     # in the log line; only the flag is gone.
     assert "$RAILWAY_ENV" in run
+
+
+# --- Behavioural: run the real "check" step's shell with a stubbed `railway`
+# binary on PATH. This step is what fell back to RAILWAY_API_TOKEN on
+# 2026-09-10 — a stub is needed here (unlike the fingerprint step above)
+# because the fallback logic only exists inside this step's script, driven by
+# the real command's exit code and output. ---
+
+# Records one line per invocation (so a test can assert "called once" /
+# "called twice" without caring about ordering) and one line per invocation
+# recording exactly which credential name carried a value, so the retry can
+# be proven to pass the *same* token under the new name rather than a new one.
+RAILWAY_STUB = """#!/usr/bin/env bash
+set -u
+: "${STUB_COUNTER_FILE:?}"
+: "${STUB_RECEIVED_TOKEN_FILE:?}"
+
+printf 'x\\n' >> "$STUB_COUNTER_FILE"
+
+if [ -n "${RAILWAY_API_TOKEN:-}" ]; then
+  printf 'API:%s\\n' "$RAILWAY_API_TOKEN" >> "$STUB_RECEIVED_TOKEN_FILE"
+else
+  printf 'TOKEN:%s\\n' "${RAILWAY_TOKEN:-}" >> "$STUB_RECEIVED_TOKEN_FILE"
+fi
+
+REFUSAL="Error: Invalid RAILWAY_TOKEN, or your token does not have access to the resource you are trying to use."
+
+case "${STUB_MODE:-succeed}" in
+  succeed)
+    echo "Checking pro service areas..."
+    echo "5 pros checked, all placed on the map."
+    exit 0
+    ;;
+  real_finding)
+    echo "Checking pro service areas..."
+    echo "No pro matched the filter."
+    exit 3
+    ;;
+  refuse_until_api)
+    if [ -n "${RAILWAY_API_TOKEN:-}" ]; then
+      echo "Checking pro service areas..."
+      echo "5 pros checked, all placed on the map."
+      exit 0
+    fi
+    echo "$REFUSAL" >&2
+    exit 1
+    ;;
+  always_refuse)
+    echo "$REFUSAL" >&2
+    exit 1
+    ;;
+  *)
+    echo "unknown STUB_MODE: ${STUB_MODE:-}" >&2
+    exit 99
+    ;;
+esac
+"""
+
+
+@pytest.fixture(scope="module")
+def check_script(tmp_path_factory):
+    step = _find_step(_load_workflow(), "check")
+    script_path = tmp_path_factory.mktemp("check-run") / "check.sh"
+    script_path.write_text(step["run"], encoding="utf-8")
+    return script_path
+
+
+def _run_check(check_script, tmp_path, *, stub_mode, token=UUID_TOKEN, apply_="false"):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    stub_path = bin_dir / "railway"
+    stub_path.write_text(RAILWAY_STUB, encoding="utf-8")
+    stub_path.chmod(0o755)
+
+    counter_file = tmp_path / "invocation_count"
+    counter_file.write_text("", encoding="utf-8")
+    received_file = tmp_path / "received_tokens"
+    received_file.write_text("", encoding="utf-8")
+    summary_file = tmp_path / "step_summary.md"
+    summary_file.write_text("", encoding="utf-8")
+
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["RAILWAY_TOKEN"] = token
+    env.pop("RAILWAY_API_TOKEN", None)
+    env["RAILWAY_ENV"] = "Staging"
+    env["APPLY"] = apply_
+    env["GITHUB_STEP_SUMMARY"] = str(summary_file)
+    env["STUB_MODE"] = stub_mode
+    env["STUB_COUNTER_FILE"] = str(counter_file)
+    env["STUB_RECEIVED_TOKEN_FILE"] = str(received_file)
+
+    proc = subprocess.run(
+        ["bash", str(check_script)],
+        env=env,
+        cwd=workdir,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    return (
+        proc,
+        counter_file.read_text(encoding="utf-8"),
+        received_file.read_text(encoding="utf-8"),
+    )
+
+
+def test_check_step_first_credential_name_succeeds_without_retry(
+    check_script, tmp_path
+):
+    proc, counter, received = _run_check(check_script, tmp_path, stub_mode="succeed")
+
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert len(counter.strip().splitlines()) == 1
+    assert "::warning::" not in proc.stdout
+    assert received.strip() == f"TOKEN:{UUID_TOKEN}"
+
+
+def test_check_step_real_finding_is_not_mistaken_for_an_auth_failure(
+    check_script, tmp_path
+):
+    # This is the case an exit-code-based judgement would have got wrong:
+    # the script's own exit 3 ("no pro matched the filter") looks like a
+    # failure but is not a credential problem, so no retry may happen.
+    proc, counter, received = _run_check(
+        check_script, tmp_path, stub_mode="real_finding"
+    )
+
+    assert proc.returncode == 3, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert len(counter.strip().splitlines()) == 1
+    assert "::warning::" not in proc.stdout
+    assert (
+        "::error::No pro matched the filter, so this run checked nothing" in proc.stdout
+    )
+
+
+def test_check_step_retries_under_railway_api_token_and_succeeds(
+    check_script, tmp_path
+):
+    proc, counter, received = _run_check(
+        check_script, tmp_path, stub_mode="refuse_until_api"
+    )
+
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert len(counter.strip().splitlines()) == 2
+    assert "::warning::" in proc.stdout
+    assert "RAILWAY_API_TOKEN" in proc.stdout
+    assert "::notice::" in proc.stdout
+    # The notice also flags the sibling workflow that needs the same fix.
+    assert "Stop Railway Proli Services" in proc.stdout
+
+
+def test_check_step_both_names_refused_reports_auth_failure_before_case_block(
+    check_script, tmp_path
+):
+    proc, counter, received = _run_check(
+        check_script, tmp_path, stub_mode="always_refuse"
+    )
+
+    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert len(counter.strip().splitlines()) == 2
+    assert "::error::Railway refused the credential under both names" in proc.stdout
+    # The exit-code `case` block's geocoder-findings language must never
+    # appear for an auth failure — that would misreport pros that were never
+    # checked as having been checked.
+    assert "No pro matched the filter" not in proc.stdout
+    assert "Every checked pro can be placed on the map" not in proc.stdout
+    assert "service areas the geocoder does not know" not in proc.stdout
+
+
+def test_check_step_retry_passes_the_identical_token_value(check_script, tmp_path):
+    token = "PROJTOK-9f3ac7d2-abcd-b1e2"
+
+    proc, counter, received = _run_check(
+        check_script, tmp_path, stub_mode="refuse_until_api", token=token
+    )
+
+    lines = received.strip().splitlines()
+    assert lines[0] == f"TOKEN:{token}"
+    assert lines[1] == f"API:{token}"
 
 
 # --- Structural: pin the shape ---
@@ -334,8 +519,22 @@ def test_check_step_gates_apply_flag_on_the_apply_input():
     # --apply is only ever passed via $FLAGS, set conditionally on $APPLY —
     # never appended to the command line unconditionally.
     assert 'if [ "${APPLY:-false}" = "true" ]; then' in run
-    assert "check_pro_service_areas.py $FLAGS" in run
+    # $FLAGS is appended to the CMD array only when non-empty, so --apply
+    # can never reach the command line unconditionally.
+    assert 'CMD+=("$FLAGS")' in run
+    assert 'if [ -n "$FLAGS" ]; then' in run
     assert "check_pro_service_areas.py --apply" not in run
+
+
+def test_check_step_builds_the_command_once_and_reuses_it_for_the_retry():
+    # The original call and the RAILWAY_API_TOKEN retry must run the exact
+    # same command — built once into CMD, not two call sites that could drift
+    # apart (e.g. one gaining --apply and the other not).
+    doc = _load_workflow()
+    run = _find_step(doc, "check")["run"]
+
+    assert run.count("CMD=(") == 1
+    assert run.count('"${CMD[@]}"') == 2
 
 
 def test_run_name_names_the_target_and_is_a_single_line():
