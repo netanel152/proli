@@ -235,6 +235,28 @@ def test_verify_step_never_invokes_railway():
     assert re.search(r"\brailway\b", step["run"]) is None
 
 
+def test_check_step_does_not_pass_an_environment_flag_to_railway():
+    # A Railway project token is bound to one environment already, so the
+    # environment is pinned by the credential rather than by a flag that has
+    # to agree with it. Passing --environment as well made the CLI resolve an
+    # environment name at project level, which a newly-created
+    # environment-scoped token is not permitted to do: every staging run on
+    # 2026-09-10 failed on "Invalid RAILWAY_TOKEN" holding a token the
+    # fingerprint step had already proved correct. Re-adding the flag brings
+    # that back, so read the comment above the command first.
+    doc = _load_workflow()
+    step = _find_step(doc, "check")
+    run = step["run"]
+
+    railway_run = next(
+        line for line in run.splitlines() if line.strip().startswith("railway run")
+    )
+    assert "--environment" not in railway_run
+    # The resolved target still selects the token and names the environment
+    # in the log line; only the flag is gone.
+    assert "$RAILWAY_ENV" in run
+
+
 # --- Structural: pin the shape ---
 
 
