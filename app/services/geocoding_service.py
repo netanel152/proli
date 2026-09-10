@@ -595,10 +595,18 @@ def resolve_service_areas_sync(areas) -> ServiceAreaResolution:
     """
     from app.core.sync_bridge import run_blocking
 
-    names = [str(a).strip() for a in (areas or []) if str(a).strip()]
+    # Same dedupe rule as resolve_service_areas, so the fallback below reports
+    # the same set of names a successful run would have checked.
+    names: List[str] = []
+    seen = set()
+    for raw in areas or []:
+        name = str(raw).strip()
+        if name and _normalize(name) not in seen:
+            seen.add(_normalize(name))
+            names.append(name)
     timeout = max(_SYNC_MIN_TIMEOUT_SECONDS, _SYNC_PER_AREA_SECONDS * len(names))
     try:
         return run_blocking(resolve_service_areas(names), timeout)
     except Exception as e:
         logger.error(f"Geocoding: service-area check could not run: {e}")
-        return ServiceAreaResolution(unavailable=list(dict.fromkeys(names)))
+        return ServiceAreaResolution(unavailable=names)
