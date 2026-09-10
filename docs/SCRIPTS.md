@@ -56,6 +56,8 @@ python scripts/check_pro_service_areas.py --apply --overwrite-location
 
 Exit `0` when every checked pro resolves, `1` when some pro needs a correction (or resolves but carries no `location` — re-run with `--apply`), `2` when the geocoder was unavailable for at least one area. Needs `REDIS_URL` and `GOOGLE_MAPS_API_KEY` for anything outside `ISRAEL_CITIES_COORDS`; without the key nothing is ever marked *unresolved*.
 
+Against staging or production, run it through the **`🗺️ Check pro service areas`** workflow rather than by hand: the branch picks the environment (`dev` → staging, `production` → production), `railway run` supplies the credentials, the job exits with the script's own code, and the report is written to the run's job summary — which is the artifact to paste onto the issue.
+
 ### `create_indexes.py`
 
 Creates MongoDB indexes for query performance. Run once when setting up a new environment.

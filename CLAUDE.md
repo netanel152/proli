@@ -176,6 +176,7 @@ python scripts/seed_db.py          # Seed initial data
 python scripts/create_indexes.py   # Create MongoDB indexes (runs automatically on every API boot; indexes are declared in its INDEX_SPECS table — manual run only primes a fresh DB)
 python scripts/clear_history.py    # Clear chat history
 python scripts/check_pro_service_areas.py  # Backfill/audit: geocode every approved pro's service_areas, --apply to write
+#                                            (against staging/production, run the 🗺️ Check pro service areas workflow instead — branch picks the environment, report lands in the job summary)
 ```
 
 ### Testing

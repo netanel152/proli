@@ -603,9 +603,19 @@ def _render_service_area_correction(
         try:
             _check_then_approve(p, T)
         except Exception as e:
-            st.error(f"Error approving: {e}")
+            st.error(T["error_approve_pro"].replace("{error}", str(e)))
             return
-        # Not approved — the re-check stashed a fresh verdict; redraw it.
+        # Not approved — the re-check stashed a fresh verdict and the redrawn
+        # warning is byte-identical to the one already on screen, so say that
+        # the write landed. Without this the click is indistinguishable from a
+        # no-op even though `service_areas` and an audit entry were committed.
+        set_flash(
+            "pro_flash",
+            T["geo_areas_saved"].replace(
+                "{name}", p.get("business_name") or T["unnamed_pro"]
+            ),
+            "warning",
+        )
         st.rerun()
 
     # Offered only when something resolved: approving with no placeable area
