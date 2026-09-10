@@ -69,18 +69,26 @@ jobs:
       - name: Install Railway CLI
         run: npm install -g @railway/cli
 
-      # A missing or wrong credential otherwise surfaces as one opaque line —
-      # "Invalid RAILWAY_TOKEN" — that says nothing about which of the several
-      # causes it is. On 2026-09-10 that cost two rounds of guessing against a
-      # token that turned out to be correctly scoped in Railway; what was
-      # wrong lived on the GitHub side. This step separates the cases before
-      # the real work starts. It prints the credential's LENGTH, never a
-      # character of it: a length distinguishes "the secret did not resolve"
-      # (0 — most often stored under Settings → Environments rather than as a
-      # repository secret, which resolves to an empty string in a job that
-      # declares no `environment:`) from "a value is there but Railway will
-      # not take it", and leaks nothing.
-      - name: Verify the Railway credential resolves and works
+      # A missing credential otherwise surfaces as one opaque line — "Invalid
+      # RAILWAY_TOKEN" — that says nothing about which of the several causes
+      # it is. On 2026-09-10 that cost two rounds of guessing against a token
+      # that turned out to be correctly scoped in Railway.
+      #
+      # This answers exactly one question, the one the CLI's message cannot:
+      # did a value reach the job at all? It prints the credential's LENGTH,
+      # never a character of it. Zero means the secret did not resolve — most
+      # often because it is stored under Settings → Environments rather than
+      # as a repository secret, which yields an empty string in a job that
+      # declares no `environment:`. Any other length means a value arrived,
+      # and whatever the real command says next is about that value.
+      #
+      # It deliberately does NOT probe with `railway whoami`: that is an
+      # account-scoped command, and a project token — which is what these
+      # secrets hold, and what Railway's own tokens page tells you to pass as
+      # RAILWAY_TOKEN — has no user identity behind it. A probe that a valid
+      # project token cannot pass would fail the job before the real command
+      # ever ran, which is worse than the opaque line it set out to replace.
+      - name: Verify the Railway credential resolved
         env:
           RAILWAY_TOKEN: ${{ steps.target.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
           TARGET: ${{ steps.target.outputs.target }}
@@ -92,11 +100,6 @@ jobs:
             exit 1
           fi
           echo "Credential resolved for $TARGET (${#RAILWAY_TOKEN} characters). Value never printed."
-
-          if ! railway whoami 2>&1 | tee whoami.txt; then
-            echo "::error::Railway rejected the credential for '$TARGET'. It resolved and is ${#RAILWAY_TOKEN} characters long, so the secret exists — the value itself is wrong, truncated, carries stray whitespace, or belongs to a different project. Re-copy it from Railway → the Proli project → Project Settings → Tokens, where the environment column must read the one you are targeting."
-            exit 1
-          fi
 
       # Keyed on the resolve step's output, not on the branch name again, so
       # the token and the environment name can never disagree with what was

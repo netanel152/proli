@@ -14,6 +14,7 @@ verdict.
 """
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -116,8 +117,8 @@ def test_any_other_branch_refuses(resolve_script, tmp_path, ref_name):
     assert "target" not in output
 
 
-# --- Behavioural: run the real "Verify the Railway credential resolves and
-# works" shell, with a stubbed `railway` on PATH ---
+# --- Behavioural: run the real "Verify the Railway credential resolved"
+# shell. It never invokes the `railway` binary, so no stub is needed. ---
 
 
 def _find_step_by_name(doc, name):
@@ -127,7 +128,7 @@ def _find_step_by_name(doc, name):
     raise AssertionError(f"no step named {name!r} in {WORKFLOW_PATH}")
 
 
-VERIFY_STEP_NAME = "Verify the Railway credential resolves and works"
+VERIFY_STEP_NAME = "Verify the Railway credential resolved"
 
 
 @pytest.fixture(scope="module")
@@ -138,33 +139,10 @@ def verify_script(tmp_path_factory):
     return script_path
 
 
-def _make_railway_stub(bin_dir, exit_code, marker_path=None):
-    """A fake `railway` binary: `whoami` exits `exit_code`, optionally
-    touching `marker_path` first so a test can prove it was (or wasn't)
-    invoked at all."""
-    bin_dir.mkdir(parents=True, exist_ok=True)
-    stub = bin_dir / "railway"
-    marker_line = f'touch "{marker_path}"\n' if marker_path is not None else ""
-    stub.write_text(
-        "#!/bin/bash\n"
-        f"{marker_line}"
-        'if [ "$1" = "whoami" ]; then\n'
-        "  echo 'stub whoami output'\n"
-        f"  exit {exit_code}\n"
-        "fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    stub.chmod(0o755)
-    return stub
-
-
-def _run_verify(verify_script, tmp_path, *, token, target, bin_dir=None):
+def _run_verify(verify_script, tmp_path, *, token, target):
     env = dict(os.environ)
     env["RAILWAY_TOKEN"] = token
     env["TARGET"] = target
-    if bin_dir is not None:
-        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
     return subprocess.run(
         ["bash", str(verify_script)],
         env=env,
@@ -175,14 +153,8 @@ def _run_verify(verify_script, tmp_path, *, token, target, bin_dir=None):
     )
 
 
-def test_empty_token_fails_before_invoking_railway(verify_script, tmp_path):
-    bin_dir = tmp_path / "bin"
-    marker = tmp_path / "railway_was_called"
-    _make_railway_stub(bin_dir, exit_code=0, marker_path=marker)
-
-    proc = _run_verify(
-        verify_script, tmp_path, token="", target="staging", bin_dir=bin_dir
-    )
+def test_empty_token_fails_with_error(verify_script, tmp_path):
+    proc = _run_verify(verify_script, tmp_path, token="", target="staging")
 
     assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     assert "::error::" in proc.stdout
@@ -191,54 +163,38 @@ def test_empty_token_fails_before_invoking_railway(verify_script, tmp_path):
     # `environment:`.
     assert "repository" in proc.stdout
     assert "Environments" in proc.stdout
-    assert not marker.exists(), "an empty token must never reach `railway`"
 
 
 def test_working_token_reports_character_count_and_succeeds(verify_script, tmp_path):
     token = "sk-test-token-1234567890"
-    bin_dir = tmp_path / "bin"
-    _make_railway_stub(bin_dir, exit_code=0)
 
-    proc = _run_verify(
-        verify_script, tmp_path, token=token, target="production", bin_dir=bin_dir
-    )
+    proc = _run_verify(verify_script, tmp_path, token=token, target="production")
 
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
     assert f"({len(token)} characters)" in proc.stdout
 
 
-def test_rejected_token_fails_with_error(verify_script, tmp_path):
-    token = "sk-wrong-token"
-    bin_dir = tmp_path / "bin"
-    _make_railway_stub(bin_dir, exit_code=1)
-
-    proc = _run_verify(
-        verify_script, tmp_path, token=token, target="staging", bin_dir=bin_dir
-    )
-
-    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert "::error::" in proc.stdout
-    assert "staging" in proc.stdout
-
-
-@pytest.mark.parametrize(
-    "exit_code",
-    [pytest.param(0, id="railway-accepts"), pytest.param(1, id="railway-rejects")],
-)
-def test_token_value_never_appears_in_output(verify_script, tmp_path, exit_code):
+def test_token_value_never_appears_in_output(verify_script, tmp_path):
     # The assertion that matters most: a diagnostic that leaks the credential
-    # is worse than the opaque line it replaces. True whether the stub
-    # accepts or rejects the token.
+    # is worse than the opaque line it replaces.
     sentinel = "SENTINEL-RAILWAY-TOKEN-do-not-print-9f3ac7"
-    bin_dir = tmp_path / f"bin-{exit_code}"
-    _make_railway_stub(bin_dir, exit_code=exit_code)
 
-    proc = _run_verify(
-        verify_script, tmp_path, token=sentinel, target="production", bin_dir=bin_dir
-    )
+    proc = _run_verify(verify_script, tmp_path, token=sentinel, target="production")
 
     combined = proc.stdout + proc.stderr
     assert sentinel not in combined
+
+
+def test_verify_step_never_invokes_railway():
+    # The whole point of narrowing this step: `railway whoami` is
+    # account-scoped, and a valid *project* token (what these secrets hold)
+    # has no user identity behind it, so it can fail the probe while the
+    # credential is fine. If a probe creeps back in here, read the comment
+    # above the step in the workflow before re-adding it.
+    doc = _load_workflow()
+    step = _find_step_by_name(doc, VERIFY_STEP_NAME)
+
+    assert re.search(r"\brailway\b", step["run"]) is None
 
 
 # --- Structural: pin the shape ---
