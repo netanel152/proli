@@ -122,6 +122,9 @@ jobs:
             2)
               echo "::warning::The geocoder was unavailable for at least one area, so the verdict is incomplete. Re-run in a minute (the geo:unavailable flag clears after 60s)."
               ;;
+            3)
+              echo "::error::No pro matched the filter, so this run checked nothing and is not evidence of anything. The report says which population is empty — see the job summary."
+              ;;
             *)
               echo "::error::The check did not complete (exit $code). See the log above."
               ;;

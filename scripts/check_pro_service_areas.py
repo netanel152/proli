@@ -28,6 +28,11 @@ Exit codes (so the run can gate a checklist):
        all — and needs its `service_areas` corrected in the admin panel
     2  the geocoder was unavailable for at least one area; the verdict is
        incomplete — re-run once `geo:unavailable` has cleared (60s)
+    3  no pro matched the filter, so nothing was checked. Deliberately not 0:
+       "every checked pro is fine" is vacuously true of an empty set, and a
+       green run that examined nothing is indistinguishable from a green run
+       that examined everything — the exact failure this check exists to
+       prevent, aimed at itself. The report says which population is empty.
 
 Uses the same pipeline as routing (static dict → Redis cache → Google), so it
 needs the same env: `REDIS_URL`, and `GOOGLE_MAPS_API_KEY` for anything
@@ -58,6 +63,7 @@ from app.services.geocoding_service import (  # noqa: E402
 EXIT_OK = 0
 EXIT_UNRESOLVED = 1
 EXIT_UNAVAILABLE = 2
+EXIT_NOTHING_CHECKED = 3
 
 _PROJECTION = {
     "_id": 1,
@@ -116,6 +122,47 @@ def _print_pro(pro: dict, resolution: ServiceAreaResolution, label: str) -> None
         print("   ✗ no service areas on record")
 
 
+async def _report_empty_population(include_inactive: bool) -> None:
+    """Say *why* nothing was checked, so an empty run is a fact rather than a
+    shrug. A zero-row check is not evidence of anything, and the difference
+    between "no professionals exist yet" and "they all sit behind the filter"
+    is the difference between a pre-pilot database and a misconfigured one.
+    """
+    print()
+    print("⚠️  No pro matched the filter — nothing was checked, and this run")
+    print("   proves nothing about anybody's service areas.")
+    try:
+        total = await users_collection.count_documents({"role": "professional"})
+        pending = await users_collection.count_documents(
+            {"role": "professional", "pending_approval": True}
+        )
+        approved = total - pending
+        inactive = await users_collection.count_documents(
+            {
+                "role": "professional",
+                "pending_approval": {"$ne": True},
+                "is_active": {"$ne": True},
+            }
+        )
+    except Exception as exc:  # pragma: no cover — diagnostics must never mask
+        print(f"   (could not count the wider population: {type(exc).__name__})")
+        return
+
+    print(
+        f"   professionals on record: {total}  "
+        f"(approved: {approved}, awaiting approval: {pending})"
+    )
+    if not total:
+        print("   The collection holds no professionals at all — expected before")
+        print("   the pilot onboards anyone, and a misconfigured MONGO_URI otherwise.")
+    elif not approved:
+        print("   Every one of them is still awaiting approval, so none is a")
+        print("   routing target yet. Approve one and the check has something to do.")
+    elif inactive and not include_inactive:
+        print(f"   {inactive} approved pro(s) are paused (is_active=False) and were")
+        print("   skipped. Re-run with --include-inactive to check them too.")
+
+
 async def run(
     *,
     apply: bool,
@@ -167,6 +214,10 @@ async def run(
             **counts
         )
     )
+
+    if not checked:
+        await _report_empty_population(include_inactive)
+        return EXIT_NOTHING_CHECKED
 
     if counts["PARTIAL"] or counts["UNREACHABLE"]:
         print("❌ Some pros have service areas the geocoder does not know — fix them.")

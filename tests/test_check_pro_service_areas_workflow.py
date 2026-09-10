@@ -215,6 +215,11 @@ def case_script(tmp_path_factory):
             "2", "::warning::The geocoder was unavailable", id="geocoder-down"
         ),
         pytest.param(
+            "3",
+            "::error::No pro matched the filter, so this run checked nothing",
+            id="nothing-checked",
+        ),
+        pytest.param(
             "77", "::error::The check did not complete (exit 77)", id="unknown-code"
         ),
     ],
