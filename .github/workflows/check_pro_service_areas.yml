@@ -150,21 +150,50 @@ jobs:
 
           echo "Checking pro service areas in $RAILWAY_ENV — $MODE"
 
-          # No --environment flag, deliberately. A Railway *project token* is
-          # already bound to exactly one environment — that is what it is —
-          # so the environment is pinned by the credential itself, which an
-          # operator cannot mistype, rather than by a flag that has to agree
-          # with it. Passing the flag as well made the CLI resolve an
-          # environment name at project level, which a newly-created
-          # environment-scoped token is not permitted to do: every staging
-          # run on 2026-09-10 died on "Invalid RAILWAY_TOKEN ... and has
-          # access to the resource you're trying to use" with a token that
-          # the fingerprint step proved was the right one, correctly scoped.
-          # Production's token predates the change and survived the extra
-          # lookup, which is why only staging failed.
-          railway run --service worker -- \
-            python scripts/check_pro_service_areas.py $FLAGS 2>&1 | tee report.txt
+          # No --environment flag, deliberately: a Railway project token is
+          # bound to one environment already, so the credential pins it —
+          # something an operator cannot mistype, unlike a flag that has to
+          # agree with it.
+          CMD=(railway run --service worker -- python scripts/check_pro_service_areas.py)
+          if [ -n "$FLAGS" ]; then
+            CMD+=("$FLAGS")
+          fi
+
+          "${CMD[@]}" 2>&1 | tee report.txt
           code=${PIPESTATUS[0]}
+
+          # Railway has two credential names and the CLI reads them from
+          # different variables: a classic project token from RAILWAY_TOKEN,
+          # and a newer workspace-scoped token from RAILWAY_API_TOKEN. Both
+          # appear on the same Project Settings → Tokens page and look
+          # identical — a UUID with an environment beside it — so there is no
+          # way to tell from the dashboard which kind you were handed.
+          #
+          # On 2026-09-10 that cost most of a day. Production's token, created
+          # four months earlier, authenticated fine; a staging token created
+          # that morning was refused as "Invalid RAILWAY_TOKEN ... and has
+          # access to the resource you're trying to use" — the same sentence
+          # Railway uses for a bad value — through three rotations, while the
+          # fingerprint step proved the value matched the dashboard exactly
+          # and a production run nine minutes earlier proved nothing global
+          # was broken. Age of the token was the only variable left.
+          #
+          # So try the other name rather than asking a human to guess which
+          # kind they have. Authentication is judged by whether the refusal
+          # is still in the output, not by the exit code: the script exits
+          # 1/2/3 for real findings, and those are not credential failures.
+          if [ "$code" -ne 0 ] && grep -qiE 'invalid railway_token|unauthorized|not signed in' report.txt; then
+            echo "::warning::Railway refused this credential under RAILWAY_TOKEN. Retrying the identical value under RAILWAY_API_TOKEN, which is where the CLI looks for a workspace-scoped token."
+            API_TOKEN="$RAILWAY_TOKEN"
+            RAILWAY_TOKEN="" RAILWAY_API_TOKEN="$API_TOKEN" "${CMD[@]}" 2>&1 | tee report.txt
+            code=${PIPESTATUS[0]}
+            if grep -qiE 'invalid railway_token|unauthorized|not signed in' report.txt; then
+              AUTH_FAILED=1
+              echo "::error::Railway refused the credential under both names. The value is not the problem if the fingerprint above matches the dashboard — check that the token still exists in Railway → Project Settings → Tokens and that its environment column reads the target."
+            else
+              echo "::notice::Authenticated under RAILWAY_API_TOKEN, not RAILWAY_TOKEN — this secret holds a workspace-scoped token. 🛑 Stop Railway Proli Services reads the same secret under the old name only, and needs the same treatment before it is next relied on."
+            fi
+          fi
 
           {
             echo "## 🗺️ Pro service areas — $RAILWAY_ENV"
@@ -178,7 +207,15 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           # The script's exit codes, kept as the job's verdict so a checklist
-          # can be ticked on a green run and only on a green run.
+          # can be ticked on a green run and only on a green run. Skipped
+          # when the credential was refused: the CLI's exit 1 is not the
+          # script's exit 1, and reading it as one would report "some pros
+          # have areas the geocoder does not know" about pros that were
+          # never looked at.
+          if [ "${AUTH_FAILED:-0}" = "1" ]; then
+            exit 1
+          fi
+
           case "$code" in
             0)
               echo "✅ Every checked pro can be placed on the map."
