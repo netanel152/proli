@@ -71,7 +71,7 @@ def _run_resolve(resolve_script, tmp_path, ref_name):
         env["REF_NAME"] = ref_name
     env["GITHUB_OUTPUT"] = str(output_path)
     proc = subprocess.run(
-        ["bash", str(resolve_script)],
+        ["bash", "-e", str(resolve_script)],
         env=env,
         capture_output=True,
         text=True,
@@ -148,7 +148,7 @@ def _run_verify(verify_script, tmp_path, *, token, target):
     env["RAILWAY_TOKEN"] = token
     env["TARGET"] = target
     return subprocess.run(
-        ["bash", str(verify_script)],
+        ["bash", "-e", str(verify_script)],
         env=env,
         cwd=tmp_path,
         capture_output=True,
@@ -353,7 +353,7 @@ def _run_check(check_script, tmp_path, *, stub_mode, token=UUID_TOKEN, apply_="f
     env["STUB_RECEIVED_TOKEN_FILE"] = str(received_file)
 
     proc = subprocess.run(
-        ["bash", str(check_script)],
+        ["bash", "-e", str(check_script)],
         env=env,
         cwd=workdir,
         capture_output=True,
@@ -601,7 +601,7 @@ def test_exit_code_case_block_matches_the_scripts_contract(
     case_script, code, expect_substring
 ):
     proc = subprocess.run(
-        ["bash", str(case_script), code],
+        ["bash", "-e", str(case_script), code],
         capture_output=True,
         text=True,
         timeout=10,
