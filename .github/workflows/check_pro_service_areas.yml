@@ -150,7 +150,19 @@ jobs:
 
           echo "Checking pro service areas in $RAILWAY_ENV — $MODE"
 
-          railway run --service worker --environment "$RAILWAY_ENV" -- \
+          # No --environment flag, deliberately. A Railway *project token* is
+          # already bound to exactly one environment — that is what it is —
+          # so the environment is pinned by the credential itself, which an
+          # operator cannot mistype, rather than by a flag that has to agree
+          # with it. Passing the flag as well made the CLI resolve an
+          # environment name at project level, which a newly-created
+          # environment-scoped token is not permitted to do: every staging
+          # run on 2026-09-10 died on "Invalid RAILWAY_TOKEN ... and has
+          # access to the resource you're trying to use" with a token that
+          # the fingerprint step proved was the right one, correctly scoped.
+          # Production's token predates the change and survived the extra
+          # lookup, which is why only staging failed.
+          railway run --service worker -- \
             python scripts/check_pro_service_areas.py $FLAGS 2>&1 | tee report.txt
           code=${PIPESTATUS[0]}
 
