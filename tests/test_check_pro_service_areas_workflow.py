@@ -117,8 +117,8 @@ def test_any_other_branch_refuses(resolve_script, tmp_path, ref_name):
     assert "target" not in output
 
 
-# --- Behavioural: run the real "Verify the Railway credential resolved"
-# shell. It never invokes the `railway` binary, so no stub is needed. ---
+# --- Behavioural: run the real "Fingerprint the Railway credential" shell.
+# It never invokes the `railway` binary, so no stub is needed. ---
 
 
 def _find_step_by_name(doc, name):
@@ -128,7 +128,11 @@ def _find_step_by_name(doc, name):
     raise AssertionError(f"no step named {name!r} in {WORKFLOW_PATH}")
 
 
-VERIFY_STEP_NAME = "Verify the Railway credential resolved"
+VERIFY_STEP_NAME = "Fingerprint the Railway credential"
+
+# What a Railway project token looks like — used both as a "well-formed"
+# fixture and as the source for the trailing-4-characters comparison.
+UUID_TOKEN = "550e8400-e29b-41d4-a716-446655440000"
 
 
 @pytest.fixture(scope="module")
@@ -165,24 +169,58 @@ def test_empty_token_fails_with_error(verify_script, tmp_path):
     assert "Environments" in proc.stdout
 
 
-def test_working_token_reports_character_count_and_succeeds(verify_script, tmp_path):
-    token = "sk-test-token-1234567890"
-
-    proc = _run_verify(verify_script, tmp_path, token=token, target="production")
+def test_well_formed_uuid_reports_full_fingerprint(verify_script, tmp_path):
+    proc = _run_verify(verify_script, tmp_path, token=UUID_TOKEN, target="production")
 
     assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
-    assert f"({len(token)} characters)" in proc.stdout
+    assert "length:      36 characters" in proc.stdout
+    assert f"last 4:      ...{UUID_TOKEN[-4:]}" in proc.stdout
+    assert "whitespace:  none" in proc.stdout
+    assert "a well-formed UUID" in proc.stdout
 
 
-def test_token_value_never_appears_in_output(verify_script, tmp_path):
-    # The assertion that matters most: a diagnostic that leaks the credential
-    # is worse than the opaque line it replaces.
-    sentinel = "SENTINEL-RAILWAY-TOKEN-do-not-print-9f3ac7"
+def test_trailing_newline_reports_whitespace_and_the_real_last_four(
+    verify_script, tmp_path
+):
+    # A trailing newline used to push a line break into the middle of the
+    # comparison the "last 4" line exists to serve — pin that the printed
+    # characters come from the trimmed value, not the raw one.
+    token = UUID_TOKEN + "\n"
+
+    proc = _run_verify(verify_script, tmp_path, token=token, target="staging")
+
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "whitespace:  YES" in proc.stdout
+    assert "1 whitespace character(s)" in proc.stdout
+    assert f"last 4:      ...{UUID_TOKEN[-4:]}" in proc.stdout
+
+
+def test_non_uuid_value_reports_shape_mismatch(verify_script, tmp_path):
+    proc = _run_verify(
+        verify_script, tmp_path, token="not-a-railway-token", target="production"
+    )
+
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "NOT a UUID" in proc.stdout
+
+
+def test_disclosure_is_bounded_to_exactly_the_last_four_characters(
+    verify_script, tmp_path
+):
+    # The property changed on purpose: the last 4 characters are now printed
+    # deliberately (Railway's own tokens page shows the same "****-3bc1"
+    # slice). What must stay pinned is that the disclosure never grows past
+    # that — no 5-character suffix, no 8-character prefix, and never the
+    # full value.
+    sentinel = "PROJTOK-9f3ac7d2-DO-NOT-LEAK-b1e2"
 
     proc = _run_verify(verify_script, tmp_path, token=sentinel, target="production")
 
     combined = proc.stdout + proc.stderr
     assert sentinel not in combined
+    assert sentinel[-4:] in combined  # "b1e2" — the deliberate disclosure
+    assert sentinel[-5:] not in combined  # "-b1e2"
+    assert sentinel[:8] not in combined  # "PROJTOK-"
 
 
 def test_verify_step_never_invokes_railway():
