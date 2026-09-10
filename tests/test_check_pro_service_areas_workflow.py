@@ -116,6 +116,131 @@ def test_any_other_branch_refuses(resolve_script, tmp_path, ref_name):
     assert "target" not in output
 
 
+# --- Behavioural: run the real "Verify the Railway credential resolves and
+# works" shell, with a stubbed `railway` on PATH ---
+
+
+def _find_step_by_name(doc, name):
+    for step in _steps(doc):
+        if step.get("name") == name:
+            return step
+    raise AssertionError(f"no step named {name!r} in {WORKFLOW_PATH}")
+
+
+VERIFY_STEP_NAME = "Verify the Railway credential resolves and works"
+
+
+@pytest.fixture(scope="module")
+def verify_script(tmp_path_factory):
+    step = _find_step_by_name(_load_workflow(), VERIFY_STEP_NAME)
+    script_path = tmp_path_factory.mktemp("check-verify") / "verify.sh"
+    script_path.write_text(step["run"], encoding="utf-8")
+    return script_path
+
+
+def _make_railway_stub(bin_dir, exit_code, marker_path=None):
+    """A fake `railway` binary: `whoami` exits `exit_code`, optionally
+    touching `marker_path` first so a test can prove it was (or wasn't)
+    invoked at all."""
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "railway"
+    marker_line = f'touch "{marker_path}"\n' if marker_path is not None else ""
+    stub.write_text(
+        "#!/bin/bash\n"
+        f"{marker_line}"
+        'if [ "$1" = "whoami" ]; then\n'
+        "  echo 'stub whoami output'\n"
+        f"  exit {exit_code}\n"
+        "fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return stub
+
+
+def _run_verify(verify_script, tmp_path, *, token, target, bin_dir=None):
+    env = dict(os.environ)
+    env["RAILWAY_TOKEN"] = token
+    env["TARGET"] = target
+    if bin_dir is not None:
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    return subprocess.run(
+        ["bash", str(verify_script)],
+        env=env,
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+def test_empty_token_fails_before_invoking_railway(verify_script, tmp_path):
+    bin_dir = tmp_path / "bin"
+    marker = tmp_path / "railway_was_called"
+    _make_railway_stub(bin_dir, exit_code=0, marker_path=marker)
+
+    proc = _run_verify(
+        verify_script, tmp_path, token="", target="staging", bin_dir=bin_dir
+    )
+
+    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "::error::" in proc.stdout
+    # The distinction that cost two rounds of guessing: repo secret vs. an
+    # Environments-scoped secret, which resolves to empty in a job with no
+    # `environment:`.
+    assert "repository" in proc.stdout
+    assert "Environments" in proc.stdout
+    assert not marker.exists(), "an empty token must never reach `railway`"
+
+
+def test_working_token_reports_character_count_and_succeeds(verify_script, tmp_path):
+    token = "sk-test-token-1234567890"
+    bin_dir = tmp_path / "bin"
+    _make_railway_stub(bin_dir, exit_code=0)
+
+    proc = _run_verify(
+        verify_script, tmp_path, token=token, target="production", bin_dir=bin_dir
+    )
+
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert f"({len(token)} characters)" in proc.stdout
+
+
+def test_rejected_token_fails_with_error(verify_script, tmp_path):
+    token = "sk-wrong-token"
+    bin_dir = tmp_path / "bin"
+    _make_railway_stub(bin_dir, exit_code=1)
+
+    proc = _run_verify(
+        verify_script, tmp_path, token=token, target="staging", bin_dir=bin_dir
+    )
+
+    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "::error::" in proc.stdout
+    assert "staging" in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "exit_code",
+    [pytest.param(0, id="railway-accepts"), pytest.param(1, id="railway-rejects")],
+)
+def test_token_value_never_appears_in_output(verify_script, tmp_path, exit_code):
+    # The assertion that matters most: a diagnostic that leaks the credential
+    # is worse than the opaque line it replaces. True whether the stub
+    # accepts or rejects the token.
+    sentinel = "SENTINEL-RAILWAY-TOKEN-do-not-print-9f3ac7"
+    bin_dir = tmp_path / f"bin-{exit_code}"
+    _make_railway_stub(bin_dir, exit_code=exit_code)
+
+    proc = _run_verify(
+        verify_script, tmp_path, token=sentinel, target="production", bin_dir=bin_dir
+    )
+
+    combined = proc.stdout + proc.stderr
+    assert sentinel not in combined
+
+
 # --- Structural: pin the shape ---
 
 
@@ -135,6 +260,39 @@ def test_branch_reaches_the_resolve_step_through_env_not_expressions():
 
     assert step["env"]["REF_NAME"] == "${{ github.ref_name }}"
     assert "${{" not in step["run"]
+
+
+def test_verify_step_sits_between_install_cli_and_check():
+    doc = _load_workflow()
+    steps = _steps(doc)
+    names = [s.get("name") for s in steps]
+    ids = [s.get("id") for s in steps]
+
+    install_idx = names.index("Install Railway CLI")
+    verify_idx = names.index(VERIFY_STEP_NAME)
+    check_idx = ids.index("check")
+
+    assert install_idx < verify_idx < check_idx
+
+
+def test_verify_step_keys_token_on_resolved_target_not_the_branch():
+    doc = _load_workflow()
+    step = _find_step_by_name(doc, VERIFY_STEP_NAME)
+
+    token_expr = step["env"]["RAILWAY_TOKEN"]
+    assert "steps.target.outputs.target" in token_expr
+    assert "github.ref_name" not in token_expr
+    assert "RAILWAY_TOKEN_PRODUCTION" in token_expr
+    assert "RAILWAY_TOKEN_STAGING" in token_expr
+
+
+def test_verify_step_reaches_the_shell_through_env_not_expressions():
+    doc = _load_workflow()
+    step = _find_step_by_name(doc, VERIFY_STEP_NAME)
+
+    assert "${{" not in step["run"]
+    assert "RAILWAY_TOKEN" in step["env"]
+    assert "TARGET" in step["env"]
 
 
 def test_check_step_keys_railway_creds_on_the_resolved_target_not_the_branch():
