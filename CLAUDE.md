@@ -219,7 +219,7 @@ Picks up `process_message_task` jobs from Redis and calls `workflow_service.proc
 
 ### Process 3: Streamlit Admin Panel (`admin_panel/`)
 
-Protected by bcrypt cookie-based auth. Views for lead management, professional profiles, and schedule management. Auto-refresh (PRO-141) is a client-side timer (`streamlit-autorefresh`, armed in the sidebar above the view dispatch) rather than the old `time.sleep(interval); st.rerun()` at the end of the script run, which blocked the page for up to 120s per tick; it pauses (and says so) while a `st.data_editor` holds unsaved rows, per `admin_panel/core/refresh.py`.
+Protected by bcrypt cookie-based auth. Views for lead management, professional profiles, and schedule management. Auto-refresh (PRO-141) is a client-side timer (`streamlit-autorefresh`, armed in the sidebar above the view dispatch) rather than the old `time.sleep(interval); st.rerun()` at the end of the script run, which blocked the page for up to 120s per tick; it pauses (and says so) while a `st.data_editor` holds unsaved rows, per `admin_panel/core/refresh.py`. Hebrew/English copy lives in the `TRANS` dict (`admin_panel/core/config.py`); lead-status and profession-type labels are resolved through the single `admin_panel/core/labels.py` (PRO-61) rather than at each call site, and `tests/test_admin_translations.py` guards HE/EN key parity and forbids the old silent `.capitalize()` fallback.
 
 ### Service Layer (`app/services/`)
 
