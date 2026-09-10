@@ -963,22 +963,35 @@ def load_css(lang_code, T):
     )
 
 
-def set_flash(key, message):
+def set_flash(key, message, level="success"):
     """Stash a confirmation to be shown on the *next* run (PRO-61).
 
     ``st.success`` followed by ``st.rerun()`` is discarded with the element
     tree before the browser paints it, so a mutation that reruns to refresh
     its view had no readable confirmation. Same pattern as ``leads_flash``
-    (PRO-161) and ``sch_flash`` (PRO-158), for a plain message: set it right
-    before the ``st.rerun()``, ``render_flash`` it at the top of the view.
+    (PRO-161) and ``sch_flash`` (PRO-158): set it right before the
+    ``st.rerun()``, ``render_flash`` it at the top of the view.
+
+    ``level`` is ``"success"`` or ``"warning"``. Not every mutation that
+    completes is good news — approving a pro whose service areas could not
+    all be geocoded succeeds *and* needs the operator to come back to it —
+    and a green tick over that sentence reads as "nothing to do here".
     """
-    st.session_state[key] = message
+    st.session_state[key] = (level, message)
 
 
 def render_flash(key):
     """Render and clear the confirmation stashed by ``set_flash``."""
-    msg = st.session_state.pop(key, None)
-    if msg:
+    flash = st.session_state.pop(key, None)
+    if not flash:
+        return
+    # Tolerates a bare string: a caller that wrote the key directly, and any
+    # message stashed by the previous build still sitting in a live session.
+    level, msg = flash if isinstance(flash, tuple) else ("success", flash)
+    if level == "warning":
+        st.toast(msg, icon="⚠️")
+        st.warning(msg)
+    else:
         st.toast(msg, icon="✅")
         st.success(msg)
 

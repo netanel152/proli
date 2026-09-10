@@ -11,6 +11,7 @@ All Redis and HTTP calls are mocked — these tests run offline.
 """
 
 import json
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -411,7 +412,7 @@ async def test_resolve_caches_invalid_request_with_transient_ttl_and_opens_circu
 
     assert result is None
     key = "geo:city:גיבריש"
-    assert store[key] == geo._NEGATIVE_CACHE_VALUE
+    assert store[key] == geo._TRANSIENT_CACHE_VALUE
     assert ttls[key] == geo.settings.GEOCODING_TRANSIENT_TTL_SECONDS
     assert ttls[key] == 60
     # The circuit must be opened, same as any other transient status.
@@ -437,7 +438,7 @@ async def test_resolve_caches_transient_failure_with_short_ttl_via_mock(
 
     assert result is None
     key = "geo:city:ראש העין"
-    assert store[key] == geo._NEGATIVE_CACHE_VALUE
+    assert store[key] == geo._TRANSIENT_CACHE_VALUE
     assert ttls[key] == geo.settings.GEOCODING_TRANSIENT_TTL_SECONDS
     assert ttls[key] == 60
 
@@ -455,7 +456,7 @@ async def test_resolve_caches_transient_failure_with_short_ttl_via_missing_key(
 
     assert result is None
     key = "geo:city:ראש העין"
-    assert store[key] == geo._NEGATIVE_CACHE_VALUE
+    assert store[key] == geo._TRANSIENT_CACHE_VALUE
     assert ttls[key] == geo.settings.GEOCODING_TRANSIENT_TTL_SECONDS
     assert ttls[key] == 60
 
@@ -478,7 +479,7 @@ async def test_transient_failure_is_retryable_after_short_ttl_expiry(
 
     assert first is None
     key = "geo:city:ראש העין"
-    assert store[key] == geo._NEGATIVE_CACHE_VALUE
+    assert store[key] == geo._TRANSIENT_CACHE_VALUE
     assert ttls[key] == 60
 
     # Simulate the short TTL expiring — this also trips the circuit
@@ -704,7 +705,7 @@ async def test_unexpected_attribute_error_is_swallowed_with_short_ttl(
 
     assert result is None
     key = "geo:city:ראש העין"
-    assert store[key] == geo._NEGATIVE_CACHE_VALUE
+    assert store[key] == geo._TRANSIENT_CACHE_VALUE
     assert ttls[key] == geo.settings.GEOCODING_TRANSIENT_TTL_SECONDS
     assert ttls[key] == 60
     # A single malformed payload must not disable geocoding process-wide.
@@ -727,7 +728,7 @@ async def test_unexpected_value_error_is_swallowed_with_short_ttl(
 
     assert result is None
     key = "geo:city:ראש העין"
-    assert store[key] == geo._NEGATIVE_CACHE_VALUE
+    assert store[key] == geo._TRANSIENT_CACHE_VALUE
     assert ttls[key] == geo.settings.GEOCODING_TRANSIENT_TTL_SECONDS
     assert ttls[key] == 60
     assert geo._UNAVAILABLE_KEY not in store
@@ -789,3 +790,307 @@ def test_inside_israel_bounds():
     assert geo._inside_israel(31.9454, 35.9284) is False
     # Cairo, Egypt — outside
     assert geo._inside_israel(30.0444, 31.2357) is False
+
+
+# ---------------------------------------------------------------------------
+# geocode() — the status-reporting entry point (PRO-19 approval check)
+# ---------------------------------------------------------------------------
+# resolve_city_to_coords's coords-only contract is already covered above;
+# these pin the new GeocodeResult.status distinction it is built on.
+
+
+@pytest.mark.asyncio
+async def test_geocode_static_hit_returns_resolved_status(mock_redis):
+    result = await geo.geocode("Tel Aviv")
+    assert result.status == geo.GEOCODE_RESOLVED
+    assert result.resolved is True
+    assert result.coords == (34.7818, 32.0853)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "name,prep,expected_status",
+    [
+        ("", lambda store: None, geo.GEOCODE_UNRESOLVED),
+        (
+            "גיבריש",
+            lambda store: store.__setitem__(
+                "geo:city:גיבריש", geo._NEGATIVE_CACHE_VALUE
+            ),
+            geo.GEOCODE_UNRESOLVED,
+        ),
+        (
+            "ראש העין",
+            lambda store: store.__setitem__(
+                "geo:city:ראש העין", geo._TRANSIENT_CACHE_VALUE
+            ),
+            geo.GEOCODE_UNAVAILABLE,
+        ),
+        (
+            "ראש העין",
+            lambda store: store.__setitem__(geo._UNAVAILABLE_KEY, "1"),
+            geo.GEOCODE_UNAVAILABLE,
+        ),
+    ],
+    ids=["empty-name", "negative-cache-hit", "transient-cache-hit", "breaker-open"],
+)
+async def test_geocode_short_circuit_paths_never_call_google(
+    mock_redis, name, prep, expected_status
+):
+    """Four ways geocode() answers without a network call — each must report
+    the right status AND never award Google, which is the whole point of the
+    cache/breaker layers."""
+    prep(mock_redis)
+    with patch(
+        "app.services.geocoding_service._call_google", new=AsyncMock()
+    ) as mock_google:
+        result = await geo.geocode(name)
+    assert result.status == expected_status
+    assert result.coords is None
+    mock_google.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_geocode_definitive_miss_returns_unresolved_status(
+    mock_redis, mock_google_maps_key
+):
+    async def fake_google(name):
+        return None
+
+    with patch("app.services.geocoding_service._call_google", side_effect=fake_google):
+        result = await geo.geocode("גיבריש")
+    assert result.status == geo.GEOCODE_UNRESOLVED
+    assert result.resolved is False
+
+
+@pytest.mark.asyncio
+async def test_geocode_transient_failure_returns_unavailable_status(
+    mock_redis, mock_google_maps_key
+):
+    with patch(
+        "app.services.geocoding_service._call_google",
+        side_effect=geo.GeocodingUnavailable("quota exhausted"),
+    ):
+        result = await geo.geocode("ראש העין")
+    assert result.status == geo.GEOCODE_UNAVAILABLE
+    assert result.resolved is False
+
+
+@pytest.mark.asyncio
+async def test_geocode_success_returns_resolved_status_with_coords(
+    mock_redis, mock_google_maps_key
+):
+    async def fake_google(name):
+        return (34.9519, 32.0875)
+
+    with patch("app.services.geocoding_service._call_google", side_effect=fake_google):
+        result = await geo.geocode("ראש העין")
+    assert result.status == geo.GEOCODE_RESOLVED
+    assert result.resolved is True
+    assert result.coords == (34.9519, 32.0875)
+
+
+# ---------------------------------------------------------------------------
+# ServiceAreaResolution — pure dataclass behavior (PRO-27)
+# ---------------------------------------------------------------------------
+
+_TLV = ("Tel Aviv", (34.7818, 32.0853))
+
+
+@pytest.mark.parametrize(
+    "resolved,unresolved,unavailable,expect_clean,expect_needs_recheck,"
+    "expect_blocks_approval,expect_location",
+    [
+        (
+            [_TLV],
+            [],
+            [],
+            True,
+            False,
+            False,
+            {"type": "Point", "coordinates": [34.7818, 32.0853]},
+        ),
+        ([], [], [], False, False, True, None),
+        ([], ["גיבריש"], [], False, False, True, None),
+        ([], [], ["ראש העין"], False, True, False, None),
+        (
+            [_TLV],
+            ["גיבריש"],
+            [],
+            False,
+            False,
+            False,
+            {"type": "Point", "coordinates": [34.7818, 32.0853]},
+        ),
+    ],
+    ids=["all-resolved", "no-areas", "only-unresolved", "only-unavailable", "mixed"],
+)
+def test_service_area_resolution_properties(
+    resolved,
+    unresolved,
+    unavailable,
+    expect_clean,
+    expect_needs_recheck,
+    expect_blocks_approval,
+    expect_location,
+):
+    resolution = geo.ServiceAreaResolution(
+        resolved=resolved, unresolved=unresolved, unavailable=unavailable
+    )
+    assert resolution.clean is expect_clean
+    assert resolution.needs_recheck is expect_needs_recheck
+    assert resolution.blocks_approval is expect_blocks_approval
+    assert resolution.location == expect_location
+
+
+_NOW = datetime(2026, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "unresolved,unavailable,expect_set,expect_unset",
+    [
+        ([], [], set(), {"unresolved", "pending"}),
+        (["גיבריש"], [], {"unresolved"}, {"pending"}),
+        ([], ["ראש העין"], {"pending"}, {"unresolved"}),
+        (["גיבריש"], ["ראש העין"], {"unresolved", "pending"}, set()),
+    ],
+    ids=["clean", "unresolved-only", "unavailable-only", "both"],
+)
+def test_mongo_update_sets_or_unsets_unresolved_and_pending_fields(
+    unresolved, unavailable, expect_set, expect_unset
+):
+    field_names = {
+        "unresolved": geo.SERVICE_AREAS_UNRESOLVED_FIELD,
+        "pending": geo.SERVICE_AREAS_GEOCODE_PENDING_FIELD,
+    }
+    resolution = geo.ServiceAreaResolution(
+        unresolved=unresolved, unavailable=unavailable
+    )
+    update = resolution.mongo_update(now=_NOW, include_location=False)
+
+    set_field_names = {name for name, f in field_names.items() if f in update["$set"]}
+    unset_field_names = {
+        name for name, f in field_names.items() if f in update.get("$unset", {})
+    }
+    assert set_field_names == expect_set
+    assert unset_field_names == expect_unset
+    assert update["$set"][geo.SERVICE_AREAS_CHECKED_AT_FIELD] == _NOW
+    # Nothing to unset must mean no "$unset" key at all, not an empty one.
+    if not expect_unset:
+        assert "$unset" not in update
+
+
+@pytest.mark.parametrize(
+    "include_location,resolved,expect_location_written",
+    [
+        (True, [_TLV], True),
+        (False, [_TLV], False),
+        (True, [], False),
+    ],
+    ids=["included-and-resolvable", "excluded", "included-but-unresolvable"],
+)
+def test_mongo_update_writes_location_only_when_included_and_resolvable(
+    include_location, resolved, expect_location_written
+):
+    resolution = geo.ServiceAreaResolution(resolved=resolved)
+    update = resolution.mongo_update(now=_NOW, include_location=include_location)
+    assert ("location" in update["$set"]) is expect_location_written
+    if expect_location_written:
+        assert update["$set"]["location"] == {
+            "type": "Point",
+            "coordinates": [34.7818, 32.0853],
+        }
+
+
+# ---------------------------------------------------------------------------
+# parse_service_areas
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("תל אביב, חיפה", ["תל אביב", "חיפה"]),
+        ("תל אביב، חיפה", ["תל אביב", "חיפה"]),  # Arabic comma
+        ("תל אביב,, חיפה, ", ["תל אביב", "חיפה"]),  # blanks dropped
+        ("", []),
+        (None, []),
+    ],
+    ids=["comma", "arabic-comma", "blanks", "empty-string", "none"],
+)
+def test_parse_service_areas(text, expected):
+    assert geo.parse_service_areas(text) == expected
+
+
+# ---------------------------------------------------------------------------
+# resolve_service_areas — dedupe + bucketing
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_resolve_service_areas_dedupes_and_buckets_by_status(monkeypatch):
+    """Blanks are dropped, a repeated name (any casing/whitespace) is looked
+    up once, first-occurrence order is kept, and each outcome lands in the
+    right bucket."""
+    calls = []
+
+    async def fake_geocode(name):
+        calls.append(name)
+        if name.strip().lower() == "tel aviv":
+            return geo.GeocodeResult(geo.GEOCODE_RESOLVED, (34.78, 32.08))
+        if name.strip().lower() == "גיבריש":
+            return geo.GeocodeResult(geo.GEOCODE_UNRESOLVED)
+        return geo.GeocodeResult(geo.GEOCODE_UNAVAILABLE)
+
+    monkeypatch.setattr(geo, "geocode", fake_geocode)
+
+    result = await geo.resolve_service_areas(
+        ["Tel Aviv", "  ", "TEL AVIV", "גיבריש", "ראש העין"]
+    )
+
+    assert result.resolved == [("Tel Aviv", (34.78, 32.08))]
+    assert result.unresolved == ["גיבריש"]
+    assert result.unavailable == ["ראש העין"]
+    # The duplicate ("TEL AVIV") must not trigger a second lookup.
+    assert calls == ["Tel Aviv", "גיבריש", "ראש העין"]
+
+
+# ---------------------------------------------------------------------------
+# resolve_service_areas_sync — the admin-panel bridge crossing
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_service_areas_sync_returns_resolver_result_via_bridge(monkeypatch):
+    import asyncio as _asyncio
+
+    expected = geo.ServiceAreaResolution(resolved=[_TLV])
+
+    async def fake_resolve_service_areas(names):
+        return expected
+
+    monkeypatch.setattr(geo, "resolve_service_areas", fake_resolve_service_areas)
+    monkeypatch.setattr(
+        "app.core.sync_bridge.run_blocking",
+        lambda coro, timeout: _asyncio.run(coro),
+    )
+
+    result = geo.resolve_service_areas_sync(["Tel Aviv"])
+    assert result is expected
+
+
+def test_resolve_service_areas_sync_reports_unavailable_on_bridge_failure(monkeypatch):
+    """A bridge timeout/loop error must not raise into the admin panel — every
+    (deduped, non-blank) area is reported unavailable, so the pro is flagged
+    for a re-check instead of blocking the operator on our own fault."""
+
+    def failing_run_blocking(coro, timeout):
+        coro.close()  # avoid a "coroutine was never awaited" warning
+        raise TimeoutError("bridge timed out")
+
+    monkeypatch.setattr("app.core.sync_bridge.run_blocking", failing_run_blocking)
+
+    result = geo.resolve_service_areas_sync(["Tel Aviv", " ", "Tel Aviv", "Haifa"])
+
+    assert result.resolved == []
+    assert result.unresolved == []
+    assert result.unavailable == ["Tel Aviv", "Haifa"]

@@ -59,7 +59,9 @@ timeout on the dispatcher's hot path.
 from __future__ import annotations
 
 import json
-from typing import Optional, Tuple
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import List, Optional, Tuple
 
 import httpx
 
@@ -80,6 +82,12 @@ _CACHE_PREFIX = "geo:city:"
 # Sentinel stored in Redis for "we asked Google and it doesn't know".
 # Chosen so it can never collide with a real serialized coord pair.
 _NEGATIVE_CACHE_VALUE = "__NULL__"
+# Sentinel for "we could not ask Google" (transient failure, short TTL). It is
+# a distinct value from the definitive one so a reader that cares about the
+# difference — the pro-approval check — can tell "this name is unresolvable"
+# from "the geocoder was down a moment ago" without a second network call.
+# `resolve_city_to_coords` treats both as a plain miss, exactly as before.
+_TRANSIENT_CACHE_VALUE = "__RETRY__"
 
 # Circuit-breaker key. Set for GEOCODING_TRANSIENT_TTL_SECONDS after any
 # transient failure; while present, lookups skip Google entirely instead of
@@ -297,21 +305,46 @@ async def _call_google(name: str) -> Optional[Tuple[float, float]]:
     return (float(lon), float(lat))
 
 
-async def resolve_city_to_coords(name: str) -> Optional[Tuple[float, float]]:
-    """
-    Resolve a city/locality name to (lon, lat).
+# Outcome classes of one lookup. Strings, not an Enum, so they serialise
+# straight into a log line or an audit entry.
+GEOCODE_RESOLVED = "resolved"
+# Google answered and the name really is unknown (or outside Israel).
+GEOCODE_UNRESOLVED = "unresolved"
+# The geocoder could not be asked: no key, quota, denial, network, breaker
+# open. Says nothing about the name — a caller that gates on this must not
+# treat it as a verdict.
+GEOCODE_UNAVAILABLE = "unavailable"
 
-    Returns None when the name is empty, can't be geocoded, or falls
-    outside Israel. Never raises — a transient failure is logged and
-    cached briefly, then reported to the caller as an ordinary miss.
+
+@dataclass(frozen=True)
+class GeocodeResult:
+    """One lookup's outcome: where it landed, and why when it did not."""
+
+    status: str
+    coords: Optional[Tuple[float, float]] = None
+
+    @property
+    def resolved(self) -> bool:
+        return self.status == GEOCODE_RESOLVED
+
+
+async def geocode(name: str) -> GeocodeResult:
+    """
+    Resolve a city/locality name to (lon, lat), reporting *why* on a miss.
+
+    Same pipeline as ``resolve_city_to_coords`` — static dict, Redis cache,
+    circuit breaker, Google — and the same caching side effects. The only
+    difference is the return type: a miss is either ``GEOCODE_UNRESOLVED``
+    (Google answered; the name is unknown) or ``GEOCODE_UNAVAILABLE`` (we
+    could not ask). Never raises.
     """
     if not name or not name.strip():
-        return None
+        return GeocodeResult(GEOCODE_UNRESOLVED)
 
     # 1. Static fast-path
     static_hit = _static_lookup(name)
     if static_hit is not None:
-        return static_hit
+        return GeocodeResult(GEOCODE_RESOLVED, static_hit)
 
     normalized = _normalize(name)
     cache_key = f"{_CACHE_PREFIX}{normalized}"
@@ -321,10 +354,13 @@ async def resolve_city_to_coords(name: str) -> Optional[Tuple[float, float]]:
     if cached is not None:
         if cached == _NEGATIVE_CACHE_VALUE:
             logger.debug(f"Geocoding: negative cache hit for {name!r}")
-            return None
+            return GeocodeResult(GEOCODE_UNRESOLVED)
+        if cached == _TRANSIENT_CACHE_VALUE:
+            logger.debug(f"Geocoding: transient-miss cache hit for {name!r}")
+            return GeocodeResult(GEOCODE_UNAVAILABLE)
         try:
             lon, lat = json.loads(cached)
-            return (float(lon), float(lat))
+            return GeocodeResult(GEOCODE_RESOLVED, (float(lon), float(lat)))
         except (ValueError, TypeError) as e:
             # Corrupt cache entry — fall through to Google and overwrite.
             # cache_key embeds the normalized lookup — debug only, same
@@ -345,7 +381,7 @@ async def resolve_city_to_coords(name: str) -> Optional[Tuple[float, float]]:
     #    whatsapp_client_service; fails open (a Redis error returns None).
     if await _cache_get(_UNAVAILABLE_KEY):
         logger.debug("Geocoding: circuit open (recent transient failure), skipping")
-        return None
+        return GeocodeResult(GEOCODE_UNAVAILABLE)
 
     # 4. Google. A transient failure (no key, quota, denial, network) is
     #    NOT a statement about this city, so it gets the short TTL — see
@@ -362,10 +398,10 @@ async def resolve_city_to_coords(name: str) -> Optional[Tuple[float, float]]:
         await _open_circuit(str(e))
         await _cache_set(
             cache_key,
-            _NEGATIVE_CACHE_VALUE,
+            _TRANSIENT_CACHE_VALUE,
             ttl=settings.GEOCODING_TRANSIENT_TTL_SECONDS,
         )
-        return None
+        return GeocodeResult(GEOCODE_UNAVAILABLE)
     except Exception as e:
         # Deliberately does NOT open the circuit. A false trip disables
         # geocoding for *every* name for a full window, and that failure mode
@@ -386,10 +422,10 @@ async def resolve_city_to_coords(name: str) -> Optional[Tuple[float, float]]:
         logger.debug(f"Geocoding: failing lookup was {name!r}")
         await _cache_set(
             cache_key,
-            _NEGATIVE_CACHE_VALUE,
+            _TRANSIENT_CACHE_VALUE,
             ttl=settings.GEOCODING_TRANSIENT_TTL_SECONDS,
         )
-        return None
+        return GeocodeResult(GEOCODE_UNAVAILABLE)
 
     # 5. Cache the outcome (positive forever, definitive negative for 24h)
     if result is not None:
@@ -400,11 +436,177 @@ async def resolve_city_to_coords(name: str) -> Optional[Tuple[float, float]]:
         # coordinates is the most identifying pair this service handles.
         logger.info(f"Geocoding: resolved a new location → ({lon}, {lat}) [cached ∞]")
         logger.debug(f"Geocoding: resolved {name!r} → ({lon}, {lat})")
-        return result
-    else:
-        await _cache_set(
-            cache_key,
-            _NEGATIVE_CACHE_VALUE,
-            ttl=settings.GEOCODING_NEGATIVE_TTL_SECONDS,
-        )
-        return None
+        return GeocodeResult(GEOCODE_RESOLVED, result)
+
+    await _cache_set(
+        cache_key,
+        _NEGATIVE_CACHE_VALUE,
+        ttl=settings.GEOCODING_NEGATIVE_TTL_SECONDS,
+    )
+    return GeocodeResult(GEOCODE_UNRESOLVED)
+
+
+async def resolve_city_to_coords(name: str) -> Optional[Tuple[float, float]]:
+    """
+    Resolve a city/locality name to (lon, lat).
+
+    Returns None when the name is empty, can't be geocoded, or falls
+    outside Israel. Never raises — a transient failure is logged and
+    cached briefly, then reported to the caller as an ordinary miss.
+
+    The routing hot path. Callers that need to know *why* a name missed
+    (the pro-approval check) use ``geocode`` instead.
+    """
+    return (await geocode(name)).coords
+
+
+# ---------------------------------------------------------------------------
+# Pro service areas (PRO-27)
+# ---------------------------------------------------------------------------
+#
+# Matching reaches a pro through `$geoNear` on the pro's GeoJSON `location`,
+# so a pro without one is never offered a lead — the text fallback on
+# `service_areas` only runs when the *lead's* location cannot be geocoded.
+# These helpers turn a pro's `service_areas` list into that `location` plus a
+# verdict the approval UI and the backfill script can act on, and they own
+# the field names both writers use so the two cannot drift.
+
+# Definitive misses at the last check — names Google does not know. Set only
+# on the "approve anyway" path and by the backfill script; absent when clean.
+SERVICE_AREAS_UNRESOLVED_FIELD = "service_areas_unresolved"
+# True when the geocoder was unavailable for at least one area at the last
+# check, so the verdict is incomplete and the pro needs a re-check
+# (`scripts/check_pro_service_areas.py`). Approval is never blocked on it.
+SERVICE_AREAS_GEOCODE_PENDING_FIELD = "service_areas_geocode_pending"
+SERVICE_AREAS_CHECKED_AT_FIELD = "service_areas_checked_at"
+
+
+@dataclass
+class ServiceAreaResolution:
+    """Every area of one pro, sorted into resolved / unresolved / unavailable.
+
+    ``resolved`` keeps the input order, so ``location`` is the first area the
+    pro listed that we could place — the one they presumably work from.
+    """
+
+    resolved: List[Tuple[str, Tuple[float, float]]] = field(default_factory=list)
+    unresolved: List[str] = field(default_factory=list)
+    unavailable: List[str] = field(default_factory=list)
+
+    @property
+    def location(self) -> Optional[dict]:
+        """GeoJSON Point for `users.location` from the first resolved area."""
+        if not self.resolved:
+            return None
+        _, (lon, lat) = self.resolved[0]
+        return {"type": "Point", "coordinates": [lon, lat]}
+
+    @property
+    def clean(self) -> bool:
+        """Every area resolved (and there was at least one)."""
+        return bool(self.resolved) and not self.unresolved and not self.unavailable
+
+    @property
+    def needs_recheck(self) -> bool:
+        """The geocoder was down for at least one area — verdict incomplete."""
+        return bool(self.unavailable)
+
+    @property
+    def blocks_approval(self) -> bool:
+        """Nothing can place this pro and nothing is pending a retry: either
+        no areas at all or every one is a definitive miss. Approving would
+        create exactly the silently-unmatchable pro this check exists to
+        prevent, so there is no "approve anyway" for this case."""
+        return not self.resolved and not self.unavailable
+
+    def mongo_update(self, *, now: datetime, include_location: bool) -> dict:
+        """The `update_one` document that records this verdict on the pro.
+
+        ``include_location`` is the caller's call: approval always writes it
+        (approval is the authoritative moment); the backfill script writes it
+        only for pros that have none unless told to overwrite.
+        """
+        set_fields: dict = {SERVICE_AREAS_CHECKED_AT_FIELD: now}
+        unset_fields: dict = {}
+        if include_location and self.location is not None:
+            set_fields["location"] = self.location
+        if self.unresolved:
+            set_fields[SERVICE_AREAS_UNRESOLVED_FIELD] = list(self.unresolved)
+        else:
+            unset_fields[SERVICE_AREAS_UNRESOLVED_FIELD] = ""
+        if self.unavailable:
+            set_fields[SERVICE_AREAS_GEOCODE_PENDING_FIELD] = True
+        else:
+            unset_fields[SERVICE_AREAS_GEOCODE_PENDING_FIELD] = ""
+        update = {"$set": set_fields}
+        if unset_fields:
+            update["$unset"] = unset_fields
+        return update
+
+
+def parse_service_areas(text: str) -> List[str]:
+    """Split an operator-typed comma list into area names — same rule as the
+    WhatsApp onboarding step (Arabic comma tolerated, blanks dropped)."""
+    return [a.strip() for a in (text or "").replace("،", ",").split(",") if a.strip()]
+
+
+async def resolve_service_areas(areas) -> ServiceAreaResolution:
+    """Geocode each of a pro's service areas and sort the outcomes.
+
+    Blank entries are dropped, duplicates (after normalisation) are looked up
+    once. Sequential on purpose: a handful of names, and the second lookup
+    of an outage benefits from the breaker the first one opened.
+    """
+    result = ServiceAreaResolution()
+    seen = set()
+    for raw in areas or []:
+        name = str(raw).strip()
+        if not name:
+            continue
+        key = _normalize(name)
+        if key in seen:
+            continue
+        seen.add(key)
+        outcome = await geocode(name)
+        if outcome.resolved:
+            result.resolved.append((name, outcome.coords))
+        elif outcome.status == GEOCODE_UNAVAILABLE:
+            result.unavailable.append(name)
+        else:
+            result.unresolved.append(name)
+    return result
+
+
+# Per-area budget for the blocking bridge: one Google call is capped at 5s
+# inside _call_google; the rest is Redis round-trips and slack.
+_SYNC_PER_AREA_SECONDS = 6.0
+_SYNC_MIN_TIMEOUT_SECONDS = 15.0
+
+
+def resolve_service_areas_sync(areas) -> ServiceAreaResolution:
+    """``resolve_service_areas`` for the synchronous admin panel.
+
+    Runs on the process's one sync→async bridge loop (``app.core.sync_bridge``,
+    shared with the WhatsApp facade) so the cached Redis client is never
+    handed to a second loop. Never raises: a bridge failure (timeout, loop
+    error) is reported as every area *unavailable* — the "could not check"
+    verdict, which flags the pro for a re-check rather than blocking the
+    operator on our own fault.
+    """
+    from app.core.sync_bridge import run_blocking
+
+    # Same dedupe rule as resolve_service_areas, so the fallback below reports
+    # the same set of names a successful run would have checked.
+    names: List[str] = []
+    seen = set()
+    for raw in areas or []:
+        name = str(raw).strip()
+        if name and _normalize(name) not in seen:
+            seen.add(_normalize(name))
+            names.append(name)
+    timeout = max(_SYNC_MIN_TIMEOUT_SECONDS, _SYNC_PER_AREA_SECONDS * len(names))
+    try:
+        return run_blocking(resolve_service_areas(names), timeout)
+    except Exception as e:
+        logger.error(f"Geocoding: service-area check could not run: {e}")
+        return ServiceAreaResolution(unavailable=names)
