@@ -212,14 +212,18 @@ Professionals can register directly via WhatsApp:
 4. Admin approves/rejects from the "Pending Approval" section in the admin panel. **Approve first geocodes every service area** (static dict → Redis cache → Google, the same pipeline routing uses) and writes the pro's GeoJSON `location` from the first area that resolves — matching reaches a pro only through `$geoNear` on that field, so a pro nobody can place on the map is approved into silence (the 2026-04-18 failure class). An area Google does not know blocks the plain Approve and opens a correction box (edit the comma-separated list → *Save & re-check*, which approves if everything now resolves; *Approve anyway* is offered only when at least one area did resolve, and records the rest in `service_areas_unresolved`). A geocoder outage never blocks: the pro is approved with whatever resolved and flagged `service_areas_geocode_pending` for a re-check.
 5. Pro receives WhatsApp notification of the decision
 
-**Backfill check for pros approved before this existed** — run from the repo root against the target environment's `MONGO_URI`/`REDIS_URL` (`railway run …` for staging/production; `GOOGLE_MAPS_API_KEY` must be set or every non-static name reports *unavailable*, never *unresolved*):
+**Backfill check for pros approved before this existed.**
+
+The supported path is the **`🗺️ Check pro service areas`** workflow (Actions tab → Run workflow). Like the stop workflow, the branch you run it from is the target — pick `production` to check production, `dev` to check staging, and any other branch refuses rather than touching a real database. The one control is a checkbox: leave `apply` unticked for a read-only report, tick it to write `location` on pros that have none and record each pro's verdict. The report lands in the run's job summary, which is what you paste onto the issue — the script only proves the backfill once it has actually been run against production.
+
+By hand, if you need it — run from the repo root against the target environment's `MONGO_URI`/`REDIS_URL` (`railway run …` for staging/production; `GOOGLE_MAPS_API_KEY` must be set or every non-static name reports *unavailable*, never *unresolved*):
 
 ```bash
 python scripts/check_pro_service_areas.py            # dry run: one block per active pro, ✓ / ✗ / ? per area
 python scripts/check_pro_service_areas.py --apply    # also write missing `location` + the verdict fields
 ```
 
-Exit code `1` means at least one pro has an area to correct in the admin panel (or none at all), `2` means the geocoder was unavailable and the verdict is incomplete — wait for `geo:unavailable` to clear (60s) and re-run. Paste the run's output on the issue as the evidence; the script only proves the backfill once it has actually been run against production.
+Exit code `1` means at least one pro has an area to correct in the admin panel (or none at all), `2` means the geocoder was unavailable and the verdict is incomplete — wait for `geo:unavailable` to clear (60s) and re-run. The workflow exits with the script's code, so a green run is the only green run.
 
 ---
 

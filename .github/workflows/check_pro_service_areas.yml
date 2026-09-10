@@ -1,0 +1,129 @@
+name: 🗺️ Check pro service areas
+
+# PRO-27's backfill, as a button.
+#
+# Matching reaches a pro only through `$geoNear` on the pro's GeoJSON
+# `location`. A pro whose `service_areas` never resolved to coordinates has no
+# `location`, is never offered a lead, and nothing says so — the 2026-04-18
+# failure class. Approval now runs the check per pro; this runs
+# `scripts/check_pro_service_areas.py` across the pros approved *before* that,
+# against the real database. The report it writes into the job summary is the
+# evidence the issue's `launch-readiness` gate asks for: a merged script is not
+# proof the script was ever run.
+#
+# Same shape as 🛑 Stop Railway Proli Services — the branch you run it from is
+# the target. `dev` checks staging, `production` checks production, any other
+# branch refuses, so a feature branch can never write to a real database. The
+# run-list line names the target before anything happens.
+#
+# The one control is a checkbox, and it is a checkbox rather than a text box on
+# purpose: the 2026-09-08 confirm box refused four operator runs in a row over
+# a phone keyboard's trailing space. Unticked is read-only.
+
+run-name: >-
+  ${{ github.ref_name == 'production' && '🗺️ Check pro service areas — PRODUCTION' || (github.ref_name == 'dev' && '🗺️ Check pro service areas — staging' || '🗺️ Refused — run from dev (staging) or production') }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Write the fixes: set `location` on pros that have none, record each pro's verdict. Leave unticked for a read-only report."
+        type: boolean
+        default: false
+
+jobs:
+  check-service-areas:
+    runs-on: ubuntu-latest
+    steps:
+      # The branch name reaches the script through `env:`, never `${{ }}`
+      # inside `run:`, and only the two known names resolve to a target.
+      - name: Resolve the target from the branch
+        id: target
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "${REF_NAME:-}" in
+            dev)        TARGET=staging ;;
+            production) TARGET=production ;;
+            *)
+              echo "::error::Run this workflow from 'dev' to check staging or from 'production' to check production. Branch '${REF_NAME:-}' maps to nothing. Refusing to touch any database."
+              exit 1
+              ;;
+          esac
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Branch '$REF_NAME' → checking $TARGET."
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # The script runs on this runner with Railway's environment injected, so
+      # the runner needs the app's own dependencies.
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      # Keyed on the resolve step's output, not on the branch name again, so
+      # the token and the environment name can never disagree with what was
+      # just resolved. `railway run` injects that environment's variables
+      # (MONGO_URI, REDIS_URL, GOOGLE_MAPS_API_KEY) — none of them are ever
+      # printed, and `ENVIRONMENT` is cross-checked against Railway's own
+      # RAILWAY_ENVIRONMENT_NAME at import (PRO-96), so a mis-scoped token
+      # fails to boot rather than reporting on the wrong database.
+      - name: Check service areas in ${{ steps.target.outputs.target }}
+        id: check
+        env:
+          RAILWAY_TOKEN: ${{ steps.target.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
+          RAILWAY_ENV: ${{ steps.target.outputs.target == 'production' && 'Production' || 'Staging' }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          set -uo pipefail
+
+          if [ "${APPLY:-false}" = "true" ]; then
+            FLAGS="--apply"
+            MODE="--apply (writing verdicts and missing locations)"
+          else
+            FLAGS=""
+            MODE="read-only (dry run — no writes)"
+          fi
+
+          echo "Checking pro service areas in $RAILWAY_ENV — $MODE"
+
+          railway run --service worker --environment "$RAILWAY_ENV" -- \
+            python scripts/check_pro_service_areas.py $FLAGS 2>&1 | tee report.txt
+          code=${PIPESTATUS[0]}
+
+          {
+            echo "## 🗺️ Pro service areas — $RAILWAY_ENV"
+            echo
+            echo "- Mode: $MODE"
+            echo "- Exit code: \`$code\`"
+            echo
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # The script's exit codes, kept as the job's verdict so a checklist
+          # can be ticked on a green run and only on a green run.
+          case "$code" in
+            0)
+              echo "✅ Every checked pro can be placed on the map."
+              ;;
+            1)
+              echo "::error::Some pros have service areas the geocoder does not know, or resolve but carry no location. See the job summary — fix the areas in the admin panel, or re-run with the apply box ticked."
+              ;;
+            2)
+              echo "::warning::The geocoder was unavailable for at least one area, so the verdict is incomplete. Re-run in a minute (the geo:unavailable flag clears after 60s)."
+              ;;
+            *)
+              echo "::error::The check did not complete (exit $code). See the log above."
+              ;;
+          esac
+          exit "$code"
