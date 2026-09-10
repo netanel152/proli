@@ -1779,6 +1779,11 @@ async def test_details_command_lists_booked_only(
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
+    # PRO-147: _handle_details unconditionally calls _remember_page, which
+    # reads/writes metadata even for a single-page list (to clear a stale
+    # pointer left by an earlier multi-page list of another kind).
+    mock_state.get_metadata = AsyncMock(return_value={})
+    mock_state.set_metadata = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
     result = await handle_pro_text_command(chat_id, "פרטים", mock_wa, mock_lm)
@@ -2064,6 +2069,9 @@ async def test_details_includes_whatsapp_and_waze_links(
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
+    # PRO-147: _handle_details unconditionally calls _remember_page.
+    mock_state.get_metadata = AsyncMock(return_value={})
+    mock_state.set_metadata = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
     result = await handle_pro_text_command(chat_id, "פרטים", mock_wa, mock_lm)
@@ -2338,3 +2346,385 @@ async def test_dashboard_shows_resume_command_when_pro_is_paused(
 
     assert Messages.Pro.CMD_RESUME in result
     assert Messages.Pro.CMD_PAUSE not in result
+
+
+# --- PRO-147: paginated job lists (ביטול / עוד) ---
+
+
+@pytest.mark.asyncio
+async def test_cancel_lists_first_page_of_fifteen_and_maps_every_job(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """15 BOOKED leads: 'ביטול' shows exactly page 1 but the stored mapping
+    covers all 15, so every job is reachable by number."""
+    pro_doc, db = pro_setup
+    # mock_db is module-scoped — clear out anything earlier tests left behind
+    # for this pro so the count in this test is exactly 15.
+    await db.leads.delete_many({"pro_id": PRO_ID})
+    chat_id = f"{PRO_PHONE}@c.us"
+    page_size = WorkerConstants.PRO_LIST_PAGE_SIZE
+    total_leads = page_size + 5
+
+    for i in range(total_leads):
+        await db.leads.insert_one(
+            {
+                "_id": ObjectId(),
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "chat_id": f"customer{i}@c.us",
+                "customer_name": f"לקוח {i}",
+                "city": "חיפה",
+                "issue_type": "חשמל",
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    mock_state.set_state = AsyncMock()
+    mock_state.set_metadata = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    result = await handle_pro_text_command(chat_id, "ביטול", mock_wa, mock_lm)
+
+    rows = re.findall(r"^(\d+)\.", result, re.MULTILINE)
+    assert rows == [str(n) for n in range(1, page_size + 1)]
+    assert (
+        Messages.Pro.LIST_PAGE_MORE.format(first=1, last=page_size, total=total_leads)
+        in result
+    )
+
+    mock_state.set_metadata.assert_called_once()
+    meta_arg = mock_state.set_metadata.call_args.args[1]
+    assert len(meta_arg["cancelling_jobs_context"]) == total_leads
+
+
+@pytest.mark.asyncio
+async def test_cancel_selection_more_shows_next_page_and_keeps_the_prompt_open(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """Inside PRO_SELECTING_JOB_TO_CANCEL, 'עוד' renders page 2 and re-enters
+    the SAME state — the prompt is never abandoned."""
+    pro_doc, db = pro_setup
+    await db.leads.delete_many({"pro_id": PRO_ID})
+    chat_id = f"{PRO_PHONE}@c.us"
+    page_size = WorkerConstants.PRO_LIST_PAGE_SIZE
+    total_leads = page_size + 5
+
+    lead_ids = []
+    for i in range(total_leads):
+        lead_id = ObjectId()
+        lead_ids.append(lead_id)
+        await db.leads.insert_one(
+            {
+                "_id": lead_id,
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "chat_id": f"customer{i}@c.us",
+                "customer_name": f"לקוח {i}",
+                "city": "חיפה",
+                "issue_type": "חשמל",
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
+    mapping = {str(i + 1): str(lead_ids[i]) for i in range(total_leads)}
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.PRO_SELECTING_JOB_TO_CANCEL
+    )
+    mock_state.get_metadata = AsyncMock(
+        return_value={
+            "cancelling_jobs_context": mapping,
+            "job_list_page": {"kind": "cancelling_jobs_context", "offset": page_size},
+        }
+    )
+    mock_state.set_state = AsyncMock()
+    mock_state.set_metadata = AsyncMock()
+    mock_state.clear_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    result = await handle_pro_text_command(chat_id, "עוד", mock_wa, mock_lm)
+
+    rows = re.findall(r"^(\d+)\.", result, re.MULTILINE)
+    assert rows == [str(n) for n in range(page_size + 1, total_leads + 1)]
+    assert (
+        Messages.Pro.LIST_PAGE_END.format(
+            first=page_size + 1, last=total_leads, total=total_leads
+        )
+        in result
+    )
+    mock_state.set_state.assert_called_with(
+        chat_id, UserStates.PRO_SELECTING_JOB_TO_CANCEL
+    )
+    mock_state.clear_state.assert_not_called()
+    # PRO-147: a continuation page passes the stored mapping straight back —
+    # numbers are never reassigned while the prompt stays open.
+    meta_arg = mock_state.set_metadata.call_args.args[1]
+    assert meta_arg["cancelling_jobs_context"] == mapping
+
+
+@pytest.mark.asyncio
+async def test_cancel_selection_picks_job_past_the_first_page_by_number(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """Every booked job is reachable by number, not just the ones shown on
+    page 1 — picking a number past the page size cancels that specific job
+    while the others stay BOOKED."""
+    pro_doc, db = pro_setup
+    await db.leads.delete_many({"pro_id": PRO_ID})
+    chat_id = f"{PRO_PHONE}@c.us"
+    page_size = WorkerConstants.PRO_LIST_PAGE_SIZE
+    total_leads = page_size + 5
+    pick = page_size + 2  # guaranteed to be past page 1
+
+    lead_ids = []
+    for i in range(total_leads):
+        lead_id = ObjectId()
+        lead_ids.append(lead_id)
+        await db.leads.insert_one(
+            {
+                "_id": lead_id,
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "chat_id": f"customer{i}@c.us",
+                "customer_name": f"לקוח {i}",
+                "city": "חיפה",
+                "issue_type": "חשמל",
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
+    mapping = {str(i + 1): str(lead_ids[i]) for i in range(total_leads)}
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.PRO_SELECTING_JOB_TO_CANCEL
+    )
+    mock_state.get_metadata = AsyncMock(
+        return_value={"cancelling_jobs_context": mapping}
+    )
+    mock_state.clear_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    mock_ctx = MagicMock()
+    mock_ctx.clear_context = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "ContextManager", mock_ctx)
+
+    result = await handle_pro_text_command(chat_id, str(pick), mock_wa, mock_lm)
+
+    assert result == Messages.Pro.CANCEL_SUCCESS
+    picked = await db.leads.find_one({"_id": lead_ids[pick - 1]})
+    assert picked["status"] == LeadStatus.CANCELLED
+    first = await db.leads.find_one({"_id": lead_ids[0]})
+    assert first["status"] == LeadStatus.BOOKED
+
+
+@pytest.mark.asyncio
+async def test_cancel_selection_more_drops_prompt_when_a_listed_job_changed_owner(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """A 12-entry mapping where entry '3' now belongs to a different pro (a
+    no-show reassignment, the Healer, or an admin reassignment while the
+    prompt was open) makes the stored numbers meaningless. 'עוד' must drop
+    the prompt with SELECTION_LIST_CHANGED rather than silently renumber —
+    a shifted number here would cancel the wrong job."""
+    pro_doc, db = pro_setup
+    await db.leads.delete_many({"pro_id": PRO_ID})
+    chat_id = f"{PRO_PHONE}@c.us"
+    other_pro_id = ObjectId()
+    total_leads = 12
+
+    lead_ids = []
+    for i in range(total_leads):
+        lead_id = ObjectId()
+        lead_ids.append(lead_id)
+        # Entry "3" (index 2) has moved to a different pro since the prompt
+        # was built — the mapping still names it, but the pro no longer owns it.
+        owner = other_pro_id if i == 2 else PRO_ID
+        await db.leads.insert_one(
+            {
+                "_id": lead_id,
+                "pro_id": owner,
+                "status": LeadStatus.BOOKED,
+                "chat_id": f"customer{i}@c.us",
+                "customer_name": f"לקוח {i}",
+                "city": "חיפה",
+                "issue_type": "חשמל",
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
+    mapping = {str(i + 1): str(lead_ids[i]) for i in range(total_leads)}
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.PRO_SELECTING_JOB_TO_CANCEL
+    )
+    mock_state.get_metadata = AsyncMock(
+        return_value={
+            "cancelling_jobs_context": mapping,
+            "job_list_page": {"kind": "cancelling_jobs_context", "offset": 10},
+        }
+    )
+    mock_state.set_state = AsyncMock()
+    mock_state.clear_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    result = await handle_pro_text_command(chat_id, "עוד", mock_wa, mock_lm)
+
+    assert result == Messages.Pro.SELECTION_LIST_CHANGED
+    mock_state.clear_state.assert_called_once_with(chat_id)
+    mock_state.set_state.assert_not_called()
+    for lead_id in lead_ids:
+        lead = await db.leads.find_one({"_id": lead_id})
+        assert lead["status"] == LeadStatus.BOOKED
+
+
+@pytest.mark.asyncio
+async def test_active_jobs_orders_by_appointment_and_puts_unscheduled_last(
+    pro_setup, mock_wa, mock_lm
+):
+    """'עבודות' sorts by when the work happens (not by created_at): a
+    tomorrow job comes before a next-week job, and a job with no resolved
+    appointment_datetime sits last, under DAY_HEADER_UNSCHEDULED."""
+    pro_doc, db = pro_setup
+    await db.leads.delete_many({"pro_id": PRO_ID})
+    chat_id = f"{PRO_PHONE}@c.us"
+    now = datetime.now(timezone.utc)
+    soon_dt = (now + timedelta(days=1)).replace(tzinfo=None)
+    later_dt = (now + timedelta(days=8)).replace(tzinfo=None)
+
+    await db.leads.insert_many(
+        [
+            {
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "issue_type": "תיקון-מחר",
+                "full_address": "תל אביב",
+                "appointment_datetime": soon_dt,
+                "created_at": now,
+            },
+            {
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "issue_type": "תיקון-שבוע-הבא",
+                "full_address": "חיפה",
+                "appointment_datetime": later_dt,
+                "created_at": now,
+            },
+            {
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "issue_type": "תיקון-ללא-מועד",
+                "full_address": "ירושלים",
+                "created_at": now,
+            },
+        ]
+    )
+
+    result = await handle_pro_text_command(chat_id, "עבודות", mock_wa, mock_lm)
+
+    idx_soon = result.index("תיקון-מחר")
+    idx_later = result.index("תיקון-שבוע-הבא")
+    idx_unscheduled_header = result.index(Messages.Pro.DAY_HEADER_UNSCHEDULED)
+    idx_unscheduled_row = result.index("תיקון-ללא-מועד")
+
+    assert idx_soon < idx_later < idx_unscheduled_header < idx_unscheduled_row
+
+
+@pytest.mark.asyncio
+async def test_active_jobs_single_page_clears_a_stale_page_pointer(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """A single-page 'עבודות' result must still clear any `job_list_page`
+    pointer left behind by an earlier multi-page list of another kind (e.g.
+    'פרטים') — otherwise a following 'עוד' would incorrectly resume that
+    stale details list instead of saying there's nothing more."""
+    pro_doc, db = pro_setup
+    await db.leads.delete_many({"pro_id": PRO_ID})
+    chat_id = f"{PRO_PHONE}@c.us"
+
+    await db.leads.insert_one(
+        {
+            "pro_id": PRO_ID,
+            "status": LeadStatus.BOOKED,
+            "issue_type": "נזילה",
+            "full_address": "תל אביב",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    mock_state.get_metadata = AsyncMock(
+        return_value={"job_list_page": {"kind": "details", "offset": 10}}
+    )
+    mock_state.set_metadata = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    await handle_pro_text_command(chat_id, "עבודות", mock_wa, mock_lm)
+
+    mock_state.set_metadata.assert_called_once()
+    meta_arg = mock_state.set_metadata.call_args.args[1]
+    assert "job_list_page" not in meta_arg
+
+
+@pytest.mark.asyncio
+async def test_more_outside_selection_with_no_stored_page_returns_no_more_rows(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """'עוד' in plain PRO_MODE, with nothing paged, is a dead end that says so."""
+    pro_doc, db = pro_setup
+    chat_id = f"{PRO_PHONE}@c.us"
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=UserStates.PRO_MODE)
+    mock_state.get_metadata = AsyncMock(return_value={})
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    result = await handle_pro_text_command(chat_id, "עוד", mock_wa, mock_lm)
+
+    assert result == Messages.Pro.NO_MORE_ROWS
+
+
+@pytest.mark.asyncio
+async def test_more_continues_active_jobs_list_to_its_last_page(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """'עוד' with a stored ('active', offset=page_size) page and a list two
+    rows longer than one page renders the remaining rows and a footer that
+    says so out of the true total."""
+    pro_doc, db = pro_setup
+    await db.leads.delete_many({"pro_id": PRO_ID})
+    chat_id = f"{PRO_PHONE}@c.us"
+    page_size = WorkerConstants.PRO_LIST_PAGE_SIZE
+    total_leads = page_size + 2
+
+    for i in range(total_leads):
+        await db.leads.insert_one(
+            {
+                "pro_id": PRO_ID,
+                "status": LeadStatus.BOOKED,
+                "issue_type": f"תקלה{i}",
+                "full_address": "תל אביב",
+                "created_at": datetime.now(timezone.utc),
+            }
+        )
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=UserStates.PRO_MODE)
+    mock_state.get_metadata = AsyncMock(
+        return_value={"job_list_page": {"kind": "active", "offset": page_size}}
+    )
+    mock_state.set_metadata = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    result = await handle_pro_text_command(chat_id, "עוד", mock_wa, mock_lm)
+
+    rows = re.findall(r"^(\d+)\.", result, re.MULTILINE)
+    assert rows == [str(n) for n in range(page_size + 1, total_leads + 1)]
+    assert (
+        Messages.Pro.LIST_PAGE_END.format(
+            first=page_size + 1, last=total_leads, total=total_leads
+        )
+        in result
+    )

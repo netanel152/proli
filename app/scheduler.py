@@ -31,6 +31,7 @@ import os
 import time
 import pytz
 from app.services.scheduling_service import regenerate_all_templates
+from app.services import agenda_service
 from app.core.logger import logger, page_critical, redact_secrets
 from app.core.redis_client import with_scheduler_lock
 
@@ -67,11 +68,10 @@ async def send_daily_reminders():
                 pro_name=pro["business_name"], date=today_start.strftime("%d/%m")
             )
             for job in booked_jobs:
-                job_time = (
-                    job["appointment_datetime"]
-                    .replace(tzinfo=pytz.utc)
-                    .astimezone(IL_TZ)
-                )
+                # PRO-147: one Israel-time conversion for every pro-facing
+                # list. `to_israel` also tolerates an already-aware value,
+                # which the old `.replace(tzinfo=utc)` would have relabelled.
+                job_time = agenda_service.to_israel(job["appointment_datetime"])
                 time_str = job_time.strftime("%H:%M")
                 client_phone = strip_suffix(job["chat_id"])
                 # PRO-168: this read `job.get("details")` — a field the bot

@@ -203,6 +203,11 @@ class WorkerConstants:
     PRO_SEARCH_RATE_LIMIT_SECONDS = (
         600  # 10 min — per-pro cool-down on proactive "מצא" command
     )
+    # PRO-147: rows per page in the pro's job lists (עבודות / פרטים and the
+    # סיימתי / ביטול selection prompts). The lists used to be cut silently at
+    # 10–20 rows; now every row is reachable and a longer list says how many
+    # rows it is showing out of how many, with *עוד* for the next page.
+    PRO_LIST_PAGE_SIZE = 10
     # PRO-33 monetization: platform take-rate applied to a recorded final_price to
     # derive commission_amount. GMV = sum(final_price); commission = sum(commission_amount).
     COMMISSION_RATE = 0.10  # 10% — configurable take-rate for unit economics
