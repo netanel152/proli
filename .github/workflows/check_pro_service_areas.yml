@@ -88,7 +88,7 @@ jobs:
       # RAILWAY_TOKEN — has no user identity behind it. A probe that a valid
       # project token cannot pass would fail the job before the real command
       # ever ran, which is worse than the opaque line it set out to replace.
-      - name: Verify the Railway credential resolved
+      - name: Fingerprint the Railway credential
         env:
           RAILWAY_TOKEN: ${{ steps.target.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
           TARGET: ${{ steps.target.outputs.target }}
@@ -99,7 +99,30 @@ jobs:
             echo "::error::The repo secret for '$TARGET' resolved to an empty string, so no credential reached the Railway CLI. Check Settings → Secrets and variables → Actions: the secret must exist as a *repository* secret named RAILWAY_TOKEN_STAGING or RAILWAY_TOKEN_PRODUCTION. A secret stored under Settings → Environments is invisible to this job, which declares no environment."
             exit 1
           fi
-          echo "Credential resolved for $TARGET (${#RAILWAY_TOKEN} characters). Value never printed."
+
+          # Everything below is a fingerprint, not the value. The last four
+          # characters are what Railway's own tokens page prints next to each
+          # token ("****-3bc1"), so showing them here discloses nothing the
+          # dashboard does not already show — and they are what lets an
+          # operator tell "the secret holds the token I am looking at" from
+          # "it holds something else", which is otherwise unknowable: GitHub
+          # never shows a secret's value again once saved.
+          TRIMMED="$(printf '%s' "$RAILWAY_TOKEN" | tr -d '[:space:]')"
+          echo "Credential fingerprint for $TARGET"
+          echo "  length:      ${#RAILWAY_TOKEN} characters"
+          # From the trimmed value: a trailing newline would otherwise push a
+          # line break into the middle of the comparison it exists to serve.
+          echo "  last 4:      ...${TRIMMED: -4}   (compare with the Token column in Railway → Project Settings → Tokens)"
+          if [ "${#TRIMMED}" -ne "${#RAILWAY_TOKEN}" ]; then
+            echo "  whitespace:  YES — the stored value carries $(( ${#RAILWAY_TOKEN} - ${#TRIMMED} )) whitespace character(s), which Railway will reject. Re-save the secret without them."
+          else
+            echo "  whitespace:  none"
+          fi
+          if printf '%s' "$TRIMMED" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'; then
+            echo "  shape:       a well-formed UUID, which is what a Railway project token looks like"
+          else
+            echo "  shape:       NOT a UUID — a Railway project token is one, so this is very likely the wrong value entirely"
+          fi
 
       # Keyed on the resolve step's output, not on the branch name again, so
       # the token and the environment name can never disagree with what was
