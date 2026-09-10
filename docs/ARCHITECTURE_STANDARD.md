@@ -736,7 +736,7 @@ review comments into build failures. Cheap, and worth doing.
 
 > **Decided: implemented.** Both guards run as the "single egress" Guard
 > step in `.github/workflows/tests.yml`. The allowlist is
-> `geocoding_service.py` (Nominatim); tests are outside the guard's scope
+> `geocoding_service.py` (Google Geocoding API); tests are outside the guard's scope
 > because they construct providers in order to test them.
 
 **4. Admin panel config duplication.** `admin_panel/core/config.py` is the
