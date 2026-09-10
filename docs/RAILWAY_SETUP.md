@@ -87,6 +87,25 @@ Note that a **variable change also redeploys**, and that path is not equivalent:
 
 If you would rather drop the gate, point the three production services at `dev` in the Railway dashboard (each service → Settings → Source → Branch) and delete the `production` branch, so there is no stale ref left to mislead anyone.
 
+### The Railway credentials CI holds
+
+Two workflows drive Railway directly — `🛑 Stop Railway Proli Services` and `🗺️ Check pro service areas` — and both read a **project token** from a repo secret, picked by the branch they run from:
+
+| repo secret | Railway environment | used by |
+|---|---|---|
+| `RAILWAY_TOKEN_STAGING` | Staging | both workflows, run from `dev` |
+| `RAILWAY_TOKEN_PRODUCTION` | Production | both workflows, run from `production` |
+
+**These went undocumented until 2026-09-10, which is why nobody noticed the staging one had stopped working** — the failure only appears when somebody runs one of those workflows, and the staging path had not been exercised in months. Both workflows now verify the credential before doing anything and say which of the causes below it is.
+
+Creating or rotating one:
+
+1. Railway → the **Proli project** → **Project Settings → Tokens**. It must be a *project* token: an account token (your avatar → Account Settings → Tokens) is a different thing that the CLI reads from `RAILWAY_API_TOKEN`, and passing one as `RAILWAY_TOKEN` fails with a bare *"Invalid RAILWAY_TOKEN"*.
+2. Set **Environment** to the one the secret is for. A token scoped to Production cannot act on Staging; the workflows pass `--environment` explicitly so the two can never silently disagree.
+3. Copy it immediately — Railway shows the value once.
+4. GitHub → repo **Settings → Secrets and variables → Actions → Repository secrets**. It must live here, **not** under Settings → Environments: neither workflow declares an `environment:`, so an environment-scoped secret resolves to an empty string and the job reports a credential that did not resolve at all.
+5. Verify by running `🗺️ Check pro service areas` from the matching branch with `apply` unticked — it is read-only, and its credential step reports success or names the specific failure.
+
 ## Step 4: Environment Variables
 
 Set these as **shared variables** (project-level, *within each environment*) so all 3 services inherit them. Which values must **differ** between Staging and Production is specified in the ownership table below — do not copy them across environments:
