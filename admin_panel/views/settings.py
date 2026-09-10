@@ -231,7 +231,7 @@ def view_system_settings(T):
                     with st.container(border=True):
                         c1, c2, c3 = st.columns([2, 2, 1])
                         c1.markdown(f"**{admin['username']}**")
-                        role_code = admin.get("role", "viewer")
+                        role_code = admin.get("role") or "viewer"
                         c2.markdown(f"**{T.get(f'role_{role_code}') or role_code}**")
 
                         if admin["username"] != get_current_username():

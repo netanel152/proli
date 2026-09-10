@@ -27,7 +27,7 @@ import pytest
 from bson import ObjectId
 
 from admin_panel.core.config import TRANS
-from admin_panel.core.labels import status_by_label
+from admin_panel.core.labels import status_by_label, status_label_map
 from admin_panel.core.lead_queries import (
     EDITOR_COLUMNS,
     SKIP_LEAD_GONE,
@@ -1092,6 +1092,22 @@ def test_build_lead_row_status_label_without_map_falls_back_to_raw_status():
         unknown_pro_label=UNKNOWN_PRO_LABEL,
     )
     assert row["status_label"] == "booked"
+
+
+def test_build_lead_row_none_status_falls_back_to_na_for_both_columns():
+    # A lead with an explicit `status: None` used to build an empty
+    # `status_label` cell (`{}.get(None, None)` -> None) and drop the lead
+    # out of every Kanban column, which groups by the raw `status` value.
+    # `lead.get("status") or "N/A"` catches None the same way it already
+    # caught a missing key.
+    row = build_lead_row(
+        _row_lead_doc(status=None),
+        pro_map_id_to_name={},
+        unknown_pro_label=UNKNOWN_PRO_LABEL,
+        status_labels=status_label_map(TRANS["HE"]),
+    )
+    assert row["status"] == "N/A"
+    assert row["status_label"] == "N/A"
 
 
 def test_build_lead_row_parses_legacy_deal_marker_into_details_summary():

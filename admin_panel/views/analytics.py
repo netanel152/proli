@@ -7,7 +7,7 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient
 from app.core.config import settings
-from app.core.constants import LeadStatus, WorkerConstants
+from app.core.constants import AdminDefaults, LeadStatus, WorkerConstants
 from app.core.database import DB_NAME
 from app.core.logger import logger
 from admin_panel.core import analytics_queries as aq
@@ -228,7 +228,7 @@ def view_analytics(T):
         if perf:
             df = pd.DataFrame(perf)
             # The query's English sentinel for a pro with no business_name.
-            df["name"] = df["name"].replace("Unknown", T["unnamed_pro"])
+            df["name"] = df["name"].replace(AdminDefaults.UNKNOWN_PRO, T["unnamed_pro"])
             st.dataframe(
                 df,
                 column_config={
