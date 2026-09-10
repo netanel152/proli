@@ -279,8 +279,10 @@ async def test_run_include_inactive_flag_controls_which_pros_are_checked(mock_db
         overwrite_location=False,
         resolver=counting_resolver,
     )
-    assert code == script.EXIT_OK
-    assert seen == []  # both excluded by the default active-only filter
+    # Both excluded by the default active-only filter — nothing matched, so
+    # this is not a clean bill of health, it's an empty run (EXIT_NOTHING_CHECKED).
+    assert code == script.EXIT_NOTHING_CHECKED
+    assert seen == []
 
     seen.clear()
     code = await script.run(
@@ -292,3 +294,76 @@ async def test_run_include_inactive_flag_controls_which_pros_are_checked(mock_db
     assert code == script.EXIT_OK
     # --include-inactive picks up the paused pro but never the pending one
     assert seen == [("Tel Aviv",)]
+
+
+# ---------------------------------------------------------------------------
+# EXIT_NOTHING_CHECKED — an empty run is a fact, not a shrug (the PRO-27 fix)
+# ---------------------------------------------------------------------------
+
+
+async def _never_called_resolver(areas):
+    raise AssertionError("resolver must not be called when nothing is checked")
+
+
+@pytest.mark.asyncio
+async def test_run_reports_no_professionals_on_record_when_collection_is_empty(
+    mock_db, capsys
+):
+    # _clean_users leaves mock_db.users empty at the start of every test.
+    code = await script.run(
+        apply=False,
+        include_inactive=False,
+        overwrite_location=False,
+        resolver=_never_called_resolver,
+    )
+
+    assert code == script.EXIT_NOTHING_CHECKED
+    out = capsys.readouterr().out
+    assert "no professionals at all" in out
+
+
+@pytest.mark.asyncio
+async def test_run_reports_all_pending_when_every_pro_awaits_approval(mock_db, capsys):
+    await mock_db.users.insert_one(
+        _pro(business_name="Pending One", pending_approval=True)
+    )
+    await mock_db.users.insert_one(
+        _pro(business_name="Pending Two", pending_approval=True)
+    )
+
+    code = await script.run(
+        apply=False,
+        include_inactive=False,
+        overwrite_location=False,
+        resolver=_never_called_resolver,
+    )
+
+    assert code == script.EXIT_NOTHING_CHECKED
+    out = capsys.readouterr().out
+    assert "awaiting approval" in out
+
+
+@pytest.mark.asyncio
+async def test_run_reports_skipped_paused_pros_and_points_at_include_inactive(
+    mock_db, capsys
+):
+    await mock_db.users.insert_one(_pro(business_name="Paused Pro", is_active=False))
+
+    code = await script.run(
+        apply=False,
+        include_inactive=False,
+        overwrite_location=False,
+        resolver=_never_called_resolver,
+    )
+
+    assert code == script.EXIT_NOTHING_CHECKED
+    out = capsys.readouterr().out
+    assert "1 approved pro" in out
+    assert "--include-inactive" in out
+
+
+# A non-empty run whose verdict is EXIT_UNRESOLVED is already covered by
+# test_run_dry_run_writes_nothing_and_returns_unresolved_exit above (one pro
+# checked, resolution UNREACHABLE) — checked=1 there, so the new
+# `if not checked: return EXIT_NOTHING_CHECKED` branch never has a chance to
+# intercept it. No separate test added for that; this comment records why.
