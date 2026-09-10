@@ -10,6 +10,7 @@ from admin_panel.core.utils import (
 )
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import PROFESSION_TYPES, profession_label
+from admin_panel.ui.components import render_flash, set_flash
 from admin_panel.core.rbac import can_edit, has_permission
 import re
 
@@ -26,6 +27,9 @@ def get_professionals():
 def view_professionals(T):
     st.title(T["pros_title"])
     st.caption(T.get("page_desc_professionals", "Manage the list of professionals."))
+    # Confirmation of the previous run's create/edit/delete/approve/reject
+    # (each ends in st.rerun(), which would otherwise discard it).
+    render_flash("pro_flash")
 
     if "pro_view_mode" not in st.session_state:
         st.session_state.pro_view_mode = "list"
@@ -106,9 +110,16 @@ def render_pro_list(T):
 
             with c_info:
                 # Status + Name + Verified
-                status_dot = "🟢" if is_active else "🔴"
-                verified_badge = " ✅" if p.get("is_verified") else ""
-                st.markdown(f"**{status_dot} {p['business_name']}{verified_badge}**")
+                # Icon + text, never colour alone (PRO-61).
+                status_txt = (
+                    f"🟢 {T['status_active']}"
+                    if is_active
+                    else f"🔴 {T['status_inactive']}"
+                )
+                verified_badge = (
+                    f" · ✅ {T['verified']}" if p.get("is_verified") else ""
+                )
+                st.markdown(f"**{p['business_name']}** · {status_txt}{verified_badge}")
 
                 pro_type = profession_label(T, p.get("type", "general"))
                 st.caption(f"{pro_type} · {p.get('phone_number', '')}")
@@ -160,6 +171,12 @@ def render_pro_list(T):
                     users_collection.delete_one({"_id": p["_id"]})
                     log_audit(
                         "delete_pro", {"pro_id": pro_id, "name": p.get("business_name")}
+                    )
+                    set_flash(
+                        "pro_flash",
+                        T["pro_deleted"].replace(
+                            "{name}", str(p.get("business_name") or T["unnamed_pro"])
+                        ),
                     )
                     del st.session_state[f"confirm_del_{pro_id}"]
                     st.cache_data.clear()
@@ -344,7 +361,7 @@ def render_pro_form(T, pro_data=None):
                         {"_id": ObjectId(pro_id)}, {"$set": pro_payload}
                     )
                     log_audit("edit_pro", {"pro_id": pro_id, "name": name})
-                    st.success(T["success_update"])
+                    set_flash("pro_flash", T["success_update"])
                 else:
                     pro_payload.update(
                         {
@@ -359,7 +376,7 @@ def render_pro_form(T, pro_data=None):
                     log_audit(
                         "create_pro", {"pro_id": str(res.inserted_id), "name": name}
                     )
-                    st.success(T["success_create"])
+                    set_flash("pro_flash", T["success_create"])
 
                 st.session_state.pro_view_mode = "list"
                 st.session_state.pro_to_edit = None
@@ -396,8 +413,9 @@ def render_pending_approvals(T):
                         f"{T.get('new_prices', 'Prices')}: {p['prices_for_prompt']}"
                     )
                 if p.get("created_at"):
+                    # LRM pins the date-then-time order under RTL bidi.
                     st.caption(
-                        f"{T.get('registered_at', 'Registered')}: {p['created_at'].strftime('%Y-%m-%d %H:%M')}"
+                        f"{T.get('registered_at', 'Registered')}: \u200e{p['created_at'].strftime('%Y-%m-%d %H:%M')}"
                     )
 
             with c_actions:
@@ -433,11 +451,12 @@ def render_pending_approvals(T):
                                 {"pro_id": pro_id, "name": p.get("business_name")},
                             )
                             _notify_pro_approved(p.get("phone_number"))
-                            st.success(
+                            set_flash(
+                                "pro_flash",
                                 T["pro_approved"].replace(
                                     "{name}",
                                     str(p.get("business_name") or T["unnamed_pro"]),
-                                )
+                                ),
                             )
                             st.cache_data.clear()
                             st.rerun()
@@ -463,6 +482,12 @@ def render_pending_approvals(T):
                         "reject_pro", {"pro_id": pro_id, "name": p.get("business_name")}
                     )
                     _notify_pro_rejected(p.get("phone_number"))
+                    set_flash(
+                        "pro_flash",
+                        T["pro_rejected"].replace(
+                            "{name}", str(p.get("business_name") or T["unnamed_pro"])
+                        ),
+                    )
                     del st.session_state[f"confirm_reject_{pro_id}"]
                     st.cache_data.clear()
                     st.rerun()

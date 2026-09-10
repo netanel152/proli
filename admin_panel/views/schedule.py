@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta, time
 from admin_panel.core.utils import users_collection, slots_collection
 from admin_panel.core.schedule_queries import EDITOR_COLUMNS, save_daily_schedule
+from admin_panel.ui.components import render_flash, set_flash
 from app.core.config import settings
 import pytz
 
@@ -20,6 +21,10 @@ def view_schedule_editor(T):
             "Edit the daily and weekly work schedule for each professional.",
         )
     )
+
+    # Bulk generate / clear end in st.rerun(); their confirmation is stashed
+    # and shown here, above the tabs (the daily editor has its own sch_flash).
+    render_flash("sch_bulk_flash")
 
     pros = get_active_professionals()
     if not pros:
@@ -228,7 +233,10 @@ def view_schedule_editor(T):
 
                     if new_slots:
                         slots_collection.insert_many(new_slots)
-                        st.success(f"{T['sch_msg_generated']} ({len(new_slots)})")
+                        set_flash(
+                            "sch_bulk_flash",
+                            f"{T['sch_msg_generated']} ({len(new_slots)})",
+                        )
                         st.rerun()
                     else:
                         st.warning(T.get("sch_msg_no_slots", "No slots generated."))
@@ -261,7 +269,10 @@ def view_schedule_editor(T):
                                 },
                             }
                         )
-                        st.success(f"{T['sch_msg_cleared']} ({res.deleted_count})")
+                        set_flash(
+                            "sch_bulk_flash",
+                            f"{T['sch_msg_cleared']} ({res.deleted_count})",
+                        )
                         del st.session_state.confirm_clear_slots
                         st.rerun()
                     if cn.button(T["confirm_no"], key="confirm_clear_no"):

@@ -53,7 +53,7 @@ if not check_password(cookies):
 
 # --- Language Logic ---
 if "lang_code" not in st.session_state:
-    st.session_state.lang_code = cookies.get("proli_lang", "EN")
+    st.session_state.lang_code = cookies.get("proli_lang", "HE")  # PRO-61
 
 T = TRANS[st.session_state.lang_code]
 load_css(st.session_state.lang_code, T)

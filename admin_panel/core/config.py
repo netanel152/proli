@@ -335,6 +335,9 @@ TRANS = {
         "finops_est_cost": "עלות משוערת: ${cost}",
         "finops_distribution": "התפלגות טוקנים",
         "finops_no_data": "אין עדיין נתוני שימוש בטוקנים.",
+        # The four chart_* values double as DataFrame column names handed to
+        # st.bar_chart/st.line_chart, i.e. Vega-Lite field names: keep them
+        # free of ".", "[" and "\" or the chart silently renders empty.
         "chart_status": "סטטוס",
         "chart_count": "כמות",
         "chart_date": "תאריך",
@@ -353,6 +356,14 @@ TRANS = {
         "help_stale_mon": "בודק עבודות שנקבעו ולא הושלמו.",
         "help_sos_healer": "משבץ מחדש אוטומטית לידים שאנשי מקצוע התעלמו מהם.",
         "help_sos_reporter": "שולח דוחות מרוכזים על לידים תקועים לוואטסאפ של המנהל.",
+        # Confirmations for mutations that end in st.rerun() — the message is
+        # stashed and rendered on the next run (see components.render_flash),
+        # otherwise the rerun discards it before the browser paints it.
+        "status_inactive": "לא פעיל",
+        "pro_deleted": "איש המקצוע {name} נמחק.",
+        "pro_rejected": "הפרופיל של {name} נדחה ונשלחה לו הודעה.",
+        "admin_role_updated": "התפקיד של {name} עודכן.",
+        "admin_deleted": "המנהל {name} נמחק.",
     },
     "EN": {
         "dir": "ltr",
@@ -679,6 +690,7 @@ TRANS = {
         "finops_est_cost": "Estimated cost: ${cost}",
         "finops_distribution": "Token Distribution",
         "finops_no_data": "No token usage data available.",
+        # Vega-Lite field names — no ".", "[" or "\" (see the HE block).
         "chart_status": "Status",
         "chart_count": "Count",
         "chart_date": "Date",
@@ -697,5 +709,10 @@ TRANS = {
         "help_stale_mon": "Checks for booked jobs that haven't been completed.",
         "help_sos_healer": "Automatically reassigns leads that pros ignored.",
         "help_sos_reporter": "Sends batched reports of stuck leads to the admin's WhatsApp.",
+        "status_inactive": "Inactive",
+        "pro_deleted": "Professional {name} deleted.",
+        "pro_rejected": "{name} was rejected and notified.",
+        "admin_role_updated": "Role of {name} updated.",
+        "admin_deleted": "Admin {name} deleted.",
     },
 }

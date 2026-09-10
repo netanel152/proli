@@ -12,7 +12,6 @@ from admin_panel.ui.components import (
     render_chat_bubble,
     render_kanban_column,
     render_status_pill,
-    STATUS_COLORS,
 )
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import (
@@ -169,12 +168,12 @@ def view_leads_dashboard(T):
     # --- Shared Data ---
     all_pros = list(users_collection.find())
     pro_map_id_to_name = {
-        p["_id"]: p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros
+        p["_id"]: p.get("business_name", T["unnamed_pro"]) for p in all_pros
     }
     pro_map_name_to_id = {
-        p.get("business_name", AdminDefaults.UNKNOWN_PRO): p["_id"] for p in all_pros
+        p.get("business_name", T["unnamed_pro"]): p["_id"] for p in all_pros
     }
-    pro_names = [p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros]
+    pro_names = [p.get("business_name", T["unnamed_pro"]) for p in all_pros]
     pro_names.insert(0, T["unknown_pro"])
 
     # PRO-61: the frame carries localized status labels, so it is cached per
@@ -306,7 +305,7 @@ def view_leads_dashboard(T):
             csv = (
                 leads_df.drop(
                     columns=[c for c in leads_df.columns if c.startswith("_")]
-                    + ["status"]
+                    + ["status", "id"]
                 )
                 .rename(
                     columns={
@@ -339,6 +338,15 @@ def view_leads_dashboard(T):
             edited_df = st.data_editor(
                 leads_df,
                 key="leads_editor",
+                # Status is the most-acted-on cell, so it sits next to the
+                # client rather than at the far end of the grid.
+                column_order=(
+                    "client",
+                    "status_label",
+                    "details_summary",
+                    "professional",
+                    "date",
+                ),
                 column_config={
                     "id": None,
                     "_chat_id": None,
@@ -492,7 +500,7 @@ def view_leads_dashboard(T):
                 )
             with c2:
                 pro_names_create = [
-                    p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros
+                    p.get("business_name", T["unnamed_pro"]) for p in all_pros
                 ]
                 pro_names_create.insert(0, T["unknown_pro"])
                 selected_pro_name = st.selectbox(

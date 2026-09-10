@@ -466,6 +466,9 @@ def load_css(lang_code, T):
 
         /* ===== BUTTONS ===== */
         .stButton button {{
+            /* Pinned, not inherited: the per-language arrow in
+               T["back_to_list"] relies on the label's base direction. */
+            direction: {direction};
             border-radius: var(--radius-sm);
             font-family: 'Inter', 'Heebo', sans-serif !important;
             font-weight: 600;
@@ -960,6 +963,26 @@ def load_css(lang_code, T):
     )
 
 
+def set_flash(key, message):
+    """Stash a confirmation to be shown on the *next* run (PRO-61).
+
+    ``st.success`` followed by ``st.rerun()`` is discarded with the element
+    tree before the browser paints it, so a mutation that reruns to refresh
+    its view had no readable confirmation. Same pattern as ``leads_flash``
+    (PRO-161) and ``sch_flash`` (PRO-158), for a plain message: set it right
+    before the ``st.rerun()``, ``render_flash`` it at the top of the view.
+    """
+    st.session_state[key] = message
+
+
+def render_flash(key):
+    """Render and clear the confirmation stashed by ``set_flash``."""
+    msg = st.session_state.pop(key, None)
+    if msg:
+        st.toast(msg, icon="✅")
+        st.success(msg)
+
+
 def render_chat_bubble(text, role, timestamp, T):
     is_user = role == "user"
     cls = "user-msg" if is_user else "bot-msg"
@@ -1014,7 +1037,7 @@ def render_kanban_card(lead, T):
         </div>
         <div class="kanban-card-detail">
             <span class="material-symbols-rounded" style="font-size:0.85rem">schedule</span>
-            {date_str}
+            <span dir="ltr" style="unicode-bidi:isolate">{date_str}</span>
         </div>
     </div>
 </div>"""

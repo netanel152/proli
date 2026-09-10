@@ -170,7 +170,9 @@ def build_lead_row(lead, *, pro_map_id_to_name, unknown_pro_label, status_labels
         display_details = f"{issue_type} | {appointment_time} | {full_address}"
 
     pro_name = pro_map_id_to_name.get(lead.get("pro_id"), unknown_pro_label)
-    status = lead.get("status", "N/A")
+    # `or`, not a default: an explicit null would otherwise blank the cell
+    # of a required selectbox and drop the lead out of every Kanban column.
+    status = lead.get("status") or "N/A"
 
     return {
         "id": str(lead["_id"]),

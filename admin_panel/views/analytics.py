@@ -227,6 +227,8 @@ def view_analytics(T):
         perf = _fetch(T, aq.get_pro_performance, days)
         if perf:
             df = pd.DataFrame(perf)
+            # The query's English sentinel for a pro with no business_name.
+            df["name"] = df["name"].replace("Unknown", T["unnamed_pro"])
             st.dataframe(
                 df,
                 column_config={

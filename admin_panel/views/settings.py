@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, time
 from admin_panel.core.utils import settings_collection
+from admin_panel.ui.components import render_flash, set_flash
 from admin_panel.core.audit_queries import (
     DEFAULT_PAGE_SIZE,
     PAGE_SIZE_OPTIONS,
@@ -66,6 +67,8 @@ def _reset_audit_page_on_filter_change(signature):
 def view_system_settings(T):
     st.title(T["settings_title"])
     st.caption(T.get("page_desc_settings", "Configure system-wide settings."))
+    # Confirmation of the previous run's save / admin-user mutation (PRO-61).
+    render_flash("settings_flash")
 
     role = get_current_role()
 
@@ -111,7 +114,8 @@ def view_system_settings(T):
                 last_run_str = last_run_val.astimezone(IL_TZ).strftime("%Y-%m-%d %H:%M")
             else:
                 last_run_str = T.get("never", "Never")
-            c1.caption(f"{T.get('last_run', 'Last Run')}: {last_run_str}")
+            # LRM pins the date-then-time order under RTL bidi (PRO-61).
+            c1.caption(f"{T.get('last_run', 'Last Run')}: \u200e{last_run_str}")
 
             try:
                 t_obj = datetime.strptime(
@@ -151,7 +155,7 @@ def view_system_settings(T):
                             "run_time": new_time.strftime("%H:%M"),
                         },
                     )
-                    st.success(T["success_save"])
+                    set_flash("settings_flash", T["success_save"])
                     st.rerun()
 
     # --- TAB: Safety & Monitoring ---
@@ -211,7 +215,7 @@ def view_system_settings(T):
                             "sos_reporter": reporter_active,
                         },
                     )
-                    st.success(T["success_save"])
+                    set_flash("settings_flash", T["success_save"])
                     st.rerun()
 
     # --- TAB: Admin Users ---
@@ -227,7 +231,8 @@ def view_system_settings(T):
                     with st.container(border=True):
                         c1, c2, c3 = st.columns([2, 2, 1])
                         c1.markdown(f"**{admin['username']}**")
-                        c2.markdown(f"`{admin.get('role', 'unknown')}`")
+                        role_code = admin.get("role", "viewer")
+                        c2.markdown(f"**{T.get(f'role_{role_code}') or role_code}**")
 
                         if admin["username"] != get_current_username():
                             new_role = c1.selectbox(
@@ -237,6 +242,7 @@ def view_system_settings(T):
                                     admin.get("role", "viewer")
                                 ),
                                 key=f"role_{admin['username']}",
+                                format_func=lambda r: T.get(f"role_{r}") or r,
                             )
                             if c2.button(
                                 T.get("admin_update_role", "Update"),
@@ -248,6 +254,12 @@ def view_system_settings(T):
                                     "update_admin_role",
                                     {"target": admin["username"], "new_role": new_role},
                                 )
+                                set_flash(
+                                    "settings_flash",
+                                    T["admin_role_updated"].replace(
+                                        "{name}", admin["username"]
+                                    ),
+                                )
                                 st.rerun()
 
                             if c3.button(
@@ -258,6 +270,12 @@ def view_system_settings(T):
                             ):
                                 delete_admin(admin["username"])
                                 log_audit("delete_admin", {"target": admin["username"]})
+                                set_flash(
+                                    "settings_flash",
+                                    T["admin_deleted"].replace(
+                                        "{name}", admin["username"]
+                                    ),
+                                )
                                 st.rerun()
                         else:
                             c3.caption(T.get("admin_you", "(you)"))
@@ -278,6 +296,7 @@ def view_system_settings(T):
                         T.get("admin_role", "Role"),
                         options=[r.value for r in AdminRole],
                         index=1,
+                        format_func=lambda r: T.get(f"role_{r}") or r,
                     )
 
                 if st.form_submit_button(
@@ -303,10 +322,9 @@ def view_system_settings(T):
                                 "create_admin",
                                 {"target": new_username, "role": new_role},
                             )
-                            st.success(
-                                T.get(
-                                    "admin_created", "Admin '{name}' created!"
-                                ).replace("{name}", new_username)
+                            set_flash(
+                                "settings_flash",
+                                T["admin_created"].replace("{name}", new_username),
                             )
                             st.rerun()
                         else:
