@@ -138,6 +138,15 @@ jobs:
           RAILWAY_ENV: ${{ steps.target.outputs.target == 'production' && 'Production' || 'Staging' }}
           APPLY: ${{ inputs.apply }}
         run: |
+          # `set +e` first, and it is load-bearing. GitHub runs every `run:`
+          # block as `bash -e {0}`, so errexit is on before this script's
+          # first line and `set -uo pipefail` does not clear it. With it on,
+          # the shell exits the moment `railway run` fails — taking the
+          # credential-name retry, the job-summary write and the exit-code
+          # interpretation with it, all as dead code. That is exactly what
+          # happened on 2026-09-10: no failing run ever wrote a job summary,
+          # and the fallback added hours earlier never executed once.
+          set +e
           set -uo pipefail
 
           if [ "${APPLY:-false}" = "true" ]; then
