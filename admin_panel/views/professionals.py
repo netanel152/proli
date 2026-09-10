@@ -468,6 +468,7 @@ def render_pending_approvals(T):
                     )
                     _notify_pro_rejected(p.get("phone_number"))
                     del st.session_state[f"confirm_reject_{pro_id}"]
+                    st.session_state.pop(_geo_check_key(pro_id), None)
                     st.cache_data.clear()
                     st.rerun()
                 if c_no.button(T.get("confirm_no", "No"), key=f"no_reject_{pro_id}"):
@@ -593,11 +594,17 @@ def _render_service_area_correction(
         )
         p["service_areas"] = areas
         del st.session_state[key]
-        _check_then_approve(p, T)
+        try:
+            _check_then_approve(p, T)
+        except Exception as e:
+            st.error(f"Error approving: {e}")
+            return
         # Not approved — the re-check stashed a fresh verdict; redraw it.
         st.rerun()
 
-    if not resolution.blocks_approval and c_anyway.button(
+    # Offered only when something resolved: approving with no placeable area
+    # would write no `location` — the silent pro this check exists to prevent.
+    if resolution.resolved and c_anyway.button(
         T["geo_approve_anyway_btn"], key=f"geo_anyway_{pro_id}"
     ):
         _approve_pending_pro(p, T, resolution)

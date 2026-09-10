@@ -23,6 +23,7 @@ same crossing.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import threading
 from typing import Any, Coroutine, TypeVar
 
@@ -50,6 +51,13 @@ def run_blocking(coro: Coroutine[Any, Any, T], timeout: float) -> T:
     """Run ``coro`` on the bridge loop and wait for it.
 
     The timeout is load-bearing: an unbounded wait here hangs the Streamlit
-    script run with no way out for the operator.
+    script run with no way out for the operator. On timeout the coroutine is
+    cancelled too — ``Future.result`` alone would leave it running on the
+    loop after the caller has already reported failure and moved on.
     """
-    return asyncio.run_coroutine_threadsafe(coro, bridge_loop()).result(timeout)
+    fut = asyncio.run_coroutine_threadsafe(coro, bridge_loop())
+    try:
+        return fut.result(timeout)
+    except concurrent.futures.TimeoutError:
+        fut.cancel()
+        raise

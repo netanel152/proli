@@ -86,12 +86,17 @@ def _has_location(pro: dict) -> bool:
 
 def verdict(pro: dict, resolution: ServiceAreaResolution) -> str:
     """One word per pro for the report and the exit code."""
-    if resolution.needs_recheck and not resolution.unresolved:
+    if not resolution.resolved:
+        # Nothing places this pro. A definitive miss among the areas needs a
+        # correction regardless of what else is pending (UNREACHABLE, exit 1);
+        # only when *every* area is merely unchecked is the verdict incomplete.
+        if resolution.unresolved or not resolution.unavailable:
+            return "UNREACHABLE"
         return "UNAVAILABLE"
-    if resolution.blocks_approval:
-        return "UNREACHABLE"  # nothing resolves — no `location` is possible
     if resolution.unresolved:
         return "PARTIAL"  # reachable via the resolved area(s); junk remains
+    if resolution.unavailable:
+        return "UNAVAILABLE"  # reachable, but part of the verdict is pending
     if not _has_location(pro):
         return "MISSING_LOCATION"  # areas fine, doc never got the point
     return "OK"
