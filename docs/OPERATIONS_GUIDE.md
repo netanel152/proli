@@ -223,7 +223,7 @@ python scripts/check_pro_service_areas.py            # dry run: one block per ac
 python scripts/check_pro_service_areas.py --apply    # also write missing `location` + the verdict fields
 ```
 
-Exit code `1` means at least one pro has an area to correct in the admin panel (or none at all), `2` means the geocoder was unavailable and the verdict is incomplete — wait for `geo:unavailable` to clear (60s) and re-run. The workflow exits with the script's code, so a green run is the only green run.
+Exit code `1` means at least one pro has an area to correct in the admin panel (or none at all), `2` means the geocoder was unavailable and the verdict is incomplete — wait for `geo:unavailable` to clear (60s) and re-run, and `3` means no pro matched the filter, so the run checked nothing and is not evidence of anything (the report says whether that is because none is on record, all are awaiting approval, or all are paused). The workflow exits with the script's code, so a green run is the only green run — and an empty one is not green.
 
 ---
 
