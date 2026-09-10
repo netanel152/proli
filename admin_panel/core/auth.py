@@ -208,8 +208,10 @@ def get_manager():
 def check_password(cookies):
     cookie_manager = get_manager()
 
-    saved_lang = cookies.get("proli_lang", "EN")
-    T_auth = TRANS.get(saved_lang, TRANS["EN"])
+    # PRO-61: Hebrew is the default — the operator is a Hebrew speaker, and
+    # an EN default rendered the login screen and every fresh session LTR.
+    saved_lang = cookies.get("proli_lang", "HE")
+    T_auth = TRANS.get(saved_lang, TRANS["HE"])
 
     cookie_token = cookies.get("proli_auth_token")
 
@@ -283,10 +285,7 @@ def check_password(cookies):
                         f"Admin login locked out: {identifier} ({seconds_left}s remaining)"
                     )
                     st.error(
-                        T_auth.get(
-                            "login_locked",
-                            f"Too many failed attempts. Try again in {minutes_left} minute(s).",
-                        )
+                        T_auth["login_locked"].replace("{minutes}", str(minutes_left))
                     )
                 else:
                     auth_result = None
@@ -343,7 +342,7 @@ def check_password(cookies):
 
 def logout(cookie_manager, T):
     if st.sidebar.button(T["disconnect"]):
-        T_logout = TRANS.get(st.session_state.get("lang_code", "EN"), TRANS["EN"])
+        T_logout = TRANS.get(st.session_state.get("lang_code", "HE"), TRANS["HE"])
         st.toast(T_logout.get("disconnecting", "Disconnecting..."))
 
         username = st.session_state.get("admin_username", "unknown")

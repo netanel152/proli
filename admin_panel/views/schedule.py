@@ -3,6 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta, time
 from admin_panel.core.utils import users_collection, slots_collection
 from admin_panel.core.schedule_queries import EDITOR_COLUMNS, save_daily_schedule
+from admin_panel.ui.components import render_flash, set_flash
 from app.core.config import settings
 import pytz
 
@@ -20,6 +21,10 @@ def view_schedule_editor(T):
             "Edit the daily and weekly work schedule for each professional.",
         )
     )
+
+    # Bulk generate / clear end in st.rerun(); their confirmation is stashed
+    # and shown here, above the tabs (the daily editor has its own sch_flash).
+    render_flash("sch_bulk_flash")
 
     pros = get_active_professionals()
     if not pros:
@@ -175,14 +180,17 @@ def view_schedule_editor(T):
                     )
                     end_hour = st.number_input(T["sch_end_hour"], 0, 23, 18)
 
+                # Python `date.weekday()` indices (Monday == 0), Sunday-first
+                # for the Israeli week. `day_N` in TRANS is indexed the same way
+                # (PRO-61 — it used to be Sunday-first, so "ראשון" sat on the
+                # option that generated Monday slots). The default is the
+                # Sunday-Thursday week `utils.create_initial_schedule` assumes.
                 weekdays_opts = [6, 0, 1, 2, 3, 4, 5]
                 selected_days = st.multiselect(
                     T["sch_workdays"],
                     weekdays_opts,
-                    default=[0, 1, 2, 3, 4],
-                    format_func=lambda x: T.get(
-                        f"day_{x}", ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][x]
-                    ),
+                    default=[6, 0, 1, 2, 3],
+                    format_func=lambda x: T[f"day_{x}"],
                 )
 
                 st.markdown("")
@@ -225,7 +233,10 @@ def view_schedule_editor(T):
 
                     if new_slots:
                         slots_collection.insert_many(new_slots)
-                        st.success(f"{T['sch_msg_generated']} ({len(new_slots)})")
+                        set_flash(
+                            "sch_bulk_flash",
+                            f"{T['sch_msg_generated']} ({len(new_slots)})",
+                        )
                         st.rerun()
                     else:
                         st.warning(T.get("sch_msg_no_slots", "No slots generated."))
@@ -258,7 +269,10 @@ def view_schedule_editor(T):
                                 },
                             }
                         )
-                        st.success(f"{T['sch_msg_cleared']} ({res.deleted_count})")
+                        set_flash(
+                            "sch_bulk_flash",
+                            f"{T['sch_msg_cleared']} ({res.deleted_count})",
+                        )
                         del st.session_state.confirm_clear_slots
                         st.rerun()
                     if cn.button(T["confirm_no"], key="confirm_clear_no"):
@@ -287,14 +301,15 @@ def view_schedule_editor(T):
                 "friday",
                 "saturday",
             ]
+            # `day_N` is Python-weekday indexed (Monday == 0), see TRANS.
             day_labels = {
-                "sunday": T.get("day_6", "Sun"),
-                "monday": T.get("day_0", "Mon"),
-                "tuesday": T.get("day_1", "Tue"),
-                "wednesday": T.get("day_2", "Wed"),
-                "thursday": T.get("day_3", "Thu"),
-                "friday": T.get("day_4", "Fri"),
-                "saturday": T.get("day_5", "Sat"),
+                "sunday": T["day_6"],
+                "monday": T["day_0"],
+                "tuesday": T["day_1"],
+                "wednesday": T["day_2"],
+                "thursday": T["day_3"],
+                "friday": T["day_4"],
+                "saturday": T["day_5"],
             }
 
             slot_dur = st.number_input(
@@ -321,7 +336,7 @@ def view_schedule_editor(T):
                     c_check, c_start, c_end = st.columns([1, 2, 2])
 
                     enabled = c_check.checkbox(
-                        day_labels.get(day, day.capitalize()),
+                        day_labels[day],
                         value=day_config.get("enabled", False),
                         key=f"tmpl_en_{day}",
                     )
