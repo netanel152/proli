@@ -12,9 +12,14 @@ from admin_panel.ui.components import (
     render_chat_bubble,
     render_kanban_column,
     render_status_pill,
-    STATUS_COLORS,
 )
 from admin_panel.core.auth import log_audit, get_current_role
+from admin_panel.core.labels import (
+    LEAD_STATUSES,
+    lead_status_label,
+    status_by_label,
+    status_label_map,
+)
 from admin_panel.core.lead_queries import (
     EDITOR_COLUMNS,
     SKIP_LEAD_GONE,
@@ -50,7 +55,8 @@ KANBAN_STATUSES = [
     "closed",
     "cancelled",
 ]
-ALL_STATUSES = [s.value for s in LeadStatus]
+# PRO-61: one option list for every status selector in this view.
+ALL_STATUSES = LEAD_STATUSES
 
 
 #: Why a row was skipped -> the T key explaining it to the operator.
@@ -162,16 +168,22 @@ def view_leads_dashboard(T):
     # --- Shared Data ---
     all_pros = list(users_collection.find())
     pro_map_id_to_name = {
-        p["_id"]: p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros
+        p["_id"]: p.get("business_name", T["unnamed_pro"]) for p in all_pros
     }
     pro_map_name_to_id = {
-        p.get("business_name", AdminDefaults.UNKNOWN_PRO): p["_id"] for p in all_pros
+        p.get("business_name", T["unnamed_pro"]): p["_id"] for p in all_pros
     }
-    pro_names = [p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros]
+    pro_names = [p.get("business_name", T["unnamed_pro"]) for p in all_pros]
     pro_names.insert(0, T["unknown_pro"])
 
+    # PRO-61: the frame carries localized status labels, so it is cached per
+    # language — `lang` exists only to key the cache (no leading underscore:
+    # st.cache_data skips hashing `_`-prefixed params). Without it a language
+    # switch would serve a frame whose label cells are not among the new
+    # language's selectbox options for up to 30s.
     @st.cache_data(ttl=30)
-    def get_leads_data():
+    def get_leads_data(lang):
+        status_labels = status_label_map(T)
         leads = list(leads_collection.find().sort("created_at", -1).limit(100))
         if not leads:
             # PRO-161/PRO-158: a bare `pd.DataFrame()` has zero columns, which
@@ -190,6 +202,7 @@ def view_leads_dashboard(T):
                 l,
                 pro_map_id_to_name=pro_map_id_to_name,
                 unknown_pro_label=T["unknown_pro"],
+                status_labels=status_labels,
             )
             for l in leads
         ]
@@ -206,7 +219,7 @@ def view_leads_dashboard(T):
             raise KeyError(f"leads editor frame is missing {sorted(missing)}")
         return pd.DataFrame(data, columns=EDITOR_COLUMNS)
 
-    leads_df = get_leads_data()
+    leads_df = get_leads_data(st.session_state.get("lang_code"))
 
     # --- Metrics Row (shared across tabs) ---
     total_count = leads_collection.count_documents({})
@@ -286,9 +299,22 @@ def view_leads_dashboard(T):
             # editor and the Edit form (`_chat_id`, `_display_name`,
             # `_details`), not operator-facing data — they duplicate
             # visible columns in the export.
+            # PRO-61: the raw `status` twin is dropped (the label column is
+            # the operator-facing one) and the headers are the table's own
+            # localized column titles rather than frame column names.
             csv = (
                 leads_df.drop(
                     columns=[c for c in leads_df.columns if c.startswith("_")]
+                    + ["status", "id"]
+                )
+                .rename(
+                    columns={
+                        "date": T["col_date"],
+                        "client": T["col_client"],
+                        "professional": T["col_pro"],
+                        "details_summary": T["col_details"],
+                        "status_label": T["col_status"],
+                    }
                 )
                 .to_csv(index=False)
                 .encode("utf-8-sig")
@@ -306,18 +332,31 @@ def view_leads_dashboard(T):
         else:
             st.subheader(T["table_title"])
 
-            status_options = ALL_STATUSES
+            # PRO-61: the editable cell holds the *label*; see EDITOR_COLUMNS.
+            status_options = [lead_status_label(T, s) for s in ALL_STATUSES]
 
             edited_df = st.data_editor(
                 leads_df,
                 key="leads_editor",
+                # Status is the most-acted-on cell, so it sits next to the
+                # client rather than at the far end of the grid.
+                column_order=(
+                    "client",
+                    "status_label",
+                    "details_summary",
+                    "professional",
+                    "date",
+                ),
                 column_config={
                     "id": None,
                     "_chat_id": None,
                     "_display_name": None,
+                    "status": None,
                     "date": st.column_config.DatetimeColumn(
                         T["col_date"],
-                        format="D MMM YYYY, h:mm a",
+                        # Numeric, so no English month names or AM/PM on the
+                        # Hebrew panel (PRO-61); the grid is forced LTR anyway.
+                        format="DD/MM/YYYY HH:mm",
                         width="medium",
                         disabled=True,
                     ),
@@ -336,7 +375,7 @@ def view_leads_dashboard(T):
                     "details_summary": st.column_config.TextColumn(
                         T["col_details"], width="large"
                     ),
-                    "status": st.column_config.SelectboxColumn(
+                    "status_label": st.column_config.SelectboxColumn(
                         T["col_status"],
                         options=status_options,
                         width="small",
@@ -401,6 +440,7 @@ def view_leads_dashboard(T):
                             pro_map_name_to_id=pro_map_name_to_id,
                             unknown_pro_label=T["unknown_pro"],
                             audit=log_audit,
+                            status_by_label=status_by_label(T),
                         )
 
                         if result["updated"]:
@@ -456,10 +496,11 @@ def view_leads_dashboard(T):
                     T.get("input_status", "Initial Status"),
                     options=["new", "contacted", "booked", "closed"],
                     index=0,
+                    format_func=lambda x: lead_status_label(T, x),
                 )
             with c2:
                 pro_names_create = [
-                    p.get("business_name", AdminDefaults.UNKNOWN_PRO) for p in all_pros
+                    p.get("business_name", T["unnamed_pro"]) for p in all_pros
                 ]
                 pro_names_create.insert(0, T["unknown_pro"])
                 selected_pro_name = st.selectbox(
@@ -468,7 +509,7 @@ def view_leads_dashboard(T):
 
             new_details = st.text_area(
                 T.get("input_issue", "Issue / Details"),
-                placeholder="e.g., Leaking faucet in the kitchen...",
+                placeholder=T["issue_placeholder"],
             )
 
             submitted = st.form_submit_button(
@@ -512,7 +553,7 @@ def view_leads_dashboard(T):
                         )
                         st.cache_data.clear()
                     except Exception as e:
-                        st.error(f"Error creating lead: {e}")
+                        st.error(_t(T, "error_create_lead", "Failed: {error}", error=e))
 
 
 def _render_lead_detail_section(
@@ -539,7 +580,7 @@ def _render_lead_detail_section(
     # the direction-neutral separators can't reorder under bidi.
     lead_labels = {
         str(row["id"]): (
-            f"‏{T.get(row['status'], str(row['status']).capitalize())} · "
+            f"‏{lead_status_label(T, row['status'])} · "
             f"{row['client']} · {str(row.get('details_summary', ''))[:40]}"
         )
         for _, row in leads_df.iterrows()
@@ -618,7 +659,7 @@ def _render_selected_lead_actions(
                             )
                         )
                 except Exception as e:
-                    st.error(f"Failed: {e}")
+                    st.error(_t(T, "error_check_failed", "Failed: {error}", error=e))
 
         # Edit Lead Form
         if can_edit(get_current_role()):
@@ -634,7 +675,7 @@ def _render_selected_lead_actions(
                         T.get("status_label", "Status"),
                         status_options,
                         index=status_options.index(current_status),
-                        format_func=lambda x: T.get(x, x.capitalize()),
+                        format_func=lambda x: lead_status_label(T, x),
                     )
                     # PRO-163: a real, optional label for the customer.
                     # Prefilled from the *raw* `_display_name`, never from the
