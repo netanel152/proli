@@ -12,6 +12,7 @@ from app.core.redis_client import get_redis_client
 from app.services.matching_service import book_slot_for_lead, is_pro_eligible_for_lead
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
+from app.services import agenda_service
 from datetime import datetime, timedelta, timezone
 
 # PRO-166: label vocabulary lives in the catalog; LeadStatus is a str Enum,
@@ -43,7 +44,12 @@ _PRO_COMMAND_LISTS = (
     "STATS_COMMANDS",
     "REVIEWS_COMMANDS",
     "SEARCH_COMMANDS",
+    "MORE_COMMANDS",
 )
+
+# PRO-147: the paged job lists remember where the next page starts under this
+# key in the pro's state metadata. `kind` names the handler that renders it.
+_PAGE_META_KEY = "job_list_page"
 
 
 def _is_pro_command(text: str) -> bool:
@@ -156,13 +162,13 @@ async def handle_pro_text_command(
         return await _handle_still_working(pro)
 
     if text in Messages.Keywords.DETAILS_COMMANDS:
-        return await _handle_details(pro)
+        return await _handle_details(pro, chat_id)
 
     if text in Messages.Keywords.CANCEL_BOOKED_COMMANDS:
         return await _handle_cancel(pro, whatsapp, chat_id)
 
     if text in Messages.Keywords.ACTIVE_JOBS_COMMANDS:
-        return await _handle_active_jobs(pro)
+        return await _handle_active_jobs(pro, chat_id)
 
     if text in Messages.Keywords.HISTORY_COMMANDS:
         return await _handle_history(pro)
@@ -178,6 +184,9 @@ async def handle_pro_text_command(
 
     if text in Messages.Keywords.SEARCH_COMMANDS:
         return await _handle_search(pro, chat_id, whatsapp)
+
+    if text in Messages.Keywords.MORE_COMMANDS:
+        return await _handle_more(pro, chat_id)
 
     # No command match — try intent detection on free-text
     if ai is not None and text and len(text) > 3:
@@ -286,6 +295,14 @@ async def _handle_job_selection(chat_id, text, pro, whatsapp, current_state):
         "cancelling_jobs_context" if is_cancel_flow else "finishing_jobs_context"
     )
     mapping = meta.get(context_key, {})
+
+    # PRO-147: the next page of the prompt's own list. Checked before the
+    # PRO-186 abandon rule below — *עוד* is a pro command, and letting it
+    # fall through would drop the very prompt the pro is paging through.
+    if text in Messages.Keywords.MORE_COMMANDS:
+        return await _selection_next_page(
+            chat_id, pro, meta, mapping, context_key, current_state
+        )
 
     if text not in mapping:
         # PRO-186: before PRO-186 this state was unreachable, so a pro who typed
@@ -613,33 +630,24 @@ async def _handle_resume(pro):
 
 
 async def _handle_finish(pro, whatsapp, chat_id):
-    cursor = leads_collection.find(
-        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED}
-    ).sort("created_at", -1)
-    leads = await cursor.to_list(length=10)
+    leads, total = await _fetch_jobs_chronological(pro, [LeadStatus.BOOKED])
 
     if not leads:
         return Messages.Pro.NO_ACTIVE_JOBS
 
-    if len(leads) == 1:
+    if total == 1:
         return await _execute_finish(leads[0], pro, whatsapp, chat_id)
 
-    # Multiple leads: Ask to select
-    lines = []
-    mapping = {}
-    for i, lead in enumerate(leads, 1):
-        name = lead.get("customer_name") or Messages.Fallbacks.CUSTOMER_NAME
-        city = lead.get("city") or Messages.Fallbacks.UNKNOWN
-        issue = lead.get("issue_type") or Messages.Fallbacks.ISSUE_UNKNOWN
-        lines.append(
-            Messages.Pro.JOB_SELECT_ROW.format(num=i, name=name, city=city, issue=issue)
-        )
-        mapping[str(i)] = str(lead["_id"])
-
-    await StateManager.set_state(chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH)
-    await StateManager.set_metadata(chat_id, {"finishing_jobs_context": mapping})
-
-    return Messages.Pro.SELECT_JOB_TO_FINISH.format(jobs_list="\n".join(lines))
+    # Multiple leads: ask to select (PRO-147: chronological, paged, every
+    # booked job reachable by number).
+    return await _prompt_job_selection(
+        chat_id,
+        leads,
+        total,
+        state=UserStates.PRO_SELECTING_JOB_TO_FINISH,
+        context_key="finishing_jobs_context",
+        template=Messages.Pro.SELECT_JOB_TO_FINISH,
+    )
 
 
 async def _handle_still_working(pro):
@@ -759,101 +767,258 @@ async def _handle_final_price_reply(chat_id, text, pro) -> str:
     return Messages.Pro.FINAL_PRICE_RECORDED.format(price=price)
 
 
-async def _handle_active_jobs(pro):
-    cursor = leads_collection.find(
-        {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
-        sort=[("created_at", -1)],
-    )
-    leads = await cursor.to_list(length=20)
+# --- PRO-147: chronological, paged job lists ----------------------------
+#
+# The three lists (עבודות / פרטים / the ביטול prompt) and the סיימתי prompt
+# used to be sorted by `created_at` and cut silently at 10–20 rows, so a job
+# approved two days ago could sit below one booked for next week — or fall
+# off the list entirely, with no hint it existed. They now share one fetch
+# (chronological, unscheduled last) and one renderer (`agenda_service`), and
+# a list longer than PRO_LIST_PAGE_SIZE says so and continues on *עוד*.
 
+
+async def _fetch_jobs_chronological(pro, statuses):
+    """This pro's leads in the given statuses, ordered by when the work
+    happens. Returns ``(leads, total)`` — ``total`` is the true collection
+    count, so the paging footer never lies even if the fetch cap
+    (``DB_QUERY_LIMIT``) is somehow exceeded."""
+    query = {"pro_id": pro["_id"], "status": {"$in": list(statuses)}}
+    total = await leads_collection.count_documents(query)
+    if not total:
+        return [], 0
+    # Newest-created first *before* the stable chronological sort, so the
+    # unscheduled ("בהקדם") group keeps the order the old lists had.
+    leads = await leads_collection.find(query, sort=[("created_at", -1)]).to_list(
+        length=WorkerConstants.DB_QUERY_LIMIT
+    )
+    return agenda_service.sort_by_appointment(leads), total
+
+
+async def _remember_page(chat_id, kind, next_offset):
+    """Store (or drop) the continuation point of a paged PRO_MODE list.
+    Merges into the existing metadata so nothing else parked there is lost.
+
+    Note: this writes ``state_meta:{chat_id}`` even when no ``state:`` key
+    exists. Nothing in dispatch treats a non-empty metadata dict as a
+    signal, so a pointer without a state is inert until the next *עוד*."""
+    meta = await StateManager.get_metadata(chat_id) or {}
+    if next_offset is None:
+        if _PAGE_META_KEY not in meta:
+            return
+        meta.pop(_PAGE_META_KEY, None)
+    else:
+        meta[_PAGE_META_KEY] = {"kind": kind, "offset": next_offset}
+    await StateManager.set_metadata(chat_id, meta)
+
+
+def _active_job_row(num, lead, time_str):
+    status_label = STATUS_LABELS.get(lead.get("status"), lead.get("status", "?"))
+    issue = lead.get("issue_type", Messages.Fallbacks.UNKNOWN)
+    # `or` covers both key-missing and key-present-with-None (nullable full_address)
+    address = lead.get("full_address") or Messages.Fallbacks.UNKNOWN
+    return Messages.Pro.ACTIVE_JOB_ROW.format(
+        num=num, status=status_label, issue=issue, address=address, time=time_str
+    )
+
+
+def _details_row(num, lead, time_str):
+    raw_phone = lead.get("customer_phone") or strip_suffix(lead.get("chat_id", ""))
+    # Local display (0XX) and international for wa.me link (972XX)
+    customer_phone = to_local_phone(raw_phone)
+    city = lead.get("city") or ""
+    street = lead.get("street") or ""
+    issue = lead.get("issue_type") or Messages.Fallbacks.UNKNOWN
+    address_query = (
+        f"{street} {city}".strip()
+        if (street or city)
+        else (lead.get("full_address") or "ישראל")
+    )
+    return Messages.Pro.DETAILS_ROW.format(
+        num=num,
+        customer_phone=customer_phone,
+        customer_phone_intl=raw_phone,
+        city=city or Messages.Fallbacks.UNKNOWN,
+        issue=issue,
+        appointment_time=time_str,
+        address_encoded=urllib.parse.quote(address_query),
+    )
+
+
+def _select_row(num, lead, time_str):
+    name = lead.get("customer_name") or Messages.Fallbacks.CUSTOMER_NAME
+    city = lead.get("city") or Messages.Fallbacks.UNKNOWN
+    issue = lead.get("issue_type") or Messages.Fallbacks.ISSUE_UNKNOWN
+    return Messages.Pro.JOB_SELECT_ROW.format(
+        num=num, name=name, city=city, issue=issue, time=time_str
+    )
+
+
+async def _handle_active_jobs(pro, chat_id, offset=0):
+    leads, total = await _fetch_jobs_chronological(
+        pro, [LeadStatus.NEW, LeadStatus.BOOKED]
+    )
     if not leads:
         return Messages.Pro.NO_ACTIVE_JOBS_LIST
+    if offset and offset >= len(leads):
+        await _remember_page(chat_id, "active", None)
+        return Messages.Pro.NO_MORE_ROWS
 
     lines = [Messages.Pro.ACTIVE_JOBS_HEADER]
-    for i, lead in enumerate(leads, 1):
-        status_label = STATUS_LABELS.get(lead.get("status"), lead.get("status", "?"))
-        issue = lead.get("issue_type", Messages.Fallbacks.UNKNOWN)
-        # `or` covers both key-missing and key-present-with-None (nullable full_address)
-        address = lead.get("full_address") or Messages.Fallbacks.UNKNOWN
-        time = lead.get("appointment_time", Messages.Fallbacks.TIME_UNSET)
-        lines.append(
-            Messages.Pro.ACTIVE_JOB_ROW.format(
-                num=i, status=status_label, issue=issue, address=address, time=time
-            )
-        )
-
-    lines.append(Messages.Pro.ACTIVE_JOBS_TOTAL.format(count=len(leads)))
+    page, next_offset = agenda_service.render_page(
+        leads,
+        _active_job_row,
+        now_il=agenda_service.now_israel(),
+        offset=offset,
+        total=total,
+    )
+    lines.extend(page)
+    if next_offset is None and not offset:
+        # Single page: the paged footer is absent, so state the total here.
+        lines.append(Messages.Pro.ACTIVE_JOBS_TOTAL.format(count=total))
+    # Always recorded (or dropped) — a single-page list must clear the
+    # pointer a previous multi-page list of another kind left behind.
+    await _remember_page(chat_id, "active", next_offset)
     return "\n".join(lines)
 
 
-async def _handle_details(pro):
-    cursor = leads_collection.find(
-        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED}, sort=[("created_at", -1)]
-    )
-    leads = await cursor.to_list(length=20)
-
+async def _handle_details(pro, chat_id, offset=0):
+    leads, total = await _fetch_jobs_chronological(pro, [LeadStatus.BOOKED])
     if not leads:
         return Messages.Pro.NO_ACTIVE_JOBS_LIST
+    if offset and offset >= len(leads):
+        await _remember_page(chat_id, "details", None)
+        return Messages.Pro.NO_MORE_ROWS
 
     lines = [Messages.Pro.DETAILS_HEADER]
-    for i, lead in enumerate(leads, 1):
-        raw_phone = lead.get("customer_phone") or strip_suffix(lead.get("chat_id", ""))
-        # Local display (0XX) and international for wa.me link (972XX)
-        customer_phone = to_local_phone(raw_phone)
-        customer_phone_intl = raw_phone
-        city = lead.get("city") or ""
-        street = lead.get("street") or ""
-        issue = lead.get("issue_type") or Messages.Fallbacks.UNKNOWN
-        appt = lead.get("appointment_time") or Messages.Fallbacks.TIME_UNSET
-        address_query = (
-            f"{street} {city}".strip()
-            if (street or city)
-            else (lead.get("full_address") or "ישראל")
-        )
-        address_encoded = urllib.parse.quote(address_query)
-        lines.append(
-            Messages.Pro.DETAILS_ROW.format(
-                num=i,
-                customer_phone=customer_phone,
-                customer_phone_intl=customer_phone_intl,
-                city=city or Messages.Fallbacks.UNKNOWN,
-                issue=issue,
-                appointment_time=appt,
-                address_encoded=address_encoded,
-            )
-        )
-
+    page, next_offset = agenda_service.render_page(
+        leads,
+        _details_row,
+        now_il=agenda_service.now_israel(),
+        offset=offset,
+        total=total,
+    )
+    lines.extend(page)
+    await _remember_page(chat_id, "details", next_offset)
     return "\n".join(lines)
+
+
+_PAGED_LIST_HANDLERS = {
+    "active": _handle_active_jobs,
+    "details": _handle_details,
+}
+
+
+async def _handle_more(pro, chat_id):
+    """*עוד* outside a selection prompt: continue the last paged PRO_MODE list."""
+    meta = await StateManager.get_metadata(chat_id) or {}
+    ctx = meta.get(_PAGE_META_KEY) or {}
+    handler = _PAGED_LIST_HANDLERS.get(ctx.get("kind"))
+    offset = ctx.get("offset")
+    if handler is None or not isinstance(offset, int) or offset <= 0:
+        return Messages.Pro.NO_MORE_ROWS
+    return await handler(pro, chat_id, offset=offset)
+
+
+async def _prompt_job_selection(
+    chat_id, leads, total, *, state, context_key, template, offset=0, mapping=None
+):
+    """Open (or page through) a numbered pick-one prompt over *every* lead in
+    ``leads``. The number→lead mapping covers the whole list, so a pro who
+    already knows the job is number 12 can answer before page two is shown.
+
+    ``mapping`` is built here only when the prompt opens; a continuation page
+    passes the stored one back in, so numbers are never reassigned while the
+    prompt is open."""
+    if mapping is None:
+        mapping = {str(i): str(lead["_id"]) for i, lead in enumerate(leads, 1)}
+    page, next_offset = agenda_service.render_page(
+        leads,
+        _select_row,
+        now_il=agenda_service.now_israel(),
+        offset=offset,
+        total=total,
+    )
+
+    await StateManager.set_state(chat_id, state)
+    meta = {context_key: mapping}
+    if next_offset is not None:
+        meta[_PAGE_META_KEY] = {"kind": context_key, "offset": next_offset}
+    await StateManager.set_metadata(chat_id, meta)
+
+    return template.format(jobs_list="\n".join(page))
+
+
+async def _selection_next_page(chat_id, pro, meta, mapping, context_key, state):
+    """*עוד* inside a selection prompt: render the next page of the same list
+    without leaving the state. The list is rebuilt from the stored mapping in
+    its stored order and the mapping is passed back unchanged, so the numbers
+    the pro already read stay valid. If a job has left this pro since the
+    prompt opened (reassigned by a no-show report, the Healer, or the admin),
+    page-one numbers would be stale — the prompt is dropped with a message
+    rather than renumbered under the pro's feet, because the reply on the
+    other end is a cancel."""
+    ctx = meta.get(_PAGE_META_KEY) or {}
+    offset = ctx.get("offset")
+    if not mapping or not isinstance(offset, int) or offset <= 0:
+        return Messages.Pro.SELECTION_NO_MORE_ROWS
+
+    ordered_ids = [
+        ObjectId(v) for _, v in sorted(mapping.items(), key=lambda kv: int(kv[0]))
+    ]
+    docs = await leads_collection.find(
+        {"_id": {"$in": ordered_ids}, "pro_id": pro["_id"]}
+    ).to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+    by_id = {doc["_id"]: doc for doc in docs}
+    if len(by_id) != len(ordered_ids):
+        await StateManager.clear_state(chat_id)
+        logger.info(
+            f"Pro {pro['_id']} paged a selection prompt after a listed job "
+            "moved away — dropping the prompt instead of renumbering it."
+        )
+        return Messages.Pro.SELECTION_LIST_CHANGED
+    leads = [by_id[i] for i in ordered_ids]
+    if offset >= len(leads):
+        # Stale pointer: forget it so the next *עוד* answers the same way
+        # without a fetch, and keep the prompt open.
+        meta.pop(_PAGE_META_KEY, None)
+        await StateManager.set_metadata(chat_id, meta)
+        return Messages.Pro.SELECTION_NO_MORE_ROWS
+
+    template = (
+        Messages.Pro.SELECT_JOB_TO_CANCEL
+        if context_key == "cancelling_jobs_context"
+        else Messages.Pro.SELECT_JOB_TO_FINISH
+    )
+    return await _prompt_job_selection(
+        chat_id,
+        leads,
+        len(leads),
+        state=state,
+        context_key=context_key,
+        template=template,
+        offset=offset,
+        mapping=mapping,
+    )
 
 
 async def _handle_cancel(pro, whatsapp, chat_id):
-    cursor = leads_collection.find(
-        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED}
-    ).sort("created_at", -1)
-    leads = await cursor.to_list(length=10)
+    leads, total = await _fetch_jobs_chronological(pro, [LeadStatus.BOOKED])
 
     if not leads:
         return Messages.Pro.NO_ACTIVE_JOBS_LIST
 
-    if len(leads) == 1:
+    if total == 1:
         await _execute_cancel(leads[0], pro, whatsapp)
         return Messages.Pro.CANCEL_SUCCESS
 
-    lines = []
-    mapping = {}
-    for i, lead in enumerate(leads, 1):
-        name = lead.get("customer_name") or Messages.Fallbacks.CUSTOMER_NAME
-        city = lead.get("city") or Messages.Fallbacks.UNKNOWN
-        issue = lead.get("issue_type") or Messages.Fallbacks.ISSUE_UNKNOWN
-        lines.append(
-            Messages.Pro.JOB_SELECT_ROW.format(num=i, name=name, city=city, issue=issue)
-        )
-        mapping[str(i)] = str(lead["_id"])
-
-    await StateManager.set_state(chat_id, UserStates.PRO_SELECTING_JOB_TO_CANCEL)
-    await StateManager.set_metadata(chat_id, {"cancelling_jobs_context": mapping})
-
-    return Messages.Pro.SELECT_JOB_TO_CANCEL.format(jobs_list="\n".join(lines))
+    return await _prompt_job_selection(
+        chat_id,
+        leads,
+        total,
+        state=UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+        context_key="cancelling_jobs_context",
+        template=Messages.Pro.SELECT_JOB_TO_CANCEL,
+    )
 
 
 async def _execute_cancel(lead, pro, whatsapp):

@@ -641,9 +641,59 @@ class Messages:
         NO_PAUSED_CONVERSATION = "אין שיחה מושהית כרגע."
         BOT_RESUMED = "✅ הבוט חזר לפעולה."
         BOT_ALREADY_ACTIVE = "הבוט כבר פעיל."
-        JOB_SELECT_ROW = "{num}. {name} — {city} ({issue})"
+        # PRO-147 §6: the appointment is numeric-heavy, so it closes its own
+        # line instead of joining the Hebrew row.
+        JOB_SELECT_ROW = "{num}. {name} — {city} ({issue})\n*מועד:* {time}"
         ACTIVE_JOBS_HEADER = "🔄 *עבודות פעילות*\n"
         ACTIVE_JOBS_TOTAL = '\n*סה"כ:* {count} עבודות'
+
+        # --- PRO-147: chronological job lists ------------------------------
+        # Every pro-facing job list (עבודות, פרטים, the סיימתי / ביטול prompts)
+        # is ordered by when the work happens and grouped under one header per
+        # day. Jobs with no resolved `appointment_datetime` (open-ended
+        # "בהקדם" requests) sit last under their own header, so an ASAP job
+        # can never hide a dated one. §4: the message headline already carries
+        # the one emoji, so the day headers are bold only. §6: the date is
+        # numeric, so it is the last thing on its line.
+        DAY_HEADER_TODAY = "*היום*"
+        DAY_HEADER_TOMORROW = "*מחר*"
+        DAY_HEADER_DATE = "*{weekday} {date}*"
+        DAY_HEADER_UNSCHEDULED = "*ללא מועד קבוע*"
+        # Absolute Israel-time rendering of `appointment_datetime` inside a
+        # row. The raw `appointment_time` string ("מחר בבוקר") is shown only
+        # when no datetime was resolved — it stops being true a day later.
+        TIME_TODAY = "היום {time}"
+        TIME_TOMORROW = "מחר {time}"
+        TIME_DATE = "{weekday} {date} {time}"
+        # Python weekday() order: Monday first, Sunday last.
+        WEEKDAY_NAMES = ("שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון")
+        # Pagination. A list is never cut silently: when more rows exist the
+        # footer says how many are shown out of how many and how to continue.
+        # §6: each numeric value closes its own labelled line.
+        LIST_PAGE_MORE = (
+            '\n*סה"כ עבודות:* {total}\n'
+            "*מוצגות:* {first}–{last}\n"
+            "להמשך הרשימה — *עוד*"
+        )
+        LIST_PAGE_END = '\n*סה"כ עבודות:* {total}\n*מוצגות:* {first}–{last}'
+        NO_MORE_ROWS = (
+            "אין המשך לרשימה.\n"
+            "*עבודות* — רשימה מעודכנת\n"
+            "*פרטים* — פרטי העבודות המאושרות"
+        )
+        # Inside a סיימתי / ביטול prompt the pro is still choosing, so the
+        # reply keeps the prompt open instead of pointing at other commands.
+        SELECTION_NO_MORE_ROWS = (
+            "זה סוף הרשימה.\nאפשר להשיב במספר העבודה, או *ביטול* ליציאה."
+        )
+        # A listed job left this pro while the prompt was open, so the numbers
+        # already shown no longer mean what they meant. The prompt is dropped
+        # rather than renumbered — a shifted number here cancels the wrong job.
+        SELECTION_LIST_CHANGED = (
+            "הרשימה השתנתה מאז שהוצגה, אז ביטלתי את הבחירה.\n"
+            "*סיימתי* — רשימה מעודכנת לסיום עבודה\n"
+            "*ביטול* — רשימה מעודכנת לביטול עבודה"
+        )
         HISTORY_HEADER = "📋 *10 העבודות האחרונות שהושלמו*\n"
         RATING_NONE = "אין עדיין"
 
@@ -907,6 +957,12 @@ class Messages:
         SEARCH_COMMANDS = ["מצא", "חפש", "search", "find"]
         DETAILS_COMMANDS = ["פרטים", "details"]
         CANCEL_BOOKED_COMMANDS = ["ביטול"]
+        # PRO-147: next page of a paged job list (עבודות / פרטים / the סיימתי
+        # and ביטול selection prompts). Matched exactly, like every command;
+        # inside a selection prompt it is checked *before* the PRO-186
+        # abandon-on-command rule, so asking for the next page never drops
+        # the prompt.
+        MORE_COMMANDS = ["עוד", "more", "הבא"]
         SUMMARY_COMMANDS = ["סיכום", "סטטיסטיקה"]
         # Explicit "I need service myself" switch for a registered pro.
         # Deterministic — never routed through the AI intent detector.
