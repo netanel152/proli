@@ -9,7 +9,14 @@ from admin_panel.core.utils import (
     generate_system_prompt,
 )
 from admin_panel.core.auth import log_audit, get_current_role
+from admin_panel.core.labels import PROFESSION_TYPES, profession_label
+from admin_panel.ui.components import render_flash, set_flash
 from admin_panel.core.rbac import can_edit, has_permission
+from app.services.geocoding_service import (
+    ServiceAreaResolution,
+    parse_service_areas,
+    resolve_service_areas_sync,
+)
 import re
 
 # Constants for Prompt Markers
@@ -25,6 +32,9 @@ def get_professionals():
 def view_professionals(T):
     st.title(T["pros_title"])
     st.caption(T.get("page_desc_professionals", "Manage the list of professionals."))
+    # Confirmation of the previous run's create/edit/delete/approve/reject
+    # (each ends in st.rerun(), which would otherwise discard it).
+    render_flash("pro_flash")
 
     if "pro_view_mode" not in st.session_state:
         st.session_state.pro_view_mode = "list"
@@ -105,13 +115,18 @@ def render_pro_list(T):
 
             with c_info:
                 # Status + Name + Verified
-                status_dot = "🟢" if is_active else "🔴"
-                verified_badge = " ✅" if p.get("is_verified") else ""
-                st.markdown(f"**{status_dot} {p['business_name']}{verified_badge}**")
+                # Icon + text, never colour alone (PRO-61).
+                status_txt = (
+                    f"🟢 {T['status_active']}"
+                    if is_active
+                    else f"🔴 {T['status_inactive']}"
+                )
+                verified_badge = (
+                    f" · ✅ {T['verified']}" if p.get("is_verified") else ""
+                )
+                st.markdown(f"**{p['business_name']}** · {status_txt}{verified_badge}")
 
-                pro_type = T.get(
-                    f"type_{p.get('type', 'general')}", p.get("type", "general")
-                ).capitalize()
+                pro_type = profession_label(T, p.get("type", "general"))
                 st.caption(f"{pro_type} · {p.get('phone_number', '')}")
 
                 areas = ", ".join(p.get("service_areas", []))
@@ -162,6 +177,12 @@ def render_pro_list(T):
                     log_audit(
                         "delete_pro", {"pro_id": pro_id, "name": p.get("business_name")}
                     )
+                    set_flash(
+                        "pro_flash",
+                        T["pro_deleted"].replace(
+                            "{name}", str(p.get("business_name") or T["unnamed_pro"])
+                        ),
+                    )
                     del st.session_state[f"confirm_del_{pro_id}"]
                     st.cache_data.clear()
                     st.rerun()
@@ -181,7 +202,8 @@ def render_pro_form(T, pro_data=None):
     )
     st.header(header)
 
-    if st.button(f"← {T.get('back_to_list', 'Back to list')}"):
+    # The arrow lives in the translation: → is "back" in RTL, ← in LTR.
+    if st.button(T["back_to_list"]):
         st.session_state.pro_view_mode = "list"
         st.session_state.pro_to_edit = None
         st.rerun()
@@ -204,15 +226,9 @@ def render_pro_form(T, pro_data=None):
                 value=pro_data.get("license_number", "") if is_edit else "",
             )
         with c2:
-            ptype_options = [
-                "plumber",
-                "electrician",
-                "handyman",
-                "locksmith",
-                "painter",
-                "cleaner",
-                "general",
-            ]
+            # PRO-61: the onboarding catalog's codes, so the panel cannot
+            # offer a profession the bot cannot name (or vice versa).
+            ptype_options = list(PROFESSION_TYPES)
             default_type = pro_data.get("type", "general") if is_edit else "general"
             ptype_index = (
                 ptype_options.index(default_type)
@@ -223,7 +239,7 @@ def render_pro_form(T, pro_data=None):
                 T["new_type"],
                 ptype_options,
                 index=ptype_index,
-                format_func=lambda x: T.get(f"type_{x}", x.capitalize()),
+                format_func=lambda x: profession_label(T, x),
             )
 
             c_active, c_verified = st.columns(2)
@@ -350,7 +366,7 @@ def render_pro_form(T, pro_data=None):
                         {"_id": ObjectId(pro_id)}, {"$set": pro_payload}
                     )
                     log_audit("edit_pro", {"pro_id": pro_id, "name": name})
-                    st.success(T["success_update"])
+                    set_flash("pro_flash", T["success_update"])
                 else:
                     pro_payload.update(
                         {
@@ -365,7 +381,7 @@ def render_pro_form(T, pro_data=None):
                     log_audit(
                         "create_pro", {"pro_id": str(res.inserted_id), "name": name}
                     )
-                    st.success(T["success_create"])
+                    set_flash("pro_flash", T["success_create"])
 
                 st.session_state.pro_view_mode = "list"
                 st.session_state.pro_to_edit = None
@@ -374,7 +390,15 @@ def render_pro_form(T, pro_data=None):
                 st.error(T["error_fill_fields"])
 
 
+# Session-state key for a message that must survive the `st.rerun()` an
+# approval ends with — anything rendered before the rerun is discarded.
+def _geo_check_key(pro_id: str) -> str:
+    return f"geo_check_{pro_id}"
+
+
 def render_pending_approvals(T):
+    # No flash render here: `view_professionals` already renders "pro_flash"
+    # at the top of the page, and this section is inside it.
     pending = list(
         users_collection.find({"pending_approval": True}).sort("created_at", -1)
     )
@@ -385,15 +409,13 @@ def render_pending_approvals(T):
 
     for p in pending:
         pro_id = str(p["_id"])
-        pro_type_label = T.get(
-            f"type_{p.get('type', 'general')}", p.get("type", "general")
-        ).capitalize()
+        pro_type_label = profession_label(T, p.get("type", "general"))
 
         with st.container(border=True):
             c_info, c_actions = st.columns([3, 1])
 
             with c_info:
-                st.markdown(f"**🟡 {p.get('business_name', 'Unknown')}**")
+                st.markdown(f"**🟡 {p.get('business_name') or T['unnamed_pro']}**")
                 st.caption(f"{pro_type_label} · {p.get('phone_number', '')}")
                 st.markdown(
                     f"<span style='font-size:0.85rem;'>{T.get('new_areas', 'Areas')}: {', '.join(p.get('service_areas', []))}</span>",
@@ -404,8 +426,9 @@ def render_pending_approvals(T):
                         f"{T.get('new_prices', 'Prices')}: {p['prices_for_prompt']}"
                     )
                 if p.get("created_at"):
+                    # LRM pins the date-then-time order under RTL bidi.
                     st.caption(
-                        f"{T.get('registered_at', 'Registered')}: {p['created_at'].strftime('%Y-%m-%d %H:%M')}"
+                        f"{T.get('registered_at', 'Registered')}: \u200e{p['created_at'].strftime('%Y-%m-%d %H:%M')}"
                     )
 
             with c_actions:
@@ -417,35 +440,9 @@ def render_pending_approvals(T):
                         use_container_width=True,
                     ):
                         try:
-                            areas_str = ", ".join(p.get("service_areas", []))
-                            prompt, keywords = generate_system_prompt(
-                                p.get("business_name", ""),
-                                p.get("type", "general"),
-                                areas_str,
-                                p.get("prices_for_prompt", ""),
-                            )
-                            users_collection.update_one(
-                                {"_id": p["_id"]},
-                                {
-                                    "$set": {
-                                        "is_active": True,
-                                        "pending_approval": False,
-                                        "system_prompt": prompt,
-                                        "keywords": keywords,
-                                    }
-                                },
-                            )
-                            create_initial_schedule(p["_id"])
-                            log_audit(
-                                "approve_pro",
-                                {"pro_id": pro_id, "name": p.get("business_name")},
-                            )
-                            _notify_pro_approved(p.get("phone_number"))
-                            st.success(f"{p.get('business_name')} approved!")
-                            st.cache_data.clear()
-                            st.rerun()
+                            _check_then_approve(p, T)
                         except Exception as e:
-                            st.error(f"Error approving: {e}")
+                            st.error(T["error_approve_pro"].replace("{error}", str(e)))
 
                     if st.button(
                         T.get("reject_btn", "Reject"),
@@ -466,12 +463,161 @@ def render_pending_approvals(T):
                         "reject_pro", {"pro_id": pro_id, "name": p.get("business_name")}
                     )
                     _notify_pro_rejected(p.get("phone_number"))
+                    set_flash(
+                        "pro_flash",
+                        T["pro_rejected"].replace(
+                            "{name}", str(p.get("business_name") or T["unnamed_pro"])
+                        ),
+                    )
                     del st.session_state[f"confirm_reject_{pro_id}"]
+                    st.session_state.pop(_geo_check_key(pro_id), None)
                     st.cache_data.clear()
                     st.rerun()
                 if c_no.button(T.get("confirm_no", "No"), key=f"no_reject_{pro_id}"):
                     del st.session_state[f"confirm_reject_{pro_id}"]
                     st.rerun()
+
+            check = st.session_state.get(_geo_check_key(pro_id))
+            if check is not None:
+                _render_service_area_correction(p, T, check)
+
+
+def _check_then_approve(p: dict, T) -> None:
+    """The approve click. Geocode every service area first: a pro is matched
+    through `$geoNear` on `location`, so one nobody can place on the map is
+    approved into silence — the 2026-04-18 failure class.
+
+    * every area resolves → approve, write `location`.
+    * geocoder down for some (`unavailable`) and nothing definitively wrong →
+      approve anyway (a Google outage must not block the operator), write
+      what resolved, flag the pro for a re-check.
+    * any definitive miss → stop and show the correction box. "Approve
+      anyway" is offered there only when at least one area did resolve.
+    """
+    pro_id = str(p["_id"])
+    resolution = resolve_service_areas_sync(p.get("service_areas", []))
+    if resolution.unresolved or resolution.blocks_approval:
+        st.session_state[_geo_check_key(pro_id)] = resolution
+        return
+    _approve_pending_pro(p, T, resolution)
+
+
+def _approve_pending_pro(p: dict, T, resolution: ServiceAreaResolution) -> None:
+    pro_id = str(p["_id"])
+    name = p.get("business_name", "")
+    areas_str = ", ".join(p.get("service_areas", []))
+    prompt, keywords = generate_system_prompt(
+        name,
+        p.get("type", "general"),
+        areas_str,
+        p.get("prices_for_prompt", ""),
+    )
+    update = resolution.mongo_update(
+        now=datetime.now(timezone.utc), include_location=True
+    )
+    update["$set"].update(
+        {
+            "is_active": True,
+            "pending_approval": False,
+            "system_prompt": prompt,
+            "keywords": keywords,
+        }
+    )
+    users_collection.update_one({"_id": p["_id"]}, update)
+    create_initial_schedule(p["_id"])
+    log_audit(
+        "approve_pro",
+        {
+            "pro_id": pro_id,
+            "name": name,
+            "service_areas_unresolved": list(resolution.unresolved),
+            "service_areas_geocode_pending": resolution.needs_recheck,
+        },
+    )
+    _notify_pro_approved(p.get("phone_number"))
+
+    shown_name = name or T["unnamed_pro"]
+    if resolution.unresolved:
+        set_flash(
+            "pro_flash",
+            T["geo_approved_flagged"].format(
+                name=shown_name, areas=", ".join(resolution.unresolved)
+            ),
+            "warning",
+        )
+    elif resolution.needs_recheck:
+        set_flash(
+            "pro_flash", T["geo_approved_recheck"].format(name=shown_name), "warning"
+        )
+    else:
+        set_flash("pro_flash", T["approved_ok"].format(name=shown_name))
+    st.session_state.pop(_geo_check_key(pro_id), None)
+    st.cache_data.clear()
+    st.rerun()
+
+
+def _render_service_area_correction(
+    p: dict, T, resolution: ServiceAreaResolution
+) -> None:
+    """The warning + fix-it box shown under a pending pro whose areas did not
+    all resolve. Text-only, like every other admin mutation here."""
+    pro_id = str(p["_id"])
+    key = _geo_check_key(pro_id)
+
+    if resolution.unresolved:
+        st.warning(
+            T["geo_unresolved_warning"].format(areas=", ".join(resolution.unresolved))
+        )
+    if resolution.unavailable:
+        st.warning(
+            T["geo_unavailable_warning"].format(areas=", ".join(resolution.unavailable))
+        )
+    if resolution.blocks_approval and not resolution.unresolved:
+        st.warning(T["geo_no_areas"])
+    if resolution.resolved:
+        st.caption(
+            T["geo_resolved_caption"].format(
+                areas=", ".join(name for name, _ in resolution.resolved)
+            )
+        )
+
+    edited = st.text_input(
+        T["geo_fix_areas_label"],
+        value=", ".join(p.get("service_areas", [])),
+        key=f"geo_fix_{pro_id}",
+        help=T["geo_fix_areas_help"],
+    )
+    c_save, c_anyway, c_cancel = st.columns([2, 2, 1])
+
+    if c_save.button(T["geo_recheck_btn"], key=f"geo_recheck_{pro_id}"):
+        areas = parse_service_areas(edited)
+        users_collection.update_one(
+            {"_id": p["_id"]}, {"$set": {"service_areas": areas}}
+        )
+        log_audit(
+            "edit_pro_service_areas",
+            {"pro_id": pro_id, "name": p.get("business_name"), "areas": areas},
+        )
+        p["service_areas"] = areas
+        del st.session_state[key]
+        try:
+            _check_then_approve(p, T)
+        except Exception as e:
+            st.error(f"Error approving: {e}")
+            return
+        # Not approved — the re-check stashed a fresh verdict; redraw it.
+        st.rerun()
+
+    # Offered only when something resolved: approving with no placeable area
+    # would write no `location` — the silent pro this check exists to prevent.
+    if resolution.resolved and c_anyway.button(
+        T["geo_approve_anyway_btn"], key=f"geo_anyway_{pro_id}"
+    ):
+        _approve_pending_pro(p, T, resolution)
+
+    if c_cancel.button(T["cancel_btn"], key=f"geo_cancel_{pro_id}"):
+        del st.session_state[key]
+        st.rerun()
 
 
 def _notify_pro_approved(phone_number: str):

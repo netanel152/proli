@@ -619,6 +619,38 @@ def test_the_sync_bridge_reuses_one_event_loop(monkeypatch):
     assert not seen[0].is_closed()
 
 
+def test_geocoding_and_whatsapp_sync_calls_share_the_same_bridge_loop(monkeypatch):
+    """PRO-19's pro-approval geocode check reuses app.core.sync_bridge rather than
+    starting its own loop — a second loop would hand the cached Redis client
+    (app.core.redis_client's process-global) to a loop it was never created on.
+    This is the reason the loop was extracted out of app.providers.whatsapp.sync
+    in the first place, so it must be exercised across both callers, not just one."""
+    from app.providers.whatsapp import sync as sync_module
+    from app.services import geocoding_service as geo
+
+    seen = []
+
+    async def _capture_send(chat_id, text):
+        seen.append(asyncio.get_running_loop())
+        return {"id": "1"}
+
+    async def _capture_resolve(names):
+        seen.append(asyncio.get_running_loop())
+        return geo.ServiceAreaResolution()
+
+    facade = MagicMock()
+    facade.send_message = _capture_send
+    monkeypatch.setattr(sync_module, "get_whatsapp", lambda: facade)
+    monkeypatch.setattr(geo, "resolve_service_areas", _capture_resolve)
+
+    assert sync_module.send_text_sync("972500000001@c.us", "hi") is True
+    geo.resolve_service_areas_sync(["Tel Aviv"])
+
+    assert len(seen) == 2
+    assert seen[0] is seen[1], "geocoding started a second bridge loop"
+    assert not seen[0].is_closed()
+
+
 def test_the_sync_bridge_reports_a_suppressed_send_as_failure(monkeypatch):
     """The facade returns None when the breaker suppresses a send. Reporting that
     as success gives the operator a 'Check sent!' toast for a message nobody got."""

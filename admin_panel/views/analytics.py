@@ -7,10 +7,11 @@ import pandas as pd
 from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient
 from app.core.config import settings
-from app.core.constants import LeadStatus, WorkerConstants
+from app.core.constants import AdminDefaults, LeadStatus, WorkerConstants
 from app.core.database import DB_NAME
 from app.core.logger import logger
 from admin_panel.core import analytics_queries as aq
+from admin_panel.core.labels import lead_status_label, profession_label
 import certifi
 
 _mongo_uri = settings.MONGO_URI.get_secret_value()  # PRO-94: SecretStr
@@ -86,10 +87,13 @@ def view_analytics(T):
     )
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric(f"{T.get('metric_total', 'Leads')} ({days}d)", period_leads)
+    # PRO-61: "(30d)" was English on every panel; `days` is the localized unit.
+    period_suffix = f"({days} {T['days']})"
+    c1.metric(f"{T.get('metric_total', 'Leads')} {period_suffix}", period_leads)
     c2.metric(T.get("analytics_today", "Today"), leads_today)
     c3.metric(
-        f"{T.get('analytics_completed', 'Completed')} ({days}d)", period_completed
+        f"{T.get('analytics_completed', 'Completed')} {period_suffix}",
+        period_completed,
     )
     c4.metric(T.get("conversion_rate", "Conv. Rate"), f"{conv_rate}%")
     c5.metric(T.get("metric_pros", "Active Pros"), active_pros)
@@ -104,7 +108,7 @@ def view_analytics(T):
             T.get("tab_pro_perf", "Pro Performance"),
             T.get("tab_by_type", "By Service Type"),
             T.get("tab_revenue", "Revenue (GMV)"),
-            "FinOps (AI Costs)",
+            T["tab_finops"],
         ]
     )
 
@@ -122,13 +126,16 @@ def view_analytics(T):
                 "closed",
                 "cancelled",
             ]
+            # PRO-61: axis titles and category names are what the chart shows,
+            # so both are localized here rather than left as column names.
+            x_col, y_col = T["chart_status"], T["chart_count"]
             funnel_data = pd.DataFrame(
                 [
-                    {"Status": s.capitalize(), "Count": funnel.get(s, 0)}
+                    {x_col: lead_status_label(T, s), y_col: funnel.get(s, 0)}
                     for s in funnel_order
                 ]
             )
-            st.bar_chart(funnel_data, x="Status", y="Count", color="#2563EB")
+            st.bar_chart(funnel_data, x=x_col, y=y_col, color="#2563EB")
 
             # Conversion metrics
             total = sum(funnel.values())
@@ -196,8 +203,9 @@ def view_analytics(T):
 
         volume = _fetch(T, aq.get_daily_volume, days)
         if volume:
-            df = pd.DataFrame(volume)
-            st.line_chart(df, x="date", y="count", color="#2563EB")
+            x_col, y_col = T["chart_date"], T["chart_count"]
+            df = pd.DataFrame(volume).rename(columns={"date": x_col, "count": y_col})
+            st.line_chart(df, x=x_col, y=y_col, color="#2563EB")
         else:
             st.info(T.get("no_data", "No data available for this period."))
 
@@ -219,6 +227,8 @@ def view_analytics(T):
         perf = _fetch(T, aq.get_pro_performance, days)
         if perf:
             df = pd.DataFrame(perf)
+            # The query's English sentinel for a pro with no business_name.
+            df["name"] = df["name"].replace(AdminDefaults.UNKNOWN_PRO, T["unnamed_pro"])
             st.dataframe(
                 df,
                 column_config={
@@ -283,8 +293,19 @@ def view_analytics(T):
 
         types = _fetch(T, aq.get_leads_by_type, days)
         if types:
-            df = pd.DataFrame(types)
-            st.bar_chart(df, x="type", y="count", color="#2563EB")
+            x_col, y_col = T["chart_type"], T["chart_count"]
+            df = pd.DataFrame(types).rename(columns={"type": x_col, "count": y_col})
+            # The query emits profession codes plus "unassigned" for a pro
+            # document with no `type` (it already filters out leads with no
+            # pro); both are shown in the operator's language.
+            df[x_col] = df[x_col].map(
+                lambda t: (
+                    T["chart_type_unknown"]
+                    if t == "unassigned"
+                    else profession_label(T, t)
+                )
+            )
+            st.bar_chart(df, x=x_col, y=y_col, color="#2563EB")
         else:
             st.info(T.get("no_data", "No data available for this period."))
 
@@ -301,9 +322,12 @@ def view_analytics(T):
         rev = _fetch(T, aq.get_revenue_stats, days)
         if rev and rev["priced_jobs"] > 0:
             r1, r2, r3, r4 = st.columns(4)
-            r1.metric(f"{T.get('revenue_gmv', 'GMV')} ({days}d)", f"₪{rev['gmv']:,.0f}")
+            r1.metric(
+                f"{T.get('revenue_gmv', 'GMV')} {period_suffix}",
+                f"₪{rev['gmv']:,.0f}",
+            )
             r2.metric(
-                f"{T.get('revenue_commission', 'Commission')} ({days}d)",
+                f"{T.get('revenue_commission', 'Commission')} {period_suffix}",
                 f"₪{rev['commission']:,.2f}",
             )
             r3.metric(T.get("revenue_priced_jobs", "Priced jobs"), rev["priced_jobs"])
@@ -325,10 +349,8 @@ def view_analytics(T):
             )
 
     with tab_finops:
-        st.subheader("FinOps: Lifetime AI Token Usage")
-        st.caption(
-            "Monitoring cumulative Google Gemini token consumption per professional to track overall API costs."
-        )
+        st.subheader(T["finops_title"])
+        st.caption(T["finops_desc"])
 
         tokens_data = _fetch(T, aq.get_finops_stats)
         if tokens_data:
@@ -339,10 +361,10 @@ def view_analytics(T):
                 st.dataframe(
                     df_tokens,
                     column_config={
-                        "name": "Professional",
-                        "phone": "Phone",
+                        "name": T["finops_col_pro"],
+                        "phone": T["finops_col_phone"],
                         "tokens": st.column_config.NumberColumn(
-                            "Tokens Used", format="%d"
+                            T["finops_col_tokens"], format="%d"
                         ),
                     },
                     hide_index=True,
@@ -350,12 +372,15 @@ def view_analytics(T):
                 )
             with col_b:
                 total_tokens = df_tokens["tokens"].sum()
-                st.metric("Total System Tokens", f"{total_tokens:,}")
-                st.info(
-                    f"Estimated Cost: ${round(total_tokens / 1_000_000 * 0.15, 4)}"
-                )  # Rough Flash Lite 2.5 estimate
+                st.metric(T["finops_total_tokens"], f"{total_tokens:,}")
+                # Rough Flash Lite 2.5 estimate, in USD — the currency the
+                # API bills in, so the "$" is not a localization gap.
+                est_cost = total_tokens / 1_000_000 * 0.15
+                st.info(T["finops_est_cost"].replace("{cost}", f"{est_cost:.4f}"))
 
-            st.markdown("### Token Distribution")
-            st.bar_chart(df_tokens, x="name", y="tokens", color="#F59E0B")
+            st.markdown(f"### {T['finops_distribution']}")
+            x_col, y_col = T["finops_col_pro"], T["finops_col_tokens"]
+            df_chart = df_tokens.rename(columns={"name": x_col, "tokens": y_col})
+            st.bar_chart(df_chart, x=x_col, y=y_col, color="#F59E0B")
         else:
-            st.info("No token usage data available.")
+            st.info(T["finops_no_data"])
