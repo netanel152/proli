@@ -66,86 +66,71 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      # A missing credential otherwise surfaces as one opaque line — "Invalid
-      # RAILWAY_TOKEN" — that says nothing about which of the several causes
-      # it is. On 2026-09-10 that cost two rounds of guessing against a token
-      # that turned out to be correctly scoped in Railway.
+      # No Railway CLI and no Railway token. `railway run` was only ever a
+      # way to hand the script three connection settings, and on 2026-09-10
+      # it stopped being a reliable one: a project token created that morning
+      # was refused as "Invalid RAILWAY_TOKEN" under both credential names,
+      # through four rotations, while a four-month-old token in the same
+      # project kept working. Everything inside this repo was ruled out with
+      # evidence — the value, the secret's scope in GitHub, the `--environment`
+      # flag, the CLI version, the service name — so the fault sits on
+      # Railway's side, and this workflow no longer depends on it.
       #
-      # This answers exactly one question, the one the CLI's message cannot:
-      # did a value reach the job at all? It prints the credential's LENGTH,
-      # never a character of it. Zero means the secret did not resolve — most
-      # often because it is stored under Settings → Environments rather than
-      # as a repository secret, which yields an empty string in a job that
-      # declares no `environment:`. Any other length means a value arrived,
-      # and whatever the real command says next is about that value.
-      #
-      # It deliberately does NOT probe with `railway whoami`: that is an
-      # account-scoped command, and a project token — which is what these
-      # secrets hold, and what Railway's own tokens page tells you to pass as
-      # RAILWAY_TOKEN — has no user identity behind it. A probe that a valid
-      # project token cannot pass would fail the job before the real command
-      # ever ran, which is worse than the opaque line it set out to replace.
-      - name: Fingerprint the Railway credential
+      # The settings come straight from repo secrets instead. Fewer moving
+      # parts, and the database is chosen by the same branch that chooses
+      # everything else.
+      - name: Verify the connection settings resolved
+        id: creds
         env:
-          RAILWAY_TOKEN: ${{ steps.target.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
+          MONGO_URI: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_MONGO_URI || secrets.STAGING_MONGO_URI }}
           TARGET: ${{ steps.target.outputs.target }}
         run: |
+          set +e
           set -uo pipefail
 
-          if [ -z "${RAILWAY_TOKEN:-}" ]; then
-            echo "::error::The repo secret for '$TARGET' resolved to an empty string, so no credential reached the Railway CLI. Check Settings → Secrets and variables → Actions: the secret must exist as a *repository* secret named RAILWAY_TOKEN_STAGING or RAILWAY_TOKEN_PRODUCTION. A secret stored under Settings → Environments is invisible to this job, which declares no environment."
+          # The guard that matters most. `Settings.MONGO_URI` defaults to
+          # localhost when unset, so a missing secret would not fail — it
+          # would connect to an empty database on the runner and report
+          # "0 pros, everything fine". That is the exact false green this
+          # check exists to prevent, and it would be indistinguishable from
+          # a real clean result.
+          if [ -z "${MONGO_URI:-}" ]; then
+            echo "::error::No MONGO_URI resolved for '$TARGET'. Add it as a *repository* secret (Settings → Secrets and variables → Actions) named PRODUCTION_MONGO_URI or STAGING_MONGO_URI — a secret under Settings → Environments is invisible here, since this job declares no environment. Refusing to run: without it the script would silently check an empty local database and call it clean."
             exit 1
           fi
 
-          # Everything below is a fingerprint, not the value. The last four
-          # characters are what Railway's own tokens page prints next to each
-          # token ("****-3bc1"), so showing them here discloses nothing the
-          # dashboard does not already show — and they are what lets an
-          # operator tell "the secret holds the token I am looking at" from
-          # "it holds something else", which is otherwise unknowable: GitHub
-          # never shows a secret's value again once saved.
-          TRIMMED="$(printf '%s' "$RAILWAY_TOKEN" | tr -d '[:space:]')"
-          echo "Credential fingerprint for $TARGET"
-          echo "  length:      ${#RAILWAY_TOKEN} characters"
-          # From the trimmed value: a trailing newline would otherwise push a
-          # line break into the middle of the comparison it exists to serve.
-          echo "  last 4:      ...${TRIMMED: -4}   (compare with the Token column in Railway → Project Settings → Tokens)"
-          if [ "${#TRIMMED}" -ne "${#RAILWAY_TOKEN}" ]; then
-            echo "  whitespace:  YES — the stored value carries $(( ${#RAILWAY_TOKEN} - ${#TRIMMED} )) whitespace character(s), which Railway will reject. Re-save the secret without them."
-          else
-            echo "  whitespace:  none"
-          fi
-          if printf '%s' "$TRIMMED" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'; then
-            echo "  shape:       a well-formed UUID, which is what a Railway project token looks like"
-          else
-            echo "  shape:       NOT a UUID — a Railway project token is one, so this is very likely the wrong value entirely"
-          fi
+          # The database name, and nothing else from the URI — never the
+          # host and never the credentials. It answers the one question that
+          # went unanswered when production came back empty: which database
+          # did this actually read?
+          DB_NAME="$(python -c 'import os, urllib.parse as up; p = up.urlsplit(os.environ["MONGO_URI"]).path or ""; print(p.lstrip("/").split("?")[0] or "(none named in the URI)")')"
+          echo "Connection settings resolved for $TARGET"
+          echo "  database:    $DB_NAME"
 
-      # Keyed on the resolve step's output, not on the branch name again, so
-      # the token and the environment name can never disagree with what was
-      # just resolved. `railway run` injects that environment's variables
-      # (MONGO_URI, REDIS_URL, GOOGLE_MAPS_API_KEY) — none of them are ever
-      # printed, and `ENVIRONMENT` is cross-checked against Railway's own
-      # RAILWAY_ENVIRONMENT_NAME at import (PRO-96), so a mis-scoped token
-      # fails to boot rather than reporting on the wrong database.
       - name: Check service areas in ${{ steps.target.outputs.target }}
         id: check
         env:
-          RAILWAY_TOKEN: ${{ steps.target.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
-          RAILWAY_ENV: ${{ steps.target.outputs.target == 'production' && 'Production' || 'Staging' }}
+          MONGO_URI: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_MONGO_URI || secrets.STAGING_MONGO_URI }}
+          REDIS_URL: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_REDIS_URL || secrets.STAGING_REDIS_URL }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          # `Settings` refuses to construct without these four. This script
+          # touches neither Gemini nor Cloudinary, so they are placeholders,
+          # not credentials — the same thing the test suite does.
+          GEMINI_API_KEY: unused-by-this-script
+          CLOUDINARY_CLOUD_NAME: unused-by-this-script
+          CLOUDINARY_API_KEY: unused-by-this-script
+          CLOUDINARY_API_SECRET: unused-by-this-script
+          # Deliberately `development`, and the trade-off is worth naming:
+          # `staging`/`production` would make Settings demand WEBHOOK_TOKEN
+          # and fail closed on HEALTH_TOKEN, neither of which this script
+          # uses. Nothing it does is gated on ENVIRONMENT. The consequence is
+          # that ENVIRONMENT no longer describes the data being read — the
+          # branch and the secret it selects do, and the step above prints
+          # the database name so that choice is visible rather than assumed.
+          ENVIRONMENT: development
+          TARGET_ENV: ${{ steps.target.outputs.target }}
           APPLY: ${{ inputs.apply }}
         run: |
-          # `set +e` first, and it is load-bearing. GitHub runs every `run:`
-          # block as `bash -e {0}`, so errexit is on before this script's
-          # first line and `set -uo pipefail` does not clear it. With it on,
-          # the shell exits the moment `railway run` fails — taking the
-          # credential-name retry, the job-summary write and the exit-code
-          # interpretation with it, all as dead code. That is exactly what
-          # happened on 2026-09-10: no failing run ever wrote a job summary,
-          # and the fallback added hours earlier never executed once.
           set +e
           set -uo pipefail
 
@@ -157,13 +142,9 @@ jobs:
             MODE="read-only (dry run — no writes)"
           fi
 
-          echo "Checking pro service areas in $RAILWAY_ENV — $MODE"
+          echo "Checking pro service areas in $TARGET_ENV — $MODE"
 
-          # No --environment flag, deliberately: a Railway project token is
-          # bound to one environment already, so the credential pins it —
-          # something an operator cannot mistype, unlike a flag that has to
-          # agree with it.
-          CMD=(railway run --service worker -- python scripts/check_pro_service_areas.py)
+          CMD=(python scripts/check_pro_service_areas.py)
           if [ -n "$FLAGS" ]; then
             CMD+=("$FLAGS")
           fi
@@ -171,41 +152,8 @@ jobs:
           "${CMD[@]}" 2>&1 | tee report.txt
           code=${PIPESTATUS[0]}
 
-          # Railway has two credential names and the CLI reads them from
-          # different variables: a classic project token from RAILWAY_TOKEN,
-          # and a newer workspace-scoped token from RAILWAY_API_TOKEN. Both
-          # appear on the same Project Settings → Tokens page and look
-          # identical — a UUID with an environment beside it — so there is no
-          # way to tell from the dashboard which kind you were handed.
-          #
-          # On 2026-09-10 that cost most of a day. Production's token, created
-          # four months earlier, authenticated fine; a staging token created
-          # that morning was refused as "Invalid RAILWAY_TOKEN ... and has
-          # access to the resource you're trying to use" — the same sentence
-          # Railway uses for a bad value — through three rotations, while the
-          # fingerprint step proved the value matched the dashboard exactly
-          # and a production run nine minutes earlier proved nothing global
-          # was broken. Age of the token was the only variable left.
-          #
-          # So try the other name rather than asking a human to guess which
-          # kind they have. Authentication is judged by whether the refusal
-          # is still in the output, not by the exit code: the script exits
-          # 1/2/3 for real findings, and those are not credential failures.
-          if [ "$code" -ne 0 ] && grep -qiE 'invalid railway_token|unauthorized|not signed in' report.txt; then
-            echo "::warning::Railway refused this credential under RAILWAY_TOKEN. Retrying the identical value under RAILWAY_API_TOKEN, which is where the CLI looks for a workspace-scoped token."
-            API_TOKEN="$RAILWAY_TOKEN"
-            RAILWAY_TOKEN="" RAILWAY_API_TOKEN="$API_TOKEN" "${CMD[@]}" 2>&1 | tee report.txt
-            code=${PIPESTATUS[0]}
-            if grep -qiE 'invalid railway_token|unauthorized|not signed in' report.txt; then
-              AUTH_FAILED=1
-              echo "::error::Railway refused the credential under both names. The value is not the problem if the fingerprint above matches the dashboard — check that the token still exists in Railway → Project Settings → Tokens and that its environment column reads the target."
-            else
-              echo "::notice::Authenticated under RAILWAY_API_TOKEN, not RAILWAY_TOKEN — this secret holds a workspace-scoped token. 🛑 Stop Railway Proli Services reads the same secret under the old name only, and needs the same treatment before it is next relied on."
-            fi
-          fi
-
           {
-            echo "## 🗺️ Pro service areas — $RAILWAY_ENV"
+            echo "## 🗺️ Pro service areas — $TARGET_ENV"
             echo
             echo "- Mode: $MODE"
             echo "- Exit code: \`$code\`"
@@ -216,15 +164,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           # The script's exit codes, kept as the job's verdict so a checklist
-          # can be ticked on a green run and only on a green run. Skipped
-          # when the credential was refused: the CLI's exit 1 is not the
-          # script's exit 1, and reading it as one would report "some pros
-          # have areas the geocoder does not know" about pros that were
-          # never looked at.
-          if [ "${AUTH_FAILED:-0}" = "1" ]; then
-            exit 1
-          fi
-
+          # can be ticked on a green run and only on a green run.
           case "$code" in
             0)
               echo "✅ Every checked pro can be placed on the map."
