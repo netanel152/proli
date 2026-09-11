@@ -87,24 +87,33 @@ Note that a **variable change also redeploys**, and that path is not equivalent:
 
 If you would rather drop the gate, point the three production services at `dev` in the Railway dashboard (each service → Settings → Source → Branch) and delete the `production` branch, so there is no stale ref left to mislead anyone.
 
-### The Railway credentials CI holds
+### The credentials CI holds
 
-Two workflows drive Railway directly — `🛑 Stop Railway Proli Services` and `🗺️ Check pro service areas` — and both read a **project token** from a repo secret, picked by the branch they run from:
+**`🛑 Stop Railway Proli Services`** drives Railway directly and reads a **project token** from a repo secret, picked by the branch it runs from:
 
-| repo secret | Railway environment | used by |
-|---|---|---|
-| `RAILWAY_TOKEN_STAGING` | Staging | both workflows, run from `dev` |
-| `RAILWAY_TOKEN_PRODUCTION` | Production | both workflows, run from `production` |
+| repo secret | Railway environment |
+|---|---|
+| `RAILWAY_TOKEN_STAGING` | Staging |
+| `RAILWAY_TOKEN_PRODUCTION` | Production |
 
-**These went undocumented until 2026-09-10, which is why nobody noticed the staging one had stopped working** — the failure only appears when somebody runs one of those workflows, and the staging path had not been exercised in months. Both workflows now verify the credential before doing anything and say which of the causes below it is.
+Create one at Railway → the **Proli project** → **Project Settings → Tokens**, with **Environment** set to the one the secret is for, and store it under GitHub → repo **Settings → Secrets and variables → Actions → Repository secrets** — *not* under Settings → Environments, which that workflow cannot see.
 
-Creating or rotating one:
+**The staging token is known broken as of 2026-09-11, and it is not a paste error.** A token created that day was refused as *"Invalid RAILWAY_TOKEN. Please check that it is valid and has access to the resource you're trying to use"* through four rotations, under both `RAILWAY_TOKEN` and `RAILWAY_API_TOKEN`, while the four-month-old production token in the same project kept working. Ruled out with evidence, in this order: the stored value (a fingerprint step showed 36 characters, no whitespace, UUID-shaped, last four matching the dashboard), the secret's scope in GitHub, the `--environment` flag, the CLI version, the service name, and the credential variable name. What is left is Railway's own token issuance for this project — see [railwayapp/cli#845](https://github.com/railwayapp/cli/issues/845). **So `🛑 Stop` cannot currently stop staging.** Production is unaffected.
 
-1. Railway → the **Proli project** → **Project Settings → Tokens**. It must be a *project* token: an account token (your avatar → Account Settings → Tokens) is a different thing that the CLI reads from `RAILWAY_API_TOKEN`, and passing one as `RAILWAY_TOKEN` fails with a bare *"Invalid RAILWAY_TOKEN"*.
-2. Set **Environment** to the one the secret is for. A token scoped to Production cannot act on Staging; the workflows pass `--environment` explicitly so the two can never silently disagree.
-3. Copy it immediately — Railway shows the value once.
-4. GitHub → repo **Settings → Secrets and variables → Actions → Repository secrets**. It must live here, **not** under Settings → Environments: neither workflow declares an `environment:`, so an environment-scoped secret resolves to an empty string and the job reports a credential that did not resolve at all.
-5. Verify by running `🗺️ Check pro service areas` from the matching branch with `apply` unticked — it is read-only, and its credential step reports success or names the specific failure.
+**`🗺️ Check pro service areas` no longer uses Railway at all**, for that reason. It reads the script's three connection settings straight from repo secrets:
+
+| repo secret | used for |
+|---|---|
+| `STAGING_MONGO_URI` / `PRODUCTION_MONGO_URI` | the database the check reads (and writes, with `apply`) |
+| `STAGING_REDIS_URL` / `PRODUCTION_REDIS_URL` | the geocoding cache |
+| `GOOGLE_MAPS_API_KEY` | shared; without it every non-static city name reports *unavailable* rather than *unresolved* |
+
+Two guards are worth knowing about, because both encode a mistake that has already happened here:
+
+- **A missing `MONGO_URI` fails the job rather than falling back.** `Settings.MONGO_URI` defaults to localhost, so an unset secret would connect to an empty database on the runner and report *"0 pros, everything fine"* — indistinguishable from a genuine clean result, and exactly the false green this check exists to prevent.
+- **The run prints the database name** parsed from the URI, and nothing else from it — never the host, never the credentials. When production first came back empty, "which database did this actually read?" was the open question; now the answer is in the log.
+
+`ENVIRONMENT` is set to `development` for that job. It is deliberate: `staging`/`production` would make `Settings` demand `WEBHOOK_TOKEN` and fail closed on `HEALTH_TOKEN`, neither of which the script uses, and nothing it does is gated on `ENVIRONMENT`. The consequence is worth stating plainly — **`ENVIRONMENT` no longer describes the data being touched in that job.** The branch and the secret it selects do, and the printed database name is what makes that visible rather than assumed.
 
 ## Step 4: Environment Variables
 
