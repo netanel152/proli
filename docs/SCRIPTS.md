@@ -56,7 +56,7 @@ python scripts/check_pro_service_areas.py --apply --overwrite-location
 
 Exit `0` when every checked pro resolves, `1` when some pro needs a correction (or resolves but carries no `location` — re-run with `--apply`), `2` when the geocoder was unavailable for at least one area, `3` when **no pro matched the filter at all**. That last one is deliberately not `0`: "every checked pro is fine" is vacuously true of an empty set, so a green run that examined nothing would be indistinguishable from one that examined everything — the failure this script exists to catch, aimed at itself. On `3` the report says which population is empty (none on record / all awaiting approval / all paused). Needs `REDIS_URL` and `GOOGLE_MAPS_API_KEY` for anything outside `ISRAEL_CITIES_COORDS`; without the key nothing is ever marked *unresolved*.
 
-Against staging or production, run it through the **`🗺️ Check pro service areas`** workflow rather than by hand: the branch picks the environment (`dev` → staging, `production` → production), `railway run` supplies the credentials, the job exits with the script's own code, and the report is written to the run's job summary — which is the artifact to paste onto the issue.
+Against staging or production, run it through the **`🗺️ Check pro service areas`** workflow rather than by hand: the branch picks the environment (`dev` → staging, `production` → production), the connection settings come from repo secrets, the job exits with the script's own code, and the report is written to the run's job summary — which is the artifact to paste onto the issue. It also prints the database name it connected to, so a `Checked 0 pros` result can be told apart from a run that reached the wrong database.
 
 ### `create_indexes.py`
 
