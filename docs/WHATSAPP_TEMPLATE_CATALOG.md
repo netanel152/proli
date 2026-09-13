@@ -32,10 +32,10 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 
 | # | Send | Call site | Trigger | Notes |
 |---|---|---|---|---|
-| **P1** | **Lead offer** (`APPROVAL_REQUEST`) | `workflow_service.py:1658` | Customer completes intake | **The product.** Interpolates customer name, address, floor/apartment, issue type, appointment time, price line, and a media-links block. Immediately followed by a second send (P2). |
-| **P2** | Navigation link (`NAVIGATE_TO`) | `workflow_service.py:1660`, `notification_service.py:159` | Always paired with P1 | A separate message. Under templates that is a second approval **and** a second billable send — strong candidate to fold into P1's body. |
+| **P1** | **Lead offer** (`APPROVAL_REQUEST`) | `workflow_service.py:1017` | Customer completes intake | **The product.** Interpolates customer name, address, floor/apartment, issue type, appointment time, price line, and a media-links block. Immediately followed by a second send (P2). |
+| **P2** | Navigation link (`NAVIGATE_TO`) | `workflow_service.py:1039`, `notification_service.py:159` | Always paired with P1 | A separate message. Under templates that is a second approval **and** a second billable send — strong candidate to fold into P1's body. |
 | **P3** | Lead offer, reassignment + admin-assignment path | `notification_service.py:157` (`notify_pro_new_lead`) | `monitor_service.reassign_lead`, `admin_flow` assignment | Shares the builder with P1 but uses the leaner `NEW_LEAD_*` templates. Same variable set. |
-| **P4** | Early-lead notification (`EARLY_LEAD_*`) | `workflow_service.py:1319–1325` | Customer mid-intake | **Sends media** via `send_file_by_url` when a photo exists, text otherwise. A media-header template is a different structure from a text template — this needs two templates or a policy change. |
+| **P4** | Early-lead notification (`EARLY_LEAD_*`) | `conversation_pipeline.py:694–699` | Customer mid-intake | **Sends media** via `send_file_by_url` when a photo exists, text otherwise. A media-header template is a different structure from a text template — this needs two templates or a policy change. |
 | **P5** | Approval nudge (`APPROVAL_NUDGE`) | `monitor_service.py:688` | Scheduler, T+10 min of pro silence | Sent precisely because the pro is *not* engaging, so assuming an open window is exactly backwards. |
 | **P6** | Daily agenda | `scheduler.py:76` | Cron 08:00 Israel time | Per-pro job list. Classic UTILITY-category daily digest. |
 | **P7** | Stale booked-lead reminder (`STALE_LEAD_REMINDER`) | `monitor_service.py:825` | Scheduler, every 4h, lead ≥24h old | The 24h staleness threshold guarantees the window is closed. |
