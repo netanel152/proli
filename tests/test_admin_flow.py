@@ -928,6 +928,106 @@ async def test_action_self_assign_lead_lookup_missing_after_write_distinct_messa
     notify.assert_not_awaited()
 
 
+# --- PRO-188 — assign_lead_to_pro core (shared by the wizard and the panel) -
+#
+# The wizard's own behaviour above is unchanged and stays pinned through
+# handle_admin_message. These call the extracted core directly, since that is
+# the function the admin panel's one-click strip now calls too — the
+# acceptance criterion is that both callers get the same customer-notify
+# behaviour from one implementation rather than two that can drift.
+
+
+@pytest.mark.asyncio
+async def test_assign_lead_to_pro_core_notifies_customer_when_offer_reaches_pro(
+    patch_admin_collections, mock_whatsapp, monkeypatch
+):
+    db = patch_admin_collections
+    monkeypatch.setattr(admin_flow, "notify_pro_new_lead", AsyncMock(return_value=True))
+    pro = {"_id": ObjectId(), "business_name": "יוסי"}
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+
+    offer_sent, pro_name = await admin_flow.assign_lead_to_pro(
+        str(lead_id), pro, mock_whatsapp
+    )
+
+    assert offer_sent is True
+    assert pro_name == "יוסי"
+    customer_msgs = [
+        c.args[1]
+        for c in mock_whatsapp.send_message.call_args_list
+        if c.args[0] == "customer@c.us"
+    ]
+    assert any("יוסי" in m for m in customer_msgs)
+
+
+@pytest.mark.asyncio
+async def test_assign_lead_to_pro_core_does_not_notify_customer_when_offer_not_sent(
+    patch_admin_collections, mock_whatsapp, monkeypatch
+):
+    db = patch_admin_collections
+    monkeypatch.setattr(
+        admin_flow, "notify_pro_new_lead", AsyncMock(return_value=False)
+    )
+    pro = {"_id": ObjectId(), "business_name": "יוסי"}
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+
+    offer_sent, pro_name = await admin_flow.assign_lead_to_pro(
+        str(lead_id), pro, mock_whatsapp
+    )
+
+    assert offer_sent is False
+    customer_msgs = [
+        c.args[1]
+        for c in mock_whatsapp.send_message.call_args_list
+        if c.args[0] == "customer@c.us"
+    ]
+    assert customer_msgs == [], "customer must not be told a pro was found"
+
+
+@pytest.mark.asyncio
+async def test_assign_lead_to_pro_core_lookup_miss_returns_none_and_skips_notify(
+    patch_admin_collections, mock_whatsapp, monkeypatch
+):
+    db = patch_admin_collections
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(admin_flow, "notify_pro_new_lead", notify)
+    # The write still lands (lead_manager_service uses its own leads_collection
+    # reference); only the post-write find_one at the top of the core misses.
+    monkeypatch.setattr(
+        admin_flow,
+        "leads_collection",
+        MagicMock(find_one=AsyncMock(return_value=None)),
+    )
+    pro = {"_id": ObjectId(), "business_name": "יוסי"}
+
+    offer_sent, pro_name = await admin_flow.assign_lead_to_pro(
+        str(ObjectId()), pro, mock_whatsapp
+    )
+
+    assert offer_sent is None
+    assert pro_name == "יוסי"
+    notify.assert_not_awaited()
+    mock_whatsapp.send_message.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_unknown_admin_state_resets_silently(
     patch_admin_collections, mock_state, mock_whatsapp
