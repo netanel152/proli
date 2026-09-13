@@ -40,7 +40,7 @@
 - **Live Dashboard** — Real-time metrics on leads, professionals, and revenue.
 - **RBAC** — Owner, Editor, and Viewer roles with full audit logging.
 - **Analytics** — Lead funnels, daily volume, pro performance charts.
-- **Lead Management** — Full CRUD with inline editing.
+- **Lead Management** — Full CRUD with inline editing, plus a one-click assignment strip for stuck (`PENDING_ADMIN_REVIEW`) leads that notifies the pro through the same path as the WhatsApp Admin Routing Wizard.
 - **Schedule Management** — Daily editor, bulk generator, and recurring weekly templates.
 - **Privacy Tools** — GDPR data export and user deletion.
 

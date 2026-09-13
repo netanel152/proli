@@ -972,10 +972,13 @@ def set_flash(key, message, level="success"):
     (PRO-161) and ``sch_flash`` (PRO-158): set it right before the
     ``st.rerun()``, ``render_flash`` it at the top of the view.
 
-    ``level`` is ``"success"`` or ``"warning"``. Not every mutation that
-    completes is good news — approving a pro whose service areas could not
+    ``level`` is ``"success"``, ``"warning"`` or ``"error"``. Not every mutation
+    that completes is good news — approving a pro whose service areas could not
     all be geocoded succeeds *and* needs the operator to come back to it —
-    and a green tick over that sentence reads as "nothing to do here".
+    and a green tick over that sentence reads as "nothing to do here". ``error``
+    is the third case PRO-188 needed: "assigned, now go phone them" and "the
+    assignment failed" are different problems, and one amber box for both
+    collapses exactly the distinction the message is trying to draw.
     """
     st.session_state[key] = (level, message)
 
@@ -988,7 +991,10 @@ def render_flash(key):
     # Tolerates a bare string: a caller that wrote the key directly, and any
     # message stashed by the previous build still sitting in a live session.
     level, msg = flash if isinstance(flash, tuple) else ("success", flash)
-    if level == "warning":
+    if level == "error":
+        st.toast(msg, icon="🚨")
+        st.error(msg)
+    elif level == "warning":
         st.toast(msg, icon="⚠️")
         st.warning(msg)
     else:
