@@ -579,7 +579,12 @@ def view_leads_dashboard(T):
         # to act on. Driven by its own query rather than `leads_df`, which is
         # capped at 100 and cached for 30s — a stuck lead must not be invisible
         # here because it fell off a display list.
-        _render_pending_review_strip(T, pro_names, pro_map_name_to_id)
+        # Takes only `T`: the strip builds its own pro list from
+        # `APPROVED_PRO_FILTER` rather than reusing the board's `pro_names` /
+        # `pro_map_name_to_id`, which are name-keyed and include pros this
+        # queue must never offer. Passing them crashed the whole tab (staging
+        # `TypeError: takes 1 positional argument but 3 were given`).
+        _render_pending_review_strip(T)
 
         if leads_df.empty:
             st.info(T["no_leads_found"])
