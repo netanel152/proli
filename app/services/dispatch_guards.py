@@ -27,7 +27,7 @@ closure over function locals.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
 from bson import ObjectId
@@ -931,6 +931,398 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
     return HANDLED
 
 
+# ---------------------------------------------------------------------------
+# PRO-181 (PRO-139 slice A3): the pro-routing cluster.
+#
+# Same call-time `workflow_service` lookup as A2 above, for the same two
+# reasons (circular import, and the suite's monkeypatch points).
+# ---------------------------------------------------------------------------
+
+
+async def guard_customer_mode_switch(ctx: DispatchContext, deps: GuardDeps):
+    """Explicit mode switch: a registered pro who types "לקוח".
+
+    Deterministic — no AI, no confirmation prompt. Works from PRO_MODE and from
+    IDLE (where auto-detect would otherwise force PRO_MODE).
+    """
+    from app.services import workflow_service as wf
+
+    if (
+        ctx.normalized_text in Messages.Keywords.CUSTOMER_MODE_COMMANDS
+        and ctx.current_state in (UserStates.PRO_MODE, UserStates.IDLE)
+    ):
+        if await wf._is_registered_pro(ctx.chat_id):
+            await deps.state_manager.set_state(ctx.chat_id, UserStates.CUSTOMER_MODE)
+            await deps.context_manager.clear_context(ctx.chat_id)
+            await deps.whatsapp.send_message(
+                ctx.chat_id, Messages.Pro.SWITCHED_TO_CUSTOMER
+            )
+            logger.info(
+                f"Pro ...{ctx.chat_id[-8:]} switched to CUSTOMER_MODE via keyword"
+            )
+            return HANDLED
+    return None
+
+
+async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDeps):
+    """Safety bypass — a registered pro typing a business keyword routes to
+    pro_flow even from CUSTOMER_MODE; snap them back to PRO_MODE first.
+
+    Never handles: it only mutates `ctx.current_state`, and the next guard
+    (`pro_mode_routing`) is what acts on it. That is the inline code's shape
+    preserved — the bypass and the routing were two separate `if`s, and keeping
+    them separate is what lets the ambiguous-keyword yield fall through to the
+    customer side rather than being swallowed here.
+
+    Ambiguous keywords (bare digits, אשר/דחה, ...) yield to a customer-side
+    question that is actually open: mid-reschedule, a "3" is a slot pick, not a
+    job approval.
+
+    PRO-186: the bypass rescues a pro stranded on the *customer* side; a pro
+    already inside one of pro_flow's own prompts is not stranded. Overwriting
+    PRO_SELECTING_JOB_TO_FINISH here is what made the job list unanswerable —
+    pro_flow re-reads the state and saw PRO_MODE, so "1" ran approve. Hence
+    PRO_DISPATCH_STATES rather than PRO_MODE alone.
+    """
+    from app.services import workflow_service as wf
+
+    if ctx.normalized_text in wf.PRO_BUSINESS_KEYWORDS:
+        is_pro_doc = await wf._is_registered_pro(ctx.chat_id)
+        if is_pro_doc and ctx.current_state not in wf.PRO_DISPATCH_STATES:
+            defer_to_customer_flow = (
+                ctx.normalized_text in wf.AMBIGUOUS_PRO_KEYWORDS
+                and (await wf._customer_prompt_pending(ctx.chat_id, ctx.current_state))
+            )
+            if defer_to_customer_flow:
+                logger.info(
+                    f"Pro ...{ctx.chat_id[-8:]} sent ambiguous keyword with a customer "
+                    f"prompt open — staying in {ctx.current_state}"
+                )
+            else:
+                await deps.state_manager.set_state(ctx.chat_id, UserStates.PRO_MODE)
+                ctx.current_state = UserStates.PRO_MODE
+    return None
+
+
+async def guard_pro_mode_routing(ctx: DispatchContext, deps: GuardDeps):
+    """Pro Mode — and every prompt pro_flow is holding open (PRO-186)."""
+    from app.services import workflow_service as wf
+
+    if ctx.current_state not in wf.PRO_DISPATCH_STATES:
+        return None
+
+    pro_resp = await wf._handle_pro_cmd(
+        ctx.chat_id, ctx.user_text, deps.whatsapp, wf.lead_manager, ai=wf.ai
+    )
+    if pro_resp:
+        await deps.whatsapp.send_message(ctx.chat_id, pro_resp)
+    # empty string "" means pro_flow already sent everything internally
+    return HANDLED
+
+
+async def guard_pro_onboarding(ctx: DispatchContext, deps: GuardDeps):
+    """Pro onboarding flow."""
+    from app.services import workflow_service as wf
+
+    if ctx.current_state not in wf.ONBOARDING_STATES:
+        return None
+
+    await wf.handle_onboarding_step(
+        ctx.chat_id, ctx.user_text or "", ctx.current_state, deps.whatsapp
+    )
+    return HANDLED
+
+
+async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
+    """AWAITING_ADDRESS re-entry after the finalization gate rejected an
+    incomplete address.
+
+    Re-run extraction on the customer's reply, merge with whatever we already
+    stored, and only clear the state when all five fields (street, number, city,
+    floor, apartment) are present.
+
+    **Falls through without refreshing `ctx.current_state`** when there is no
+    active lead — the inline original cleared Redis and left the local
+    `current_state` at AWAITING_ADDRESS, so the two IDLE-keyed guards below
+    (registration keyword, auto-detect) do not fire on that pass. Preserved
+    exactly. Calling `ctx.refresh_state()` here would read IDLE and start firing
+    them on a path where they never have, which is a dispatch change, not a
+    migration. Recorded on PRO-139 for whoever owns the behaviour.
+    """
+    from app.services import workflow_service as wf
+
+    if ctx.current_state != UserStates.AWAITING_ADDRESS:
+        return None
+
+    # Nevermind/cancel bailout: user wants out of the flow instead of fighting
+    # the address gate. Match cancellation keywords BEFORE is_address_complete
+    # so we never loop the user back through "אני צריך רחוב ומספר בית".
+    if ctx.user_text and contains_keyword(
+        ctx.normalized_text, Messages.Keywords.CANCEL_KEYWORDS
+    ):
+        cancelled_lead = await wf.leads_collection.find_one(
+            {
+                "chat_id": ctx.chat_id,
+                "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
+            },
+            sort=[("created_at", -1)],
+        )
+        if cancelled_lead:
+            await wf.set_lead_status(
+                cancelled_lead["_id"],
+                LeadStatus.CANCELLED,
+                wf.Actor.CUSTOMER,
+                extra_set={
+                    "cancelled_at": datetime.now(timezone.utc),
+                    "cancel_reason": "user_bailout_awaiting_address",
+                },
+            )
+            logger.info(
+                f"🚪 AWAITING_ADDRESS cancelled by user for {ctx.chat_id} "
+                f"(lead={cancelled_lead['_id']})"
+            )
+        await deps.state_manager.clear_state(ctx.chat_id)
+        await deps.context_manager.clear_context(ctx.chat_id)
+        await deps.whatsapp.send_message(
+            ctx.chat_id, Messages.Customer.REQUEST_CANCELLED
+        )
+        return HANDLED
+
+    if not ctx.user_text or len(ctx.user_text) <= 3:
+        await deps.whatsapp.send_message(ctx.chat_id, Messages.Customer.ADDRESS_INVALID)
+        return HANDLED
+
+    active_lead_await = await wf.leads_collection.find_one(
+        {
+            "chat_id": ctx.chat_id,
+            "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
+        },
+        sort=[("created_at", -1)],
+    )
+    if not active_lead_await:
+        await deps.state_manager.clear_state(ctx.chat_id)
+        # Fall through to normal routing below — deliberately WITHOUT refreshing
+        # ctx.current_state; see the docstring.
+        return None
+
+    lead_facts = active_lead_await
+    await wf.lead_manager.log_message(ctx.chat_id, "user", ctx.user_text)
+    follow_up_prompt = wf.Prompts.DISPATCHER_SYSTEM.format(
+        known_customer_name=lead_facts.get("customer_name") or "none",
+        known_city=lead_facts.get("city") or "none",
+        known_issue=lead_facts.get("issue_type") or "none",
+        known_street=lead_facts.get("street") or "none",
+        known_street_number=lead_facts.get("street_number") or "none",
+        known_floor=lead_facts.get("floor") or "none",
+        known_apartment=lead_facts.get("apartment") or "none",
+    )
+    if not ctx.is_exempt and not await deps.security.check_and_increment_daily_ai_cap(
+        ctx.chat_id, WorkerConstants.DAILY_AI_CALL_CAP
+    ):
+        logger.warning(f"⛔ Daily AI cap reached for ...{ctx.chat_id[-8:]}")
+        await deps.whatsapp.send_message(
+            ctx.chat_id, Messages.Errors.DAILY_AI_CAP_REACHED
+        )
+        return HANDLED
+    try:
+        follow_up = await wf.ai.analyze_conversation(
+            history=await wf.lead_manager.get_chat_history(ctx.chat_id),
+            user_text=ctx.user_text,
+            custom_system_prompt=follow_up_prompt,
+            require_json=True,
+        )
+    except Exception as e:
+        logger.error(f"AWAITING_ADDRESS re-extraction failed for {ctx.chat_id}: {e}")
+        await deps.whatsapp.send_message(ctx.chat_id, Messages.Errors.AI_OVERLOAD)
+        return HANDLED
+
+    merged = {
+        "customer_name": follow_up.extracted_data.customer_name
+        or lead_facts.get("customer_name"),
+        "street": follow_up.extracted_data.street or lead_facts.get("street"),
+        "street_number": follow_up.extracted_data.street_number
+        or lead_facts.get("street_number"),
+        "city": follow_up.extracted_data.city or lead_facts.get("city"),
+        "floor": follow_up.extracted_data.floor or lead_facts.get("floor"),
+        "apartment": follow_up.extracted_data.apartment or lead_facts.get("apartment"),
+    }
+    logger.info(
+        f"🔍 AWAITING_ADDRESS re-extraction for {ctx.chat_id}: "
+        f"new_from_ai={[k for k, v in merged.items() if v and not lead_facts.get(k)]}, "
+        f"merged={ {k: v for k, v in merged.items() if v} }"
+    )
+    non_empty = {k: v for k, v in merged.items() if v}
+    if non_empty:
+        await wf.leads_collection.update_one(
+            {"_id": active_lead_await["_id"]}, {"$set": non_empty}
+        )
+
+    class _AddrProbe:
+        pass
+
+    probe = _AddrProbe()
+    probe.street = merged.get("street")
+    probe.street_number = merged.get("street_number")
+    probe.city = merged.get("city")
+    probe.floor = merged.get("floor")
+    probe.apartment = merged.get("apartment")
+
+    ok, reason = wf.is_address_complete(probe)
+    if ok:
+        full = wf.compose_full_address(probe)
+        await wf.leads_collection.update_one(
+            {"_id": active_lead_await["_id"]}, {"$set": {"full_address": full}}
+        )
+        await deps.state_manager.clear_state(ctx.chat_id)
+        await deps.whatsapp.send_message(ctx.chat_id, Messages.Customer.ADDRESS_SAVED)
+        logger.info(
+            f"✅ AWAITING_ADDRESS complete for {ctx.chat_id}, full_address={full!r}"
+        )
+        return HANDLED
+    else:
+        await deps.whatsapp.send_message(ctx.chat_id, reason)
+        logger.info(
+            f"⏳ AWAITING_ADDRESS still missing parts for {ctx.chat_id}: {reason}"
+        )
+        return HANDLED
+
+
+async def guard_pro_registration_keyword(ctx: DispatchContext, deps: GuardDeps):
+    """Pro registration keyword check (before auto-detect)."""
+    from app.services import workflow_service as wf
+
+    if (
+        ctx.current_state == UserStates.IDLE
+        and ctx.normalized_text in Messages.Keywords.REGISTER_COMMANDS
+    ):
+        await wf.start_onboarding(ctx.chat_id, deps.whatsapp)
+        return HANDLED
+    return None
+
+
+async def guard_pro_autodetect(ctx: DispatchContext, deps: GuardDeps):
+    """Auto-detect a professional on first contact (only active/approved pros)."""
+    from app.services import workflow_service as wf
+
+    if ctx.current_state != UserStates.IDLE:
+        return None
+
+    # `phone` used to be a shared local computed by the consent gate; that
+    # gate now lives here too (PRO-180), so derive it locally.
+    phone = strip_suffix(ctx.chat_id)
+    is_pro = await deps.users_collection.find_one(
+        {
+            "phone_number": {"$in": [phone, ctx.chat_id]},
+            "role": "professional",
+            "is_active": True,
+        }
+    )
+    if not is_pro:
+        return None
+
+    # Redis TTL edge: a pro being served as a customer whose CUSTOMER_MODE
+    # key expired lands here mid-request. Re-entering PRO_MODE would answer
+    # their next message with the dashboard, so restore CUSTOMER_MODE while
+    # their own lead is still open.
+    if await wf._get_active_customer_lead(ctx.chat_id):
+        await deps.state_manager.set_state(ctx.chat_id, UserStates.CUSTOMER_MODE)
+        # Not read again on this pass — the customer dispatcher below is
+        # already the correct destination. Kept so the local view of state
+        # matches Redis for anyone extending this block.
+        ctx.current_state = UserStates.CUSTOMER_MODE
+        logger.info(
+            f"Restored CUSTOMER_MODE for pro ...{ctx.chat_id[-8:]} — own lead still open"
+        )
+        return None
+
+    await deps.state_manager.set_state(ctx.chat_id, UserStates.PRO_MODE)
+    pro_resp = await wf._handle_pro_cmd(
+        ctx.chat_id, ctx.user_text, deps.whatsapp, wf.lead_manager, ai=wf.ai
+    )
+    if pro_resp:
+        await deps.whatsapp.send_message(ctx.chat_id, pro_resp)
+    # empty string "" means pro_flow already sent everything internally
+    return HANDLED
+
+
+async def guard_pending_admin_review_shortcircuit(
+    ctx: DispatchContext, deps: GuardDeps
+):
+    """Patch #2: short-circuit PENDING_ADMIN_REVIEW.
+
+    If this chat has a lead already sitting in PENDING_ADMIN_REVIEW, an admin
+    owns it — running the dispatcher again would create a DUPLICATE contacted
+    lead for the same issue (observed on 2026-04-18 with lead
+    69e375cb9a04cba45197e625 spawning 69e376679a04cba45197e63e 2 min later).
+    Log the message for admin visibility, send a throttled ack, and stop.
+
+    PRO-63: bounded by age. The short-circuit has no natural exit — a lead sits
+    in PENDING_ADMIN_REVIEW until a human moves it, so an unworked escalation
+    would silently brick this customer's chat forever, which is a worse dead
+    end than the auto-CLOSED behaviour PRO-63 replaced. After
+    PENDING_REVIEW_SHORTCIRCUIT_HOURS their next message starts a fresh
+    request. Leads with no `updated_at` fall outside the window and therefore
+    do not short-circuit — failing toward "customer can talk to us".
+    """
+    from app.services import workflow_service as wf
+
+    shortcircuit_cutoff = datetime.now(timezone.utc) - timedelta(
+        hours=WorkerConstants.PENDING_REVIEW_SHORTCIRCUIT_HOURS
+    )
+    pending_admin_lead = await wf.leads_collection.find_one(
+        {
+            "chat_id": ctx.chat_id,
+            "status": LeadStatus.PENDING_ADMIN_REVIEW,
+            "updated_at": {"$gte": shortcircuit_cutoff},
+        },
+        sort=[("created_at", -1)],
+    )
+    if not pending_admin_lead:
+        return None
+
+    log_text_pending = ctx.user_text or ""
+    if ctx.media_url:
+        log_text_pending = f"{log_text_pending} [MEDIA: {ctx.media_url}]"
+    await wf.lead_manager.log_message(ctx.chat_id, "user", log_text_pending)
+
+    # Throttle the ack: at most once per 30 minutes so the customer isn't
+    # spammed if they send a burst of messages while waiting for admin.
+    now = datetime.now(timezone.utc)
+    last_ack = pending_admin_lead.get("last_pending_ack_at")
+    should_ack = True
+    if last_ack:
+        if last_ack.tzinfo is None:
+            last_ack = last_ack.replace(tzinfo=timezone.utc)
+        if (now - last_ack) < timedelta(minutes=30):
+            should_ack = False
+    if should_ack:
+        await deps.whatsapp.send_message(
+            ctx.chat_id, Messages.Customer.STILL_PENDING_REVIEW
+        )
+        await wf.lead_manager.log_message(
+            ctx.chat_id, "model", Messages.Customer.STILL_PENDING_REVIEW
+        )
+        await wf.leads_collection.update_one(
+            {"_id": pending_admin_lead["_id"]},
+            {"$set": {"last_pending_ack_at": now}},
+        )
+    logger.info(
+        f"🔒 PENDING_ADMIN_REVIEW short-circuit for {ctx.chat_id} "
+        f"(lead={pending_admin_lead['_id']}, ack_sent={should_ack})"
+    )
+    # PRO-121: this short-circuit is a 24h hold keyed on lead status, so the
+    # dispatch hoist above can never fire for it — an emergency declared here
+    # would otherwise get STILL_PENDING_REVIEW and reach nobody. Page on the
+    # same 30-minute throttle as the ack so a burst cannot spam the operator.
+    if ctx.is_emergency_detected and should_ack:
+        wf.notification_service.page_operator(
+            f"EMERGENCY declared on lead {pending_admin_lead['_id']}, which is "
+            "already PENDING_ADMIN_REVIEW — the customer is behind the 24h "
+            "short-circuit and needs manual routing now"
+        )
+    return HANDLED
+
+
 #: The chain, in execution order. **This ordering is the contract** — see the
 #: module docstring and `tests/test_dispatch_guards.py`, which pins it. Each
 #: entry is `(name, guard)`; the name exists so a failing order assertion names
@@ -939,6 +1331,8 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
 #: PRO-180 (slice A2): the holding-state cluster runs after the A1 head.
 #: `emergency_hoist` sits after `sos_human_handoff` and before every holding
 #: state — PRO-121's "position is the whole design".
+#:
+#: PRO-181 (slice A3): the pro-routing cluster runs after the holding states.
 GUARD_CHAIN: Tuple[Tuple[str, Guard], ...] = (
     ("admin_wizard", guard_admin_wizard),
     ("global_reset", guard_global_reset),
@@ -957,6 +1351,14 @@ GUARD_CHAIN: Tuple[Tuple[str, Guard], ...] = (
     ("loyalty_confirmation", guard_loyalty_confirmation),
     ("new_or_existing", guard_new_or_existing),
     ("booked_cancel_reschedule", guard_booked_cancel_reschedule),
+    ("customer_mode_switch", guard_customer_mode_switch),
+    ("pro_business_keyword_bypass", guard_pro_business_keyword_bypass),
+    ("pro_mode_routing", guard_pro_mode_routing),
+    ("pro_onboarding", guard_pro_onboarding),
+    ("awaiting_address", guard_awaiting_address),
+    ("pro_registration_keyword", guard_pro_registration_keyword),
+    ("pro_autodetect", guard_pro_autodetect),
+    ("pending_admin_review_shortcircuit", guard_pending_admin_review_shortcircuit),
 )
 
 
