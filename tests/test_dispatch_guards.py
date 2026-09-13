@@ -106,7 +106,39 @@ def test_guard_chain_order_is_pinned():
         "loyalty_confirmation",
         "new_or_existing",
         "booked_cancel_reschedule",
+        # PRO-181 (slice A3) — the pro-routing cluster.
+        "customer_mode_switch",
+        "pro_business_keyword_bypass",
+        "pro_mode_routing",
+        "pro_onboarding",
+        "awaiting_address",
+        "pro_registration_keyword",
+        "pro_autodetect",
+        "pending_admin_review_shortcircuit",
     ]
+
+
+def test_pro_bypass_runs_immediately_before_pro_mode_routing():
+    """PRO-181: the bypass never handles — it only snaps a pro back to PRO_MODE
+    so the *next* guard routes them. Anything inserted between the two would
+    read the mutated state and answer a message meant for pro_flow, which is the
+    PRO-186 defect from the other direction.
+    """
+    names = [name for name, _guard in GUARD_CHAIN]
+    assert (
+        names.index("pro_mode_routing")
+        == names.index("pro_business_keyword_bypass") + 1
+    )
+
+
+def test_pending_review_shortcircuit_is_last_in_the_chain():
+    """PRO-63/PRO-181: the 24h short-circuit is the last gate before the customer
+    pipeline. Moving it earlier would swallow messages the pro-routing guards
+    above it are supposed to answer — a pro whose own lead is in admin review
+    would stop reaching pro_flow.
+    """
+    names = [name for name, _guard in GUARD_CHAIN]
+    assert names[-1] == "pending_admin_review_shortcircuit"
 
 
 def test_emergency_hoist_position_is_pinned():
