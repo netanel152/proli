@@ -297,7 +297,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 
 ### Testing Conventions
 
-Unit tests use `mongomock_motor` (in-memory MongoDB) and mock `whatsapp` and `ai` instances via `monkeypatch`. Integration tests (marked `@pytest.mark.integration`) connect to a real `MONGO_TEST_URI` test database and clear it before each run. `conftest.py` auto-applies the mock fixtures to all non-integration tests via `autouse=True`. `asyncio_mode = strict` is set in `pytest.ini`.
+Unit tests use `mongomock_motor` (in-memory MongoDB) and mock `whatsapp` and `ai` instances via `monkeypatch`. Integration tests (marked `@pytest.mark.integration`) connect to a real `MONGO_TEST_URI` test database and clear it before each run. `conftest.py` auto-applies the mock fixtures to all non-integration tests via `autouse=True`. `asyncio_mode = strict` is set in `pytest.ini`. The autouse `_isolate_background_tasks` fixture (PRO-187) also clears `app.core.background_tasks`'s module-level registry between tests, so a test's `pending_background_tasks()` never sees another test's leftover, closed-loop tasks.
 
 `$geoNear` is not supported by mongomock — matching service geo tests mock `users_collection.aggregate` as async generators directly.
 

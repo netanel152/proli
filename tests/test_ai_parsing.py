@@ -4,7 +4,6 @@ from pydantic import SecretStr
 from bson import ObjectId
 import json
 from app.core.messages import Messages
-from app.core.background_tasks import pending_background_tasks
 from app.services.ai_engine_service import AIEngine, AIResponse, ExtractedData
 import app.services.ai_engine_service as ai_engine_module
 
@@ -206,7 +205,15 @@ async def test_analyze_conversation_spawns_named_token_tracking_task_for_pro(
 
     def spy(coro, *, name):
         spawned["name"] = name
-        return real_spawn(coro, name=name)
+        # Collected, not overwritten: ai_engine_service spawns this inside the
+        # `for model_name in self.model_hierarchy` retry loop, so a parse
+        # failure on the first model falls through and spawns a second task
+        # with the same name. Keeping only the last would make
+        # total_tokens_used depend on which one the single await happened to
+        # run.
+        task = real_spawn(coro, name=name)
+        spawned.setdefault("tasks", []).append(task)
+        return task
 
     monkeypatch.setattr(ai_engine_module, "spawn_background_task", spy)
 
@@ -214,8 +221,10 @@ async def test_analyze_conversation_spawns_named_token_tracking_task_for_pro(
         [], "Hi", custom_system_prompt="", pro_id=pro_id
     )
 
-    for t in list(pending_background_tasks()):
-        await t
+    # PRO-187: await *this* test's tasks, not the whole registry -- a leftover
+    # from an earlier test is bound to a loop that no longer exists.
+    for task in spawned.get("tasks", []):
+        await task
 
     assert spawned.get("name") == f"track_token_usage:{pro_id}"
     updated = await mock_db.users.find_one({"_id": ObjectId(pro_id)})
