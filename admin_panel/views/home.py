@@ -17,6 +17,8 @@ from admin_panel.ui.components import (
 )
 from admin_panel.core.assignment import (
     ASSIGN_FAILED,
+    ASSIGN_STALE,
+    ASSIGN_TIMED_OUT,
     ASSIGN_LOOKUP_MISSED,
     ASSIGN_NOT_SENT,
     ASSIGN_SENT,
@@ -31,6 +33,7 @@ from admin_panel.core.labels import (
 )
 from admin_panel.core.lead_queries import (
     EDITOR_COLUMNS,
+    client_label,
     SKIP_LEAD_GONE,
     SKIP_NO_CHANGE,
     SKIP_UNRESOLVED,
@@ -39,6 +42,7 @@ from admin_panel.core.lead_queries import (
     save_lead_edits,
 )
 from admin_panel.core.rbac import can_edit, has_permission
+from app.services.matching_service import APPROVED_PRO_FILTER
 import pytz
 import os
 import sys
@@ -75,6 +79,14 @@ ALL_STATUSES = LEAD_STATUSES
 # hiding rather than pretending it is showing everything.
 PENDING_STRIP_MAX = 5
 
+# How many to pull before sorting. The real ordering key (emergency, then the
+# first status_history entry) lives inside the documents, so the sort cannot be
+# pushed into Mongo without an index that does not exist — but an unbounded
+# fetch on an auto-refreshing page is not acceptable either. This bounds the
+# work while leaving enough headroom that an emergency does not get cut before
+# it can sort to the top.
+PENDING_STRIP_FETCH_MAX = 50
+
 
 def _assign_feedback(T, outcome, pro_name):
     """The sentence and severity for one assignment outcome.
@@ -105,6 +117,30 @@ def _assign_feedback(T, outcome, pro_name):
             ),
             "warning",
         )
+    if outcome == ASSIGN_STALE:
+        # The only outcome where the lead is NOT assigned to this pro.
+        return (
+            T.get(
+                "assign_stale",
+                "This lead is no longer waiting — somebody else took it.",
+            ),
+            "warning",
+        )
+    if outcome == ASSIGN_FAILED:
+        # Explicit rather than relying on the fallback, so an outcome nobody
+        # recognises does not quietly render as a plain failure.
+        return _assign_failed_message(T, pro_name), "error"
+    if outcome == ASSIGN_TIMED_OUT:
+        return (
+            _t(
+                T,
+                "assign_timed_out",
+                "Assigned to {pro}, but we could not confirm the offer was sent. "
+                "Contact them directly and check the lead.",
+                pro=pro_name,
+            ),
+            "warning",
+        )
     if outcome == ASSIGN_LOOKUP_MISSED:
         return (
             _t(
@@ -115,14 +151,22 @@ def _assign_feedback(T, outcome, pro_name):
             ),
             "warning",
         )
-    return (
-        _t(
-            T,
-            "assign_failed",
-            "Assignment to {pro} failed. Re-check the lead before retrying.",
-            pro=pro_name,
-        ),
-        "warning",
+    return _assign_failed_message(T, pro_name), "error"
+
+
+def _assign_failed_message(T, pro_name):
+    """The copy for a failed assignment — and for anything unrecognised.
+
+    It must not say "nothing happened". The status write precedes the
+    notification, so a failure here genuinely may have assigned the lead; an
+    operator told it failed, who then picks a different pro, double-assigns.
+    """
+    return _t(
+        T,
+        "assign_failed",
+        "Assignment to {pro} may not have completed — the lead may be assigned "
+        "anyway. Check its status before assigning anyone else.",
+        pro=pro_name,
     )
 
 
@@ -205,14 +249,53 @@ def _render_skipped(T, skipped_rows):
     )
 
 
-def _render_pending_review_strip(T, pro_names, pro_map_name_to_id):
+def _waited_label(T, lead, now):
+    """How long this customer has been waiting, as one short phrase.
+
+    The ordering is otherwise invisible: without this the operator cannot see
+    that the top row has waited nine hours and the bottom one forty minutes,
+    which is the whole reason the list is sorted.
+    """
+    since = _pending_since(lead)
+    if not since:
+        return T.get("assign_waited_unknown", "waiting")
+    if since.tzinfo is None:
+        # pymongo hands back naive datetimes unless the client sets tz_aware;
+        # treating them as anything but UTC would shift every row by the
+        # local offset (the PRO-142 trap).
+        since = pytz.UTC.localize(since)
+    hours = max(0, int((now - since).total_seconds() // 3600))
+    if hours < 1:
+        return T.get("assign_waited_lt_hour", "waiting < 1h")
+    return _t(T, "assign_waited_hours", "waiting {n}h", n=hours)
+
+
+def _pending_since(lead):
+    """When this customer actually started waiting.
+
+    NOT ``created_at``: ``assign_lead_to_pro`` deliberately resets it on every
+    assignment so the Healer does not instantly re-reassign a freshly owned
+    lead. A customer who arrived at 06:00, was assigned at 10:00 and bounced
+    back here at 11:00 therefore carries ``created_at = 10:00`` and would sort
+    *below* one who arrived at 09:00 and was never assigned — the repeatedly
+    failed leads, which are exactly what this queue is for, would sink and the
+    cap could hide them entirely. ``status_history[0]`` is appended, never
+    rewritten, so it survives every reset.
+    """
+    history = lead.get("status_history") or []
+    if history and history[0].get("at"):
+        return history[0]["at"]
+    return lead.get("created_at")
+
+
+def _render_pending_review_strip(T):
     """One-click assignment for the leads nobody is working (PRO-188).
 
     A `PENDING_ADMIN_REVIEW` lead is a customer waiting with no pro attached —
     the most time-sensitive thing the panel shows and the action the operator
     performs most often. It used to cost six clicks through the generic edit
     form, the same form used to correct a phone number. Here it is three:
-    open the selectbox, pick a pro, press שייך.
+    open the selectbox, pick a pro, press the button.
 
     Assignment goes through `assign_pending_lead_sync`, which calls the very
     function the WhatsApp routing wizard calls — so the pro is notified on both
@@ -227,41 +310,87 @@ def _render_pending_review_strip(T, pro_names, pro_map_name_to_id):
     if not can_edit(get_current_role()):
         return
 
-    pending = list(
-        leads_collection.find({"status": LeadStatus.PENDING_ADMIN_REVIEW}).sort(
-            "created_at", 1
-        )
+    # Counted, then fetched: the page auto-refreshes (PRO-141), and materialising
+    # every stuck lead on every rerun to render a handful is work the database
+    # does for nobody. The count stays exact, so the heading is honest.
+    pending_total = leads_collection.count_documents(
+        {"status": LeadStatus.PENDING_ADMIN_REVIEW}
     )
-    # No stuck leads -> no strip at all. An empty frame with a heading reads as
+    # No stuck leads -> no strip at all. An empty frame under a heading reads as
     # a broken widget, and it costs the board vertical space to say nothing.
-    if not pending:
+    if not pending_total:
         return
 
-    st.markdown(
-        f"#### {_t(T, 'assign_strip_title', 'Needs a pro ({n})', n=len(pending))}"
+    # Sorted in Python, not Mongo: the real ordering key lives inside
+    # `status_history[0]`, and emergencies outrank age outright — an emergency
+    # raised two minutes ago must not sit behind five routine leads, or fall
+    # off the end of the cap. The fetch is bounded by the count above.
+    pending = sorted(
+        leads_collection.find({"status": LeadStatus.PENDING_ADMIN_REVIEW}).limit(
+            PENDING_STRIP_FETCH_MAX
+        ),
+        key=lambda l: (not l.get("is_emergency"), _pending_since(l) or datetime.max),
     )
-    st.caption(T.get("assign_strip_hint", "Assign a pro without leaving this screen."))
 
+    # Who may be offered a lead is `matching_service`'s question, not this
+    # view's — imported rather than re-typed. The first cut of this strip built
+    # its list from a bare `users_collection.find()`, which lists pros who are
+    # inactive or still queued for approval; combined with a selectbox that
+    # defaults to its first option, one click could hand a waiting customer's
+    # name and street address to somebody never approved to receive it.
+    assignable = list(users_collection.find(APPROVED_PRO_FILTER))
+
+    # PRO-61: one vocabulary per status. The metric tile and the Kanban header
+    # both name this status through `labels.py`; a third wording invented here
+    # would make one queue look like three things.
+    st.markdown(
+        f"#### {lead_status_label(T, LeadStatus.PENDING_ADMIN_REVIEW)} "
+        f"({pending_total})"
+    )
+    st.caption(T.get("assign_strip_hint", "Quick assignment to active pros."))
+
+    if not assignable:
+        # Once, not once per lead.
+        st.warning(T.get("assign_no_pros", "No professionals available."))
+        return
+
+    now = datetime.now(pytz.UTC)
     for lead in pending[:PENDING_STRIP_MAX]:
         lead_id = str(lead["_id"])
-        client = lead.get("display_name") or lead.get("customer_name") or ""
-        city = lead.get("city") or ""
-        issue = lead.get("issue_type") or lead.get("issue") or ""
-        # Oldest first, so the customer who has waited longest is at the top.
-        label = " · ".join(part for part in (client, city, issue) if part) or lead_id
+        # `client_label` is the panel's single answer to "what is this customer
+        # called" (PRO-163) — display_name, else their own name, else the phone.
+        # Reimplementing the first two rungs and replacing the third with a raw
+        # ObjectId gave the common case (no name extracted) a 24-hex string the
+        # operator cannot dial, search, or tell from the next one.
+        parts = [
+            client_label(lead),
+            lead.get("city") or "",
+            lead.get("issue_type") or "",
+        ]
+        label = " · ".join(p for p in parts if p)
+        if lead.get("is_emergency"):
+            label = f"🚨 {label}"
 
-        with st.expander(label, expanded=True):
-            # `pro_names[0]` is the "unassigned" placeholder the edit form uses;
-            # it must not be assignable here, so the options start past it.
-            options = pro_names[1:]
-            if not options:
-                st.warning(T.get("assign_no_pros", "No professionals available."))
-                continue
-
+        # A plain container, not an expander: an expander that is always open is
+        # ~50px of header per lead for nothing, and `st.expander` takes no key on
+        # the 1.31.1 pin, so `expanded=True` re-opens on every auto-refresh tick
+        # and undoes an operator who collapsed it to see the board.
+        with st.container():
+            st.markdown(f"**{label}** · {_waited_label(T, lead, now)}")
             col_pick, col_go = st.columns([3, 1])
+            # The options are the pro *documents*. Names are not unique —
+            # `business_name` carries only a TEXT index and self-onboarding
+            # defaults it to "" — so a name->id map collapses every pro sharing
+            # a name (every blank one included) onto whichever document Mongo
+            # returned last. `index=None` removes the other half: with a default
+            # selection, pressing the button without opening the dropdown
+            # assigns to whatever happened to sort first.
             choice = col_pick.selectbox(
-                T.get("assign_pick_pro", "Assign to"),
-                options,
+                T.get("assign_pick_pro", "Pick a professional"),
+                options=assignable,
+                format_func=lambda p: p.get("business_name") or str(p["_id"]),
+                index=None,
+                placeholder=T.get("assign_pick_pro", "Pick a professional"),
                 key=f"assign_pro_{lead_id}",
                 label_visibility="collapsed",
             )
@@ -270,35 +399,64 @@ def _render_pending_review_strip(T, pro_names, pro_map_name_to_id):
                 key=f"assign_go_{lead_id}",
                 type="primary",
                 use_container_width=True,
+                disabled=choice is None,
             ):
-                pro_id = pro_map_name_to_id.get(choice)
-                pro = users_collection.find_one({"_id": pro_id}) if pro_id else None
+                pro_id = choice["_id"]
+                # Re-read at click time, against the same eligibility filter: the
+                # option list was built when the page rendered, and a pro deleted
+                # or un-approved since must not become a dangling owner.
+                pro = users_collection.find_one({"_id": pro_id, **APPROVED_PRO_FILTER})
                 if not pro:
-                    # The pro list is built once per run; one deleted between
-                    # render and click must not be written as a dangling id.
+                    log_audit(
+                        "assign_lead",
+                        {
+                            "lead_id": lead_id,
+                            "pro_id": str(pro_id),
+                            "outcome": "pro_gone",
+                        },
+                    )
                     set_flash(
                         "assign_flash",
-                        T.get("assign_pro_gone", "That professional no longer exists."),
+                        T.get(
+                            "assign_pro_gone",
+                            "That professional is no longer available.",
+                        ),
                         "warning",
                     )
+                    st.cache_data.clear()
                     st.rerun()
+                    continue  # st.rerun() raises today; do not depend on that
 
-                outcome, pro_name = assign_pending_lead_sync(lead_id, pro)
+                # The call writes and sends, and may sit for up to
+                # ASSIGN_TIMEOUT_SECONDS. Without a spinner the operator sees
+                # nothing move, clicks again, and the second script run sends
+                # the pro a duplicate offer and the customer a duplicate promise.
+                with st.spinner(
+                    T.get("assign_in_progress", "Assigning and notifying…")
+                ):
+                    outcome, pro_name = assign_pending_lead_sync(lead_id, pro)
                 message, level = _assign_feedback(T, outcome, pro_name)
                 log_audit(
                     "assign_lead",
                     {"lead_id": lead_id, "pro_id": str(pro_id), "outcome": outcome},
                 )
                 set_flash("assign_flash", message, level)
+                # Every other mutation in this view clears the cache before
+                # rerunning. `leads_df` is cached for 30s, so without this the
+                # Kanban column right below the flash keeps showing the lead as
+                # waiting while the uncached metric tile above has already
+                # dropped — the operator is told two different things at once,
+                # having just acted.
+                st.cache_data.clear()
                 st.rerun()
 
-    hidden = len(pending) - PENDING_STRIP_MAX
+    hidden = pending_total - PENDING_STRIP_MAX
     if hidden > 0:
         st.caption(
             _t(
                 T,
                 "assign_strip_more",
-                "{n} more are waiting — see the board's first column.",
+                "{n} more are waiting. Assign these first, or use the lead editor below.",
                 n=hidden,
             )
         )

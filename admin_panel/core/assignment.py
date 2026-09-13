@@ -14,10 +14,13 @@ as ``lead_queries`` (PRO-161), ``schedule_queries`` (PRO-158) and
 living inside a view function nothing can reach.
 """
 
+import concurrent.futures
+
+from app.core.constants import LeadStatus
 from app.core.logger import logger
 from app.core.sync_bridge import run_blocking
 from app.providers.whatsapp import get_whatsapp
-from app.services.admin_flow import assign_lead_to_pro
+from app.services.admin_flow import LEAD_ALREADY_TAKEN, assign_lead_to_pro
 
 #: A write plus up to two outbound sends, each of which the facade may sit on.
 #: Longer than the 30s single-send bridge timeout for that reason, and bounded
@@ -37,6 +40,16 @@ ASSIGN_NOT_SENT = "not_sent"
 #: never attempted. Distinct from ``ASSIGN_NOT_SENT`` because conflating them
 #: would blame the pro's 24h window for a database problem.
 ASSIGN_LOOKUP_MISSED = "lookup_missed"
+#: The call timed out. Almost certainly assigned with the offer cancelled
+#: mid-send: `run_blocking` cancels on timeout, cancellation lands at the next
+#: ``await``, and the status write is the first statement — so this is
+#: ``ASSIGN_NOT_SENT``'s situation, not ``ASSIGN_FAILED``'s. Kept separate
+#: because we cannot *prove* the write landed, and the operator needs to hear
+#: both halves: contact the pro, and verify the lead.
+ASSIGN_TIMED_OUT = "timed_out"
+#: The lead was no longer PENDING_ADMIN_REVIEW when the write ran — somebody
+#: else already took it. Nothing was written.
+ASSIGN_STALE = "stale"
 #: The call raised. Nothing is *promised* about the lead — see the note in
 #: :func:`assign_pending_lead_sync`.
 ASSIGN_FAILED = "failed"
@@ -53,9 +66,15 @@ def assign_pending_lead_sync(
 ):
     """Assign ``lead_id`` to ``pro`` from synchronous panel code.
 
-    Returns ``(outcome, pro_name)`` where ``outcome`` is one of the four
-    ``ASSIGN_*`` constants above, so the caller renders the operator one of
-    four different sentences rather than a green tick over all of them.
+    Returns ``(outcome, pro_name)`` where ``outcome`` is one of the six
+    ``ASSIGN_*`` constants above, so the caller renders the operator one of six
+    different sentences rather than a green tick over all of them.
+
+    The write is guarded on the lead still being PENDING_ADMIN_REVIEW. The
+    button acts on an id captured when the page rendered, the page
+    auto-refreshes, and several operators may have it open — so "somebody else
+    already took this one" is a real outcome and gets its own answer rather than
+    quietly stealing the lead back.
 
     Never raises. A UI button handler that propagates is a traceback painted
     over the panel, and the operator's next move — assign somebody else — is
@@ -75,12 +94,34 @@ def assign_pending_lead_sync(
     a Redis client or a provider.
     """
     try:
-        offer_sent, pro_name = run(assign(lead_id, pro, whatsapp_factory()), timeout)
+        offer_sent, pro_name = run(
+            assign(
+                lead_id,
+                pro,
+                whatsapp_factory(),
+                expected_status=LeadStatus.PENDING_ADMIN_REVIEW,
+            ),
+            timeout,
+        )
+    except concurrent.futures.TimeoutError:
+        # Distinct from the generic failure below, because the situations differ
+        # and so does what the operator must do. `run_blocking` cancels the
+        # coroutine on timeout, but cancellation is cooperative: it lands at the
+        # next `await`, and the status write is the first statement. The lead is
+        # very likely assigned with the notification cancelled mid-send — which
+        # is the one outcome where nobody has told the pro and nobody will,
+        # unless the operator is told to phone them.
+        logger.error(f"[admin_panel] Assigning lead {lead_id} timed out at {timeout}s")
+        return ASSIGN_TIMED_OUT, ((pro or {}).get("business_name") or "")
     except Exception as e:
         # The lead id is not PII; the pro's phone would be, so it is not here.
         logger.error(f"[admin_panel] Assigning lead {lead_id} failed: {e}")
-        return ASSIGN_FAILED, (pro.get("business_name") or "")
+        # `(pro or {})`: this handler must not be able to raise either, or the
+        # traceback it exists to prevent lands anyway.
+        return ASSIGN_FAILED, ((pro or {}).get("business_name") or "")
 
+    if offer_sent is LEAD_ALREADY_TAKEN:
+        return ASSIGN_STALE, pro_name
     if offer_sent:
         return ASSIGN_SENT, pro_name
     if offer_sent is None:

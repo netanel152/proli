@@ -28,6 +28,20 @@ def get_coordinates(city_name: str):
     return ISRAEL_CITIES_COORDS.get(city_name.lower().strip())
 
 
+#: Who may be offered a lead at all: approved, active professionals.
+#: Shared rather than re-typed. A caller that writes its own version of this
+#: drops a clause sooner or later — the short form once lost
+#: ``pending_approval: {$ne: True}`` and started offering leads to pros still
+#: queued for approval (see the note in the reverse-match branch below), and
+#: PRO-188's admin-panel assignment strip reintroduced exactly that by building
+#: its own list off a bare ``users_collection.find()``.
+APPROVED_PRO_FILTER = {
+    "is_active": True,
+    "role": "professional",
+    "pending_approval": {"$ne": True},
+}
+
+
 async def determine_best_pro(
     issue_type: str = None, location: str = None, excluded_pro_ids: list = None
 ) -> dict:
@@ -41,11 +55,7 @@ async def determine_best_pro(
     """
     try:
         # 1. Base query filter — only fully approved, active professionals
-        base_filter = {
-            "is_active": True,
-            "role": "professional",
-            "pending_approval": {"$ne": True},
-        }
+        base_filter = dict(APPROVED_PRO_FILTER)
 
         if excluded_pro_ids:
             base_filter["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}

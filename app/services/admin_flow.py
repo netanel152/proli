@@ -225,7 +225,15 @@ async def _handle_pro_selection(chat_id, text, state_manager, whatsapp):
 # ---------------------------------------------------------------------------
 
 
-async def assign_lead_to_pro(lead_id, pro, whatsapp) -> tuple[bool | None, str]:
+#: Returned in place of ``offer_sent`` when an ``expected_status`` guard was
+#: asked for and the lead was no longer in that state — somebody else got there
+#: first. A distinct object rather than ``None``/``False`` because it is a third
+#: thing: nothing was written at all, so unlike every other outcome the lead is
+#: not assigned to this pro and the caller must not say it is.
+LEAD_ALREADY_TAKEN = object()
+
+
+async def assign_lead_to_pro(lead_id, pro, whatsapp, expected_status=None):
     """Assign ``lead_id`` to ``pro``, notify them, and tell the customer.
 
     The assignment itself, with no opinion about who asked for it. Extracted
@@ -240,6 +248,12 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp) -> tuple[bool | None, str]:
     would blame the pro's 24h window for a lookup failure and send the operator
     hunting the wrong problem. Every caller must say which of the three
     happened; the assignment stands either way.
+
+    ``expected_status`` makes the write conditional and race-safe. Left ``None``
+    (the wizard) the write is unconditional, exactly as before. Passed a status
+    (the panel) and the lead has since moved on, nothing is written and
+    :data:`LEAD_ALREADY_TAKEN` comes back in place of ``offer_sent`` — the one
+    outcome where the lead is *not* assigned to this pro.
     """
     # A human taking ownership is a fresh start for the lead (PRO-63). Without
     # resetting the counter, a lead escalated for exhausted reassignments comes
@@ -252,7 +266,7 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp) -> tuple[bool | None, str]:
     # `escalation_reason` lets the lead escalate again if this assignment also
     # fails; the PRO-56 flag/timestamp resets are hygiene for the new pro.
     now = datetime.now(timezone.utc)
-    await set_lead_status(
+    updated = await set_lead_status(
         lead_id,
         LeadStatus.NEW,
         Actor.ADMIN,
@@ -278,7 +292,20 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp) -> tuple[bool | None, str]:
             "admin_reported_at": "",
             "no_show_reported_at": "",
         },
+        # Opt-in, so the wizard keeps its unconditional write. The panel passes
+        # PENDING_ADMIN_REVIEW because its button acts on a lead_id captured
+        # when the page rendered, on a page that auto-refreshes and that several
+        # operators may have open. Without the guard, a second click pulls a
+        # lead that has since moved on back to NEW under a different pro,
+        # resetting created_at and reassignment_count and sending a second
+        # offer — and if it had reached BOOKED, that is a backward jump with
+        # nothing to justify it.
+        expected_status=expected_status,
     )
+    if expected_status is not None and updated is None:
+        return LEAD_ALREADY_TAKEN, (
+            pro.get("business_name") or Defaults.GENERIC_PRO_NAME
+        )
 
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
     pro_name = pro.get("business_name") or Defaults.GENERIC_PRO_NAME
@@ -337,6 +364,11 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
             chat_id,
             Messages.Admin.ASSIGN_OFFER_FAILED.format(pro_name=pro_name),
         )
+    # Masked: `chat_id` is the admin's WhatsApp id, i.e. their phone number, and
+    # `app/core/logger.py` derives its redaction list from Settings field names,
+    # so it does not scrub this for us. The core four lines up already masks the
+    # customer's the same way.
     logger.info(
-        f"[admin_flow] Lead {lead_id} assigned to pro {pro.get('_id')} by admin {chat_id}"
+        f"[admin_flow] Lead {lead_id} assigned to pro {pro.get('_id')} "
+        f"by admin ...{chat_id[-8:]}"
     )
