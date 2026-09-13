@@ -1029,6 +1029,49 @@ async def test_assign_lead_to_pro_core_lookup_miss_returns_none_and_skips_notify
 
 
 @pytest.mark.asyncio
+async def test_assign_lead_to_pro_core_expected_status_guard_rejects_stale_lead(
+    patch_admin_collections, mock_whatsapp, monkeypatch
+):
+    """The panel passes `expected_status=PENDING_ADMIN_REVIEW`: its button acts
+    on a lead_id captured when the page rendered, on an auto-refreshing page
+    several operators may have open. If the lead has since moved on, the write
+    must not happen at all — not partially, not with a different pro
+    overwritten — and the caller must be told via LEAD_ALREADY_TAKEN rather
+    than a silent success."""
+    db = patch_admin_collections
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(admin_flow, "notify_pro_new_lead", notify)
+
+    original_pro_id = ObjectId()
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.NEW,  # already moved on, no longer PENDING_ADMIN_REVIEW
+            "pro_id": original_pro_id,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+    new_pro = {"_id": ObjectId(), "business_name": "יוסי"}
+
+    offer_sent, pro_name = await admin_flow.assign_lead_to_pro(
+        str(lead_id),
+        new_pro,
+        mock_whatsapp,
+        expected_status=LeadStatus.PENDING_ADMIN_REVIEW,
+    )
+
+    assert offer_sent is admin_flow.LEAD_ALREADY_TAKEN
+    unchanged = await db.leads.find_one({"_id": lead_id})
+    assert unchanged["status"] == LeadStatus.NEW
+    assert unchanged["pro_id"] == original_pro_id
+    notify.assert_not_awaited()
+    mock_whatsapp.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_unknown_admin_state_resets_silently(
     patch_admin_collections, mock_state, mock_whatsapp
 ):

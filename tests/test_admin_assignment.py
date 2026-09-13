@@ -8,11 +8,13 @@ already used for `lead_queries`/`schedule_queries`/`analytics_queries`.
 """
 
 import asyncio
+import concurrent.futures
 
 import pytest
 from unittest.mock import MagicMock
 
 from admin_panel.core import assignment
+from app.core.constants import LeadStatus
 
 
 def _sync_run(coro, timeout):
@@ -31,10 +33,15 @@ def _sync_run(coro, timeout):
 def test_assign_pending_lead_sync_maps_tristate_to_outcome(
     offer_sent, expected_outcome
 ):
+    # Deliberately distinct from the pro's own business_name: if the wrapper
+    # ever fell back to the pro dict instead of returning the core's actual
+    # value, this would be the assertion that catches it.
     pro = {"_id": "pro1", "business_name": "יוסי"}
+    captured = {}
 
-    async def fake_assign(lead_id, pro_arg, whatsapp):
-        return offer_sent, "יוסי"
+    async def fake_assign(lead_id, pro_arg, whatsapp, expected_status=None):
+        captured["expected_status"] = expected_status
+        return offer_sent, "אבי אינסטלציה"
 
     outcome, pro_name = assignment.assign_pending_lead_sync(
         "lead1",
@@ -45,7 +52,10 @@ def test_assign_pending_lead_sync_maps_tristate_to_outcome(
     )
 
     assert outcome == expected_outcome
-    assert pro_name == "יוסי"
+    assert pro_name == "אבי אינסטלציה"
+    # The panel's write must be guarded on the lead still being under review —
+    # a correctness property (stale-click safety), not an implementation detail.
+    assert captured["expected_status"] == LeadStatus.PENDING_ADMIN_REVIEW
 
 
 def test_assign_pending_lead_sync_raising_returns_failed_with_pro_name_from_pro_dict():
@@ -55,7 +65,7 @@ def test_assign_pending_lead_sync_raising_returns_failed_with_pro_name_from_pro_
     failure message still names somebody."""
     pro = {"_id": "pro1", "business_name": "אבי אינסטלציה"}
 
-    async def boom(lead_id, pro_arg, whatsapp):
+    async def boom(lead_id, pro_arg, whatsapp, expected_status=None):
         raise RuntimeError("boom")
 
     outcome, pro_name = assignment.assign_pending_lead_sync(
@@ -79,7 +89,7 @@ def test_assign_pending_lead_sync_resolves_facade_via_factory_and_passes_result(
     fake_factory = MagicMock(return_value=sentinel_whatsapp)
     captured = {}
 
-    async def fake_assign(lead_id, pro_arg, whatsapp):
+    async def fake_assign(lead_id, pro_arg, whatsapp, expected_status=None):
         captured["whatsapp"] = whatsapp
         return True, "יוסי"
 
@@ -93,3 +103,71 @@ def test_assign_pending_lead_sync_resolves_facade_via_factory_and_passes_result(
 
     fake_factory.assert_called_once()
     assert captured["whatsapp"] is sentinel_whatsapp
+
+
+def test_assign_pending_lead_sync_timeout_returns_timed_out_not_failed():
+    """`concurrent.futures.TimeoutError` is caught before the generic
+    `Exception` handler: `run_blocking` cancels on timeout and the status
+    write is the coroutine's first statement, so a timeout almost certainly
+    means assigned-with-the-offer-cancelled — ASSIGN_NOT_SENT's situation,
+    not ASSIGN_FAILED's silence-about-the-write."""
+    pro = {"_id": "pro1", "business_name": "יוסי"}
+
+    def timing_out_run(coro, timeout):
+        coro.close()  # avoid an "unawaited coroutine" warning
+        raise concurrent.futures.TimeoutError()
+
+    async def fake_assign(lead_id, pro_arg, whatsapp, expected_status=None):
+        return True, "יוסי"
+
+    outcome, pro_name = assignment.assign_pending_lead_sync(
+        "lead1",
+        pro,
+        assign=fake_assign,
+        whatsapp_factory=MagicMock(return_value=MagicMock()),
+        run=timing_out_run,
+    )
+
+    assert outcome == assignment.ASSIGN_TIMED_OUT
+    assert outcome != assignment.ASSIGN_FAILED
+    assert pro_name == "יוסי"
+
+
+def test_assign_pending_lead_sync_stale_lead_returns_assign_stale():
+    """The one outcome where the lead is NOT assigned to this pro — somebody
+    else already took it between page render and button click."""
+    pro = {"_id": "pro1", "business_name": "יוסי"}
+
+    async def fake_assign(lead_id, pro_arg, whatsapp, expected_status=None):
+        return assignment.LEAD_ALREADY_TAKEN, "יוסי"
+
+    outcome, pro_name = assignment.assign_pending_lead_sync(
+        "lead1",
+        pro,
+        assign=fake_assign,
+        whatsapp_factory=MagicMock(return_value=MagicMock()),
+        run=_sync_run,
+    )
+
+    assert outcome == assignment.ASSIGN_STALE
+    assert pro_name == "יוסי"
+
+
+def test_assign_pending_lead_sync_pro_none_raising_assign_returns_failed_empty_name():
+    """Pins the `(pro or {})` guard in the exception handler: a `None` pro
+    plus a raising `assign` must still land on ASSIGN_FAILED with an empty
+    name, never an AttributeError from `.get` on `None`."""
+
+    async def boom(lead_id, pro_arg, whatsapp, expected_status=None):
+        raise RuntimeError("boom")
+
+    outcome, pro_name = assignment.assign_pending_lead_sync(
+        "lead1",
+        None,
+        assign=boom,
+        whatsapp_factory=MagicMock(return_value=MagicMock()),
+        run=_sync_run,
+    )
+
+    assert outcome == assignment.ASSIGN_FAILED
+    assert pro_name == ""
