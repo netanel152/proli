@@ -36,7 +36,7 @@ from bson.errors import InvalidId
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.logger import logger
 from app.core.messages import Messages
-from app.core.phone import to_chat_id, strip_suffix
+from app.core.phone import to_chat_id, strip_suffix, mask_chat_id
 from app.core.text_matching import contains_keyword
 
 
@@ -215,11 +215,11 @@ async def guard_inbound_rate_limit(ctx: DispatchContext, deps: GuardDeps):
         ctx.chat_id, WorkerConstants.INBOUND_RATE_LIMIT_WINDOW_SECONDS
     )
     logger.warning(
-        f"⛔ Inbound rate limit hit for ...{ctx.chat_id[-8:]} (trip {trips})"
+        f"⛔ Inbound rate limit hit for {mask_chat_id(ctx.chat_id)} (trip {trips})"
     )
     if trips >= WorkerConstants.RATE_LIMIT_ABUSE_TRIP_THRESHOLD:
         logger.error(
-            f"🚨 Possible abuse: ...{ctx.chat_id[-8:]} tripped the rate limit {trips}x"
+            f"🚨 Possible abuse: {mask_chat_id(ctx.chat_id)} tripped the rate limit {trips}x"
         )
     await deps.whatsapp.send_message(ctx.chat_id, Messages.Errors.RATE_LIMITED)
     return HANDLED
@@ -349,7 +349,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
     # Refresh state after potential consent state changes
     await ctx.refresh_state(deps.state_manager)
-    logger.info(f"🚦 User ...{ctx.chat_id[-8:]} is in State: {ctx.current_state}")
+    logger.info(f"🚦 User {mask_chat_id(ctx.chat_id)} is in State: {ctx.current_state}")
     return None
 
 
@@ -408,7 +408,7 @@ async def guard_sos_human_handoff(ctx: DispatchContext, deps: GuardDeps):
         ctx.chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS
     )
     logger.info(
-        f"Bot paused for ...{ctx.chat_id[-8:]} (triggered by: customer_sos, TTL: {WorkerConstants.PAUSE_TTL_SECONDS}s)"
+        f"Bot paused for {mask_chat_id(ctx.chat_id)} (triggered by: customer_sos, TTL: {WorkerConstants.PAUSE_TTL_SECONDS}s)"
     )
 
     active_lead = await wf.leads_collection.find_one(
@@ -588,7 +588,7 @@ async def guard_paused_for_human(ctx: DispatchContext, deps: GuardDeps):
         )
         if paused_lead:
             logger.error(
-                f"🚑 Emergency declared by ...{ctx.chat_id[-8:]} while paused for a "
+                f"🚑 Emergency declared by {mask_chat_id(ctx.chat_id)} while paused for a "
                 f"human (lead={paused_lead['_id']}) — alerting the operator"
             )
             await wf.send_sos_alert(
@@ -612,7 +612,7 @@ async def guard_paused_for_human(ctx: DispatchContext, deps: GuardDeps):
     )
 
     logger.info(
-        f"Bot paused for ...{ctx.chat_id[-8:]} — message logged and timeout reset to {WorkerConstants.PAUSE_TTL_SECONDS}s"
+        f"Bot paused for {mask_chat_id(ctx.chat_id)} — message logged and timeout reset to {WorkerConstants.PAUSE_TTL_SECONDS}s"
     )
     return HANDLED
 
@@ -759,7 +759,7 @@ async def guard_loyalty_confirmation(ctx: DispatchContext, deps: GuardDeps):
         )
         return HANDLED
     logger.info(
-        f"Loyalty offer unanswered twice by ...{ctx.chat_id[-8:]} — releasing to "
+        f"Loyalty offer unanswered twice by {mask_chat_id(ctx.chat_id)} — releasing to "
         "normal routing"
     )
     await deps.state_manager.clear_state(ctx.chat_id)
@@ -818,7 +818,7 @@ async def guard_new_or_existing(ctx: DispatchContext, deps: GuardDeps):
                         )
         except Exception as e:
             logger.error(
-                f"Existing-job handoff to pro failed for ...{ctx.chat_id[-8:]}: {e}"
+                f"Existing-job handoff to pro failed for {mask_chat_id(ctx.chat_id)}: {e}"
             )
         await deps.state_manager.set_state(
             ctx.chat_id,
@@ -893,7 +893,7 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
             ctx.chat_id, Messages.Customer.CANCEL_CONFIRM_PROMPT
         )
         logger.info(
-            f"Customer ...{ctx.chat_id[-8:]} asked to cancel BOOKED lead "
+            f"Customer {mask_chat_id(ctx.chat_id)} asked to cancel BOOKED lead "
             f"{booked_lead['_id']} — awaiting confirmation"
         )
         return HANDLED
@@ -928,7 +928,7 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
         Messages.Customer.RESCHEDULE_OFFER.format(slots="\n".join(lines)),
     )
     logger.info(
-        f"Customer ...{ctx.chat_id[-8:]} offered reschedule for lead {booked_lead['_id']}"
+        f"Customer {mask_chat_id(ctx.chat_id)} offered reschedule for lead {booked_lead['_id']}"
     )
     return HANDLED
 
@@ -960,7 +960,7 @@ async def guard_customer_mode_switch(ctx: DispatchContext, deps: GuardDeps):
                 ctx.chat_id, Messages.Pro.SWITCHED_TO_CUSTOMER
             )
             logger.info(
-                f"Pro ...{ctx.chat_id[-8:]} switched to CUSTOMER_MODE via keyword"
+                f"Pro {mask_chat_id(ctx.chat_id)} switched to CUSTOMER_MODE via keyword"
             )
             return HANDLED
     return None
@@ -997,7 +997,7 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
             )
             if defer_to_customer_flow:
                 logger.info(
-                    f"Pro ...{ctx.chat_id[-8:]} sent ambiguous keyword with a customer "
+                    f"Pro {mask_chat_id(ctx.chat_id)} sent ambiguous keyword with a customer "
                     f"prompt open — staying in {ctx.current_state}"
                 )
             else:
@@ -1080,7 +1080,7 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
                 },
             )
             logger.info(
-                f"🚪 AWAITING_ADDRESS cancelled by user for ...{ctx.chat_id[-8:]} "
+                f"🚪 AWAITING_ADDRESS cancelled by user for {mask_chat_id(ctx.chat_id)} "
                 f"(lead={cancelled_lead['_id']})"
             )
         await deps.state_manager.clear_state(ctx.chat_id)
@@ -1121,7 +1121,7 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
     if not ctx.is_exempt and not await deps.security.check_and_increment_daily_ai_cap(
         ctx.chat_id, WorkerConstants.DAILY_AI_CALL_CAP
     ):
-        logger.warning(f"⛔ Daily AI cap reached for ...{ctx.chat_id[-8:]}")
+        logger.warning(f"⛔ Daily AI cap reached for {mask_chat_id(ctx.chat_id)}")
         await deps.whatsapp.send_message(
             ctx.chat_id, Messages.Errors.DAILY_AI_CAP_REACHED
         )
@@ -1135,7 +1135,7 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         )
     except Exception as e:
         logger.error(
-            f"AWAITING_ADDRESS re-extraction failed for ...{ctx.chat_id[-8:]}: {e}"
+            f"AWAITING_ADDRESS re-extraction failed for {mask_chat_id(ctx.chat_id)}: {e}"
         )
         await deps.whatsapp.send_message(ctx.chat_id, Messages.Errors.AI_OVERLOAD)
         return HANDLED
@@ -1151,9 +1151,14 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         "apartment": follow_up.extracted_data.apartment or lead_facts.get("apartment"),
     }
     logger.info(
-        f"🔍 AWAITING_ADDRESS re-extraction for ...{ctx.chat_id[-8:]}: "
+        f"🔍 AWAITING_ADDRESS re-extraction for {mask_chat_id(ctx.chat_id)}: "
         f"new_from_ai={[k for k, v in merged.items() if v and not lead_facts.get(k)]}, "
-        f"merged={ {k: v for k, v in merged.items() if v} }"
+        # Keys, not values. `merged` holds customer_name/street/street_number/
+        # floor/apartment, so rendering the dict put the customer's name and
+        # home address into an indexed log line — strictly more than the
+        # `full_address` removed a few lines below. `new_from_ai` above already
+        # carries the diagnostic: which fields this pass actually added.
+        f"merged_present={sorted(k for k, v in merged.items() if v)}"
     )
     non_empty = {k: v for k, v in merged.items() if v}
     if non_empty:
@@ -1185,13 +1190,14 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
             # masked nothing — and since PRO-184 these lines are indexed and
             # searchable, so the same rule applies here. That it is complete is
             # the fact worth recording; what it says is in the lead document.
-            f"✅ AWAITING_ADDRESS complete for ...{ctx.chat_id[-8:]}"
+            f"✅ AWAITING_ADDRESS complete for {mask_chat_id(ctx.chat_id)} "
+            f"(lead={active_lead_await['_id']})"
         )
         return HANDLED
     else:
         await deps.whatsapp.send_message(ctx.chat_id, reason)
         logger.info(
-            f"⏳ AWAITING_ADDRESS still missing parts for ...{ctx.chat_id[-8:]}: {reason}"
+            f"⏳ AWAITING_ADDRESS still missing parts for {mask_chat_id(ctx.chat_id)}: {reason}"
         )
         return HANDLED
 
@@ -1240,7 +1246,7 @@ async def guard_pro_autodetect(ctx: DispatchContext, deps: GuardDeps):
         # matches Redis for anyone extending this block.
         ctx.current_state = UserStates.CUSTOMER_MODE
         logger.info(
-            f"Restored CUSTOMER_MODE for pro ...{ctx.chat_id[-8:]} — own lead still open"
+            f"Restored CUSTOMER_MODE for pro {mask_chat_id(ctx.chat_id)} — own lead still open"
         )
         return None
 
@@ -1316,7 +1322,7 @@ async def guard_pending_admin_review_shortcircuit(
             {"$set": {"last_pending_ack_at": now}},
         )
     logger.info(
-        f"🔒 PENDING_ADMIN_REVIEW short-circuit for ...{ctx.chat_id[-8:]} "
+        f"🔒 PENDING_ADMIN_REVIEW short-circuit for {mask_chat_id(ctx.chat_id)} "
         f"(lead={pending_admin_lead['_id']}, ack_sent={should_ack})"
     )
     # PRO-121: this short-circuit is a 24h hold keyed on lead status, so the
