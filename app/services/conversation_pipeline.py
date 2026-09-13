@@ -23,8 +23,9 @@ How collaborators are reached
 Every one of them is resolved in the prologue of `run_customer_pipeline`, per
 call, and never at import:
 
-* the five on `GuardDeps` come from `deps`, which is the dependency-injection
-  seam `customer_flow` and `pro_flow` already use;
+* five of `GuardDeps`' six fields come from `deps`, which is the
+  dependency-injection seam `customer_flow` and `pro_flow` already use
+  (`settings` is the sixth and has no reader here);
 * everything else comes from `wf.<name>` through a call-time
   ``from app.services import workflow_service as wf``.
 
@@ -73,7 +74,12 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     from app.services import workflow_service as wf
 
     # --- prologue: collaborators, resolved per call --------------------------
-    # `deps` carries the five the guard chain also uses.
+    # Five of `GuardDeps`' six fields (`settings` has no reader here), carried
+    # in from the chain. One resolution-timing note: `deps` is built *before*
+    # `run_guard_chain`, where the pre-image read these five as module globals
+    # *after* it. Equivalent only while nothing rebinds them mid-turn, and
+    # nothing does — neither this module nor `dispatch_guards` has a `global`
+    # statement, and every test patch lands at setup, before the turn starts.
     whatsapp = deps.whatsapp
     StateManager = deps.state_manager
     ContextManager = deps.context_manager
@@ -108,6 +114,15 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     # falling through, and the emergency hoist (PRO-180) sets
     # `emergency_inbound_logged` so step 1 does not log the same turn twice —
     # so this must take the post-chain values, not the pre-chain ones.
+    #
+    # Only three of the seven are actually mutated, though. `chat_id`,
+    # `user_text` and `media_url` were `_process_incoming_message_inner`'s
+    # *parameters* in the pre-image and were never re-read from `ctx`; taking
+    # them off `ctx` here is equivalent only because no guard assigns them. That
+    # is a property the chain now has to preserve rather than one it happens to
+    # have: a guard that rewrote `ctx.user_text` used to be ignored below this
+    # line and would now be honoured. Said out loud because the widening is
+    # invisible in a diff that is otherwise byte-identical.
     chat_id = ctx.chat_id
     user_text = ctx.user_text
     media_url = ctx.media_url
