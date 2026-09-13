@@ -2654,18 +2654,25 @@ async def test_typing_indicator_task_name_carries_masked_phone_suffix(
 
     def spy(coro, *, name):
         captured["name"] = name
-        captured["task"] = real_spawn(coro, name=name)
-        return captured["task"]
+        # Collected rather than overwritten. workflow_service's spawn site is
+        # single and non-looping today, so this is shape-matching with
+        # test_ai_parsing rather than a live hazard -- but a spy that silently
+        # drops all but the last task is the kind of thing that only becomes
+        # wrong later, quietly.
+        task = real_spawn(coro, name=name)
+        captured.setdefault("tasks", []).append(task)
+        return task
 
     monkeypatch.setattr(app.services.workflow_service, "spawn_background_task", spy)
 
     await process_incoming_message(chat_id, "שלום")
 
-    # PRO-187: await *this* test's task, not the whole registry. Draining
+    # PRO-187: await *this* test's tasks, not the whole registry. Draining
     # pending_background_tasks() meant awaiting whatever an earlier test had
     # left behind -- a task bound to a loop pytest-asyncio has since closed,
     # which raises "attached to a different loop" depending on run order.
-    await captured["task"]
+    for task in captured.get("tasks", []):
+        await task
 
     assert captured["name"] == f"typing:{mask_chat_id(chat_id)}"
     assert "972501234567" not in captured["name"]

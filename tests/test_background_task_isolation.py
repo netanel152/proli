@@ -18,7 +18,12 @@ from pathlib import Path
 
 import pytest
 
-import tests.conftest as conftest
+# `conftest`, not `tests.conftest`: tests/ has no __init__.py, so pytest
+# registers the file under the bare name and `import tests.conftest` would
+# execute it a *second* time through the namespace package -- a separate
+# module object with its own _evicted_background_tasks, which is not the one
+# the fixture mutates. Asserting against that copy would pass by accident.
+import conftest
 from app.core.background_tasks import pending_background_tasks, spawn_background_task
 
 
@@ -47,8 +52,9 @@ async def test_leaked_task_does_not_leave_registry_for_next_test():
 @pytest.mark.asyncio
 async def test_registry_is_still_empty_after_a_leaker_ran():
     """Companion to the two tests above: run right after a leaking test (by
-    file order) and the registry must already be clear again, proving setup
-    -- not luck -- is what isolates it."""
+    file order) and the registry must already be clear again, proving the
+    fixture -- its teardown half -- is what isolates it, not luck of
+    timing."""
     assert pending_background_tasks() == set()
 
 
@@ -139,6 +145,7 @@ def test_narrowed_readers_no_longer_drain_the_whole_registry(filename):
     check rather than a run: the failure is order-dependent and isn't
     reliably reproducible in-process within a single suite run."""
     path = Path(__file__).parent / filename
+    assert path.exists(), f"{filename} was renamed -- update this guard"
     contents = path.read_text(encoding="utf-8")
 
     drain_pattern = re.compile(
@@ -151,7 +158,13 @@ def test_narrowed_readers_no_longer_drain_the_whole_registry(filename):
         r"(?:\w+\.)?pending_background_tasks\(\)"
         r"[\s)]*:\s*\n\s*await\s+\w+"
     )
-    assert not drain_pattern.search(contents), (
-        f"{path} appears to drain the whole background-task registry again; "
-        "await only the task your own spy captured (see PRO-187)."
+    # The other realistic re-regression: gathering the registry rather than
+    # looping it. Same defect, so the same guard has to see it.
+    gather_pattern = re.compile(
+        r"gather\(\s*\*\s*(?:\w+\.)?pending_background_tasks\(\)"
     )
+    for pattern in (drain_pattern, gather_pattern):
+        assert not pattern.search(contents), (
+            f"{path} appears to drain the whole background-task registry "
+            "again; await only the tasks your own spy captured (see PRO-187)."
+        )

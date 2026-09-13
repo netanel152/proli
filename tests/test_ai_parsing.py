@@ -205,8 +205,15 @@ async def test_analyze_conversation_spawns_named_token_tracking_task_for_pro(
 
     def spy(coro, *, name):
         spawned["name"] = name
-        spawned["task"] = real_spawn(coro, name=name)
-        return spawned["task"]
+        # Collected, not overwritten: ai_engine_service spawns this inside the
+        # `for model_name in self.model_hierarchy` retry loop, so a parse
+        # failure on the first model falls through and spawns a second task
+        # with the same name. Keeping only the last would make
+        # total_tokens_used depend on which one the single await happened to
+        # run.
+        task = real_spawn(coro, name=name)
+        spawned.setdefault("tasks", []).append(task)
+        return task
 
     monkeypatch.setattr(ai_engine_module, "spawn_background_task", spy)
 
@@ -214,9 +221,10 @@ async def test_analyze_conversation_spawns_named_token_tracking_task_for_pro(
         [], "Hi", custom_system_prompt="", pro_id=pro_id
     )
 
-    # PRO-187: await *this* test's task, not the whole registry -- a leftover
+    # PRO-187: await *this* test's tasks, not the whole registry -- a leftover
     # from an earlier test is bound to a loop that no longer exists.
-    await spawned["task"]
+    for task in spawned.get("tasks", []):
+        await task
 
     assert spawned.get("name") == f"track_token_usage:{pro_id}"
     updated = await mock_db.users.find_one({"_id": ObjectId(pro_id)})

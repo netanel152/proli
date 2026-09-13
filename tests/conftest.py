@@ -81,13 +81,19 @@ def _isolate_background_tasks():
     no reason to await. Leaking here is the fire-and-forget contract working
     as designed, so the harness isolates rather than accuses.
 
-    The teardown half is what delivers the isolation; the setup clear is a
-    backstop, and honestly a redundant one on the normal path -- remove it and
-    the suite still passes, because teardown has already emptied the registry
-    before the next test starts. It earns its line only where teardown did not
-    run: a fixture further down the autouse chain that spawns work while
-    tearing down after this one, or an interpreter-level abort. Kept because it
-    costs one statement, not because a test would catch its absence.
+    The teardown half is what delivers the isolation; the setup call is a
+    backstop, and a redundant one on the normal path -- remove it and the suite
+    still passes, because teardown has already emptied the registry before the
+    next test starts. It earns its line only where teardown did not run: a
+    fixture further down the autouse chain that spawns work while tearing down
+    after this one, or an interpreter-level abort. Kept because it costs one
+    statement, not because a test would catch its absence.
+
+    Both halves go through the same helper rather than the setup one clearing
+    directly. On precisely the path the setup call exists for, the registry is
+    non-empty, and a bare ``clear()`` there would drop the last strong
+    reference to a still-pending task -- reintroducing the GC-mid-await failure
+    PRO-143 exists to prevent, in the one place this fixture was added to cover.
 
     Teardown evicts rather than cancels, deliberately. At this point the
     test's loop is not running and will not run again, so a ``cancel()`` can
@@ -100,7 +106,7 @@ def _isolate_background_tasks():
     Production code is untouched: the registry earns its keep at runtime,
     where nothing tears the loop down between callers.
     """
-    background_tasks._background_tasks.clear()
+    evict_leftover_background_tasks()
     yield
     evict_leftover_background_tasks()
 
