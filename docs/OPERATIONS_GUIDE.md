@@ -193,6 +193,7 @@ Manage admins under **Settings → Admin Users** (Owner only). All actions are l
 - Change status, assigned pro, issue details
 - Click **Save Changes** to persist to MongoDB
 - **Auto-refresh** (sidebar toggle, PRO-141): a client-side timer, so the page stays clickable between ticks — unlike the old sleep-based refresh, it does not freeze the panel. It pauses itself (and shows "refresh paused — unsaved table edits") while the leads table has uncommitted edits, so a tick can't discard work in progress.
+- **Pending-review assignment strip** (PRO-188): `PENDING_ADMIN_REVIEW` leads (up to 5, emergencies first) get a one-click "pick a pro → Assign" row above the Kanban board instead of the generic edit form — pick a pro, notified through the same path as the WhatsApp Admin Routing Wizard, with the outcome (sent / assigned-but-not-sent / timed out / stale / failed) reported rather than a blanket success.
 
 ### Professional Management
 
