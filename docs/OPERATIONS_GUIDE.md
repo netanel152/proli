@@ -51,6 +51,18 @@ Proli uses **Loguru** with PII masking applied to all sinks.
 - **PII masking:** Israeli phone numbers are masked in all environments: `972521234567` → `97252****567`.
 - **Address masking (PRO-174):** Hebrew street addresses are replaced with `***ADDRESS***`, leaving the trailing `, <city>` intact as triage context. Latin-script addresses are a known uncovered gap.
 - **Secret redaction (PRO-80):** known secret values are replaced with `***REDACTED***` wherever they appear in a log line — a URL query string (e.g. the uvicorn access line `POST /webhook?token=…`), a URL path, an exception string, etc. Complements PRO-79, which suppresses `httpx`/`httpcore` INFO request logs at the source. Since PRO-94 the redaction list is sourced automatically from every `SecretStr` field on `Settings`, so the PRO-89 `META_ACCESS_TOKEN`/`META_APP_SECRET`/`META_VERIFY_TOKEN` are covered without any redaction-list change.
+- **Chat id / free-text masking at the call site (PRO-191):** the sink-level filters above scrub the *rendered message* for phone- and street-shaped patterns; they don't know a raw `chat_id`, `full_address`, `customer_name`, `transcription` or similar field was ever there. A `chat_id` interpolated into a log line must go through `app/core/phone.py`'s `mask_chat_id`; the other fields shouldn't be logged at all (log presence/shape instead — a length, a boolean, a key list). `tests/test_log_pii.py` enforces this as a ratchet over `app/` and `admin_panel/`: zero violations in any new file, and the known remaining debt (38 lines across 12 files) can only shrink, never grow.
+
+  **Why the sink filters are not enough, measured rather than assumed.** They are regexes over the rendered message, so they catch PII in the shapes they were written for and miss it in every other shape. All three of these were live before PRO-191:
+
+  | logged | what actually reached the log |
+  |---|---|
+  | `f"...{chat_id}"` (a `972…` id) | `97250****567@c.us` — partly masked, 5 real digits left |
+  | `f"full_address={full!r}"` | `'***ADDRESS***, תל אביב, …'` — caught |
+  | `f"merged={dict}"` | `{'customer_name': 'דני כהן', 'street': 'הרצל', 'street_number': '12'}` — **untouched** |
+  | `f"Notified pro {phone}"` (local `05…` format) | `0501234567` — **untouched** |
+
+  `_ADDRESS_PATTERN` needs street-word/house-number adjacency, which a dict repr breaks with quotes and commas; `_PHONE_PATTERN` is anchored on the `972` prefix, which a locally-formatted number does not have. Structured output walks straight past both. Mask at the call site.
 - **Token Accounting (FinOps):** AI token usage is tracked per `pro_id` and stored in the `total_tokens_used` field of the `users` collection. This is handled by a fire-and-forget background task.
 
 Log patterns to watch:

@@ -282,7 +282,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     acquired = await acquire_chat_lock(chat_id, ttl=10)
     if not acquired:
         logger.info(
-            f"🔒 Chat lock held for {chat_id} — another task is mid-flight; deferring"
+            f"🔒 Chat lock held for {mask_chat_id(chat_id)} — another task is mid-flight; deferring"
         )
         raise ChatLockBusyError(chat_id)
 
@@ -332,7 +332,7 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
     if not past_pro:
         # Offered while active, deactivated since (or corrupt metadata).
         logger.info(
-            f"Loyalty offer accepted by ...{chat_id[-8:]} but pro {past_pro_id} is "
+            f"Loyalty offer accepted by {mask_chat_id(chat_id)} but pro {past_pro_id} is "
             "no longer available — falling back to normal matching"
         )
         return False
@@ -375,7 +375,7 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
         await whatsapp.send_message(chat_id, ack)
         await lead_manager.log_message(chat_id, "model", ack)
         logger.info(
-            f"Loyalty accepted by ...{chat_id[-8:]} — pro {past_pro['_id']} saved, "
+            f"Loyalty accepted by {mask_chat_id(chat_id)} — pro {past_pro['_id']} saved, "
             "address incomplete so intake continues"
         )
         return True
@@ -421,7 +421,7 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
     )
     if updated is None:
         logger.info(
-            f"Loyalty dispatch for ...{chat_id[-8:]} lost the status race on lead "
+            f"Loyalty dispatch for {mask_chat_id(chat_id)} lost the status race on lead "
             f"{active_lead['_id']} — leaving it to the current owner"
         )
         # None (not False) so the caller can tell "the lead moved under you"
@@ -440,7 +440,7 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
         # a valid loyalty preference over what may be a transient failure.
         logger.error(
             f"Loyalty dispatch to pro {past_pro['_id']} failed to send for "
-            f"...{chat_id[-8:]} — SLA monitor will recover the lead"
+            f"{mask_chat_id(chat_id)} — SLA monitor will recover the lead"
         )
     await StateManager.set_state(
         chat_id,
@@ -451,7 +451,7 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
     await whatsapp.send_message(chat_id, ack)
     await lead_manager.log_message(chat_id, "model", ack)
     logger.info(
-        f"Loyalty accepted by ...{chat_id[-8:]} — lead {active_lead['_id']} "
+        f"Loyalty accepted by {mask_chat_id(chat_id)} — lead {active_lead['_id']} "
         f"dispatched to pro {past_pro['_id']}"
     )
     return True
@@ -491,7 +491,7 @@ async def _execute_customer_cancel(booked_lead, chat_id: str) -> None:
     await ContextManager.clear_context(chat_id)
     await whatsapp.send_message(chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD)
     logger.info(
-        f"Customer ...{chat_id[-8:]} cancelled BOOKED lead {booked_lead['_id']}"
+        f"Customer {mask_chat_id(chat_id)} cancelled BOOKED lead {booked_lead['_id']}"
     )
     if pro_id:
         pro = await users_collection.find_one({"_id": pro_id})
@@ -598,7 +598,7 @@ async def _escalate_emergency(chat_id: str, current_state, user_text: str = ""):
             return None, None
         await StateManager.clear_state(chat_id)
         logger.info(
-            f"🚑 Emergency released {_state_label(current_state)} for ...{chat_id[-8:]} "
+            f"🚑 Emergency released {_state_label(current_state)} for {mask_chat_id(chat_id)} "
             "with no "
             "active lead — routing to intake"
         )
@@ -610,7 +610,7 @@ async def _escalate_emergency(chat_id: str, current_state, user_text: str = ""):
             {"_id": active_lead["_id"]}, {"$set": {"is_emergency": True}}
         )
         logger.warning(
-            f"🚑 Emergency declared mid-conversation by ...{chat_id[-8:]} in state "
+            f"🚑 Emergency declared mid-conversation by {mask_chat_id(chat_id)} in state "
             f"{_state_label(current_state)} (lead={active_lead['_id']}) — escalating"
         )
 
@@ -652,7 +652,7 @@ async def _escalate_emergency(chat_id: str, current_state, user_text: str = ""):
         known_city = active_lead.get("city") or active_lead.get("full_address")
         if known_city:
             logger.info(
-                f"🚑 Emergency released the address gate for ...{chat_id[-8:]} "
+                f"🚑 Emergency released the address gate for {mask_chat_id(chat_id)} "
                 f"(city={known_city!r}) — routing to matching"
             )
             return "released", (
@@ -679,7 +679,7 @@ async def _escalate_emergency(chat_id: str, current_state, user_text: str = ""):
     await StateManager.clear_state(chat_id)
     logger.info(
         f"🚑 Emergency dropped the {_state_label(current_state)} menu for "
-        f"...{chat_id[-8:]} — "
+        f"{mask_chat_id(chat_id)} — "
         "routing normally"
     )
     return "released", (
@@ -778,7 +778,7 @@ async def _process_incoming_message_inner(
         try:
             media_data, media_mime = await detect_and_fetch_media(media_url)
         except Exception as e:
-            logger.warning(f"Media fetch failed for {chat_id}: {e}")
+            logger.warning(f"Media fetch failed for {mask_chat_id(chat_id)}: {e}")
 
     # 4. Check for existing active lead with assigned pro (skip dispatcher if so)
     active_lead = await leads_collection.find_one(
@@ -841,14 +841,16 @@ async def _process_incoming_message_inner(
     if not active_lead:
         await ContextManager.clear_context(chat_id)
         logger.info(
-            f"🧼 No active lead for {chat_id} — cleared stale context before new dispatcher run"
+            f"🧼 No active lead for {mask_chat_id(chat_id)} — cleared stale context before new dispatcher run"
         )
 
     history = await lead_manager.get_chat_history(chat_id)
 
     # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
     if existing_pro and active_lead:
-        logger.info(f"⚡ Skipping dispatcher — pro already assigned for {chat_id}")
+        logger.info(
+            f"⚡ Skipping dispatcher — pro already assigned for {mask_chat_id(chat_id)}"
+        )
         # NOTE: the inbound was already logged once at the top of this function
         # (step 1). Do NOT log it again here — a second log_message duplicated
         # every user turn in history and in the AI context window (PRO-116 Q5).
@@ -882,7 +884,7 @@ async def _process_incoming_message_inner(
                 chat_id, WorkerConstants.DAILY_AI_CALL_CAP
             )
         ):
-            logger.warning(f"⛔ Daily AI cap reached for ...{chat_id[-8:]}")
+            logger.warning(f"⛔ Daily AI cap reached for {mask_chat_id(chat_id)}")
             await whatsapp.send_message(chat_id, Messages.Errors.DAILY_AI_CAP_REACHED)
             return
 
@@ -899,7 +901,7 @@ async def _process_incoming_message_inner(
                 media_url=media_url,
             )
         except Exception as e:
-            logger.error(f"Pro response failed for {chat_id}: {e}")
+            logger.error(f"Pro response failed for {mask_chat_id(chat_id)}: {e}")
             await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
             return
 
@@ -919,7 +921,7 @@ async def _process_incoming_message_inner(
         cleaned_reply = _strip_deal_marker(pro_response_obj.reply_to_user)
         if emergency_expedite:
             logger.info(
-                f"🚑 Suppressing mid-intake reply for ...{chat_id[-8:]} — the "
+                f"🚑 Suppressing mid-intake reply for {mask_chat_id(chat_id)} — the "
                 f"assigned pro is being asked to approve this turn "
                 f"({len(cleaned_reply)} chars withheld)"
             )
@@ -941,7 +943,9 @@ async def _process_incoming_message_inner(
                     extracted_name=active_lead.get("customer_name"),
                 )
             except Exception as e:
-                logger.error(f"Deal finalization failed for {chat_id}: {e}")
+                logger.error(
+                    f"Deal finalization failed for {mask_chat_id(chat_id)}: {e}"
+                )
                 # The suppressed reply was this turn's only customer-facing
                 # message; finalization failing must not leave them with silence.
                 if emergency_expedite:
@@ -973,11 +977,19 @@ async def _process_incoming_message_inner(
         "floor": lead_facts.get("floor") or "none",
         "apartment": lead_facts.get("apartment") or "none",
     }
+    # Which facts are known, not what they say. This line exists to debug the
+    # sticky-facts mechanism — whether a field survived into the prompt — and
+    # that question is answered by presence alone. The values are the
+    # customer's name and home address, and since PRO-184 this line is indexed
+    # and searchable (PRO-173's rule for pages, applied to logs).
     logger.info(
-        f"📌 Sticky facts injected for {chat_id}: "
-        f"name={sticky['customer_name']}, city={sticky['city']}, issue={sticky['issue']}, "
-        f"street={sticky['street']} {sticky['street_number']}, "
-        f"floor={sticky['floor']}, apt={sticky['apartment']}"
+        f"📌 Sticky facts injected for {mask_chat_id(chat_id)}: "
+        f"known={[k for k, v in sticky.items() if v and v != 'none']}, "
+        # city/issue values kept deliberately: the sticky mechanism's
+        # characteristic failure is a *stale* fact from a previous job
+        # persisting, and presence alone cannot show that. Both are already
+        # logged by value twice in this file, and PRO-173 rules city safe.
+        f"city={sticky['city']!r}, issue={sticky['issue']!r}"
     )
     dispatcher_history = history
     dispatcher_prompt = Prompts.DISPATCHER_SYSTEM.format(
@@ -993,7 +1005,7 @@ async def _process_incoming_message_inner(
     if not is_exempt and not await SecurityService.check_and_increment_daily_ai_cap(
         chat_id, WorkerConstants.DAILY_AI_CALL_CAP
     ):
-        logger.warning(f"⛔ Daily AI cap reached for {chat_id}")
+        logger.warning(f"⛔ Daily AI cap reached for {mask_chat_id(chat_id)}")
         await whatsapp.send_message(chat_id, Messages.Errors.DAILY_AI_CAP_REACHED)
         return
     try:
@@ -1007,7 +1019,7 @@ async def _process_incoming_message_inner(
             require_json=True,
         )
     except Exception as e:
-        logger.error(f"AI dispatcher failed for {chat_id}: {e}")
+        logger.error(f"AI dispatcher failed for {mask_chat_id(chat_id)}: {e}")
         await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
         return
 
@@ -1023,13 +1035,17 @@ async def _process_incoming_message_inner(
 
     if (not ai_city and extracted_city) or (not ai_issue and extracted_issue):
         logger.warning(
-            f"🩹 Sticky-facts fallback used for {chat_id}: "
+            f"🩹 Sticky-facts fallback used for {mask_chat_id(chat_id)}: "
             f"AI returned city={ai_city!r}/issue={ai_issue!r}, "
             f"lead facts filled in city={extracted_city!r}/issue={extracted_issue!r}"
         )
 
     logger.info(
-        f"Dispatcher analysis: City={extracted_city}, Issue={extracted_issue}, Transcr={transcription}"
+        # Length, not content: a transcription is whatever the customer said,
+        # which is routinely their name and street. `city`/`issue` are the
+        # parsed fields and stay (PRO-173 rules city safe); the raw speech does not.
+        f"Dispatcher analysis: City={extracted_city}, Issue={extracted_issue}, "
+        f"transcription_chars={len(transcription or '')}"
     )
 
     # --- NEW: Sticky Persistence Gate ---
@@ -1177,7 +1193,7 @@ async def _process_incoming_message_inner(
                 issue_type=extracted_issue, location=extracted_city
             )
         except Exception as e:
-            logger.error(f"Pro matching failed for {chat_id}: {e}")
+            logger.error(f"Pro matching failed for {mask_chat_id(chat_id)}: {e}")
 
         # If no pro found, escalate to admin review instead of closing.
         if not best_pro and current_lead_id:
@@ -1191,7 +1207,7 @@ async def _process_incoming_message_inner(
                 # worker is Sentry CRITICAL-only, so this keeps no-pro leads out of the
                 # operator's email (PRO-77). chat_id masked per PII convention.
                 logger.warning(
-                    f"Lead {current_lead_id} for ...{chat_id[-8:]} requires admin "
+                    f"Lead {current_lead_id} for {mask_chat_id(chat_id)} requires admin "
                     "review — no pro available"
                 )
                 # PRO-121: a routine coverage gap is deliberately not a page
@@ -1243,7 +1259,9 @@ async def _process_incoming_message_inner(
                     media_url=media_url,
                 )
             except Exception as e:
-                logger.error(f"Pro response build failed for {chat_id}: {e}")
+                logger.error(
+                    f"Pro response build failed for {mask_chat_id(chat_id)}: {e}"
+                )
                 pro_response_obj = None
 
             # A [DEAL] marker alone is not enough — _finalize_deal's address gate
@@ -1298,7 +1316,8 @@ async def _process_incoming_message_inner(
                             await whatsapp.send_message(pro_phone, notify_msg)
 
                         logger.info(
-                            f"📢 Notified pro {pro_phone} about lead status from {chat_id}"
+                            f"📢 Notified pro {mask_chat_id(pro_phone)} about "
+                            f"lead status from {mask_chat_id(chat_id)}"
                         )
                 except Exception as e:
                     logger.error(f"Failed to notify pro about new lead: {e}")
@@ -1328,7 +1347,7 @@ async def _process_incoming_message_inner(
     cleaned_reply = _strip_deal_marker(final_response.reply_to_user)
     if emergency_expedite:
         logger.info(
-            f"🚑 Suppressing mid-intake reply for ...{chat_id[-8:]} — emergency "
+            f"🚑 Suppressing mid-intake reply for {mask_chat_id(chat_id)} — emergency "
             f"dispatches this turn ({len(cleaned_reply)} chars withheld; the text "
             "is conversation content and stays out of the log)"
         )
@@ -1356,7 +1375,7 @@ async def _process_incoming_message_inner(
     if best_pro and (is_deal or lead_is_emergency):
         if emergency_expedite:
             logger.warning(
-                f"🚑 Emergency expedited dispatch for ...{chat_id[-8:]} — finalizing "
+                f"🚑 Emergency expedited dispatch for {mask_chat_id(chat_id)} — finalizing "
                 f"without a [DEAL] marker (pro={best_pro['_id']})"
             )
         try:
@@ -1372,7 +1391,7 @@ async def _process_incoming_message_inner(
                 extracted_name=extracted_name,
             )
         except Exception as e:
-            logger.error(f"Deal finalization failed for {chat_id}: {e}")
+            logger.error(f"Deal finalization failed for {mask_chat_id(chat_id)}: {e}")
             # Same reasoning as the fast path above: on an expedited emergency
             # the AI's reply was withheld because _finalize_deal was going to
             # answer instead. It didn't, so send it rather than say nothing.
@@ -1457,10 +1476,20 @@ async def _finalize_deal(
     """Finalize a deal: create/update lead, set customer to AWAITING_PRO_APPROVAL, send pro interactive buttons."""
     # Hard address gate: never dispatch a pro without street+number+city+floor+apartment.
     ed = final_response.extracted_data
+    # Presence, not contents — the gate's decision depends only on which of the
+    # five fields are non-empty, so that is all this line needs to explain it.
+    # `city` is kept: it is the one field PRO-173 already rules safe enough to
+    # send off-platform, and it is what makes a failed gate diagnosable.
     logger.info(
-        f"🚧 Address gate check for {chat_id}: "
-        f"street={ed.street!r}, number={ed.street_number!r}, city={ed.city!r}, "
-        f"floor={ed.floor!r}, apt={ed.apartment!r}, time={ed.appointment_time!r}"
+        f"🚧 Address gate check for {mask_chat_id(chat_id)}: city={ed.city!r}, "
+        # Derived from the gate's own field set and using the gate's own
+        # emptiness test (`is_address_complete` strips). A hardcoded tuple
+        # would drift if a field were added, and without `.strip()` a
+        # whitespace-only extraction reads as present and is then rejected —
+        # exactly the case an operator is staring at when the gate "shouldn't"
+        # have failed.
+        f"present={[f for f in Messages.Customer.ADDRESS_FIELD_LABELS if (getattr(ed, f, None) or '').strip()]}, "
+        f"time={ed.appointment_time!r}"
     )
 
     # Fetch lead to check for emergency status
@@ -1486,7 +1515,7 @@ async def _finalize_deal(
     bypass_address_logic = False
     if not ok and is_emergency and (ed.city or extracted_city):
         logger.info(
-            f"🚑 EMERGENCY BYPASS: allowing incomplete address for {chat_id} (city={ed.city or extracted_city})"
+            f"🚑 EMERGENCY BYPASS: allowing incomplete address for {mask_chat_id(chat_id)} (city={ed.city or extracted_city})"
         )
         ok = True
         bypass_address_logic = True
@@ -1508,14 +1537,16 @@ async def _finalize_deal(
                 {"_id": current_lead_id}, {"$set": partial_update}
             )
             logger.info(
-                f"💾 Persisted partial address parts for {chat_id} (lead={current_lead_id}): {list(partial_update.keys())}"
+                f"💾 Persisted partial address parts for {mask_chat_id(chat_id)} (lead={current_lead_id}): {list(partial_update.keys())}"
             )
 
         await StateManager.set_state(chat_id, UserStates.AWAITING_ADDRESS)
         await whatsapp.send_message(chat_id, reason)
-        logger.warning(f"🚫 Address gate REJECTED finalization for {chat_id}: {reason}")
+        logger.warning(
+            f"🚫 Address gate REJECTED finalization for {mask_chat_id(chat_id)}: {reason}"
+        )
         return
-    logger.info(f"✅ Address gate PASSED for {chat_id}")
+    logger.info(f"✅ Address gate PASSED for {mask_chat_id(chat_id)}")
 
     d_time = final_response.extracted_data.appointment_time or Defaults.ASAP_TIME
     # Resolved absolute datetime (UTC) — used by the pro agenda and stale-lead
@@ -1606,7 +1637,9 @@ async def _finalize_deal(
                 pro_name=best_pro.get("business_name", "איש המקצוע")
             ),
         )
-        logger.info(f"Customer {chat_id} entered AWAITING_PRO_APPROVAL state")
+        logger.info(
+            f"Customer {mask_chat_id(chat_id)} entered AWAITING_PRO_APPROVAL state"
+        )
 
         # 2. Send pro approval request with interactive buttons
         pro_phone = best_pro.get("phone_number")
@@ -1667,6 +1700,6 @@ async def _finalize_deal(
     # pro keyword (Safety Bypass) or the IDLE auto-detect once the lead is closed.
     if await _is_registered_pro(chat_id):
         logger.info(
-            f"Keeping pro-as-customer ...{chat_id[-8:]} on the customer side — "
+            f"Keeping pro-as-customer {mask_chat_id(chat_id)} on the customer side — "
             f"own lead {lead['_id'] if lead else 'n/a'} just dispatched"
         )
