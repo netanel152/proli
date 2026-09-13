@@ -22,7 +22,7 @@ from app.core.redis_client import (
     release_chat_lock,
     ChatLockBusyError,
 )
-from app.core.text_matching import contains_keyword, is_emergency_text
+from app.core.text_matching import is_emergency_text
 from app.services.dispatch_guards import (
     HANDLED,
     DispatchContext,
@@ -52,8 +52,17 @@ from app.services.customer_flow import (  # noqa: F401
 )
 from app.services.scheduling_service import get_available_slots  # noqa: F401
 import pytz
-from app.services.pro_flow import handle_pro_text_command as _handle_pro_cmd
-from app.services.pro_onboarding_service import (
+
+# PRO-181: these four have no caller left *in this module* — the pro-routing
+# guards moved to dispatch_guards.py — but they are not dead. Those guards reach
+# them as `wf.<name>` through a call-time import of this module, which is the
+# A1 convention that keeps the suite's `monkeypatch.setattr(workflow_service, …)`
+# points working. flake8 cannot see that, so it reports them unused; deleting
+# them on that advice breaks dispatch at runtime, not at import.
+from app.services.pro_flow import (  # noqa: F401
+    handle_pro_text_command as _handle_pro_cmd,
+)
+from app.services.pro_onboarding_service import (  # noqa: F401
     start_onboarding,
     handle_onboarding_step,
     ONBOARDING_STATES,
@@ -64,7 +73,7 @@ from app.core.config import settings
 from bson import ObjectId
 from bson.errors import InvalidId
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 # Initialize services
 whatsapp = get_whatsapp()
@@ -729,309 +738,6 @@ async def _process_incoming_message_inner(
     current_state = ctx.current_state
     is_exempt = ctx.is_exempt
     emergency_inbound_logged = ctx.emergency_inbound_logged
-
-    # Explicit mode switch: a registered pro who types "לקוח" needs service for
-    # themselves. Deterministic — no AI, no confirmation prompt. Works from
-    # PRO_MODE and from IDLE (where auto-detect would otherwise force PRO_MODE).
-    if (
-        normalized_text in Messages.Keywords.CUSTOMER_MODE_COMMANDS
-        and current_state in (UserStates.PRO_MODE, UserStates.IDLE)
-    ):
-        if await _is_registered_pro(chat_id):
-            await StateManager.set_state(chat_id, UserStates.CUSTOMER_MODE)
-            await ContextManager.clear_context(chat_id)
-            await whatsapp.send_message(chat_id, Messages.Pro.SWITCHED_TO_CUSTOMER)
-            logger.info(f"Pro ...{chat_id[-8:]} switched to CUSTOMER_MODE via keyword")
-            return
-
-    # Safety Bypass: a registered pro typing a business keyword always routes to pro_flow,
-    # even if they're currently in CUSTOMER_MODE — snap them back to PRO_MODE first.
-    # Ambiguous keywords (bare digits, אשר/דחה, ...) yield to a customer-side question
-    # that is actually open: mid-reschedule, a "3" is a slot pick, not a job approval.
-    #
-    # PRO-186: the bypass rescues a pro stranded on the *customer* side; a pro
-    # already inside one of pro_flow's own prompts is not stranded. Overwriting
-    # PRO_SELECTING_JOB_TO_FINISH here is what made the job list unanswerable —
-    # pro_flow re-reads the state and saw PRO_MODE, so "1" ran approve. Hence
-    # PRO_DISPATCH_STATES rather than PRO_MODE alone.
-    if normalized_text in PRO_BUSINESS_KEYWORDS:
-        is_pro_doc = await _is_registered_pro(chat_id)
-        if is_pro_doc and current_state not in PRO_DISPATCH_STATES:
-            defer_to_customer_flow = normalized_text in AMBIGUOUS_PRO_KEYWORDS and (
-                await _customer_prompt_pending(chat_id, current_state)
-            )
-            if defer_to_customer_flow:
-                logger.info(
-                    f"Pro ...{chat_id[-8:]} sent ambiguous keyword with a customer "
-                    f"prompt open — staying in {current_state}"
-                )
-            else:
-                await StateManager.set_state(chat_id, UserStates.PRO_MODE)
-                current_state = UserStates.PRO_MODE
-
-    # Handle Pro Mode — and every prompt pro_flow is holding open (PRO-186).
-    if current_state in PRO_DISPATCH_STATES:
-        pro_resp = await _handle_pro_cmd(
-            chat_id, user_text, whatsapp, lead_manager, ai=ai
-        )
-        if pro_resp:
-            await whatsapp.send_message(chat_id, pro_resp)
-        # empty string "" means pro_flow already sent everything internally
-        return
-
-    # Handle Pro Onboarding Flow
-    if current_state in ONBOARDING_STATES:
-        await handle_onboarding_step(chat_id, user_text or "", current_state, whatsapp)
-        return
-
-    # Handle Awaiting Address — re-entry after the finalization gate rejected an
-    # incomplete address. Re-run extraction on the customer's reply, merge with
-    # whatever we already stored, and only clear the state when all five fields
-    # (street, number, city, floor, apartment) are present.
-    if current_state == UserStates.AWAITING_ADDRESS:
-        # Nevermind/cancel bailout: user wants out of the flow instead of fighting
-        # the address gate. Match cancellation keywords BEFORE is_address_complete
-        # so we never loop the user back through "אני צריך רחוב ומספר בית".
-        if user_text and contains_keyword(
-            normalized_text, Messages.Keywords.CANCEL_KEYWORDS
-        ):
-            cancelled_lead = await leads_collection.find_one(
-                {
-                    "chat_id": chat_id,
-                    "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
-                },
-                sort=[("created_at", -1)],
-            )
-            if cancelled_lead:
-                await set_lead_status(
-                    cancelled_lead["_id"],
-                    LeadStatus.CANCELLED,
-                    Actor.CUSTOMER,
-                    extra_set={
-                        "cancelled_at": datetime.now(timezone.utc),
-                        "cancel_reason": "user_bailout_awaiting_address",
-                    },
-                )
-                logger.info(
-                    f"🚪 AWAITING_ADDRESS cancelled by user for {chat_id} (lead={cancelled_lead['_id']})"
-                )
-            await StateManager.clear_state(chat_id)
-            await ContextManager.clear_context(chat_id)
-            await whatsapp.send_message(chat_id, Messages.Customer.REQUEST_CANCELLED)
-            return
-
-        if not user_text or len(user_text) <= 3:
-            await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_INVALID)
-            return
-
-        active_lead_await = await leads_collection.find_one(
-            {
-                "chat_id": chat_id,
-                "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
-            },
-            sort=[("created_at", -1)],
-        )
-        if not active_lead_await:
-            await StateManager.clear_state(chat_id)
-            # Fall through to normal routing below
-        else:
-            lead_facts = active_lead_await
-            await lead_manager.log_message(chat_id, "user", user_text)
-            follow_up_prompt = Prompts.DISPATCHER_SYSTEM.format(
-                known_customer_name=lead_facts.get("customer_name") or "none",
-                known_city=lead_facts.get("city") or "none",
-                known_issue=lead_facts.get("issue_type") or "none",
-                known_street=lead_facts.get("street") or "none",
-                known_street_number=lead_facts.get("street_number") or "none",
-                known_floor=lead_facts.get("floor") or "none",
-                known_apartment=lead_facts.get("apartment") or "none",
-            )
-            if (
-                not is_exempt
-                and not await SecurityService.check_and_increment_daily_ai_cap(
-                    chat_id, WorkerConstants.DAILY_AI_CALL_CAP
-                )
-            ):
-                logger.warning(f"⛔ Daily AI cap reached for ...{chat_id[-8:]}")
-                await whatsapp.send_message(
-                    chat_id, Messages.Errors.DAILY_AI_CAP_REACHED
-                )
-                return
-            try:
-                follow_up = await ai.analyze_conversation(
-                    history=await lead_manager.get_chat_history(chat_id),
-                    user_text=user_text,
-                    custom_system_prompt=follow_up_prompt,
-                    require_json=True,
-                )
-            except Exception as e:
-                logger.error(
-                    f"AWAITING_ADDRESS re-extraction failed for {chat_id}: {e}"
-                )
-                await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
-                return
-
-            merged = {
-                "customer_name": follow_up.extracted_data.customer_name
-                or lead_facts.get("customer_name"),
-                "street": follow_up.extracted_data.street or lead_facts.get("street"),
-                "street_number": follow_up.extracted_data.street_number
-                or lead_facts.get("street_number"),
-                "city": follow_up.extracted_data.city or lead_facts.get("city"),
-                "floor": follow_up.extracted_data.floor or lead_facts.get("floor"),
-                "apartment": follow_up.extracted_data.apartment
-                or lead_facts.get("apartment"),
-            }
-            logger.info(
-                f"🔍 AWAITING_ADDRESS re-extraction for {chat_id}: "
-                f"new_from_ai={[k for k, v in merged.items() if v and not lead_facts.get(k)]}, "
-                f"merged={ {k: v for k, v in merged.items() if v} }"
-            )
-            non_empty = {k: v for k, v in merged.items() if v}
-            if non_empty:
-                await leads_collection.update_one(
-                    {"_id": active_lead_await["_id"]}, {"$set": non_empty}
-                )
-
-            class _AddrProbe:
-                pass
-
-            probe = _AddrProbe()
-            probe.street = merged.get("street")
-            probe.street_number = merged.get("street_number")
-            probe.city = merged.get("city")
-            probe.floor = merged.get("floor")
-            probe.apartment = merged.get("apartment")
-
-            ok, reason = is_address_complete(probe)
-            if ok:
-                full = compose_full_address(probe)
-                await leads_collection.update_one(
-                    {"_id": active_lead_await["_id"]}, {"$set": {"full_address": full}}
-                )
-                await StateManager.clear_state(chat_id)
-                await whatsapp.send_message(chat_id, Messages.Customer.ADDRESS_SAVED)
-                logger.info(
-                    f"✅ AWAITING_ADDRESS complete for {chat_id}, full_address={full!r}"
-                )
-                return
-            else:
-                await whatsapp.send_message(chat_id, reason)
-                logger.info(
-                    f"⏳ AWAITING_ADDRESS still missing parts for {chat_id}: {reason}"
-                )
-                return
-
-    # Pro Registration keyword check (before auto-detect)
-    if (
-        current_state == UserStates.IDLE
-        and normalized_text in Messages.Keywords.REGISTER_COMMANDS
-    ):
-        await start_onboarding(chat_id, whatsapp)
-        return
-
-    # Auto-detect Professional on first contact (only active/approved pros)
-    if current_state == UserStates.IDLE:
-        # `phone` used to be a shared local computed by the consent gate; that
-        # gate now lives in dispatch_guards (PRO-180), so derive it here.
-        phone = strip_suffix(chat_id)
-        is_pro = await users_collection.find_one(
-            {
-                "phone_number": {"$in": [phone, chat_id]},
-                "role": "professional",
-                "is_active": True,
-            }
-        )
-        if is_pro:
-            # Redis TTL edge: a pro being served as a customer whose CUSTOMER_MODE
-            # key expired lands here mid-request. Re-entering PRO_MODE would answer
-            # their next message with the dashboard, so restore CUSTOMER_MODE while
-            # their own lead is still open.
-            if await _get_active_customer_lead(chat_id):
-                await StateManager.set_state(chat_id, UserStates.CUSTOMER_MODE)
-                # Not read again on this pass — the customer dispatcher below is
-                # already the correct destination. Kept so the local view of state
-                # matches Redis for anyone extending this block.
-                current_state = UserStates.CUSTOMER_MODE
-                logger.info(
-                    f"Restored CUSTOMER_MODE for pro ...{chat_id[-8:]} — own lead still open"
-                )
-            else:
-                await StateManager.set_state(chat_id, UserStates.PRO_MODE)
-                pro_resp = await _handle_pro_cmd(
-                    chat_id, user_text, whatsapp, lead_manager, ai=ai
-                )
-                if pro_resp:
-                    await whatsapp.send_message(chat_id, pro_resp)
-                # empty string "" means pro_flow already sent everything internally
-                return
-
-    # Patch #2: Short-circuit PENDING_ADMIN_REVIEW.
-    # If this chat has a lead already sitting in PENDING_ADMIN_REVIEW, an admin
-    # owns it — running the dispatcher again would create a DUPLICATE contacted
-    # lead for the same issue (observed on 2026-04-18 with lead
-    # 69e375cb9a04cba45197e625 spawning 69e376679a04cba45197e63e 2 min later).
-    # Log the message for admin visibility, send a throttled ack, and stop.
-    #
-    # PRO-63: bounded by age. The short-circuit has no natural exit — a lead sits
-    # in PENDING_ADMIN_REVIEW until a human moves it, so an unworked escalation
-    # would silently brick this customer's chat forever, which is a worse dead
-    # end than the auto-CLOSED behaviour PRO-63 replaced. After
-    # PENDING_REVIEW_SHORTCIRCUIT_HOURS their next message starts a fresh
-    # request. Leads with no `updated_at` fall outside the window and therefore
-    # do not short-circuit — failing toward "customer can talk to us".
-    shortcircuit_cutoff = datetime.now(timezone.utc) - timedelta(
-        hours=WorkerConstants.PENDING_REVIEW_SHORTCIRCUIT_HOURS
-    )
-    pending_admin_lead = await leads_collection.find_one(
-        {
-            "chat_id": chat_id,
-            "status": LeadStatus.PENDING_ADMIN_REVIEW,
-            "updated_at": {"$gte": shortcircuit_cutoff},
-        },
-        sort=[("created_at", -1)],
-    )
-    if pending_admin_lead:
-        log_text_pending = user_text or ""
-        if media_url:
-            log_text_pending = f"{log_text_pending} [MEDIA: {media_url}]"
-        await lead_manager.log_message(chat_id, "user", log_text_pending)
-
-        # Throttle the ack: at most once per 30 minutes so the customer isn't
-        # spammed if they send a burst of messages while waiting for admin.
-        now = datetime.now(timezone.utc)
-        last_ack = pending_admin_lead.get("last_pending_ack_at")
-        should_ack = True
-        if last_ack:
-            if last_ack.tzinfo is None:
-                last_ack = last_ack.replace(tzinfo=timezone.utc)
-            if (now - last_ack) < timedelta(minutes=30):
-                should_ack = False
-
-        if should_ack:
-            await whatsapp.send_message(chat_id, Messages.Customer.STILL_PENDING_REVIEW)
-            await lead_manager.log_message(
-                chat_id, "model", Messages.Customer.STILL_PENDING_REVIEW
-            )
-            await leads_collection.update_one(
-                {"_id": pending_admin_lead["_id"]},
-                {"$set": {"last_pending_ack_at": now}},
-            )
-        logger.info(
-            f"🔒 PENDING_ADMIN_REVIEW short-circuit for {chat_id} "
-            f"(lead={pending_admin_lead['_id']}, ack_sent={should_ack})"
-        )
-        # PRO-121: this short-circuit is a 24h hold keyed on lead status, so the
-        # dispatch hoist above can never fire for it — an emergency declared here
-        # would otherwise get STILL_PENDING_REVIEW and reach nobody. Page on the
-        # same 30-minute throttle as the ack so a burst cannot spam the operator.
-        if is_emergency_detected and should_ack:
-            notification_service.page_operator(
-                f"EMERGENCY declared on lead {pending_admin_lead['_id']}, which is "
-                "already PENDING_ADMIN_REVIEW — the customer is behind the 24h "
-                "short-circuit and needs manual routing now"
-            )
-        return
 
     # 1. Log User Message — unless the emergency hoist above already did, in
     #    which case logging again would duplicate the turn (PRO-116 Q5).

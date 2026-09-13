@@ -245,17 +245,27 @@ _DISPATCH_SEQUENCE = [
     # send is what remains unique to the interceptor branch itself.
     ("BOOKED cancel / reschedule interceptor", "Customer.CANCEL_CONFIRM_PROMPT"),
     ("Explicit customer-mode switch", "CUSTOMER_MODE_COMMANDS"),
-    ("Pro safety-bypass", "normalized_text in PRO_BUSINESS_KEYWORDS"),
+    # PRO-181 re-anchored (this one, PRO_MODE, Pro onboarding and Auto-detect):
+    # the pro-routing cluster moved into dispatch_guards, so the locals became
+    # `ctx.` fields and the workflow-owned names became `wf.` lookups.
+    ("Pro safety-bypass", "ctx.normalized_text in wf.PRO_BUSINESS_KEYWORDS"),
     # PRO-186 re-anchored: the branch no longer tests PRO_MODE alone — it takes
     # every state pro_flow owns, including the three prompts it holds open.
-    ("PRO_MODE", "current_state in PRO_DISPATCH_STATES:"),
-    ("Pro onboarding", "current_state in ONBOARDING_STATES"),
+    # PRO-181: the bypass guard directly above makes the same
+    # `not in PRO_DISPATCH_STATES` comparison, so the bare expression is no
+    # longer unique. What distinguishes them is that the routing guard's test is
+    # the whole condition (`if ctx.current_state not in …`) while the bypass's is
+    # the second half of one (`if is_pro_doc and ctx.current_state not in …`).
+    # Anchored on code rather than a docstring, so rewording a comment cannot
+    # break an ordering pin for a non-ordering reason.
+    ("PRO_MODE", "if ctx.current_state not in wf.PRO_DISPATCH_STATES:"),
+    ("Pro onboarding", "ctx.current_state not in wf.ONBOARDING_STATES"),
     # PRO-121 re-anchored: `_escalate_emergency` also compares against
     # AWAITING_ADDRESS, so the state test is no longer unique to this branch.
     # ADDRESS_INVALID is sent only by the re-entry handler itself.
     ("AWAITING_ADDRESS", "Messages.Customer.ADDRESS_INVALID"),
     ("Pro registration", "REGISTER_COMMANDS"),
-    ("Auto-detect professional", "Auto-detect Professional on first contact"),
+    ("Auto-detect professional", "Auto-detect a professional on first contact"),
     ("Smart Dispatcher", "Smart Dispatcher Phase"),
 ]
 

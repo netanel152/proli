@@ -106,7 +106,72 @@ def test_guard_chain_order_is_pinned():
         "loyalty_confirmation",
         "new_or_existing",
         "booked_cancel_reschedule",
+        # PRO-181 (slice A3) — the pro-routing cluster.
+        "customer_mode_switch",
+        "pro_business_keyword_bypass",
+        "pro_mode_routing",
+        "pro_onboarding",
+        "awaiting_address",
+        "pro_registration_keyword",
+        "pro_autodetect",
+        "pending_admin_review_shortcircuit",
     ]
+
+
+def test_pro_bypass_runs_immediately_before_pro_mode_routing():
+    """PRO-181: the bypass never handles — it only snaps a pro back to PRO_MODE
+    so the *next* guard routes them. Anything inserted between the two would
+    read the mutated state and answer a message meant for pro_flow, which is the
+    PRO-186 defect from the other direction.
+    """
+    names = [name for name, _guard in GUARD_CHAIN]
+    assert (
+        names.index("pro_mode_routing")
+        == names.index("pro_business_keyword_bypass") + 1
+    )
+
+
+def test_customer_prompt_states_are_answered_above_the_pro_bypass():
+    """The ambiguous-keyword yield is enforced by POSITION, not by the deferral
+    check inside the bypass — and that is worth pinning, because the bypass's own
+    docstring makes it easy to believe otherwise.
+
+    A registered pro sitting in `AWAITING_RESCHEDULE_TIME` who types "3" gets a
+    slot pick rather than a job approval because `reschedule_selection` handles
+    the message terminally five guards before the bypass ever sees it. Every
+    state in `_customer_prompt_pending`'s set is answered the same way, above the
+    bypass. Move any of those guards below it and the state half of that helper
+    starts mattering for the first time — a reordering that would look harmless
+    and would quietly change what a bare digit means to a pro mid-prompt.
+    """
+    names = [name for name, _guard in GUARD_CHAIN]
+    bypass = names.index("pro_business_keyword_bypass")
+    for guard_name in (
+        "reschedule_selection",
+        "loyalty_confirmation",
+        "new_or_existing",
+        "cancel_confirmation",
+    ):
+        assert names.index(guard_name) < bypass, (
+            f"{guard_name!r} moved below the pro bypass; a bare digit from a pro "
+            "mid-prompt would now be read as a pro command (PRO-181 trace)."
+        )
+
+
+def test_pending_review_shortcircuit_runs_after_the_pro_routing_guards():
+    """PRO-63/PRO-181: the 24h short-circuit must not swallow messages the
+    pro-routing guards are supposed to answer — a pro whose own lead is sitting
+    in admin review would stop reaching pro_flow.
+
+    Asserted as a *relative* position, not `names[-1]`. The chain is not finished:
+    A4 will append the customer pipeline's own branches, at which point "is last"
+    becomes false for a reason that has nothing to do with this rule, and the
+    failure message would accuse a pro-routing regression that did not happen.
+    """
+    names = [name for name, _guard in GUARD_CHAIN]
+    assert names.index("pending_admin_review_shortcircuit") > names.index(
+        "pro_autodetect"
+    )
 
 
 def test_emergency_hoist_position_is_pinned():
