@@ -206,7 +206,17 @@ _WORKFLOW_SERVICE = _REPO_ROOT / "app" / "services" / "workflow_service.py"
 # as it was, rather than weakening it to a per-file check. Later slices (A2/A3)
 # move more branches across the same seam and need no further change here.
 _DISPATCH_GUARDS = _REPO_ROOT / "app" / "services" / "dispatch_guards.py"
-_DISPATCH_SOURCES = (_DISPATCH_GUARDS, _WORKFLOW_SERVICE)
+# PRO-182 (slice B) moved the tail — everything the chain falls through to —
+# into a third file, so the concatenation gained one more member rather than a
+# different shape. Order is still *execution* order: the chain runs, then what
+# is left of `_process_incoming_message_inner`, then the pipeline it delegates
+# to. Every anchor above "Smart Dispatcher" now resolves in dispatch_guards.py
+# and that last one in conversation_pipeline.py; workflow_service.py holds none
+# of them any more and stays in the tuple because the helpers both files call
+# still live there, and an anchor that drifted back into one of them must not
+# silently read as "missing".
+_CONVERSATION_PIPELINE = _REPO_ROOT / "app" / "services" / "conversation_pipeline.py"
+_DISPATCH_SOURCES = (_DISPATCH_GUARDS, _WORKFLOW_SERVICE, _CONVERSATION_PIPELINE)
 
 # (branch label as it appears bolded in flow-tracer.md, unique source anchor).
 # Anchors are chosen to occur exactly once in workflow_service.py inside their
