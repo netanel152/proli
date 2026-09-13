@@ -10,8 +10,17 @@ from admin_panel.core.utils import (
 )
 from admin_panel.ui.components import (
     render_chat_bubble,
+    render_flash,
     render_kanban_column,
     render_status_pill,
+    set_flash,
+)
+from admin_panel.core.assignment import (
+    ASSIGN_FAILED,
+    ASSIGN_LOOKUP_MISSED,
+    ASSIGN_NOT_SENT,
+    ASSIGN_SENT,
+    assign_pending_lead_sync,
 )
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import (
@@ -57,6 +66,64 @@ KANBAN_STATUSES = [
 ]
 # PRO-61: one option list for every status selector in this view.
 ALL_STATUSES = LEAD_STATUSES
+
+# PRO-188: how many stuck leads the one-click assignment strip shows before it
+# stops growing. The strip sits above the Kanban board, so an unbounded list
+# would push the board — every other status the operator needs to see — off the
+# screen on exactly the day it matters most. The rest stay reachable through the
+# board's leading column and the edit form; the strip says how many it is
+# hiding rather than pretending it is showing everything.
+PENDING_STRIP_MAX = 5
+
+
+def _assign_feedback(T, outcome, pro_name):
+    """The sentence and severity for one assignment outcome.
+
+    Four outcomes, four sentences: "assigned and the pro knows" is a materially
+    different thing to tell an operator than "assigned, go phone them", and a
+    green tick over the second reads as "nothing more to do".
+
+    Written as direct `T` reads rather than a key->text lookup table on purpose.
+    PRO-61's orphan guard finds a key by scanning for a literal read of it, so a
+    key named only inside a dict is invisible to it — and a string nothing
+    appears to read is one deletion away from an untranslated panel. The
+    indirection saved four lines and cost the guard its teeth; this way the
+    guard keeps working.
+    """
+    if outcome == ASSIGN_SENT:
+        return (
+            _t(T, "assign_ok", "{pro} was assigned and notified.", pro=pro_name),
+            "success",
+        )
+    if outcome == ASSIGN_NOT_SENT:
+        return (
+            _t(
+                T,
+                "assign_offer_failed",
+                "Assigned to {pro}, but the offer did not reach them.",
+                pro=pro_name,
+            ),
+            "warning",
+        )
+    if outcome == ASSIGN_LOOKUP_MISSED:
+        return (
+            _t(
+                T,
+                "assign_lookup_missed",
+                "Assigned to {pro}, but the lead could not be re-read.",
+                pro=pro_name,
+            ),
+            "warning",
+        )
+    return (
+        _t(
+            T,
+            "assign_failed",
+            "Assignment to {pro} failed. Re-check the lead before retrying.",
+            pro=pro_name,
+        ),
+        "warning",
+    )
 
 
 #: Why a row was skipped -> the T key explaining it to the operator.
@@ -138,6 +205,106 @@ def _render_skipped(T, skipped_rows):
     )
 
 
+def _render_pending_review_strip(T, pro_names, pro_map_name_to_id):
+    """One-click assignment for the leads nobody is working (PRO-188).
+
+    A `PENDING_ADMIN_REVIEW` lead is a customer waiting with no pro attached —
+    the most time-sensitive thing the panel shows and the action the operator
+    performs most often. It used to cost six clicks through the generic edit
+    form, the same form used to correct a phone number. Here it is three:
+    open the selectbox, pick a pro, press שייך.
+
+    Assignment goes through `assign_pending_lead_sync`, which calls the very
+    function the WhatsApp routing wizard calls — so the pro is notified on both
+    paths, and the customer is told a pro was found only once the offer
+    actually reached them.
+    """
+    # The strip is nothing but an action surface, so a role that cannot edit
+    # leads gets no strip rather than a disabled one — the stuck leads are still
+    # visible to them in the board's leading column. Gated here and not only on
+    # the button: `can_edit` is what every other mutation in this view checks,
+    # and an assignment is an edit.
+    if not can_edit(get_current_role()):
+        return
+
+    pending = list(
+        leads_collection.find({"status": LeadStatus.PENDING_ADMIN_REVIEW}).sort(
+            "created_at", 1
+        )
+    )
+    # No stuck leads -> no strip at all. An empty frame with a heading reads as
+    # a broken widget, and it costs the board vertical space to say nothing.
+    if not pending:
+        return
+
+    st.markdown(
+        f"#### {_t(T, 'assign_strip_title', 'Needs a pro ({n})', n=len(pending))}"
+    )
+    st.caption(T.get("assign_strip_hint", "Assign a pro without leaving this screen."))
+
+    for lead in pending[:PENDING_STRIP_MAX]:
+        lead_id = str(lead["_id"])
+        client = lead.get("display_name") or lead.get("customer_name") or ""
+        city = lead.get("city") or ""
+        issue = lead.get("issue_type") or lead.get("issue") or ""
+        # Oldest first, so the customer who has waited longest is at the top.
+        label = " · ".join(part for part in (client, city, issue) if part) or lead_id
+
+        with st.expander(label, expanded=True):
+            # `pro_names[0]` is the "unassigned" placeholder the edit form uses;
+            # it must not be assignable here, so the options start past it.
+            options = pro_names[1:]
+            if not options:
+                st.warning(T.get("assign_no_pros", "No professionals available."))
+                continue
+
+            col_pick, col_go = st.columns([3, 1])
+            choice = col_pick.selectbox(
+                T.get("assign_pick_pro", "Assign to"),
+                options,
+                key=f"assign_pro_{lead_id}",
+                label_visibility="collapsed",
+            )
+            if col_go.button(
+                T.get("assign_btn", "Assign"),
+                key=f"assign_go_{lead_id}",
+                type="primary",
+                use_container_width=True,
+            ):
+                pro_id = pro_map_name_to_id.get(choice)
+                pro = users_collection.find_one({"_id": pro_id}) if pro_id else None
+                if not pro:
+                    # The pro list is built once per run; one deleted between
+                    # render and click must not be written as a dangling id.
+                    set_flash(
+                        "assign_flash",
+                        T.get("assign_pro_gone", "That professional no longer exists."),
+                        "warning",
+                    )
+                    st.rerun()
+
+                outcome, pro_name = assign_pending_lead_sync(lead_id, pro)
+                message, level = _assign_feedback(T, outcome, pro_name)
+                log_audit(
+                    "assign_lead",
+                    {"lead_id": lead_id, "pro_id": str(pro_id), "outcome": outcome},
+                )
+                set_flash("assign_flash", message, level)
+                st.rerun()
+
+    hidden = len(pending) - PENDING_STRIP_MAX
+    if hidden > 0:
+        st.caption(
+            _t(
+                T,
+                "assign_strip_more",
+                "{n} more are waiting — see the board's first column.",
+                n=hidden,
+            )
+        )
+    st.markdown("---")
+
+
 def view_leads_dashboard(T):
     st.title(T["title_dashboard"])
     st.caption(T.get("page_desc_dashboard", "View and manage incoming leads."))
@@ -155,6 +322,11 @@ def view_leads_dashboard(T):
     # actually sees: the Save button sits under a ~400px scroll region, so an
     # inline alert at the top of the page renders off-screen.
     _render_leads_flash(T)
+    # PRO-188: its own key, NOT `leads_flash`. That one is popped by
+    # `_render_leads_flash`, which reads it as a dict (`.get("deleted")`), while
+    # `set_flash` writes a `(level, message)` tuple — one key holding two shapes
+    # turns the next confirmation into an AttributeError painted over the page.
+    render_flash("assign_flash")
 
     # Tabs: Kanban | Table | Create
     tab_kanban, tab_table, tab_create = st.tabs(
@@ -244,6 +416,12 @@ def view_leads_dashboard(T):
         c5.metric(T.get("metric_pros", "Staff"), active_pros)
 
         st.markdown("")
+
+        # PRO-188: above the board, because this is the queue the operator came
+        # to act on. Driven by its own query rather than `leads_df`, which is
+        # capped at 100 and cached for 30s — a stuck lead must not be invisible
+        # here because it fell off a display list.
+        _render_pending_review_strip(T, pro_names, pro_map_name_to_id)
 
         if leads_df.empty:
             st.info(T["no_leads_found"])

@@ -225,8 +225,22 @@ async def _handle_pro_selection(chat_id, text, state_manager, whatsapp):
 # ---------------------------------------------------------------------------
 
 
-async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
-    """Update the lead in Mongo, notify the pro, clear admin wizard state."""
+async def assign_lead_to_pro(lead_id, pro, whatsapp) -> tuple[bool | None, str]:
+    """Assign ``lead_id`` to ``pro``, notify them, and tell the customer.
+
+    The assignment itself, with no opinion about who asked for it. Extracted
+    from the WhatsApp routing wizard (PRO-188) so the admin panel's one-click
+    strip runs *this* code rather than a copy of it: the two paths had already
+    drifted once — the panel wrote ``pro_id`` and told nobody — and two
+    implementations of "assign a lead" is how that happens again.
+
+    Returns ``(offer_sent, pro_name)``. ``offer_sent`` is tri-state: ``None``
+    means the offer was never *attempted* (the post-write lead lookup missed),
+    ``False`` that it was attempted and did not reach the pro. Conflating them
+    would blame the pro's 24h window for a lookup failure and send the operator
+    hunting the wrong problem. Every caller must say which of the three
+    happened; the assignment stands either way.
+    """
     # A human taking ownership is a fresh start for the lead (PRO-63). Without
     # resetting the counter, a lead escalated for exhausted reassignments comes
     # back with `reassignment_count` still at MAX_REASSIGNMENTS, so the next
@@ -269,24 +283,20 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
     lead = await leads_collection.find_one({"_id": ObjectId(lead_id)})
     pro_name = pro.get("business_name") or Defaults.GENERIC_PRO_NAME
 
-    # Tri-state: None = the offer was never *attempted* (lead lookup failed),
-    # False = attempted and did not reach the pro. Conflating them would blame
-    # the pro's 24h window for a lookup failure and send the operator hunting
-    # the wrong problem.
     offer_sent: bool | None = None
     if lead:
         # PRO-159 made this return honest: False means the offer never reached
         # the pro (closed 24h window with no approved template, breaker, or a
         # raised send). No auto-escalation here — the admin IS the review, so
         # escalating back to PENDING_ADMIN_REVIEW would be circular. The
-        # assignment stands; the admin is told the truth below and contacts
-        # the pro by phone.
+        # assignment stands; the caller tells the admin the truth and they
+        # contact the pro by phone.
         offer_sent = await notify_pro_new_lead(lead, pro, whatsapp)
         # Tell the CUSTOMER a pro was found — mirrors the auto-match path in
         # workflow_service. Without this the customer sat in silence after the
         # PENDING_REVIEW message ("צוות Proli יחזור אליך") until they proactively
         # asked; this path notified only the pro and the admin. Send to the
-        # lead's chat_id, never `chat_id` (that is the ADMIN running the wizard).
+        # lead's chat_id, never the admin's.
         # Fail-open: a customer-notify hiccup must not abort the assignment.
         # Only when the pro actually got the offer, though — "X יטפל בך"
         # while X has no idea is the exact false-success this branch removes.
@@ -304,6 +314,13 @@ async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
                     f"[admin_flow] Failed to notify customer "
                     f"...{customer_chat_id[-8:]} of assignment: {e}"
                 )
+
+    return offer_sent, pro_name
+
+
+async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
+    """Wizard wrapper: assign, then clear state and answer the admin in chat."""
+    offer_sent, pro_name = await assign_lead_to_pro(lead_id, pro, whatsapp)
 
     await state_manager.clear_state(chat_id)
     if offer_sent:
