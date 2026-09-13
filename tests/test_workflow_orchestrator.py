@@ -20,7 +20,6 @@ from app.services.workflow_service import (
 )
 from app.services.ai_engine_service import AIResponse, ExtractedData
 import app.services.workflow_service
-import app.core.background_tasks as background_tasks_module
 
 
 @pytest.fixture
@@ -2178,10 +2177,7 @@ def test_strip_deal_marker_also_strips_urgent_tag_and_it_is_not_a_deal_signal():
     doubles as the fallback deal-detection signal, and an emergency tag must
     never be mistaken for a closed deal.
     """
-    combined = (
-        "[URGENT] לסגור את השיבר הראשי מיד. "
-        "[DEAL: מחר | תל אביב | נזילה]"
-    )
+    combined = "[URGENT] לסגור את השיבר הראשי מיד. " "[DEAL: מחר | תל אביב | נזילה]"
     assert _strip_deal_marker(combined) == "לסגור את השיבר הראשי מיד."
 
     only_urgent = "[URGENT]   יש דליפה בבית.   "
@@ -2658,14 +2654,18 @@ async def test_typing_indicator_task_name_carries_masked_phone_suffix(
 
     def spy(coro, *, name):
         captured["name"] = name
-        return real_spawn(coro, name=name)
+        captured["task"] = real_spawn(coro, name=name)
+        return captured["task"]
 
     monkeypatch.setattr(app.services.workflow_service, "spawn_background_task", spy)
 
     await process_incoming_message(chat_id, "שלום")
 
-    for t in list(background_tasks_module.pending_background_tasks()):
-        await t
+    # PRO-187: await *this* test's task, not the whole registry. Draining
+    # pending_background_tasks() meant awaiting whatever an earlier test had
+    # left behind -- a task bound to a loop pytest-asyncio has since closed,
+    # which raises "attached to a different loop" depending on run order.
+    await captured["task"]
 
     assert captured["name"] == f"typing:{mask_chat_id(chat_id)}"
     assert "972501234567" not in captured["name"]

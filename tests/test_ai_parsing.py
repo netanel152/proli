@@ -4,7 +4,6 @@ from pydantic import SecretStr
 from bson import ObjectId
 import json
 from app.core.messages import Messages
-from app.core.background_tasks import pending_background_tasks
 from app.services.ai_engine_service import AIEngine, AIResponse, ExtractedData
 import app.services.ai_engine_service as ai_engine_module
 
@@ -206,7 +205,8 @@ async def test_analyze_conversation_spawns_named_token_tracking_task_for_pro(
 
     def spy(coro, *, name):
         spawned["name"] = name
-        return real_spawn(coro, name=name)
+        spawned["task"] = real_spawn(coro, name=name)
+        return spawned["task"]
 
     monkeypatch.setattr(ai_engine_module, "spawn_background_task", spy)
 
@@ -214,8 +214,9 @@ async def test_analyze_conversation_spawns_named_token_tracking_task_for_pro(
         [], "Hi", custom_system_prompt="", pro_id=pro_id
     )
 
-    for t in list(pending_background_tasks()):
-        await t
+    # PRO-187: await *this* test's task, not the whole registry -- a leftover
+    # from an earlier test is bound to a loop that no longer exists.
+    await spawned["task"]
 
     assert spawned.get("name") == f"track_token_usage:{pro_id}"
     updated = await mock_db.users.find_one({"_id": ObjectId(pro_id)})

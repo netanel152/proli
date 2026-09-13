@@ -17,6 +17,7 @@ from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 from unittest.mock import AsyncMock, MagicMock  # noqa: E402
 import certifi  # noqa: E402,F401
 import fakeredis.aioredis  # noqa: E402,F401
+from app.core import background_tasks  # noqa: E402
 from app.core.config import settings  # noqa: E402
 
 # Mock google.genai to avoid ImportErrors if package is missing/conflicted.
@@ -41,6 +42,67 @@ def _no_ambient_railway_env(monkeypatch):
     """
     monkeypatch.delenv("RAILWAY_ENVIRONMENT_NAME", raising=False)
     monkeypatch.delenv("RAILWAY_ENVIRONMENT", raising=False)
+
+
+# Tasks evicted from the live registry by ``_isolate_background_tasks``. The
+# list is never read; it exists purely to keep holding the strong reference
+# that ``app.core.background_tasks`` was holding, so a task the harness
+# dropped cannot be garbage-collected while still pending -- which is both the
+# failure mode PRO-143 exists to prevent and a "Task was destroyed but it is
+# pending!" line on stderr for every routing test in the suite. It grows by
+# roughly one entry per leaking test per session (19 on today's suite), which
+# is why it is a plain list and not something that needs managing.
+_evicted_background_tasks: list = []
+
+
+def evict_leftover_background_tasks() -> None:
+    """The teardown half of ``_isolate_background_tasks``, as a plain function.
+
+    Named and module-level rather than inlined in the fixture so a test can
+    call the *real* code path: pytest refuses a direct call to a fixture, and a
+    test that hand-copies the teardown into itself pins the copy, not this.
+    """
+    _evicted_background_tasks.extend(background_tasks.pending_background_tasks())
+    background_tasks._background_tasks.clear()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_background_tasks():
+    """PRO-187: no test may see another test's in-flight background tasks.
+
+    ``app.core.background_tasks._background_tasks`` is module state, so it
+    outlives the per-test event loop that ``asyncio_mode = strict`` tears
+    down. A test that spawns detached work and returns before it finishes
+    leaves a task in that set bound to a *closed* loop; a later test that
+    drains the registry then awaits it and gets ``RuntimeError: ... attached
+    to a different loop``. Order-dependent and invisible in isolation -- and
+    19 tests leak exactly that way, every one of them a routing test whose
+    call to ``process_incoming_message`` spawns a ``typing:`` indicator it has
+    no reason to await. Leaking here is the fire-and-forget contract working
+    as designed, so the harness isolates rather than accuses.
+
+    The teardown half is what delivers the isolation; the setup clear is a
+    backstop, and honestly a redundant one on the normal path -- remove it and
+    the suite still passes, because teardown has already emptied the registry
+    before the next test starts. It earns its line only where teardown did not
+    run: a fixture further down the autouse chain that spawns work while
+    tearing down after this one, or an interpreter-level abort. Kept because it
+    costs one statement, not because a test would catch its absence.
+
+    Teardown evicts rather than cancels, deliberately. At this point the
+    test's loop is not running and will not run again, so a ``cancel()`` can
+    never be delivered -- it only tears down the ``wait_for`` wrapper, orphans
+    the coroutine underneath it, and buys a ``coroutine ... was never awaited``
+    warning on stderr for the trouble (measured: the warning appears with the
+    cancel and not without it). Dropping the task from the registry is the
+    part that matters; the quarantine keeps it referenced afterwards.
+
+    Production code is untouched: the registry earns its keep at runtime,
+    where nothing tears the loop down between callers.
+    """
+    background_tasks._background_tasks.clear()
+    yield
+    evict_leftover_background_tasks()
 
 
 @pytest.fixture(scope="module")
