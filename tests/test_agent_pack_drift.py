@@ -251,10 +251,14 @@ _DISPATCH_SEQUENCE = [
     ("Pro safety-bypass", "ctx.normalized_text in wf.PRO_BUSINESS_KEYWORDS"),
     # PRO-186 re-anchored: the branch no longer tests PRO_MODE alone — it takes
     # every state pro_flow owns, including the three prompts it holds open.
-    # PRO-181: the `not in PRO_DISPATCH_STATES` test is no longer unique — the
-    # bypass guard directly above makes the same comparison — so anchor on the
-    # routing guard's own docstring instead.
-    ("PRO_MODE", "Pro Mode — and every prompt pro_flow is holding open"),
+    # PRO-181: the bypass guard directly above makes the same
+    # `not in PRO_DISPATCH_STATES` comparison, so the bare expression is no
+    # longer unique. What distinguishes them is that the routing guard's test is
+    # the whole condition (`if ctx.current_state not in …`) while the bypass's is
+    # the second half of one (`if is_pro_doc and ctx.current_state not in …`).
+    # Anchored on code rather than a docstring, so rewording a comment cannot
+    # break an ordering pin for a non-ordering reason.
+    ("PRO_MODE", "if ctx.current_state not in wf.PRO_DISPATCH_STATES:"),
     ("Pro onboarding", "ctx.current_state not in wf.ONBOARDING_STATES"),
     # PRO-121 re-anchored: `_escalate_emergency` also compares against
     # AWAITING_ADDRESS, so the state test is no longer unique to this branch.
