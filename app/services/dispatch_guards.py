@@ -349,7 +349,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
     # Refresh state after potential consent state changes
     await ctx.refresh_state(deps.state_manager)
-    logger.info(f"🚦 User {ctx.chat_id} is in State: {ctx.current_state}")
+    logger.info(f"🚦 User ...{ctx.chat_id[-8:]} is in State: {ctx.current_state}")
     return None
 
 
@@ -408,7 +408,7 @@ async def guard_sos_human_handoff(ctx: DispatchContext, deps: GuardDeps):
         ctx.chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS
     )
     logger.info(
-        f"Bot paused for {ctx.chat_id} (triggered by: customer_sos, TTL: {WorkerConstants.PAUSE_TTL_SECONDS}s)"
+        f"Bot paused for ...{ctx.chat_id[-8:]} (triggered by: customer_sos, TTL: {WorkerConstants.PAUSE_TTL_SECONDS}s)"
     )
 
     active_lead = await wf.leads_collection.find_one(
@@ -612,7 +612,7 @@ async def guard_paused_for_human(ctx: DispatchContext, deps: GuardDeps):
     )
 
     logger.info(
-        f"Bot paused for {ctx.chat_id} — message logged and timeout reset to {WorkerConstants.PAUSE_TTL_SECONDS}s"
+        f"Bot paused for ...{ctx.chat_id[-8:]} — message logged and timeout reset to {WorkerConstants.PAUSE_TTL_SECONDS}s"
     )
     return HANDLED
 
@@ -817,7 +817,9 @@ async def guard_new_or_existing(ctx: DispatchContext, deps: GuardDeps):
                             ),
                         )
         except Exception as e:
-            logger.error(f"Existing-job handoff to pro failed for {ctx.chat_id}: {e}")
+            logger.error(
+                f"Existing-job handoff to pro failed for ...{ctx.chat_id[-8:]}: {e}"
+            )
         await deps.state_manager.set_state(
             ctx.chat_id,
             UserStates.PAUSED_FOR_HUMAN,
@@ -926,7 +928,7 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
         Messages.Customer.RESCHEDULE_OFFER.format(slots="\n".join(lines)),
     )
     logger.info(
-        f"Customer {ctx.chat_id} offered reschedule for lead {booked_lead['_id']}"
+        f"Customer ...{ctx.chat_id[-8:]} offered reschedule for lead {booked_lead['_id']}"
     )
     return HANDLED
 
@@ -1078,7 +1080,7 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
                 },
             )
             logger.info(
-                f"🚪 AWAITING_ADDRESS cancelled by user for {ctx.chat_id} "
+                f"🚪 AWAITING_ADDRESS cancelled by user for ...{ctx.chat_id[-8:]} "
                 f"(lead={cancelled_lead['_id']})"
             )
         await deps.state_manager.clear_state(ctx.chat_id)
@@ -1132,7 +1134,9 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
             require_json=True,
         )
     except Exception as e:
-        logger.error(f"AWAITING_ADDRESS re-extraction failed for {ctx.chat_id}: {e}")
+        logger.error(
+            f"AWAITING_ADDRESS re-extraction failed for ...{ctx.chat_id[-8:]}: {e}"
+        )
         await deps.whatsapp.send_message(ctx.chat_id, Messages.Errors.AI_OVERLOAD)
         return HANDLED
 
@@ -1147,7 +1151,7 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         "apartment": follow_up.extracted_data.apartment or lead_facts.get("apartment"),
     }
     logger.info(
-        f"🔍 AWAITING_ADDRESS re-extraction for {ctx.chat_id}: "
+        f"🔍 AWAITING_ADDRESS re-extraction for ...{ctx.chat_id[-8:]}: "
         f"new_from_ai={[k for k, v in merged.items() if v and not lead_facts.get(k)]}, "
         f"merged={ {k: v for k, v in merged.items() if v} }"
     )
@@ -1176,13 +1180,18 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         await deps.state_manager.clear_state(ctx.chat_id)
         await deps.whatsapp.send_message(ctx.chat_id, Messages.Customer.ADDRESS_SAVED)
         logger.info(
-            f"✅ AWAITING_ADDRESS complete for {ctx.chat_id}, full_address={full!r}"
+            # The address itself is not logged. PRO-173 settled this for the
+            # paging path — masking the phone and then printing the street has
+            # masked nothing — and since PRO-184 these lines are indexed and
+            # searchable, so the same rule applies here. That it is complete is
+            # the fact worth recording; what it says is in the lead document.
+            f"✅ AWAITING_ADDRESS complete for ...{ctx.chat_id[-8:]}"
         )
         return HANDLED
     else:
         await deps.whatsapp.send_message(ctx.chat_id, reason)
         logger.info(
-            f"⏳ AWAITING_ADDRESS still missing parts for {ctx.chat_id}: {reason}"
+            f"⏳ AWAITING_ADDRESS still missing parts for ...{ctx.chat_id[-8:]}: {reason}"
         )
         return HANDLED
 
@@ -1307,7 +1316,7 @@ async def guard_pending_admin_review_shortcircuit(
             {"$set": {"last_pending_ack_at": now}},
         )
     logger.info(
-        f"🔒 PENDING_ADMIN_REVIEW short-circuit for {ctx.chat_id} "
+        f"🔒 PENDING_ADMIN_REVIEW short-circuit for ...{ctx.chat_id[-8:]} "
         f"(lead={pending_admin_lead['_id']}, ack_sent={should_ack})"
     )
     # PRO-121: this short-circuit is a 24h hold keyed on lead status, so the

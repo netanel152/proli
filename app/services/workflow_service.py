@@ -282,7 +282,7 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     acquired = await acquire_chat_lock(chat_id, ttl=10)
     if not acquired:
         logger.info(
-            f"🔒 Chat lock held for {chat_id} — another task is mid-flight; deferring"
+            f"🔒 Chat lock held for ...{chat_id[-8:]} — another task is mid-flight; deferring"
         )
         raise ChatLockBusyError(chat_id)
 
@@ -778,7 +778,7 @@ async def _process_incoming_message_inner(
         try:
             media_data, media_mime = await detect_and_fetch_media(media_url)
         except Exception as e:
-            logger.warning(f"Media fetch failed for {chat_id}: {e}")
+            logger.warning(f"Media fetch failed for ...{chat_id[-8:]}: {e}")
 
     # 4. Check for existing active lead with assigned pro (skip dispatcher if so)
     active_lead = await leads_collection.find_one(
@@ -841,14 +841,16 @@ async def _process_incoming_message_inner(
     if not active_lead:
         await ContextManager.clear_context(chat_id)
         logger.info(
-            f"🧼 No active lead for {chat_id} — cleared stale context before new dispatcher run"
+            f"🧼 No active lead for ...{chat_id[-8:]} — cleared stale context before new dispatcher run"
         )
 
     history = await lead_manager.get_chat_history(chat_id)
 
     # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
     if existing_pro and active_lead:
-        logger.info(f"⚡ Skipping dispatcher — pro already assigned for {chat_id}")
+        logger.info(
+            f"⚡ Skipping dispatcher — pro already assigned for ...{chat_id[-8:]}"
+        )
         # NOTE: the inbound was already logged once at the top of this function
         # (step 1). Do NOT log it again here — a second log_message duplicated
         # every user turn in history and in the AI context window (PRO-116 Q5).
@@ -899,7 +901,7 @@ async def _process_incoming_message_inner(
                 media_url=media_url,
             )
         except Exception as e:
-            logger.error(f"Pro response failed for {chat_id}: {e}")
+            logger.error(f"Pro response failed for ...{chat_id[-8:]}: {e}")
             await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
             return
 
@@ -941,7 +943,7 @@ async def _process_incoming_message_inner(
                     extracted_name=active_lead.get("customer_name"),
                 )
             except Exception as e:
-                logger.error(f"Deal finalization failed for {chat_id}: {e}")
+                logger.error(f"Deal finalization failed for ...{chat_id[-8:]}: {e}")
                 # The suppressed reply was this turn's only customer-facing
                 # message; finalization failing must not leave them with silence.
                 if emergency_expedite:
@@ -973,11 +975,14 @@ async def _process_incoming_message_inner(
         "floor": lead_facts.get("floor") or "none",
         "apartment": lead_facts.get("apartment") or "none",
     }
+    # Which facts are known, not what they say. This line exists to debug the
+    # sticky-facts mechanism — whether a field survived into the prompt — and
+    # that question is answered by presence alone. The values are the
+    # customer's name and home address, and since PRO-184 this line is indexed
+    # and searchable (PRO-173's rule for pages, applied to logs).
     logger.info(
-        f"📌 Sticky facts injected for {chat_id}: "
-        f"name={sticky['customer_name']}, city={sticky['city']}, issue={sticky['issue']}, "
-        f"street={sticky['street']} {sticky['street_number']}, "
-        f"floor={sticky['floor']}, apt={sticky['apartment']}"
+        f"📌 Sticky facts injected for ...{chat_id[-8:]}: "
+        f"known={[k for k, v in sticky.items() if v and v != 'none']}"
     )
     dispatcher_history = history
     dispatcher_prompt = Prompts.DISPATCHER_SYSTEM.format(
@@ -993,7 +998,7 @@ async def _process_incoming_message_inner(
     if not is_exempt and not await SecurityService.check_and_increment_daily_ai_cap(
         chat_id, WorkerConstants.DAILY_AI_CALL_CAP
     ):
-        logger.warning(f"⛔ Daily AI cap reached for {chat_id}")
+        logger.warning(f"⛔ Daily AI cap reached for ...{chat_id[-8:]}")
         await whatsapp.send_message(chat_id, Messages.Errors.DAILY_AI_CAP_REACHED)
         return
     try:
@@ -1007,7 +1012,7 @@ async def _process_incoming_message_inner(
             require_json=True,
         )
     except Exception as e:
-        logger.error(f"AI dispatcher failed for {chat_id}: {e}")
+        logger.error(f"AI dispatcher failed for ...{chat_id[-8:]}: {e}")
         await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
         return
 
@@ -1023,7 +1028,7 @@ async def _process_incoming_message_inner(
 
     if (not ai_city and extracted_city) or (not ai_issue and extracted_issue):
         logger.warning(
-            f"🩹 Sticky-facts fallback used for {chat_id}: "
+            f"🩹 Sticky-facts fallback used for ...{chat_id[-8:]}: "
             f"AI returned city={ai_city!r}/issue={ai_issue!r}, "
             f"lead facts filled in city={extracted_city!r}/issue={extracted_issue!r}"
         )
@@ -1177,7 +1182,7 @@ async def _process_incoming_message_inner(
                 issue_type=extracted_issue, location=extracted_city
             )
         except Exception as e:
-            logger.error(f"Pro matching failed for {chat_id}: {e}")
+            logger.error(f"Pro matching failed for ...{chat_id[-8:]}: {e}")
 
         # If no pro found, escalate to admin review instead of closing.
         if not best_pro and current_lead_id:
@@ -1243,7 +1248,7 @@ async def _process_incoming_message_inner(
                     media_url=media_url,
                 )
             except Exception as e:
-                logger.error(f"Pro response build failed for {chat_id}: {e}")
+                logger.error(f"Pro response build failed for ...{chat_id[-8:]}: {e}")
                 pro_response_obj = None
 
             # A [DEAL] marker alone is not enough — _finalize_deal's address gate
@@ -1298,7 +1303,7 @@ async def _process_incoming_message_inner(
                             await whatsapp.send_message(pro_phone, notify_msg)
 
                         logger.info(
-                            f"📢 Notified pro {pro_phone} about lead status from {chat_id}"
+                            f"📢 Notified pro {pro_phone} about lead status from ...{chat_id[-8:]}"
                         )
                 except Exception as e:
                     logger.error(f"Failed to notify pro about new lead: {e}")
@@ -1372,7 +1377,7 @@ async def _process_incoming_message_inner(
                 extracted_name=extracted_name,
             )
         except Exception as e:
-            logger.error(f"Deal finalization failed for {chat_id}: {e}")
+            logger.error(f"Deal finalization failed for ...{chat_id[-8:]}: {e}")
             # Same reasoning as the fast path above: on an expedited emergency
             # the AI's reply was withheld because _finalize_deal was going to
             # answer instead. It didn't, so send it rather than say nothing.
@@ -1457,10 +1462,14 @@ async def _finalize_deal(
     """Finalize a deal: create/update lead, set customer to AWAITING_PRO_APPROVAL, send pro interactive buttons."""
     # Hard address gate: never dispatch a pro without street+number+city+floor+apartment.
     ed = final_response.extracted_data
+    # Presence, not contents — the gate's decision depends only on which of the
+    # five fields are non-empty, so that is all this line needs to explain it.
+    # `city` is kept: it is the one field PRO-173 already rules safe enough to
+    # send off-platform, and it is what makes a failed gate diagnosable.
     logger.info(
-        f"🚧 Address gate check for {chat_id}: "
-        f"street={ed.street!r}, number={ed.street_number!r}, city={ed.city!r}, "
-        f"floor={ed.floor!r}, apt={ed.apartment!r}, time={ed.appointment_time!r}"
+        f"🚧 Address gate check for ...{chat_id[-8:]}: city={ed.city!r}, "
+        f"present={[f for f in ('street', 'street_number', 'floor', 'apartment') if getattr(ed, f, None)]}, "
+        f"time={ed.appointment_time!r}"
     )
 
     # Fetch lead to check for emergency status
@@ -1486,7 +1495,7 @@ async def _finalize_deal(
     bypass_address_logic = False
     if not ok and is_emergency and (ed.city or extracted_city):
         logger.info(
-            f"🚑 EMERGENCY BYPASS: allowing incomplete address for {chat_id} (city={ed.city or extracted_city})"
+            f"🚑 EMERGENCY BYPASS: allowing incomplete address for ...{chat_id[-8:]} (city={ed.city or extracted_city})"
         )
         ok = True
         bypass_address_logic = True
@@ -1508,14 +1517,16 @@ async def _finalize_deal(
                 {"_id": current_lead_id}, {"$set": partial_update}
             )
             logger.info(
-                f"💾 Persisted partial address parts for {chat_id} (lead={current_lead_id}): {list(partial_update.keys())}"
+                f"💾 Persisted partial address parts for ...{chat_id[-8:]} (lead={current_lead_id}): {list(partial_update.keys())}"
             )
 
         await StateManager.set_state(chat_id, UserStates.AWAITING_ADDRESS)
         await whatsapp.send_message(chat_id, reason)
-        logger.warning(f"🚫 Address gate REJECTED finalization for {chat_id}: {reason}")
+        logger.warning(
+            f"🚫 Address gate REJECTED finalization for ...{chat_id[-8:]}: {reason}"
+        )
         return
-    logger.info(f"✅ Address gate PASSED for {chat_id}")
+    logger.info(f"✅ Address gate PASSED for ...{chat_id[-8:]}")
 
     d_time = final_response.extracted_data.appointment_time or Defaults.ASAP_TIME
     # Resolved absolute datetime (UTC) — used by the pro agenda and stale-lead
@@ -1606,7 +1617,7 @@ async def _finalize_deal(
                 pro_name=best_pro.get("business_name", "איש המקצוע")
             ),
         )
-        logger.info(f"Customer {chat_id} entered AWAITING_PRO_APPROVAL state")
+        logger.info(f"Customer ...{chat_id[-8:]} entered AWAITING_PRO_APPROVAL state")
 
         # 2. Send pro approval request with interactive buttons
         pro_phone = best_pro.get("phone_number")
