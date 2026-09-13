@@ -84,6 +84,7 @@ pytest -m integration
 | `test_data_management.py` | Consent, data export, deletion |
 | `test_admin_auth.py` | Password hashing, cookie auth, session tokens |
 | `test_admin_kanban.py` | PRO-46 — `pending_admin_review` surfaced on the admin Kanban: column presence, `STATUS_COLORS`/label drift guards, localized-render checks, and the count-query/enum guard |
+| `test_admin_view_call_arity.py` | Static `ast` guard: every resolvable call in `admin_panel/` (same-module and imported from the panel) must bind its target signature. Streamlit views never execute under the unit suite, so a wrong-arity call is otherwise invisible until an operator opens the page — PRO-188 shipped `_render_pending_review_strip(T, pro_names, pro_map_name_to_id)` against a one-parameter def and took down the Dashboard tab on staging. Includes checker self-tests so the guard cannot rot into a no-op |
 | `test_ai_parsing.py` | Prompt template formatting (no live API calls) |
 | `test_edge_cases.py` | Bad inputs: Gemini failure, WhatsApp down, unsupported file types |
 | `test_agent_pack_drift.py` | Anti-drift guard for `.claude/agents/`: `UserStates`/`LeadStatus`/TTL embeds and the flow-tracer dispatch-order section stay in sync with `constants.py` / `dispatch_guards.py` / `workflow_service.py`; `test_guard_chain_runs_in_source_definition_order` pins `dispatch_guards.GUARD_CHAIN`'s order to the order the guard functions are defined, so the concatenated-source anchor scan stays an honest proxy for execution order |
