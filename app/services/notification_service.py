@@ -156,7 +156,6 @@ def build_new_lead_message(lead: dict) -> str:
     details = Messages.Pro.NEW_LEAD_DETAILS.format(
         customer_name=lead.get("customer_name") or Messages.Fallbacks.CUSTOMER_NAME,
         full_address=lead.get("full_address") or Messages.Fallbacks.UNKNOWN,
-        extra_info=format_lead_extra_info(lead),
         issue_type=lead.get("issue_type") or Messages.Fallbacks.UNKNOWN,
         appointment_time=lead.get("appointment_time") or Messages.Fallbacks.TIME_ASAP,
     )
@@ -214,10 +213,10 @@ async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
                 "blocked, not sent — the pro has no offer to answer."
             )
             return False
-        if lead.get("full_address"):
-            await whatsapp.send_location_link(
-                pro_chat_id, lead["full_address"], Messages.Pro.NAVIGATE_TO
-            )
+        # PRO-59: no navigation link before approval. This is the same
+        # pre-approval moment as the initial offer, and a map pin resolves the
+        # exact address the message now withholds. pro_flow._handle_approve
+        # sends it once the approval is claimed, on both paths.
         return True
     except Exception as e:
         logger.error(

@@ -419,6 +419,21 @@ class Messages:
         )
         APPROVE_SUCCESS = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
         CALENDAR_UPDATE_SUCCESS = "\nהיומן עודכן בהצלחה."
+        # PRO-59: everything APPROVAL_REQUEST withholds, sent the moment the
+        # approval is *claimed* — after the atomic status write, never before,
+        # so a pro who loses the PRO-123 race gets ALREADY_RESPONDED and no
+        # contact details at all. Field order and the wa.me/waze lines mirror
+        # DETAILS_ROW, so the pro reads the same layout here and under פרטים.
+        # §6: every Latin/numeric value ends its own line.
+        CONTACT_CARD = (
+            "\n\n*פרטי הלקוח:*\n"
+            "*טלפון:* {customer_phone}\n"
+            "*צ'אט:* https://wa.me/{customer_phone_intl}\n"
+            "*כתובת מלאה:* {full_address}"
+        )
+        # Appended to CONTACT_CARD only when the lead carries a floor or an
+        # apartment; '-' placeholders would otherwise render an empty promise.
+        CONTACT_CARD_EXTRA = "\n*פרטים נוספים:* {extra_info}"
         NO_PENDING_APPROVE = "לא מצאתי עבודה חדשה לאישור."
         ALREADY_RESPONDED = "כבר הגבת לקריאה זו, ולא ניתן לשנות את הבחירה כעת."
         # PRO-117: sent only after the rematch actually happened, so the copy
@@ -466,10 +481,13 @@ class Messages:
         DEAL_CONFIRMED_HEADER = "✅ *הלקוח אישר! פרטי העבודה:*"
         EMERGENCY_LEAD_HEADER = "🚨 *קריאת חירום דחופה!*"
         NEW_LEAD_HEADER = "📢 *הצעת עבודה חדשה*"
+        # PRO-59: the reassignment/admin offer is the same pre-approval moment
+        # as APPROVAL_REQUEST, so it withholds the same things. It never
+        # carried the phone; the floor/apartment line goes for the same reason
+        # the phone does, and both arrive in CONTACT_CARD on approval.
         NEW_LEAD_DETAILS = (
             "*לקוח:* {customer_name}\n"
             "*כתובת:* {full_address}\n"
-            "*פרטים נוספים:* {extra_info}\n"
             "*תקלה:* {issue_type}\n"
             "*מועד מועדף:* {appointment_time}"
         )
@@ -483,13 +501,18 @@ class Messages:
         # Media is always sent as text links, never re-sent as files — see
         # notification_service.format_media_links for the policy.
         MEDIA_ATTACHED_HEADER = "*מדיה מצורפת:*"
-        # §6: the customer's phone is Latin/numeric, so it ends its own line.
+        # PRO-59: no phone and no floor/apartment before the pro approves. A
+        # pro who can call the customer from the offer can reject in-bot and
+        # take the job off-platform, which is the disintermediation leak the
+        # commission model (PRO-33) cannot survive. The street and city stay,
+        # because a pro cannot judge whether to accept without knowing where
+        # it is. Everything withheld here is sent by CONTACT_CARD the moment
+        # the approval is claimed — this delays the contact details, it does
+        # not deny them.
         APPROVAL_REQUEST = (
             "📋 *פרטי עבודה חדשה לאישורך*\n\n"
             "*לקוח:* {customer_name}\n"
-            "*טלפון:* {customer_phone}\n"
             "*כתובת:* {full_address}\n"
-            "*פרטים נוספים:* {extra_info}\n"
             "*תקלה:* {issue_type}\n"
             "*מועד:* {appointment_time}\n"
             "{price_line}"

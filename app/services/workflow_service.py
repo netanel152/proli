@@ -993,9 +993,6 @@ async def _finalize_deal(
         if pro_phone:
             pro_phone = to_chat_id(pro_phone)
 
-            customer_phone = strip_suffix(chat_id)
-            extra_info = notification_service.format_lead_extra_info(lead)
-
             emergency_header = (
                 Messages.Pro.EMERGENCY_LEAD_HEADER + "\n\n" if is_emergency else ""
             )
@@ -1016,9 +1013,7 @@ async def _finalize_deal(
                 + loyalty_header
                 + Messages.Pro.APPROVAL_REQUEST.format(
                     customer_name=lead.get("customer_name") or "לקוח",
-                    customer_phone=customer_phone,
                     full_address=lead["full_address"],
-                    extra_info=extra_info,
                     issue_type=lead["issue_type"],
                     appointment_time=lead["appointment_time"],
                     price_line=price_line,
@@ -1035,9 +1030,10 @@ async def _finalize_deal(
 
             await whatsapp.send_message(pro_phone, approval_msg)
 
-            await whatsapp.send_location_link(
-                pro_phone, lead["full_address"], Messages.Pro.NAVIGATE_TO
-            )
+            # PRO-59: no navigation link here. It resolves the exact address,
+            # so sending it with the offer would hand over on a map what the
+            # message itself now withholds. pro_flow._handle_approve sends it
+            # once the approval is claimed.
 
     # PRO-69 FM-3: a pro-as-customer used to be snapped back to PRO_MODE right here,
     # the instant their own lead was dispatched. That is the worst possible moment —
