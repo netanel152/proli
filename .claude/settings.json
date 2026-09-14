@@ -164,7 +164,6 @@
     ]
   },
   "enabledPlugins": {
-    "last30days@last30days-skill": true,
     "pyright-lsp@claude-plugins-official": true,
     "mongodb@claude-plugins-official": true
   }

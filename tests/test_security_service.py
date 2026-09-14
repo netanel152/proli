@@ -1,6 +1,7 @@
 """
 Tests for security_service.py: Redis-based rate limiting.
 """
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.security_service import SecurityService
@@ -29,9 +30,15 @@ def mock_redis():
 async def test_rate_limit_allows_under_limit(mock_redis):
     redis, _ = mock_redis
 
-    with patch("app.services.security_service.get_redis_client", new_callable=AsyncMock, return_value=redis):
+    with patch(
+        "app.services.security_service.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
         for _ in range(5):
-            result = await SecurityService.check_rate_limit("user1", limit=10, window_seconds=60)
+            result = await SecurityService.check_rate_limit(
+                "user1", limit=10, window_seconds=60
+            )
             assert result is True
 
 
@@ -39,10 +46,16 @@ async def test_rate_limit_allows_under_limit(mock_redis):
 async def test_rate_limit_blocks_over_limit(mock_redis):
     redis, _ = mock_redis
 
-    with patch("app.services.security_service.get_redis_client", new_callable=AsyncMock, return_value=redis):
+    with patch(
+        "app.services.security_service.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
         results = []
         for _ in range(12):
-            r = await SecurityService.check_rate_limit("user1", limit=10, window_seconds=60)
+            r = await SecurityService.check_rate_limit(
+                "user1", limit=10, window_seconds=60
+            )
             results.append(r)
 
         # First 10 should be allowed
@@ -56,7 +69,11 @@ async def test_rate_limit_blocks_over_limit(mock_redis):
 async def test_rate_limit_different_users(mock_redis):
     redis, _ = mock_redis
 
-    with patch("app.services.security_service.get_redis_client", new_callable=AsyncMock, return_value=redis):
+    with patch(
+        "app.services.security_service.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
         # Fill up user1's limit
         for _ in range(10):
             await SecurityService.check_rate_limit("user1", limit=10)
@@ -75,7 +92,11 @@ async def test_rate_limit_expire_called_on_first():
     redis.incr = AsyncMock(return_value=1)
     redis.expire = AsyncMock()
 
-    with patch("app.services.security_service.get_redis_client", new_callable=AsyncMock, return_value=redis):
+    with patch(
+        "app.services.security_service.get_redis_client",
+        new_callable=AsyncMock,
+        return_value=redis,
+    ):
         await SecurityService.check_rate_limit("user1", limit=10, window_seconds=120)
 
     redis.expire.assert_called_once_with("rate_limit:user1", 120)
@@ -84,6 +105,10 @@ async def test_rate_limit_expire_called_on_first():
 @pytest.mark.asyncio
 async def test_rate_limit_redis_failure_allows():
     """Redis failure -> fail-open (allow request)."""
-    with patch("app.services.security_service.get_redis_client", new_callable=AsyncMock, side_effect=Exception("Redis down")):
+    with patch(
+        "app.services.security_service.get_redis_client",
+        new_callable=AsyncMock,
+        side_effect=Exception("Redis down"),
+    ):
         result = await SecurityService.check_rate_limit("user1", limit=10)
         assert result is True

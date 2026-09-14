@@ -17,6 +17,7 @@ IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 # --- Recurring Schedule Templates ---
 
+
 async def get_schedule_template(pro_id: str) -> dict | None:
     """
     Get a pro's recurring weekly schedule template.
@@ -56,7 +57,15 @@ async def generate_slots_from_template(pro_id: str, days_ahead: int = 14) -> int
 
     oid = ObjectId(pro_id)
     slot_duration = template.get("slot_duration_minutes", 60)
-    day_names = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    day_names = [
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+    ]
 
     now = datetime.now(IL_TZ)
     new_slots = []
@@ -70,13 +79,19 @@ async def generate_slots_from_template(pro_id: str, days_ahead: int = 14) -> int
             continue
 
         # Check if slots already exist for this day
-        day_start_utc = IL_TZ.localize(datetime.combine(target_date, time.min)).astimezone(pytz.utc)
-        day_end_utc = IL_TZ.localize(datetime.combine(target_date, time.max)).astimezone(pytz.utc)
+        day_start_utc = IL_TZ.localize(
+            datetime.combine(target_date, time.min)
+        ).astimezone(pytz.utc)
+        day_end_utc = IL_TZ.localize(
+            datetime.combine(target_date, time.max)
+        ).astimezone(pytz.utc)
 
-        existing = await slots_collection.count_documents({
-            "pro_id": oid,
-            "start_time": {"$gte": day_start_utc, "$lte": day_end_utc},
-        })
+        existing = await slots_collection.count_documents(
+            {
+                "pro_id": oid,
+                "start_time": {"$gte": day_start_utc, "$lte": day_end_utc},
+            }
+        )
         if existing > 0:
             continue
 
@@ -87,23 +102,29 @@ async def generate_slots_from_template(pro_id: str, days_ahead: int = 14) -> int
         except (ValueError, KeyError):
             continue
 
-        slot_start = IL_TZ.localize(datetime.combine(target_date, time(start_h, start_m)))
+        slot_start = IL_TZ.localize(
+            datetime.combine(target_date, time(start_h, start_m))
+        )
         day_end = IL_TZ.localize(datetime.combine(target_date, time(end_h, end_m)))
 
         while slot_start + timedelta(minutes=slot_duration) <= day_end:
             slot_end = slot_start + timedelta(minutes=slot_duration)
-            new_slots.append({
-                "pro_id": oid,
-                "start_time": slot_start.astimezone(pytz.utc),
-                "end_time": slot_end.astimezone(pytz.utc),
-                "is_taken": False,
-                "created_at": datetime.now(timezone.utc),
-            })
+            new_slots.append(
+                {
+                    "pro_id": oid,
+                    "start_time": slot_start.astimezone(pytz.utc),
+                    "end_time": slot_end.astimezone(pytz.utc),
+                    "is_taken": False,
+                    "created_at": datetime.now(timezone.utc),
+                }
+            )
             slot_start = slot_end
 
     if new_slots:
         await slots_collection.insert_many(new_slots)
-        logger.info(f"Generated {len(new_slots)} slots for pro {pro_id} ({days_ahead} days)")
+        logger.info(
+            f"Generated {len(new_slots)} slots for pro {pro_id} ({days_ahead} days)"
+        )
 
     return len(new_slots)
 
@@ -111,11 +132,13 @@ async def generate_slots_from_template(pro_id: str, days_ahead: int = 14) -> int
 async def regenerate_all_templates() -> int:
     """Regenerate slots for all active pros with templates. Called by scheduler."""
     total = 0
-    cursor = users_collection.find({
-        "is_active": True,
-        "role": "professional",
-        "schedule_template": {"$exists": True},
-    })
+    cursor = users_collection.find(
+        {
+            "is_active": True,
+            "role": "professional",
+            "schedule_template": {"$exists": True},
+        }
+    )
     async for pro in cursor:
         count = await generate_slots_from_template(str(pro["_id"]))
         total += count
@@ -126,7 +149,10 @@ async def regenerate_all_templates() -> int:
 
 # --- Availability Checks ---
 
-async def check_pro_availability(pro_id, requested_time: datetime | None = None) -> bool:
+
+async def check_pro_availability(
+    pro_id, requested_time: datetime | None = None
+) -> bool:
     """
     Check if a pro has available slots. Used by matching_service.
     If requested_time provided, checks within +-2 hour window.
@@ -144,16 +170,20 @@ async def check_pro_availability(pro_id, requested_time: datetime | None = None)
         window_start = now_utc
         window_end = now_utc + timedelta(days=7)
 
-    slot = await slots_collection.find_one({
-        "pro_id": oid,
-        "is_taken": False,
-        "start_time": {"$gte": window_start, "$lte": window_end},
-    })
+    slot = await slots_collection.find_one(
+        {
+            "pro_id": oid,
+            "is_taken": False,
+            "start_time": {"$gte": window_start, "$lte": window_end},
+        }
+    )
 
     return slot is not None
 
 
-async def get_available_slots(pro_id: str, date: datetime | None = None, limit: int = 20) -> list:
+async def get_available_slots(
+    pro_id: str, date: datetime | None = None, limit: int = 20
+) -> list:
     """Get available (not taken) slots for a pro, optionally filtered by date."""
     oid = ObjectId(pro_id)
     query = {"pro_id": oid, "is_taken": False}
@@ -171,6 +201,7 @@ async def get_available_slots(pro_id: str, date: datetime | None = None, limit: 
 
 
 # --- No-Show Tracking ---
+
 
 async def record_no_show(pro_id) -> int:
     """Increment a pro's no-show count. Returns the new count.
