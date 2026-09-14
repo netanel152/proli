@@ -93,7 +93,7 @@ Both are gated to business hours by PRO-73, which narrows them further.
 
 These are the parts where our current message shapes and Meta's template format are likely to collide. Each needs verification against current documentation in PRO-87.
 
-**1. Multi-line interpolated blocks.** `build_new_lead_message` composes a header, a details block with five substitutions, a footer, and a media-links block built at runtime from a list of unknown length. Template variables are generally constrained in ways free-form text is not — notably around newlines and adjacent placeholders. The media-links block (`\n1. url\n2. url…`) is the least template-shaped thing we send.
+**1. Multi-line interpolated blocks.** `build_new_lead_message` composes a header, a details block with four substitutions (PRO-59 dropped the floor/apartment line from it), a footer, and a media-links block built at runtime from a list of unknown length. Template variables are generally constrained in ways free-form text is not — notably around newlines and adjacent placeholders. The media-links block (`\n1. url\n2. url…`) is the least template-shaped thing we send.
 
 **2. The numbered-reply menus survive, but verify how.** CLAUDE.md's text-only rule was inherited from the old vendor's limitation; PRO-88/89 have both now landed (the catalog and the `CloudAPIProvider` transport), and `send_interactive` can send real buttons/lists. Numeric-reply instructions are plain body text, so they should templatize cleanly — but the reason to keep them text-only rather than adopting interactive buttons is a *choice*, not a constraint (no template is even approved yet — that's PRO-87), and this catalog is where that choice should be made explicitly.
 
@@ -108,7 +108,7 @@ These are the parts where our current message shapes and Meta's template format 
 ## Recommended next actions
 
 1. ~~**Delete the operator-facing WhatsApp leg (O1–O3)**~~ — ✅ **done 2026-08-13.** Four templates removed, no Meta dependency.
-2. **Fold P2 into P1.** One template, one send, one fee, one approval. Independent of Meta; can be done before PRO-87.
+2. ~~**Fold P2 into P1.**~~ — ✅ **done differently, PRO-59.** Rather than merging the navigation link into P1's body, the link was dropped from both pre-approval offers outright — a map pin would resolve the exact address the offer now deliberately withholds until the pro approves. Same net effect on the template count (one fewer), for a product reason rather than a template-economy one; the link now goes out inside the post-approval contact card, which needs no template of its own.
 3. **Decide P4's fate.** If the early-lead notification is not load-bearing, dropping it removes the only media template.
 4. **Then submit**, in priority order: P1/P3 (shared shape) → P6 → P5 → P7/P8 → the rest.
 
