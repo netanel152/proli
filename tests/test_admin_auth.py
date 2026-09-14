@@ -5,18 +5,20 @@ from admin_panel.core import auth
 
 # --- Password hashing / verification ---
 
+
 def test_password_hashing():
     """
     Test that make_hash returns a valid bcrypt hash different from input.
     """
     password = "password123"
     hashed = auth.make_hash(password)
-    
+
     assert isinstance(hashed, str)
     assert len(hashed) > 0
     assert hashed != password
     # Bcrypt hashes usually start with $2b$ or $2a$
     assert hashed.startswith("$2")
+
 
 def test_password_verification_success():
     """
@@ -24,8 +26,9 @@ def test_password_verification_success():
     """
     password = "secure_password"
     hashed = auth.make_hash(password)
-    
+
     assert auth.check_hash(password, hashed) is True
+
 
 def test_password_verification_failure():
     """
@@ -33,8 +36,9 @@ def test_password_verification_failure():
     """
     password = "secure_password"
     hashed = auth.make_hash(password)
-    
+
     assert auth.check_hash("wrong_password", hashed) is False
+
 
 def test_check_hash_invalid_format():
     """
@@ -44,6 +48,7 @@ def test_check_hash_invalid_format():
 
 
 # --- Login brute-force lockout ---
+
 
 class FakeRedis:
     """In-memory stand-in for sync redis with TTL bookkeeping."""

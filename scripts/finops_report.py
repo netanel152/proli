@@ -7,6 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.database import users_collection
 
+
 async def generate_finops_report():
     """
     Queries and displays the total_tokens_used for all professionals.
@@ -18,7 +19,7 @@ async def generate_finops_report():
     cursor = users_collection.find(
         {"role": "professional", "total_tokens_used": {"$exists": True, "$gt": 0}}
     ).sort("total_tokens_used", -1)
-    
+
     pros = await cursor.to_list(length=100)
 
     if not pros:
@@ -31,14 +32,15 @@ async def generate_finops_report():
         phone = pro.get("phone_number", "Unknown")
         tokens = pro.get("total_tokens_used", 0)
         total_all += tokens
-        
+
         # Trim name if too long
         display_name = (name[:27] + "...") if len(name) > 30 else name
-        
+
         print(f"{display_name:<30} | {phone:<15} | {tokens:>12,}")
 
     print("-" * 65)
     print(f"{'TOTAL':<48} | {total_all:>12,}\n")
+
 
 if __name__ == "__main__":
     asyncio.run(generate_finops_report())

@@ -332,3 +332,34 @@ def test_gitignore_keeps_per_developer_claude_files_out_of_git():
     ignored = (_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     for entry in ("CLAUDE.local.md", "settings.local.json", ".claude/agent-memory/"):
         assert entry in ignored, f".gitignore is missing {entry}"
+
+
+# --- Git hooks --------------------------------------------------------------
+#
+# `core.hooksPath = .githooks` is the PR-only workflow's local backstop. Git
+# runs a hook only if the file is executable, and warns once, quietly, when
+# it is not ("hook was ignored because it's not set as executable") — which
+# is how the pre-push guard turned out to be off on every POSIX clone while
+# looking fully present in the tree. The executable bit lives in the git
+# index (mode 100755), so this checks the index, not the working copy.
+
+
+def test_git_hooks_carry_the_executable_bit_in_the_index():
+    import subprocess
+
+    hooks_dir = _ROOT / ".githooks"
+    listed = subprocess.run(
+        ["git", "ls-files", "-s", "--", str(hooks_dir)],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    assert listed, ".githooks/ has no tracked files"
+    not_executable = [
+        line.split()[-1] for line in listed if not line.startswith("100755 ")
+    ]
+    assert not not_executable, (
+        "git ignores a non-executable hook: run "
+        "`git update-index --chmod=+x <file>` for " + ", ".join(not_executable)
+    )

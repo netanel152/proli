@@ -4,6 +4,7 @@ from app.core.logger import logger
 from app.core.constants import UserStates
 from typing import Optional, Dict, Any
 
+
 class StateManager:
     TTL = 14400  # 4 hours expiration (allows longer conversations)
 
@@ -37,7 +38,7 @@ class StateManager:
                 f"🔄 FSM {chat_id}: {prev or UserStates.IDLE} → {state_value} (ttl={effective_ttl}s)"
             )
         except Exception as e:
-             logger.error(f"Error setting state for {chat_id}: {e}")
+            logger.error(f"Error setting state for {chat_id}: {e}")
 
     @classmethod
     async def clear_state(cls, chat_id: str):

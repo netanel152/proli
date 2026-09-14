@@ -1,16 +1,20 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Optional, Any
 
+
 class BaseSchema(BaseModel):
-    model_config = ConfigDict(extra='ignore')
+    model_config = ConfigDict(extra="ignore")
+
 
 class TextMessageData(BaseSchema):
     textMessage: str
+
 
 class ExtendedTextMessageData(BaseSchema):
     text: Optional[str] = None
     description: Optional[str] = None
     previewType: Optional[str] = None
+
 
 class FileMessageData(BaseSchema):
     downloadUrl: str
@@ -18,17 +22,22 @@ class FileMessageData(BaseSchema):
     mimeType: str
     fileName: Optional[str] = None
 
+
 class LocationMessageData(BaseSchema):
     """Location message data (legacy inbound envelope)."""
+
     latitude: Optional[float] = None
     longitude: Optional[float] = None
     nameLocation: Optional[str] = None
     address: Optional[str] = None
 
+
 class QuotedMessageData(BaseSchema):
     """Quoted/reply message data."""
+
     stanzaId: Optional[str] = None
     participant: Optional[str] = None
+
 
 class MessageData(BaseSchema):
     typeMessage: Optional[str] = None
@@ -38,14 +47,17 @@ class MessageData(BaseSchema):
     locationMessageData: Optional[LocationMessageData] = None
     quotedMessage: Optional[QuotedMessageData] = None
 
+
 class SenderData(BaseSchema):
     chatId: str
     senderName: Optional[str] = "Unknown"
+
 
 class InstanceData(BaseSchema):
     idInstance: int
     wid: Optional[str] = None
     typeInstance: Optional[str] = None
+
 
 class WebhookPayload(BaseSchema):
     typeWebhook: str

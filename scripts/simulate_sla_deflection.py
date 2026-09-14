@@ -10,6 +10,7 @@ from app.core.database import leads_collection
 from app.services.state_manager_service import StateManager
 from app.core.constants import UserStates, LeadStatus, WorkerConstants
 
+
 async def simulate_sla_deflection(chat_id: str):
     """
     Simulates a 15-minute silence for a specific chat_id in PAUSED_FOR_HUMAN state.
@@ -24,18 +25,21 @@ async def simulate_sla_deflection(chat_id: str):
     # We look for an active lead or create a dummy one
     lead = await leads_collection.find_one(
         {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
-        sort=[("created_at", -1)]
+        sort=[("created_at", -1)],
     )
 
     # Threshold is 15 mins (900s)
-    stale_time = datetime.now(timezone.utc) - timedelta(seconds=WorkerConstants.PAUSE_TTL_SECONDS + 60)
+    stale_time = datetime.now(timezone.utc) - timedelta(
+        seconds=WorkerConstants.PAUSE_TTL_SECONDS + 60
+    )
 
     if lead:
         await leads_collection.update_one(
-            {"_id": lead["_id"]},
-            {"$set": {"is_paused": True, "paused_at": stale_time}}
+            {"_id": lead["_id"]}, {"$set": {"is_paused": True, "paused_at": stale_time}}
         )
-        print(f"✅ Updated existing lead {lead['_id']} to be stale (paused_at: {stale_time})")
+        print(
+            f"✅ Updated existing lead {lead['_id']} to be stale (paused_at: {stale_time})"
+        )
     else:
         # Create a dummy lead if none exists
         new_lead = {
@@ -45,21 +49,30 @@ async def simulate_sla_deflection(chat_id: str):
             "full_address": "Test City, Test St",
             "created_at": stale_time - timedelta(hours=1),
             "is_paused": True,
-            "paused_at": stale_time
+            "paused_at": stale_time,
         }
         result = await leads_collection.insert_one(new_lead)
-        print(f"✅ Created dummy lead {result.inserted_id} to be stale (paused_at: {stale_time})")
+        print(
+            f"✅ Created dummy lead {result.inserted_id} to be stale (paused_at: {stale_time})"
+        )
 
     # 2. Set Redis State
-    await StateManager.set_state(chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS)
+    await StateManager.set_state(
+        chat_id, UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS
+    )
     print(f"✅ Set Redis state to PAUSED_FOR_HUMAN for {chat_id}")
 
     print(f"\n🚀 Simulation ready! Make sure the worker is running.")
-    print(f"The SLA Monitor (APScheduler job) runs every 5 minutes and will pick this up.")
+    print(
+        f"The SLA Monitor (APScheduler job) runs every 5 minutes and will pick this up."
+    )
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python scripts/simulate_sla_deflection.py <phone_number_or_chat_id>")
+        print(
+            "Usage: python scripts/simulate_sla_deflection.py <phone_number_or_chat_id>"
+        )
         sys.exit(1)
 
     target = sys.argv[1]

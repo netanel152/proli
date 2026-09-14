@@ -130,8 +130,8 @@ The baseline is the "Current status" line in `docs/TESTING.md`, enforced by CI a
 ### Linting / Formatting
 
 ```bash
-black .
-flake8 .   # config in .flake8 — black-compatible, 100 columns
+black .    # enforced: CI runs `black --check --diff .` and fails the build on an unformatted file
+flake8 .   # config in .flake8 — black-compatible, 100 columns; advisory until the pre-existing debt is paid
 ```
 
 ## Architecture

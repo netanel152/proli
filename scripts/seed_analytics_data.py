@@ -15,7 +15,8 @@ from app.core.database import (
 )
 from app.core.constants import LeadStatus
 
-fake = Faker('he_IL')
+fake = Faker("he_IL")
+
 
 async def seed_analytics():
     print("🧹 Cleaning up old analytics data...")
@@ -50,17 +51,19 @@ async def seed_analytics():
     # Weighting statuses for a realistic funnel (8 statuses now)
     # new, contacted, booked, completed, rejected, closed, cancelled, pending_admin_review
     status_weights = [0.15, 0.2, 0.15, 0.2, 0.1, 0.05, 0.05, 0.1]
-    
+
     leads_to_create = []
     now = datetime.now(timezone.utc)
-    
+
     for _ in range(80):
-        created_at = now - timedelta(days=random.randint(0, 30), hours=random.randint(0, 23))
+        created_at = now - timedelta(
+            days=random.randint(0, 30), hours=random.randint(0, 23)
+        )
         status = random.choices(statuses, weights=status_weights)[0]
-        
+
         # Only assign pro if status is not 'new' (usually)
         pro_id = random.choice(pro_ids) if status != "new" else None
-        
+
         lead = {
             "chat_id": f"9725{random.randint(10000000, 99999999)}@c.us",
             "pro_id": pro_id,
@@ -74,26 +77,29 @@ async def seed_analytics():
 
     if leads_to_create:
         await leads_collection.insert_many(leads_to_create)
-    
+
     print(f"✅ Created 80 leads.")
 
     print("⭐ Creating some reviews for performance metrics...")
     reviews = []
     for pro_id in pro_ids:
         for _ in range(random.randint(3, 8)):
-            reviews.append({
-                "pro_id": pro_id,
-                "rating": random.randint(3, 5),
-                "comment": fake.sentence(),
-                "created_at": now - timedelta(days=random.randint(0, 20))
-            })
+            reviews.append(
+                {
+                    "pro_id": pro_id,
+                    "rating": random.randint(3, 5),
+                    "comment": fake.sentence(),
+                    "created_at": now - timedelta(days=random.randint(0, 20)),
+                }
+            )
     if reviews:
         await reviews_collection.insert_many(reviews)
-    
+
     print(f"✅ Created {len(reviews)} reviews.")
     print("\n🚀 Analytics seeding complete!")
 
+
 if __name__ == "__main__":
-    if os.name == 'nt':
+    if os.name == "nt":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(seed_analytics())

@@ -30,7 +30,11 @@ def main():
         sys.exit(2)
 
     # Block edits to anything under .git/
-    if "/.git/" in normalized or normalized.endswith("/.git") or normalized.startswith(".git/"):
+    if (
+        "/.git/" in normalized
+        or normalized.endswith("/.git")
+        or normalized.startswith(".git/")
+    ):
         print(
             "BLOCKED: Edits inside the .git directory are not allowed.",
             file=sys.stderr,
