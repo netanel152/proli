@@ -12,6 +12,7 @@ from admin_panel.ui.components import (
     render_chat_bubble,
     render_flash,
     render_kanban_column,
+    render_metric_grid,
     render_status_pill,
     set_flash,
 )
@@ -565,13 +566,29 @@ def view_leads_dashboard(T):
     # TAB 1: KANBAN BOARD
     # ==========================================
     with tab_kanban:
-        # Metrics — the pending-review tile gets extra width for its longer label.
-        c1, c2, c3, c4, c5 = st.columns([1, 1.4, 1, 1, 1])
-        c1.metric(T.get("metric_total", "Total"), total_count)
-        c2.metric(T.get("metric_pending_review", "Needs Review"), pending_review_count)
-        c3.metric(T.get("metric_new", "New"), new_count)
-        c4.metric(T.get("metric_booked", "Booked"), booked_count)
-        c5.metric(T.get("metric_pros", "Staff"), active_pros)
+        # One CSS grid, not five columns: Streamlit stacks every column to
+        # full width below 640px, so the old row put five tall cards between
+        # the operator and the first lead on a phone.
+        st.markdown(
+            render_metric_grid(
+                [
+                    (T.get("metric_total", "Total"), total_count),
+                    (
+                        T.get("metric_pending_review", "Needs Review"),
+                        pending_review_count,
+                    ),
+                    (T.get("metric_new", "New"), new_count),
+                    (T.get("metric_booked", "Booked"), booked_count),
+                    (T.get("metric_pros", "Staff"), active_pros),
+                ],
+                T,
+                # The weighting the old `st.columns([1, 1.4, 1, 1, 1])` row
+                # carried: the pending-review tile has the longest label in
+                # both languages, so desktop keeps giving it the extra width.
+                weights=[1, 1.4, 1, 1, 1],
+            ),
+            unsafe_allow_html=True,
+        )
 
         st.markdown("")
 
@@ -602,11 +619,19 @@ def view_leads_dashboard(T):
                     status, grouped.get(status, []), T
                 )
 
+            # `leads_df.empty` above covers "no leads at all", but a lead
+            # carrying a legacy or blank status matches no KANBAN_STATUSES
+            # entry and so lands in no column. On a phone, where empty columns
+            # are hidden, that rendered as a silently blank region.
+            if not any(grouped.values()):
+                st.info(T["no_leads_found"])
+                all_columns_html = ""
+
             # dir is set explicitly (not left to inherited direction) so the
             # column reading order — pending_admin_review first/leading — is
             # stable in RTL regardless of any ancestor's direction (PRO-46).
             st.markdown(
-                f"""<div dir="{T['dir']}" style="display: flex; gap: 12px; overflow-x: auto; padding-bottom: 12px; direction: {T['dir']};">
+                f"""<div class="kanban-board" dir="{T['dir']}">
 {all_columns_html}
 </div>""",
                 unsafe_allow_html=True,
@@ -624,13 +649,29 @@ def view_leads_dashboard(T):
     # TAB 2: TABLE VIEW
     # ==========================================
     with tab_table:
-        # Metrics — the pending-review tile gets extra width for its longer label.
-        c1, c2, c3, c4, c5 = st.columns([1, 1.4, 1, 1, 1])
-        c1.metric(T.get("metric_total", "Total"), total_count)
-        c2.metric(T.get("metric_pending_review", "Needs Review"), pending_review_count)
-        c3.metric(T.get("metric_new", "New"), new_count)
-        c4.metric(T.get("metric_booked", "Booked"), booked_count)
-        c5.metric(T.get("metric_pros", "Staff"), active_pros)
+        # One CSS grid, not five columns: Streamlit stacks every column to
+        # full width below 640px, so the old row put five tall cards between
+        # the operator and the first lead on a phone.
+        st.markdown(
+            render_metric_grid(
+                [
+                    (T.get("metric_total", "Total"), total_count),
+                    (
+                        T.get("metric_pending_review", "Needs Review"),
+                        pending_review_count,
+                    ),
+                    (T.get("metric_new", "New"), new_count),
+                    (T.get("metric_booked", "Booked"), booked_count),
+                    (T.get("metric_pros", "Staff"), active_pros),
+                ],
+                T,
+                # The weighting the old `st.columns([1, 1.4, 1, 1, 1])` row
+                # carried: the pending-review tile has the longest label in
+                # both languages, so desktop keeps giving it the extra width.
+                weights=[1, 1.4, 1, 1, 1],
+            ),
+            unsafe_allow_html=True,
+        )
 
         st.markdown("")
 
