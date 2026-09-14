@@ -26,7 +26,7 @@ parses all of it in the normal `pytest` run.
 | `.claude/settings.local.json` | per-machine: `disabledMcpjsonServers`, and any `enabledPlugins` entry whose marketplace is not registered in this repo (a plugin the shared file names but no clone can resolve is a warning on every session start, not a feature) — `last30days@last30days-skill` moved here in September 2026; gitignored | — |
 | `.mcp.json` | project MCP servers, auto-approved via `enableAllProjectMcpServers` | `test_claude_config.py` (transport fields, `${VAR}` env only) |
 | `.claude/agent-memory/` | `flow-tracer`'s pattern memory; gitignored, per machine | — |
-| `.githooks/` | `core.hooksPath` target: `pre-push` blocks direct pushes to `dev`/`production` | — |
+| `.githooks/` | `core.hooksPath` target: `pre-push` blocks direct pushes to `dev`/`main`/`master`; must carry the executable bit **in the index** (`100755`), or git skips it with a one-line hint and the backstop is silently off | `test_claude_config.py` (index mode) |
 
 ## Hooks (`settings.json` → `.claude/hooks/`)
 
