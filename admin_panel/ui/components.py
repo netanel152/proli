@@ -2,6 +2,7 @@ import streamlit as st
 import html
 
 from admin_panel.core.labels import lead_status_label
+from admin_panel.ui.responsive import responsive_css
 
 # Status color mapping for Kanban and pills
 STATUS_COLORS = {
@@ -268,7 +269,10 @@ def load_css(lang_code, T):
             background: linear-gradient(180deg, var(--bg-card) 0%, var(--bg-secondary) 100%);
             border-{border_side}: none;
             box-shadow: var(--shadow-md);
-            width: 280px !important;
+            /* The 280px width is NOT here: it applies only above Streamlit's
+               own sidebar-overlay breakpoint, in `responsive.py`. Pinned at
+               every width it fought the mobile overlay and the sidebar
+               covered the whole phone screen on load. */
         }}
 
         section[data-testid="stSidebar"] .block-container {{
@@ -381,6 +385,68 @@ def load_css(lang_code, T):
             font-size: 2rem !important;
             font-weight: 800 !important;
             color: var(--text-main) !important;
+        }}
+
+        /* ===== METRIC GRID (render_metric_grid) =====
+           A CSS grid rather than `st.columns` + `st.metric`, because
+           Streamlit stacks every column to full width below 640px and five
+           tall cards then push the first lead a screen and a half down. One
+           markup, re-flowed by the breakpoints in `responsive.py`: five up on
+           desktop, three on tablet, two on a phone, DOM order untouched.
+           Styled to match `stMetric` above, which is still used wherever a
+           delta is shown. */
+        .metric-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 12px;
+        }}
+
+        .metric-tile {{
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            padding: 20px 24px;
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
+            transition: var(--transition);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            text-align: {align};
+            position: relative;
+            overflow: hidden;
+        }}
+
+        .metric-tile:hover {{
+            box-shadow: var(--shadow-md);
+            transform: translateY(-1px);
+        }}
+
+        .metric-tile::before {{
+            content: '';
+            position: absolute;
+            top: 0;
+            {opp_border}: 0;
+            {border_side}: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, var(--primary) 0%, var(--primary-light) 100%);
+        }}
+
+        .metric-tile-label {{
+            font-size: 0.8rem !important;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary) !important;
+            font-weight: 600 !important;
+            text-align: {align};
+        }}
+
+        .metric-tile-value {{
+            font-size: 2rem !important;
+            font-weight: 800 !important;
+            color: var(--text-main) !important;
+            text-align: {align};
+            line-height: 1.2;
         }}
 
         /* ===== TABS ===== */
@@ -731,6 +797,18 @@ def load_css(lang_code, T):
         }}
 
         /* ===== KANBAN BOARD ===== */
+        /* The wrapper was an inline style on the markup in `home.py`; it is a
+           class so `responsive.py` can re-flow it (two-up on tablet, one
+           stacked column on a phone). The `dir` attribute stays inline on the
+           element — PRO-46: the reading order must not depend on an
+           ancestor's direction. */
+        .kanban-board {{
+            display: flex;
+            gap: 12px;
+            overflow-x: auto;
+            padding-bottom: 12px;
+        }}
+
         .kanban-column {{
             background-color: var(--bg-secondary);
             border-radius: var(--radius-md);
@@ -956,7 +1034,7 @@ def load_css(lang_code, T):
             0%, 100% {{ opacity: 1; }}
             50% {{ opacity: 0.4; }}
         }}
-
+{responsive_css(direction, align)}
     </style>
     """,
         unsafe_allow_html=True,
@@ -1070,13 +1148,20 @@ def render_kanban_column(status, leads, T):
 
     cards_html = "".join(render_kanban_card(l, T) for l in leads)
 
+    # A column with nothing in it is marked rather than omitted: on desktop it
+    # still renders (an empty status is information — the operator can see the
+    # queue is clear), and only the phone breakpoint hides it, where a stacked
+    # empty column is a screen of nothing between two real ones. Dropping it
+    # here instead would change the desktop board too.
+    empty_class = "" if leads else " kanban-column--empty"
+
     if not leads:
         cards_html = """<div class="empty-state" style="padding: 1.5rem 0.5rem;">
     <span class="material-symbols-rounded" style="font-size: 1.5rem;">inbox</span>
     <div style="font-size: 0.8rem;">—</div>
 </div>"""
 
-    return f"""<div class="kanban-column">
+    return f"""<div class="kanban-column{empty_class}">
     <div class="kanban-header" style="background-color: {colors['bg']}; color: {colors['text']}; border: 1px solid {colors['border']};">
         <span class="material-symbols-rounded" style="font-size:1rem">{colors['icon']}</span>
         {label}
@@ -1084,3 +1169,31 @@ def render_kanban_column(status, leads, T):
     </div>
     {cards_html}
 </div>"""
+
+
+def render_metric_grid(items, T):
+    """Render a row of metric tiles as one CSS grid.
+
+    `items` is a sequence of ``(label, value)`` pairs, rendered in order. The
+    grid re-flows itself — five up on desktop, three on tablet, two on a phone
+    — so callers never choose a column count and no `st.columns` spec has to
+    be kept in sync with the number of tiles.
+
+    Replaces `st.columns(...)` + `st.metric(...)` rows only. `st.metric` is
+    still the right widget wherever a delta is shown; those rows are at most
+    two wide and stack acceptably.
+    """
+    direction = T.get("dir", "ltr")
+
+    tiles = "".join(
+        f'<div class="metric-tile">'
+        f'<div class="metric-tile-label">{html.escape(str(label))}</div>'
+        f'<div class="metric-tile-value">{html.escape(str(value))}</div>'
+        f"</div>"
+        for label, value in items
+    )
+
+    # `dir` is on the element rather than inherited, for the same reason the
+    # Kanban board sets it (PRO-46): tile order must not depend on an
+    # ancestor's direction.
+    return f'<div class="metric-grid" dir="{direction}">{tiles}</div>'
