@@ -45,3 +45,7 @@ settings.local.json
 # backups/ holds real mongodump output (customer data) - PRO-144
 backups/
 .pytest_cache/
+
+# Screenshot output from scripts/admin_panel_screenshots.py — review aids for a
+# PR, regenerated on demand, never fixtures.
+artifacts/
