@@ -149,7 +149,6 @@ def view_analytics(T):
             # Conversion metrics
             total = sum(funnel.values())
             if total > 0:
-                c1, c2, c3 = st.columns(3)
                 contacted_rate = round(
                     (
                         funnel.get("contacted", 0)
@@ -167,12 +166,25 @@ def view_analytics(T):
                     1,
                 )
                 completed_rate = round(funnel.get("completed", 0) / total * 100, 1)
-                c1.metric(
-                    T.get("contacted_rate", "Contacted Rate"), f"{contacted_rate}%"
-                )
-                c2.metric(T.get("booked_rate", "Booked Rate"), f"{booked_rate}%")
-                c3.metric(
-                    T.get("completed_rate", "Completed Rate"), f"{completed_rate}%"
+                st.markdown(
+                    render_metric_grid(
+                        [
+                            (
+                                T.get("contacted_rate", "Contacted Rate"),
+                                f"{contacted_rate}%",
+                            ),
+                            (
+                                T.get("booked_rate", "Booked Rate"),
+                                f"{booked_rate}%",
+                            ),
+                            (
+                                T.get("completed_rate", "Completed Rate"),
+                                f"{completed_rate}%",
+                            ),
+                        ],
+                        T,
+                    ),
+                    unsafe_allow_html=True,
                 )
 
                 # Time-in-stage funnel metrics from status_history (PRO-57).
@@ -330,20 +342,31 @@ def view_analytics(T):
 
         rev = _fetch(T, aq.get_revenue_stats, days)
         if rev and rev["priced_jobs"] > 0:
-            r1, r2, r3, r4 = st.columns(4)
-            r1.metric(
-                f"{T.get('revenue_gmv', 'GMV')} {period_suffix}",
-                f"₪{rev['gmv']:,.0f}",
-            )
-            r2.metric(
-                f"{T.get('revenue_commission', 'Commission')} {period_suffix}",
-                f"₪{rev['commission']:,.2f}",
-            )
-            r3.metric(T.get("revenue_priced_jobs", "Priced jobs"), rev["priced_jobs"])
             avg_ticket = rev["avg_ticket"]
-            r4.metric(
-                T.get("revenue_avg_ticket", "Avg ticket"),
-                f"₪{avg_ticket:,.0f}" if avg_ticket is not None else "—",
+            st.markdown(
+                render_metric_grid(
+                    [
+                        (
+                            f"{T.get('revenue_gmv', 'GMV')} {period_suffix}",
+                            f"₪{rev['gmv']:,.0f}",
+                        ),
+                        (
+                            f"{T.get('revenue_commission', 'Commission')} "
+                            f"{period_suffix}",
+                            f"₪{rev['commission']:,.2f}",
+                        ),
+                        (
+                            T.get("revenue_priced_jobs", "Priced jobs"),
+                            rev["priced_jobs"],
+                        ),
+                        (
+                            T.get("revenue_avg_ticket", "Avg ticket"),
+                            f"₪{avg_ticket:,.0f}" if avg_ticket is not None else "—",
+                        ),
+                    ],
+                    T,
+                ),
+                unsafe_allow_html=True,
             )
             st.caption(
                 T.get("revenue_takerate_note", "Take-rate")

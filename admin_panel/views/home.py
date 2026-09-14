@@ -378,7 +378,7 @@ def _render_pending_review_strip(T):
         # and undoes an operator who collapsed it to see the board.
         with st.container():
             st.markdown(f"**{label}** · {_waited_label(T, lead, now)}")
-            col_pick, col_go = st.columns([3, 1], gap="small")
+            col_pick, col_go = st.columns([3, 1])
             # The options are the pro *documents*. Names are not unique —
             # `business_name` carries only a TEXT index and self-onboarding
             # defaults it to "" — so a name->id map collapses every pro sharing
@@ -582,6 +582,10 @@ def view_leads_dashboard(T):
                     (T.get("metric_pros", "Staff"), active_pros),
                 ],
                 T,
+                # The weighting the old `st.columns([1, 1.4, 1, 1, 1])` row
+                # carried: the pending-review tile has the longest label in
+                # both languages, so desktop keeps giving it the extra width.
+                weights=[1, 1.4, 1, 1, 1],
             ),
             unsafe_allow_html=True,
         )
@@ -614,6 +618,14 @@ def view_leads_dashboard(T):
                 all_columns_html += render_kanban_column(
                     status, grouped.get(status, []), T
                 )
+
+            # `leads_df.empty` above covers "no leads at all", but a lead
+            # carrying a legacy or blank status matches no KANBAN_STATUSES
+            # entry and so lands in no column. On a phone, where empty columns
+            # are hidden, that rendered as a silently blank region.
+            if not any(grouped.values()):
+                st.info(T["no_leads_found"])
+                all_columns_html = ""
 
             # dir is set explicitly (not left to inherited direction) so the
             # column reading order — pending_admin_review first/leading — is
@@ -653,6 +665,10 @@ def view_leads_dashboard(T):
                     (T.get("metric_pros", "Staff"), active_pros),
                 ],
                 T,
+                # The weighting the old `st.columns([1, 1.4, 1, 1, 1])` row
+                # carried: the pending-review tile has the longest label in
+                # both languages, so desktop keeps giving it the extra width.
+                weights=[1, 1.4, 1, 1, 1],
             ),
             unsafe_allow_html=True,
         )

@@ -1171,19 +1171,29 @@ def render_kanban_column(status, leads, T):
 </div>"""
 
 
-def render_metric_grid(items, T):
+def render_metric_grid(items, T, weights=None):
     """Render a row of metric tiles as one CSS grid.
 
-    `items` is a sequence of ``(label, value)`` pairs, rendered in order. The
-    grid re-flows itself — five up on desktop, three on tablet, two on a phone
-    — so callers never choose a column count and no `st.columns` spec has to
-    be kept in sync with the number of tiles.
+    `items` is a sequence of ``(label, value)`` pairs, rendered in order.
+    Below desktop the grid re-flows itself — three up on tablet, two on a
+    phone — so no caller has to keep a column count in sync with the number
+    of tiles.
 
-    Replaces `st.columns(...)` + `st.metric(...)` rows only. `st.metric` is
-    still the right widget wherever a delta is shown; those rows are at most
-    two wide and stack acceptably.
+    `weights` optionally gives the desktop column proportions, one number per
+    item, and means exactly what the same list meant to `st.columns`:
+    ``[1, 1.4, 1, 1, 1]`` gives the second tile 1.4x the width of its
+    neighbours. Omit it and every tile is equal. It exists so converting a
+    weighted `st.columns` row does not silently re-proportion the desktop
+    layout, which is meant to come through this work unchanged.
+
+    Scope note, because the plan this came from got it wrong: it claimed
+    `st.metric` was kept "wherever a delta is shown". No view passes `delta=`
+    at all. What is actually left on `st.metric` is `professionals.py`'s row,
+    which is two metrics beside a *button* rather than a metric row, and the
+    single FinOps tile — neither is a grid of tiles.
     """
     direction = T.get("dir", "ltr")
+    items = list(items)
 
     tiles = "".join(
         f'<div class="metric-tile">'
@@ -1193,7 +1203,21 @@ def render_metric_grid(items, T):
         for label, value in items
     )
 
+    style = ""
+    if weights:
+        if len(weights) != len(items):
+            raise ValueError(
+                f"weights has {len(weights)} entries for {len(items)} items"
+            )
+        # Built from floats rather than interpolated as a caller-supplied CSS
+        # string: there is then no way for a track list to carry anything but
+        # numbers, whatever a future caller derives them from. The narrower
+        # breakpoints override this with `!important`, which they need because
+        # an inline declaration outranks any selector.
+        tracks = " ".join(f"{float(w):g}fr" for w in weights)
+        style = f' style="grid-template-columns: {tracks};"'
+
     # `dir` is on the element rather than inherited, for the same reason the
     # Kanban board sets it (PRO-46): tile order must not depend on an
     # ancestor's direction.
-    return f'<div class="metric-grid" dir="{direction}">{tiles}</div>'
+    return f'<div class="metric-grid" dir="{direction}"{style}>{tiles}</div>'

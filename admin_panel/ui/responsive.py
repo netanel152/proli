@@ -51,10 +51,6 @@ def responsive_css(direction, align):
     `direction` / `align` come from the language dict exactly as they do in
     `load_css`, so RTL stays the default rather than an afterthought.
     """
-    # Used by the metric grid's phone rule, where a two-up grid of long Hebrew
-    # labels needs the value to stay on the tile.
-    opp_align = "left" if align == "right" else "right"
-
     return f"""
         /* =========================================================
            RESPONSIVE — admin_panel/ui/responsive.py
@@ -80,9 +76,13 @@ def responsive_css(direction, align):
             }}
 
             /* Three metric tiles per row: five would each be under 150px and
-               the Hebrew labels wrap to three lines. */
+               the Hebrew labels wrap to three lines.
+               `!important` because `render_metric_grid` may put an explicit
+               desktop track list in a style attribute (to preserve a row's
+               original column weighting), and an inline declaration outranks
+               any selector without it. */
             .metric-grid {{
-                grid-template-columns: repeat(3, 1fr);
+                grid-template-columns: repeat(3, 1fr) !important;
             }}
 
             /* The board wraps to two columns instead of scrolling sideways.
@@ -96,6 +96,17 @@ def responsive_css(direction, align):
             .kanban-column {{
                 flex: 1 1 calc(50% - 12px);
                 min-width: 0;
+            }}
+
+            /* An empty column packs four-up instead of taking half a row.
+               Two-up would turn a board with two active statuses into four
+               rows, six of them a dash — worse than the desktop scroller it
+               replaces, and this band is also where a half-tiled desktop
+               browser lands. The phone hides them; here they still carry the
+               "this queue is clear" signal cheaply. */
+            .kanban-column--empty {{
+                flex: 0 1 calc(25% - 12px);
+                min-height: 0;
             }}
         }}
 
@@ -123,12 +134,19 @@ def responsive_css(direction, align):
             /* 16px exactly. Anything smaller and iOS Safari zooms the page on
                focus, which leaves the operator scrolled sideways on a form
                they were only trying to type into. */
+            /* The select needs all three: the base sheet sets a size on
+               the inner `span` directly, and BaseWeb sets one on its own
+               `input` from theme typography — neither inherits from the
+               container, so styling the container alone leaves the visible
+               text at 15px and the zoom still fires. */
             .stTextInput input,
             .stNumberInput input,
             .stTextArea textarea,
             .stDateInput input,
             .stTimeInput input,
-            .stSelectbox div[data-baseweb="select"] {{
+            .stSelectbox div[data-baseweb="select"],
+            .stSelectbox div[data-baseweb="select"] span,
+            .stSelectbox div[data-baseweb="select"] input {{
                 font-size: {NO_ZOOM_FONT_PX}px !important;
             }}
 
@@ -139,9 +157,14 @@ def responsive_css(direction, align):
                 padding: 10px 18px;
             }}
 
+            /* `!important` is not decoration here: the base sheet sets
+               `label {{ display: block !important }}`, and an !important
+               declaration beats a plain one whatever the source order — so
+               without it the row is 44px tall with its text stuck at the top,
+               which is the half-fix that looks done. */
             section[data-testid="stSidebar"] .stRadio > div > label {{
                 min-height: {TOUCH_TARGET_PX}px;
-                display: flex;
+                display: flex !important;
                 align-items: center;
             }}
 
@@ -149,11 +172,19 @@ def responsive_css(direction, align):
                 min-height: {TOUCH_TARGET_PX}px;
             }}
 
+            /* The one control the button rule misses, and the most-tapped one
+               on the phone path: the pending-review assign picker. BaseWeb
+               renders it ~40px. */
+            .stSelectbox div[data-baseweb="select"] > div {{
+                min-height: {TOUCH_TARGET_PX}px;
+            }}
+
             /* Two metric tiles per row, and a tighter tile: five stacked
                full-width cards used to push the first lead a screen and a
                half down the page. */
+            /* !important for the same reason as the tablet rule above. */
             .metric-grid {{
-                grid-template-columns: repeat(2, 1fr);
+                grid-template-columns: repeat(2, 1fr) !important;
                 gap: 8px;
             }}
 
@@ -166,11 +197,14 @@ def responsive_css(direction, align):
             }}
 
             .metric-tile-label {{
-                /* Long Hebrew labels get two lines rather than an ellipsis;
-                   the tile grows instead of hiding which metric it is. */
-                white-space: normal;
+                /* Two-up on a phone is where the long Hebrew labels get
+                   tight, so the label keeps its own alignment rather than
+                   inheriting the tile's centring. The tracking goes: it buys
+                   ~11px on "ממתין לבדיקת מנהל" for no legibility gain, since
+                   Hebrew has no case for the uppercase transform to act on
+                   either. */
                 text-align: {align};
-                padding-{opp_align}: 0;
+                letter-spacing: 0;
             }}
 
             /* The board becomes one stacked column. Sideways scrolling on a
@@ -186,6 +220,10 @@ def responsive_css(direction, align):
                 flex: none;
                 min-width: 0;
                 width: 100%;
+                /* The base rule reserves 200px so columns line up side by
+                   side. Stacked, a column holding one card reserves ~80px of
+                   nothing, and four of them is an extra screen of scrolling. */
+                min-height: 0;
             }}
 
             /* An empty status is a header and a dash. On desktop it costs a
