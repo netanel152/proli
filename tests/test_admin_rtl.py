@@ -31,6 +31,8 @@ with no `.env` and no database.
 
 from pathlib import Path
 
+import re
+
 import pytest
 
 from admin_panel.core.config import TRANS
@@ -347,7 +349,7 @@ def test_hebrew_drops_uppercase_and_tracking(monkeypatch):
     to sit close into something that reads as spaced-out."""
     css = _rendered_css(HE, monkeypatch)
     for selector in (
-        "label {",
+        'label[data-testid="stWidgetLabel"] {',
         ".metric-tile-label",
         "thead tr th",
         ".kanban-header {",
@@ -361,7 +363,7 @@ def test_english_keeps_its_label_treatment(monkeypatch):
     """The Hebrew fix must not flatten the English design."""
     css = _rendered_css(EN, monkeypatch)
     for selector in (
-        "label {",
+        'label[data-testid="stWidgetLabel"] {',
         ".metric-tile-label",
         "thead tr th",
         ".kanban-header {",
@@ -419,3 +421,77 @@ def test_mobile_drawer_leaves_the_page_visible(T, monkeypatch):
     decls = _declarations(body)
     assert "min(" in decls.get("width", ""), decls
     assert "vw" in decls["width"], "a fixed px cap does not scale down a phone"
+
+
+# --- The label rule is scoped, so control rows keep their flex ------------
+
+
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+
+
+def _rules(css):
+    """``[(selector, body), ...]`` for every rule in the sheet, media blocks
+    descended into, so a rule can be judged by its own selector text.
+
+    Comments are stripped *first*: the sheet's prose quotes CSS (``label {
+    display: block !important }`` is in a comment above the caption rule),
+    and a brace inside a comment would otherwise become a phantom rule and
+    glue the comment's tail onto the next real selector."""
+    css = _CSS_COMMENT.sub("", css)
+    out = []
+    i = 0
+    while True:
+        j = css.find("{", i)
+        if j < 0:
+            return out
+        head = css[max(css.rfind("}", 0, j), css.rfind("{", 0, j)) + 1 : j].strip()
+        if head.startswith("@"):
+            i = j + 1  # a media query: keep walking into its rules
+            continue
+        end = _block_end(css, j)
+        out.append((head, css[j + 1 : end - 1]))
+        i = end
+
+
+@pytest.mark.parametrize("T", LANGS, ids=["rtl", "ltr"])
+def test_label_typography_is_scoped_to_widget_captions(T, monkeypatch):
+    """`label { display: block !important }` used to apply to every label —
+    including the ones BaseWeb lays out as a *row*: the sidebar radio (which S6
+    had to override with a second `!important`), and every checkbox and toggle,
+    whose box and text then stacked one above the other (46px tall, measured,
+    against 24px for the flex row). A caption rule belongs on captions only."""
+    css = _rendered_css(T, monkeypatch)
+    forcing = [
+        sel
+        for sel, body in _rules(css)
+        if "label" in sel
+        and _declarations(body).get("display", "").startswith("block")
+        and "stWidgetLabel" not in sel
+    ]
+    assert not forcing, f"labels forced to block outside the caption rule: {forcing}"
+    caption = _declarations(_rule_body(css, 'label[data-testid="stWidgetLabel"] {'))
+    assert caption.get("display") == "block !important", caption
+
+
+@pytest.mark.parametrize("T", LANGS, ids=["rtl", "ltr"])
+def test_form_submit_buttons_wear_the_panels_own_primary(T, monkeypatch):
+    """`st.form_submit_button` renders under `stFormSubmitButton` with
+    `kind="primaryFormSubmit"`, so the login button — the first thing the
+    operator sees — was the one primary in the panel in Streamlit's default
+    red (`rgb(255, 75, 75)`, measured) while every other one was blue."""
+    css = _rendered_css(T, monkeypatch)
+    primary = [
+        (sel, body)
+        for sel, body in _rules(css)
+        if 'button[kind="primary"]' in sel and ":hover" not in sel
+    ]
+    assert len(primary) == 1, [s for s, _ in primary]
+    sel, body = primary[0]
+    assert '[data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]' in sel
+    assert (
+        _declarations(body)
+        .get("background", "")
+        .startswith("linear-gradient(135deg, var(--primary)")
+    )
+    base = [sel for sel, _ in _rules(css) if sel.startswith(".stButton button,")]
+    assert base and '[data-testid="stFormSubmitButton"] button' in base[0], base

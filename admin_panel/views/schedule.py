@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, time
 from admin_panel.core.utils import users_collection, slots_collection
+from admin_panel.core.labels import pro_option_map
 from admin_panel.core.schedule_queries import EDITOR_COLUMNS, save_daily_schedule
 from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from app.core.config import settings
@@ -10,7 +11,9 @@ import pytz
 
 @st.cache_data(ttl=60)
 def get_active_professionals():
-    return list(users_collection.find({"is_active": True}))
+    # `role` as well as `is_active`: `users` holds customers too, and a
+    # customer document with the flag set would otherwise get a schedule.
+    return list(users_collection.find({"is_active": True, "role": "professional"}))
 
 
 def view_schedule_editor(T):
@@ -33,7 +36,9 @@ def view_schedule_editor(T):
         )
         st.stop()
 
-    pro_map = {p["business_name"]: p for p in pros}
+    # Keyed by a label that is never blank and never shared: a name-keyed
+    # dict dropped every unnamed pro but one from this selector entirely.
+    pro_map = pro_option_map(T, pros)
     selected_pro_name = st.selectbox(T["sch_select_pro"], list(pro_map.keys()))
 
     if selected_pro_name:
@@ -102,7 +107,11 @@ def view_schedule_editor(T):
                 # PRO-158: an empty grid with bare headers reads as "loading",
                 # not "this day is free — add a row". Say it, and point at the
                 # Bulk tab (filling a week by hand is ~6 clicks per slot).
-                st.info(T.get("sch_msg_no_slots_today", T.get("no_slots", "")))
+                st.info(
+                    T.get("sch_msg_no_slots_today")
+                    or T.get("no_slots")
+                    or "No slots for this date."
+                )
 
             # PRO-158: explicit schema — pd.DataFrame([]) has ZERO columns
             # (column_config styles columns, it does not create them), so on a
@@ -320,7 +329,12 @@ def view_schedule_editor(T):
                 max_value=120,
                 value=slot_duration,
                 step=15,
-                key="template_duration",
+                # Scoped to the pro (the daily editor's `editor_{id}_…` precedent):
+                # a keyed widget ignores `value=` once its key is in session
+                # state, so with a shared key the panel kept showing the
+                # previous pro's hours after the selector changed — and Save
+                # wrote them onto the newly selected pro.
+                key=f"template_duration_{pro['_id']}",
             )
 
             template_data = {}
@@ -340,7 +354,7 @@ def view_schedule_editor(T):
                     enabled = c_check.checkbox(
                         day_labels[day],
                         value=day_config.get("enabled", False),
-                        key=f"tmpl_en_{day}",
+                        key=f"tmpl_en_{pro['_id']}_{day}",
                     )
 
                     try:
@@ -357,12 +371,12 @@ def view_schedule_editor(T):
                     start_val = c_start.time_input(
                         T.get("sch_start_time", "Start"),
                         value=start_t,
-                        key=f"tmpl_s_{day}",
+                        key=f"tmpl_s_{pro['_id']}_{day}",
                     )
                     end_val = c_end.time_input(
                         T.get("sch_end_time", "End"),
                         value=end_t,
-                        key=f"tmpl_e_{day}",
+                        key=f"tmpl_e_{pro['_id']}_{day}",
                     )
 
                     template_data[day] = {
@@ -377,8 +391,21 @@ def view_schedule_editor(T):
                 key="save_template",
             ):
                 template_data["slot_duration_minutes"] = slot_dur
-                users_collection.update_one(
+                res = users_collection.update_one(
                     {"_id": pro["_id"]},
                     {"$set": {"schedule_template": template_data}},
                 )
-                st.success(T.get("template_saved", "Template saved!"))
+                # Gated on the write, and flashed through the same slot the
+                # bulk tab uses: an unconditional `st.success` said "saved"
+                # even when the pro document was gone.
+                if res.matched_count:
+                    set_flash(
+                        "sch_bulk_flash", T.get("template_saved", "Template saved!")
+                    )
+                else:
+                    set_flash(
+                        "sch_bulk_flash",
+                        T.get("sch_msg_nothing_saved", "Nothing was saved."),
+                        "warning",
+                    )
+                st.rerun()

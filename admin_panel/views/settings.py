@@ -133,7 +133,10 @@ def view_system_settings(T):
                         {"_id": "scheduler_config"}, {"$set": {"trigger_now": True}}
                     )
                     log_audit("trigger_scheduler")
-                    st.toast(T.get("sch_triggered", "Triggered!"))
+                    # The panel's flash slot rather than a bare toast: a toast
+                    # is gone in ~4 s and leaves no record the trigger was armed.
+                    set_flash("settings_flash", T.get("sch_triggered", "Triggered!"))
+                    st.rerun()
 
                 st.markdown("")
                 if st.button(T.get("sch_save_config", "Save Config"), type="primary"):
@@ -248,34 +251,86 @@ def view_system_settings(T):
                                 key=f"update_{admin['username']}",
                                 use_container_width=True,
                             ):
-                                update_admin_role(admin["username"], new_role)
-                                log_audit(
-                                    "update_admin_role",
-                                    {"target": admin["username"], "new_role": new_role},
-                                )
-                                set_flash(
-                                    "settings_flash",
-                                    T["admin_role_updated"].replace(
-                                        "{name}", admin["username"]
-                                    ),
-                                )
+                                # Both helpers return whether a document
+                                # changed; the flash used to say "updated"
+                                # over a re-picked role or an admin another
+                                # operator had just deleted.
+                                if update_admin_role(admin["username"], new_role):
+                                    log_audit(
+                                        "update_admin_role",
+                                        {
+                                            "target": admin["username"],
+                                            "new_role": new_role,
+                                        },
+                                    )
+                                    set_flash(
+                                        "settings_flash",
+                                        T["admin_role_updated"].replace(
+                                            "{name}", admin["username"]
+                                        ),
+                                    )
+                                else:
+                                    set_flash(
+                                        "settings_flash",
+                                        T["admin_role_unchanged"].replace(
+                                            "{name}", admin["username"]
+                                        ),
+                                        "warning",
+                                    )
                                 st.rerun()
 
+                            confirm_key = f"confirm_deladmin_{admin['username']}"
                             if c3.button(
                                 T.get("admin_delete", "Delete"),
                                 key=f"deladmin_{admin['username']}",
                                 type="secondary",
                                 use_container_width=True,
                             ):
-                                delete_admin(admin["username"])
-                                log_audit("delete_admin", {"target": admin["username"]})
-                                set_flash(
-                                    "settings_flash",
-                                    T["admin_deleted"].replace(
+                                # Two-step, like deleting a lead or a pro: an
+                                # irreversible write on the first click had no
+                                # confirm at all here.
+                                st.session_state[confirm_key] = True
+
+                            if st.session_state.get(confirm_key):
+                                st.warning(
+                                    T["admin_delete_confirm"].replace(
                                         "{name}", admin["username"]
-                                    ),
+                                    )
                                 )
-                                st.rerun()
+                                mark_row_inline()
+                                cy, cn = st.columns(2)
+                                if cy.button(
+                                    T["confirm_yes"],
+                                    key=f"deladmin_yes_{admin['username']}",
+                                    type="primary",
+                                ):
+                                    if delete_admin(admin["username"]):
+                                        log_audit(
+                                            "delete_admin",
+                                            {"target": admin["username"]},
+                                        )
+                                        set_flash(
+                                            "settings_flash",
+                                            T["admin_deleted"].replace(
+                                                "{name}", admin["username"]
+                                            ),
+                                        )
+                                    else:
+                                        set_flash(
+                                            "settings_flash",
+                                            T["admin_delete_missing"].replace(
+                                                "{name}", admin["username"]
+                                            ),
+                                            "warning",
+                                        )
+                                    st.session_state.pop(confirm_key, None)
+                                    st.rerun()
+                                if cn.button(
+                                    T["confirm_no"],
+                                    key=f"deladmin_no_{admin['username']}",
+                                ):
+                                    st.session_state.pop(confirm_key, None)
+                                    st.rerun()
                         else:
                             c3.caption(T.get("admin_you", "(you)"))
             else:

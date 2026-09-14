@@ -273,8 +273,16 @@ def load_css(lang_code, T):
             text-align: {align};
         }}
 
-        /* Form Labels */
-        label {{
+        /* Form labels — the caption above a text input, select, date picker.
+           Scoped to Streamlit's widget-label element on purpose: an unscoped
+           `label {{ display: block !important }}` also reached the labels
+           BaseWeb uses as *rows* — the sidebar radio (S6 had to beat it
+           with a second `!important`) and every checkbox and toggle, whose
+           box and text then stacked one above the other, 46px tall instead
+           of 24, with the checkbox text in uppercase that a later `span`
+           rule could not undo because the text lives in a `p`. A checkbox
+           label is a control, not a caption; it keeps BaseWeb's flex row. */
+        label[data-testid="stWidgetLabel"] {{
             font-weight: 500 !important;
             font-size: 0.85rem !important;
             color: var(--text-secondary) !important;
@@ -355,14 +363,11 @@ def load_css(lang_code, T):
                the text rather than the row the operator aims at. */
             width: 100%;
             box-sizing: border-box;
-            /* `!important` because the base `label` rule above sets
-               `display: block !important`, and an important declaration
-               beats a plain one whatever the source order. Under `block` the
-               radio marker fell onto its own line *above* the text, which is
-               why every nav row measured 61px tall instead of 39px. The
-               phone breakpoint already forced flex here; the bug was that
-               nothing did at any wider width, so the desktop sidebar — the
-               one an operator looks at all day — was the broken one. */
+            /* Kept `!important` as belt-and-braces. The caption rule above
+               is scoped to `stWidgetLabel` now, so nothing forces this label
+               to `block` any more — but when it did (S6), the radio marker
+               fell onto its own line above the text and every nav row
+               measured 61px instead of 39px at every width but the phone. */
             display: flex !important;
             align-items: center;
             gap: 8px;
@@ -593,7 +598,14 @@ def load_css(lang_code, T):
         }}
 
         /* ===== BUTTONS ===== */
-        .stButton button {{
+        /* `st.form_submit_button` carries `kind="primaryFormSubmit"` rather
+           than `kind="primary"`, so the `[kind]` variants below missed it and
+           the login button was the one primary in the panel wearing
+           Streamlit's default red (#FF4B4B, measured). On 1.31.1 its wrapper
+           still has the `stButton` class, so naming `stFormSubmitButton` on
+           the base rule is forward-compat for versions that drop it. */
+        .stButton button,
+        [data-testid="stFormSubmitButton"] button {{
             /* Pinned, not inherited: the per-language arrow in
                T["back_to_list"] relies on the label's base direction. */
             direction: {direction};
@@ -613,25 +625,29 @@ def load_css(lang_code, T):
             min-height: 40px;
         }}
 
-        .stButton button[kind="primary"] {{
+        .stButton button[kind="primary"],
+        [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"] {{
             background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
             color: white;
             border: none;
             box-shadow: 0 2px 4px rgb(37 99 235 / 0.3);
         }}
 
-        .stButton button[kind="primary"]:hover {{
+        .stButton button[kind="primary"]:hover,
+        [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:hover {{
             box-shadow: 0 4px 8px rgb(37 99 235 / 0.4);
             transform: translateY(-1px);
         }}
 
-        .stButton button[kind="secondary"] {{
+        .stButton button[kind="secondary"],
+        [data-testid="stFormSubmitButton"] button[kind="secondaryFormSubmit"] {{
             background-color: var(--bg-card);
             border: 1px solid var(--border-color);
             color: var(--text-main);
         }}
 
-        .stButton button[kind="secondary"]:hover {{
+        .stButton button[kind="secondary"]:hover,
+        [data-testid="stFormSubmitButton"] button[kind="secondaryFormSubmit"]:hover {{
             background-color: var(--bg-hover);
             border-color: var(--text-muted);
         }}
@@ -1117,14 +1133,6 @@ def load_css(lang_code, T):
             font-size: 3rem;
             margin-bottom: 0.5rem;
             display: block;
-        }}
-
-        /* ===== CHECKBOX TOGGLE STYLE ===== */
-        .stCheckbox label span {{
-            text-transform: none !important;
-            letter-spacing: normal !important;
-            font-size: 0.9rem !important;
-            color: var(--text-main) !important;
         }}
 
         /* ===== RTL / DIRECTION OVERRIDES ===== */

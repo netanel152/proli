@@ -554,3 +554,21 @@ def test_the_preview_app_needs_no_database():
         "MongoClient",
     ):
         assert forbidden not in source, f"preview app reaches for {forbidden}"
+
+
+def test_the_preview_reads_only_keys_the_panel_defines():
+    """The preview is the review tool, so it must not quietly fall back to an
+    English default where the real view shows Hebrew. Seven of its keys were
+    typos of real ones (`tab_table` for `tab_dashboard`, `input_client` for
+    `client_name_label`…), and every screenshot of the Hebrew dashboard showed
+    "Table / New / Client / Save" in English — a defect that did not exist."""
+    from admin_panel.core.config import TRANS
+
+    source = _source("scripts", "admin_panel_layout_preview.py")
+    # Both quote styles: a lookup inside an f-string is forced to single quotes.
+    keys = {m.group(2) for m in re.finditer(r"""T\.get\(\s*(['"])([^'"]+)\1""", source)}
+    keys |= {m.group(2) for m in re.finditer(r"""T\[(['"])([^'"]+)\1\]""", source)}
+    assert len(keys) > 40, "the key scan found almost nothing — regex drift?"
+    for lang in ("HE", "EN"):
+        missing = sorted(k for k in keys if k not in TRANS[lang])
+        assert not missing, f"preview reads keys {lang} does not define: {missing}"
