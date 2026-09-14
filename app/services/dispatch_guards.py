@@ -299,6 +299,27 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
     """
     from app.services import workflow_service as wf
 
+    async def _answer_consent(message: str) -> None:
+        """Send one consent-gate message, logging both sides of the turn.
+
+        PRO-124: none of the five branches below logged anything, so the whole
+        consent exchange was missing from history — including the customer's
+        opening message, the one that triggered the gate in the first place.
+        The pipeline's step 1 is the only inbound logger and it never runs
+        here, because every branch returns HANDLED above it.
+
+        Two things followed from that. The dispatcher saw an empty history on
+        the customer's next turn, read it as first contact, and greeted them a
+        second time; and what they had actually said — "יש לי נזילה במטבח" —
+        was gone, so it asked them to say it again. Logging both sides is what
+        every other handled branch in this chain already does.
+        """
+        await wf.lead_manager.log_message(
+            ctx.chat_id, "user", wf._inbound_log_text(ctx.user_text, ctx.media_url)
+        )
+        await deps.whatsapp.send_message(ctx.chat_id, message)
+        await wf.lead_manager.log_message(ctx.chat_id, "model", message)
+
     if ctx.current_state != UserStates.PRO_MODE:
         phone = strip_suffix(ctx.chat_id)
         is_pro = await deps.users_collection.find_one(
@@ -313,27 +334,21 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
                 if ctx.normalized_text in Messages.Consent.ACCEPT_KEYWORDS:
                     await wf.record_consent(ctx.chat_id, accepted=True)
                     await deps.state_manager.clear_state(ctx.chat_id)
-                    await deps.whatsapp.send_message(
-                        ctx.chat_id, Messages.Consent.ACCEPTED
-                    )
+                    await _answer_consent(Messages.Consent.ACCEPTED)
                     return HANDLED
                 elif ctx.normalized_text in Messages.Consent.DECLINE_KEYWORDS:
                     await wf.record_consent(ctx.chat_id, accepted=False)
                     await deps.state_manager.clear_state(ctx.chat_id)
-                    await deps.whatsapp.send_message(
-                        ctx.chat_id, Messages.Consent.DECLINED
-                    )
+                    await _answer_consent(Messages.Consent.DECLINED)
                     return HANDLED
                 else:
                     # Repeat consent request if unclear response
-                    await deps.whatsapp.send_message(
-                        ctx.chat_id, Messages.Consent.REQUEST
-                    )
+                    await _answer_consent(Messages.Consent.REQUEST)
                     return HANDLED
 
             if consent_status is None:
                 # First contact — send consent request
-                await deps.whatsapp.send_message(ctx.chat_id, Messages.Consent.REQUEST)
+                await _answer_consent(Messages.Consent.REQUEST)
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
                 )
@@ -341,7 +356,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
             if consent_status is False:
                 # User previously declined — re-ask on new contact
-                await deps.whatsapp.send_message(ctx.chat_id, Messages.Consent.REQUEST)
+                await _answer_consent(Messages.Consent.REQUEST)
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
                 )

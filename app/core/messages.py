@@ -813,7 +813,12 @@ class Messages:
             "*כן* — להמשיך\n"
             "*לא* — לביטול"
         )
-        ACCEPTED = "✅ תודה! אפשר להתחיל. במה אוכל לעזור?"
+        # PRO-124: a bare ack. It used to end "במה אוכל לעזור?", which the
+        # dispatcher's own opening question then repeated on the very next
+        # turn — two invitations to describe the same problem, back to back.
+        # The greeting and the question belong to the dispatcher; this line
+        # only confirms the consent was recorded.
+        ACCEPTED = "✅ תודה! אפשר להתחיל."
         DECLINED = "🙏 הבנתי, לא נשמור מידע עליך. אם תשנה/י את דעתך — פשוט לשלוח הודעה."
         ACCEPT_KEYWORDS = [
             "כן",
@@ -1162,6 +1167,14 @@ class Messages:
         GENERIC_ERROR = "משהו השתבש. אפשר לנסות שוב."
         # PRO-21 — graceful throttle messages
         RATE_LIMITED = "⏳ הגיעו ממך הרבה הודעות ברצף. אפשר לנסות שוב בעוד רגע."
+        # PRO-124: the download failed, so nothing the customer just sent will
+        # reach the pro. Saying so is the whole point — silence here reads as
+        # "received". Deliberately says "הקובץ" rather than "התמונה": the fetch
+        # raised before the mime type was known, and it is as likely to have
+        # been a voice note. Infinitives, no gendered verb (style guide §2.1).
+        MEDIA_FETCH_FAILED = (
+            "🙏 לא הצלחתי לקבל את הקובץ ששלחת.\n" "אפשר לשלוח שוב, או פשוט לתאר במילים."
+        )
         DAILY_AI_CAP_REACHED = (
             "🙏 הגעת למכסת הפניות היומית. אפשר לנסות שוב מחר — "
             "ואם זה דחוף, לכתוב *נציג*."

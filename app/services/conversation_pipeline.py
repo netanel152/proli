@@ -170,6 +170,19 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             media_data, media_mime = await detect_and_fetch_media(media_url)
         except Exception as e:
             logger.warning(f"Media fetch failed for {mask_chat_id(chat_id)}: {e}")
+            # PRO-124: tell the customer. Until now this failed silently — the
+            # photo of the leak never reached the pro, and the customer, having
+            # seen no error, believed it had. The AI turn below still runs on
+            # whatever caption came with it.
+            #
+            # Deliberately additive: no early return even when there is no
+            # caption to act on. Returning would also skip the sticky gate,
+            # which creates the CONTACTED lead for a media-only first contact —
+            # a flow change this issue did not ask for.
+            await whatsapp.send_message(chat_id, Messages.Errors.MEDIA_FETCH_FAILED)
+            await lead_manager.log_message(
+                chat_id, "model", Messages.Errors.MEDIA_FETCH_FAILED
+            )
 
     # 4. Check for existing active lead with assigned pro (skip dispatcher if so)
     active_lead = await leads_collection.find_one(
