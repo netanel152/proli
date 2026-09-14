@@ -12,13 +12,13 @@ user-facing message handlers without auth.
 """
 
 from datetime import datetime, timezone
-from app.core.database import (
+from app.core.database import (  # noqa: F401 — slots_collection is a monkeypatch seam
     consent_collection,
     users_collection,
     leads_collection,
+    slots_collection,  # unused here; tests/conftest.py rebinds it, so it must exist
     messages_collection,
     reviews_collection,
-    slots_collection,
 )
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
@@ -76,7 +76,7 @@ async def export_user_data(chat_id: str) -> dict:
         "chat_id": chat_id,
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "user_profile": serialize(user),
-        "leads": [serialize(l) for l in leads],
+        "leads": [serialize(lead) for lead in leads],
         "messages": [serialize(m) for m in messages],
         "reviews": [serialize(r) for r in reviews],
         "consent": serialize(consent),
@@ -85,8 +85,6 @@ async def export_user_data(chat_id: str) -> dict:
 
 async def delete_user_data(chat_id: str) -> dict:
     """Delete all data associated with a chat_id (right-to-delete)."""
-    phone = strip_suffix(chat_id)
-
     results = {}
     results["messages"] = (
         await messages_collection.delete_many({"chat_id": chat_id})

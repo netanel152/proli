@@ -5,7 +5,6 @@ GDPR/Israeli Privacy Law compliance functions.
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
-from bson import ObjectId
 from datetime import datetime, timezone
 from app.services.data_management_service import (
     record_consent,

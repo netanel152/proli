@@ -70,7 +70,6 @@ STATUS_COLORS_DARK = {
 def load_css(lang_code, T):
     direction = T["dir"]
     align = T["align"]
-    opp_align = "left" if align == "right" else "right"
     border_side = "left" if direction == "rtl" else "right"
     opp_border = "right" if direction == "rtl" else "left"
 
@@ -1340,7 +1339,7 @@ def render_kanban_column(status, leads, T):
     label = lead_status_label(T, status)
     count = len(leads)
 
-    cards_html = "".join(render_kanban_card(l, T) for l in leads)
+    cards_html = "".join(render_kanban_card(lead, T) for lead in leads)
 
     # A column with nothing in it is marked rather than omitted: on desktop it
     # still renders (an empty status is information — the operator can see the

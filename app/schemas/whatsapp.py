@@ -1,5 +1,5 @@
 from pydantic import BaseModel, ConfigDict
-from typing import Optional, Any
+from typing import Optional
 
 
 class BaseSchema(BaseModel):
