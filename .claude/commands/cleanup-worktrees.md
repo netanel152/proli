@@ -1,5 +1,5 @@
 ---
-description: Tear down the parallel-track worktrees under D:/Projects/proli-wt whose PR has merged (optionally one named track, e.g. /cleanup-worktrees pro-123)
+description: Tear down the parallel-track worktrees whose PR has merged (optionally one named track, e.g. /cleanup-worktrees pro-123)
 ---
 
 Run the teardown sweep for finished tracks. `$ARGUMENTS` may name specific
