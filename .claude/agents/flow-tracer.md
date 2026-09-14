@@ -1,8 +1,9 @@
 ---
 name: flow-tracer
-description: FSM and message-flow specialist. Given a state transition or a reported bug, traces the full path through workflow_service dispatch, flags broken invariants, and maintains a pattern memory file.
+description: FSM and message-flow specialist. Given a state transition or a reported bug, traces the full path through workflow_service dispatch, flags broken invariants, and remembers the patterns it confirms across sessions.
 model: opus
 effort: 3
+memory: project
 color: cyan
 tools:
   - Read
@@ -95,4 +96,6 @@ When asked to trace a transition or debug a flow bug:
 
 ## Memory
 
-After each session, update `.claude/agent-memory/flow-tracer/MEMORY.md` with any new reusable patterns, confirmed invariants, or known edge cases. Keep the file under 200 lines. Format: `## Pattern: <name>` headers, each with a 2–4 line description.
+This agent declares `memory: project` in its frontmatter, so Claude Code keeps and reloads its notes itself — there is no file in the repo to maintain, and the instruction to write one by hand into `.claude/agent-memory/` is gone (nothing ever created it).
+
+What is worth remembering, when a trace turns one up: a reusable **pattern** (`## Pattern: <name>`, two to four lines), a **confirmed invariant** and what pins it, or an **edge case** with the state and message that reach it. A constant belongs in `app/core/constants.py` and a rule in `.claude/rules/`, never here — memory that restates a value the code owns is the PRO-67 drift the rules contract exists to prevent.
