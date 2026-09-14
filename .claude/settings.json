@@ -1,4 +1,5 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [
       "mcp__railway__list-projects",
@@ -108,7 +109,12 @@
             "type": "command",
             "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start-context.sh\"",
             "timeout": 10
-          },
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
           {
             "type": "command",
             "command": "sh \"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start-web-setup.sh\"",

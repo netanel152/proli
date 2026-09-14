@@ -2,6 +2,7 @@
 description: Ops triage cockpit — sweep Sentry, cluster errors by root cause, cross-reference Linear, open/annotate tickets, resolve stale issues, report project status, and update the living system-audit artifact.
 argument-hint: "[report] — pass 'report' for read-only mode (no tickets opened, nothing resolved)"
 allowed-tools: Bash(git:*), Bash(gh:*), Read, Grep, Glob
+disable-model-invocation: true
 ---
 
 You are running the Proli ops-triage loop. Mode: **$1** (empty = full triage with actions; `report` = read-only, findings only — take NO mutating action in Sentry, Linear, or the artifact).

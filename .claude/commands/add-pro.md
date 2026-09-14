@@ -1,6 +1,7 @@
 ---
 description: Help the user add a new professional to the database
 argument-hint: [business name, phone, type, cities...]
+disable-model-invocation: true
 ---
 
 Help the user add a new professional to the database.

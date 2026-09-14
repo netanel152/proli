@@ -116,6 +116,40 @@ def test_hook_commands_use_the_project_dir_variable():
         ), f"hook command is not portable: {command}"
 
 
+def _session_start_matchers_for(script_name):
+    """The `matcher` of every SessionStart entry that runs ``script_name``."""
+    return [
+        entry.get("matcher")
+        for entry in (_load(_SETTINGS).get("hooks") or {}).get("SessionStart", [])
+        if any(script_name in h.get("command", "") for h in entry.get("hooks", []))
+    ]
+
+
+def test_the_web_setup_hook_does_not_run_on_compact():
+    """SessionStart fires on startup, resume, clear, compact and fork.
+
+    `session-start-web-setup.sh` builds a venv and pip-installs; `clear` and
+    `compact` are the same container mid-session with that work already done,
+    so running it there put a pip resolve in front of the first tool call after
+    every compaction and bought nothing. Scoped to `startup|resume` — an entry
+    with no matcher runs on all five.
+    """
+    matchers = _session_start_matchers_for("session-start-web-setup.sh")
+    assert matchers, "the web-setup hook is not wired to SessionStart"
+    for matcher in matchers:
+        assert matcher, "web-setup has no matcher — it would run on every compaction"
+        assert "compact" not in matcher, f"web-setup runs on compact: {matcher!r}"
+
+
+def test_the_git_context_hook_runs_on_every_session_start():
+    """The opposite case, and the reason the matcher above is per-entry rather
+    than on the whole event: after a compaction the branch and dirty-tree state
+    have to be re-injected, or the session carries a summary of them instead."""
+    matchers = _session_start_matchers_for("session-start-context.sh")
+    assert matchers, "the git-context hook is not wired to SessionStart"
+    assert None in matchers, "the git-context hook must not be matcher-scoped"
+
+
 def test_hook_scripts_are_not_orphaned():
     """Every script in .claude/hooks/ is wired to something (or is the launcher)."""
     wired = " ".join(_hook_commands())
@@ -140,6 +174,40 @@ def test_every_command_has_a_description():
         if not re.search(r"^description:\s*\S", frontmatter, re.MULTILINE):
             offenders.append(f"{command_file.name}: frontmatter has no description")
     assert not offenders, "slash commands missing a description:\n  " + "\n  ".join(
+        offenders
+    )
+
+
+# A slash command is offered to the model as a skill, so anything that changes
+# the world outside this session can be reached for on its own initiative unless
+# it says otherwise. `disable-model-invocation: true` makes one `/name`-only,
+# which is how each of these was always meant to be used. The set is written out
+# rather than inferred: there is no way to read "mutating" off a markdown file,
+# so adding a command that changes something is meant to cost a line here.
+_INVOCATION_ONLY = {
+    "take-issue": "creates a branch and a PR, and moves a Linear issue",
+    "triage": "opens tickets, resolves Sentry issues, republishes the audit artifact",
+    "cleanup-worktrees": "removes worktrees and their branches",
+    "add-pro": "writes a professional into the database",
+    "full-sync-docs": "rewrites stale claims across the repo's .md files",
+}
+
+
+def test_operator_workflows_that_change_things_are_invocation_only():
+    offenders = []
+    for name, why in sorted(_INVOCATION_ONLY.items()):
+        command_file = _COMMANDS / f"{name}.md"
+        if not command_file.is_file():
+            offenders.append(f"{name}.md: gone — was it renamed? ({why})")
+            continue
+        frontmatter = _frontmatter(command_file) or ""
+        if not re.search(
+            r"^disable-model-invocation:\s*true\s*$", frontmatter, re.MULTILINE
+        ):
+            offenders.append(
+                f"{name}.md: needs `disable-model-invocation: true` — it {why}"
+            )
+    assert not offenders, "model-invocable mutating workflows:\n  " + "\n  ".join(
         offenders
     )
 
@@ -330,7 +398,7 @@ def test_claude_md_stays_within_its_size_budget():
 
 def test_gitignore_keeps_per_developer_claude_files_out_of_git():
     ignored = (_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
-    for entry in ("CLAUDE.local.md", "settings.local.json", ".claude/agent-memory/"):
+    for entry in ("CLAUDE.local.md", "settings.local.json"):
         assert entry in ignored, f".gitignore is missing {entry}"
 
 

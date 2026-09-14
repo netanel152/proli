@@ -17,6 +17,11 @@
 # re-checks the pins. Runs synchronously on purpose: the first tool call of
 # a session may well be `pytest`, and an async install would race it.
 #
+# settings.json scopes this to the `startup|resume` SessionStart matcher. The
+# other two — `clear` and `compact` — are the *same* container mid-session with
+# the venv already built, so re-running there bought nothing and put a pip
+# resolve in front of the first tool call after every compaction.
+#
 # Never fails the session start: every step reports and continues, so a
 # network hiccup degrades to "tests unavailable, here is why" rather than a
 # session that will not open.
@@ -69,8 +74,8 @@ fi
 
 # 4. Put the venv first on PATH for every Bash command this session, so
 #    `pytest`, `black` and `flake8` resolve without a venv/bin/ prefix.
-#    SessionStart also fires on resume/clear/compact, so append only once —
-#    otherwise PATH accumulates a venv/bin entry per compaction.
+#    The `resume` matcher fires this again in the same container, so append
+#    only once — otherwise PATH accumulates a venv/bin entry per resume.
 if [ -n "${CLAUDE_ENV_FILE:-}" ] && ! grep -qs "$PWD/venv/bin" "$CLAUDE_ENV_FILE"; then
     {
         echo "export PATH=\"$PWD/venv/bin:\$PATH\""

@@ -1,5 +1,6 @@
 ---
 description: Code-first full-codebase documentation audit — extract ground truth from live code and fix every stale .md claim
+disable-model-invocation: true
 ---
 
 # /full-sync-docs
