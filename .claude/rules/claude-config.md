@@ -20,7 +20,7 @@ parses all of it in the normal `pytest` run.
 | `CLAUDE.local.md` | per-developer overrides; gitignored | — |
 | `.claude/rules/*.md` | path-scoped reference, `paths:` frontmatter of globs; loaded when a matching file is read; a rule **without** `paths` loads every session like `CLAUDE.md` and must justify that | `test_claude_config.py` (frontmatter, globs resolve) |
 | `.claude/skills/<name>/SKILL.md` | a procedure Claude picks up by context (`description`, plus `paths` — see the note below); supporting files beside it load on demand | `test_claude_config.py` (frontmatter, referenced paths exist) |
-| `.claude/commands/*.md` | operator workflows invoked as `/name`; the older format, kept because they work — a new one should be a skill | `test_claude_config.py` (description) |
+| `.claude/commands/*.md` | operator workflows invoked as `/name` — see "Commands are skills already" below | `test_claude_config.py` (description, `disable-model-invocation` on the mutating five) |
 | `.claude/agents/*.md` | subagents with their own context and tool set | `test_agent_pack_drift.py` (embedded constants) |
 | `.claude/settings.json` | permissions, hooks, env, plugins; shared | `test_claude_config.py` |
 | `.claude/settings.local.json` | per-machine: `disabledMcpjsonServers`, and any `enabledPlugins` entry whose marketplace is not registered in this repo (a plugin the shared file names but no clone can resolve is a warning on every session start, not a feature) — `last30days@last30days-skill` moved here in September 2026; gitignored | — |
@@ -78,6 +78,42 @@ TTL changed (PRO-67). The contract now:
   under its size budget.
 - A rule without `paths:` costs every session what it weighs. Prefer scoping; the budget
   test does not count rules, so the discipline is the review, not the gate.
+
+## Commands are skills already — and five of them must not self-fire
+
+The docs treat `.claude/commands/*.md` as the older format and skills as the one going
+forward, which reads like fourteen files owe a move to `.claude/skills/<name>/SKILL.md`.
+They do not, and the reason is worth keeping: **Claude Code already loads this directory
+through the skill surface.** Every command here is offered to the model as a skill, with its
+`description` verbatim, under `/name` — checked by listing the session's skills against this
+directory, not assumed. A move would rename fourteen files, and four of them interpolate
+`$ARGUMENTS`, which is not in the documented skill frontmatter; it works today because these
+*are* skills today. Renaming to buy a property we already have, at the cost of an
+unverifiable substitution, is the trade the September permissions pass warned about from the
+other side — config that only *looks* like it changed something.
+
+What the skill format does buy is frontmatter, and it applies here as-is. Being offered to
+the model is wrong for a workflow that changes the world outside this session, so the five
+that do carry **`disable-model-invocation: true`** and are `/name`-only:
+
+| command | what it changes |
+|---|---|
+| `take-issue` | creates a branch and a PR, moves a Linear issue |
+| `triage` | opens and annotates tickets, resolves Sentry issues, republishes the audit artifact |
+| `cleanup-worktrees` | removes worktrees and their branches |
+| `add-pro` | writes a professional into the database |
+| `full-sync-docs` | rewrites stale claims across the repo's `.md` files |
+
+`test_operator_workflows_that_change_things_are_invocation_only` pins the set. It is written
+out rather than inferred, because nothing can read "mutating" off a markdown file — adding a
+command that changes something is meant to cost a line in that test. The read-only ones
+(`health`, `logs`, `db-status`, `test`, `deploy-check`, `user-debug`, `finops`) and the two
+local-only simulators (`simulate`, `sla-test`) stay model-invocable on purpose: reaching for
+`/logs` mid-debug is the feature.
+
+Not taken: `context: fork` on `full-sync-docs`. It is the obvious candidate — a 217-line
+audit that returns a report — but forking hides the run from the operator watching it, and
+the context saving is speculative against a cost that is not.
 
 ## What the frontmatter is allowed to say
 

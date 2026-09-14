@@ -178,6 +178,40 @@ def test_every_command_has_a_description():
     )
 
 
+# A slash command is offered to the model as a skill, so anything that changes
+# the world outside this session can be reached for on its own initiative unless
+# it says otherwise. `disable-model-invocation: true` makes one `/name`-only,
+# which is how each of these was always meant to be used. The set is written out
+# rather than inferred: there is no way to read "mutating" off a markdown file,
+# so adding a command that changes something is meant to cost a line here.
+_INVOCATION_ONLY = {
+    "take-issue": "creates a branch and a PR, and moves a Linear issue",
+    "triage": "opens tickets, resolves Sentry issues, republishes the audit artifact",
+    "cleanup-worktrees": "removes worktrees and their branches",
+    "add-pro": "writes a professional into the database",
+    "full-sync-docs": "rewrites stale claims across the repo's .md files",
+}
+
+
+def test_operator_workflows_that_change_things_are_invocation_only():
+    offenders = []
+    for name, why in sorted(_INVOCATION_ONLY.items()):
+        command_file = _COMMANDS / f"{name}.md"
+        if not command_file.is_file():
+            offenders.append(f"{name}.md: gone — was it renamed? ({why})")
+            continue
+        frontmatter = _frontmatter(command_file) or ""
+        if not re.search(
+            r"^disable-model-invocation:\s*true\s*$", frontmatter, re.MULTILINE
+        ):
+            offenders.append(
+                f"{name}.md: needs `disable-model-invocation: true` — it {why}"
+            )
+    assert not offenders, "model-invocable mutating workflows:\n  " + "\n  ".join(
+        offenders
+    )
+
+
 # --- Permissions --------------------------------------------------------------
 
 

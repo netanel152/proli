@@ -3,6 +3,7 @@ description: Pull a Linear issue, implement it on a feature branch, review + tes
 argument-hint: <ISSUE-ID> (e.g. PRO-123)
 allowed-tools: Agent, Bash(git:*), Bash(gh:*), Bash(venv/Scripts/python.exe -m pytest:*), Bash(venv/bin/python -m pytest:*), Bash(python -m pytest:*), Read, Grep, Glob, Edit, Write, mcp__linear__get_issue, mcp__linear__list_issues, mcp__linear__save_issue, mcp__linear__save_comment, mcp__linear__list_comments
 model: opus
+disable-model-invocation: true
 ---
 
 Stack: FastAPI + ARQ worker + Streamlit admin, MongoDB + Redis. Conventions live in CLAUDE.md — read it first if it isn't already in context.
