@@ -273,8 +273,16 @@ def load_css(lang_code, T):
             text-align: {align};
         }}
 
-        /* Form Labels */
-        label {{
+        /* Form labels — the caption above a text input, select, date picker.
+           Scoped to Streamlit's widget-label element on purpose: an unscoped
+           `label {{ display: block !important }}` also reached the labels
+           BaseWeb uses as *rows* — the sidebar radio (S6 had to beat it
+           with a second `!important`) and every checkbox and toggle, whose
+           box and text then stacked one above the other, 46px tall instead
+           of 24, with the checkbox text in uppercase that a later `span`
+           rule could not undo because the text lives in a `p`. A checkbox
+           label is a control, not a caption; it keeps BaseWeb's flex row. */
+        label[data-testid="stWidgetLabel"] {{
             font-weight: 500 !important;
             font-size: 0.85rem !important;
             color: var(--text-secondary) !important;
@@ -593,7 +601,13 @@ def load_css(lang_code, T):
         }}
 
         /* ===== BUTTONS ===== */
-        .stButton button {{
+        /* `st.form_submit_button` renders under `stFormSubmitButton`, not
+           `.stButton`, with `kind="primaryFormSubmit"` rather than
+           `kind="primary"` — so the login button was the only primary in the
+           panel wearing Streamlit's default red (#FF4B4B, measured) while
+           every other one was the blue gradient below. One button, one look. */
+        .stButton button,
+        [data-testid="stFormSubmitButton"] button {{
             /* Pinned, not inherited: the per-language arrow in
                T["back_to_list"] relies on the label's base direction. */
             direction: {direction};
@@ -613,25 +627,29 @@ def load_css(lang_code, T):
             min-height: 40px;
         }}
 
-        .stButton button[kind="primary"] {{
+        .stButton button[kind="primary"],
+        [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"] {{
             background: linear-gradient(135deg, var(--primary) 0%, var(--primary-hover) 100%);
             color: white;
             border: none;
             box-shadow: 0 2px 4px rgb(37 99 235 / 0.3);
         }}
 
-        .stButton button[kind="primary"]:hover {{
+        .stButton button[kind="primary"]:hover,
+        [data-testid="stFormSubmitButton"] button[kind="primaryFormSubmit"]:hover {{
             box-shadow: 0 4px 8px rgb(37 99 235 / 0.4);
             transform: translateY(-1px);
         }}
 
-        .stButton button[kind="secondary"] {{
+        .stButton button[kind="secondary"],
+        [data-testid="stFormSubmitButton"] button[kind="secondaryFormSubmit"] {{
             background-color: var(--bg-card);
             border: 1px solid var(--border-color);
             color: var(--text-main);
         }}
 
-        .stButton button[kind="secondary"]:hover {{
+        .stButton button[kind="secondary"]:hover,
+        [data-testid="stFormSubmitButton"] button[kind="secondaryFormSubmit"]:hover {{
             background-color: var(--bg-hover);
             border-color: var(--text-muted);
         }}

@@ -5,7 +5,7 @@ import secrets
 import extra_streamlit_components as stx
 import bcrypt
 import redis as _sync_redis
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pymongo import MongoClient
 from app.core.logger import logger
 from app.core.config import settings
@@ -149,7 +149,7 @@ def create_admin(username: str, password: str, role: str) -> bool:
             "username": username,
             "password_hash": make_hash(password),
             "role": role,
-            "created_at": datetime.utcnow(),
+            "created_at": datetime.now(timezone.utc),
         }
     )
     return True

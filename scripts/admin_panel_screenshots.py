@@ -58,6 +58,32 @@ LANGS = ["HE", "EN"]
 # with the page cap doing the centring.
 SECTIONS = ["dashboard", "widgets", "forms", "login"]
 
+# Google's own class rule for the icon font, so a locally supplied file renders
+# exactly as the stylesheet the panel links to. Needed because an environment
+# whose browser cannot reach fonts.googleapis.com (a sandboxed session behind
+# an egress proxy, an offline laptop) shoots every icon as its ligature *name*
+# — "support_agent", "handyman" — and those words are wide enough to wrap a
+# kanban header onto three lines and push its count badge out of the column.
+# That reads as a layout bug and is not one: with the glyphs in place every
+# header fits. `--icon-font` makes the screenshots show the real thing.
+ICON_FONT_FAMILY = "Material Symbols Rounded"
+ICON_FONT_CLASS_CSS = """
+.material-symbols-rounded {
+  font-family: 'Material Symbols Rounded';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+}
+"""
+
 # Set by the environment this repo's sessions run in; when present it is the
 # browser to use, and downloading another would be both slow and wrong.
 PINNED_CHROMIUM = "/opt/pw-browsers/chromium"
@@ -118,9 +144,29 @@ def _start_preview(lang, section):
     return proc, url
 
 
-def _shoot(page, url, width, height, label, lang, section):
+def _icon_font_css(path):
+    """An `@font-face` carrying the woff2 at `path` inline, plus the class rule.
+
+    Inline as a data URI rather than served: Streamlit's static route cannot be
+    pointed at an arbitrary file, and a `file://` URL is blocked as mixed
+    content from an http page.
+    """
+    import base64
+
+    data = base64.b64encode(Path(path).read_bytes()).decode("ascii")
+    return (
+        "@font-face {"
+        f"font-family: '{ICON_FONT_FAMILY}'; font-style: normal; font-weight: 400;"
+        f" font-display: block; src: url(data:font/woff2;base64,{data}) format('woff2');"
+        "}" + ICON_FONT_CLASS_CSS
+    )
+
+
+def _shoot(page, url, width, height, label, lang, section, extra_css=None):
     page.set_viewport_size({"width": width, "height": height})
     page.goto(url, wait_until="networkidle")
+    if extra_css:
+        page.add_style_tag(content=extra_css)
     # Streamlit renders its script asynchronously after the socket connects;
     # waiting for a widget rather than a fixed sleep keeps this from being
     # flaky on a slow machine and fast on a quick one.
@@ -156,6 +202,14 @@ def main():
         help="limit to one preview page (repeatable); default is both",
     )
     ap.add_argument(
+        "--icon-font",
+        metavar="WOFF2",
+        help=(
+            "a local Material Symbols Rounded .woff2 to embed, for a browser "
+            "that cannot fetch it from Google (icons otherwise render as words)"
+        ),
+    )
+    ap.add_argument(
         "--scheme",
         choices=["light", "dark"],
         default="light",
@@ -178,6 +232,7 @@ def main():
 
     langs = args.lang or LANGS
     sections = args.section or SECTIONS
+    extra_css = _icon_font_css(args.icon_font) if args.icon_font else None
     exe = PINNED_CHROMIUM if Path(PINNED_CHROMIUM).exists() else None
     if exe is None and not shutil.which("chromium"):
         print(
@@ -212,7 +267,16 @@ def main():
                         page = context.new_page()
                         for width, height, label in VIEWPORTS:
                             written.append(
-                                _shoot(page, url, width, height, label, lang, section)
+                                _shoot(
+                                    page,
+                                    url,
+                                    width,
+                                    height,
+                                    label,
+                                    lang,
+                                    section,
+                                    extra_css,
+                                )
                             )
                         context.close()
                     finally:

@@ -275,6 +275,46 @@ changed two of them and killed a third.
   box and is inert below itself. Narrowed to `width` and `min-width`, with a
   test beside it proving both forcing shapes are still caught.
 
+### The sweep after S6 (2026-09-14)
+
+A second full look at the rendered panel — all four pages, four widths, both
+languages, both colour schemes — after everything above had landed. Two real
+defects, one root cause, and a review tool that had been lying.
+
+- **Every checkbox and toggle stacked its box above its text** (46px tall,
+  measured, against 24px for the row), and the English checkbox text was in
+  uppercase that a later `span` rule could not undo because the text lives in
+  a `p`. The cause was the same one S6 had already met on the sidebar radio and
+  had beaten with a second `!important`: an unscoped `label {{ display: block
+  !important }}` written for the captions above inputs, reaching every label
+  BaseWeb lays out as a *row*. Fixed at the root — the rule is now
+  `label[data-testid="stWidgetLabel"]`, captions only — rather than with a
+  third override. `tests/test_admin_rtl.py` walks every rule in the sheet and
+  fails if any selector containing `label` forces `display: block` outside that
+  one.
+- **The login button was Streamlit's default red** (`rgb(255, 75, 75)`,
+  measured) while every other primary in the panel was the blue gradient:
+  `st.form_submit_button` renders under `stFormSubmitButton` with
+  `kind="primaryFormSubmit"`, which `.stButton button[kind="primary"]` never
+  matched. The base, primary and secondary button rules now name both.
+- **The preview app was wrong about the panel in two ways**, and every
+  screenshot taken from it since S5 carried both. Seven of its translation
+  keys were near-misses of real ones (`tab_table` for `tab_dashboard`,
+  `input_client` for `client_name_label`…), so the Hebrew dashboard's tabs
+  rendered "Table / New" and its forms "Client / Save" in English — a
+  localisation defect that did not exist. And its copy of the dashboard's
+  delete confirm was not marked with `mark_row_inline()` while the real one
+  is, so the phone screenshot showed the two buttons stacked — a regression
+  that was not there. Both fixed, both pinned: every key the preview reads must
+  exist in `TRANS`, and its confirm row must be marked like the view's.
+- **A false positive worth recording.** With the Material Symbols font
+  unreachable (a sandboxed browser behind an egress proxy), every icon renders
+  as its ligature *name* — `support_agent`, `event_available` — and those words
+  wrapped the Kanban headers onto three lines and pushed the count badge
+  outside its column. Measured with the real font embedded, every header fits
+  and nothing clips. `scripts/admin_panel_screenshots.py --icon-font
+  <file.woff2>` embeds a local copy so the evidence shows the real thing.
+
 ## Acceptance criteria
 
 Checked in both `HE` (RTL) and `EN` (LTR), light and dark, at 375×812, 768×1024,

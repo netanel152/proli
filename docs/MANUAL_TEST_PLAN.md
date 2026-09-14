@@ -554,6 +554,18 @@ instead of wrapping. The login form is 345px wide at 375px and capped at 400px
 centred on desktop. `st.data_editor` measures 402px tall with 30 rows **and
 with 200** — it self-caps, which is why no `60vh` rule was added.
 
+### The sweep after S6, measured at 375×812
+
+| control | before | after |
+|---|---|---|
+| checkbox / toggle label | `display: block`, **46px** tall, box above text | `flex`, **24px**, box beside text |
+| `st.form_submit_button` (login) | `rgb(255, 75, 75)` — Streamlit's red | the panel's blue gradient, same as every `st.button(type="primary")` |
+| Kanban header with the icon font **missing** | 3 lines, count badge 25px outside the column | with the font: 2 lines, badge inside — a font problem, not a layout one |
+
+The last row is why the screenshot script grew `--icon-font`: a browser that
+cannot reach Google Fonts shoots every icon as its name, and the names are wide
+enough to invent a layout bug.
+
 ### The checklist
 
 Tick per width (375 × 812, 768 × 1024, 1024 × 768, 1440 × 900) in **both** HE and EN,
@@ -569,6 +581,9 @@ light and dark:
 - [ ] Sidebar nav rows are all the same width, the selected one is highlighted across
       the whole row, and the radio marker is beside the label rather than above it.
 - [ ] Opening the drawer on a phone still leaves an edge of the page visible behind it.
+- [ ] Every checkbox and toggle (the login "remember me", the sidebar auto-refresh, the
+      Verified box on Create Pro) has its box **beside** its text on one line, and the
+      text is in sentence case, not uppercase.
 - [ ] **HE only:** nothing on the page is left-aligned except the data editor and the
       slider, which are deliberate LTR islands. Table cells, alerts, form labels,
       captions and chat bubbles all read from the right.
@@ -582,7 +597,8 @@ light and dark:
       delete-lead confirm and the audit pagination.
 - [ ] No confirm row shows an empty third column or a band of nothing beside it.
 - [ ] Login: full width on a phone, 400px centred on desktop, with no empty
-      columns above or beside the form.
+      columns above or beside the form. Its button is the panel's blue — the same
+      colour as every other primary button — not Streamlit's red.
 - [ ] Analytics' six tabs scroll sideways on one line; the selected tab is visible
       and the strip never wraps to a second row.
 - [ ] Metric tiles: 2 per row on a phone, 3 on a tablet, 5 on desktop, same order, and
