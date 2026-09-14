@@ -3,6 +3,7 @@ import html
 
 from admin_panel.core.labels import lead_status_label
 from admin_panel.ui.responsive import responsive_css
+from admin_panel.ui.rtl import rtl_css
 
 # Status color mapping for Kanban and pills
 STATUS_COLORS = {
@@ -73,6 +74,16 @@ def load_css(lang_code, T):
     border_side = "left" if direction == "rtl" else "right"
     opp_border = "right" if direction == "rtl" else "left"
 
+    # Hebrew has no letter case, so `text-transform: uppercase` is a no-op on
+    # it — but the tracking that goes with the small-caps look is not. Hebrew
+    # letterforms are drawn to sit close, and 0.03–0.05em pulls them apart
+    # into something that reads as spaced-out rather than as a label.
+    caps = "none" if direction == "rtl" else "uppercase"
+
+    def tracking(em):
+        """The rule's own LTR tracking, or none of it in Hebrew."""
+        return "normal" if direction == "rtl" else em
+
     # Import Google Fonts and Material Symbols
     st.markdown(
         """
@@ -82,7 +93,15 @@ def load_css(lang_code, T):
         unsafe_allow_html=True,
     )
 
-    # Generate status pill CSS
+    # Status colours, both palettes, as classes.
+    #
+    # `STATUS_COLORS_DARK` existed from PRO-46 and was never read by anything:
+    # both render helpers took the light dict, so on the dark palette every
+    # pill and every Kanban header stayed a pale pastel on a #0F172A page.
+    # Python cannot see `prefers-color-scheme` — only CSS can — so the fix is
+    # to emit both palettes here and let the media query choose, which is
+    # also why the header colours move out of an inline `style` attribute in
+    # `render_kanban_column`: an inline declaration outranks any media query.
     status_pill_css = ""
     for status, colors in STATUS_COLORS.items():
         status_pill_css += f"""
@@ -99,7 +118,27 @@ def load_css(lang_code, T):
             gap: 4px;
             white-space: nowrap;
         }}
+
+        .kanban-header--{status} {{
+            background-color: {colors['bg']};
+            color: {colors['text']};
+            border: 1px solid {colors['border']};
+        }}
         """
+
+    status_dark_css = ""
+    for status, colors in STATUS_COLORS_DARK.items():
+        status_dark_css += f"""
+            .status-pill-{status},
+            .kanban-header--{status} {{
+                background-color: {colors['bg']};
+                color: {colors['text']};
+                border-color: {colors['border']};
+            }}
+        """
+    status_dark_css = (
+        "@media (prefers-color-scheme: dark) {\n" + status_dark_css + "\n        }\n"
+    )
 
     st.markdown(
         f"""
@@ -240,8 +279,8 @@ def load_css(lang_code, T):
             font-weight: 500 !important;
             font-size: 0.85rem !important;
             color: var(--text-secondary) !important;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
+            text-transform: {caps};
+            letter-spacing: {tracking('0.03em')};
             display: block !important;
             text-align: {align} !important;
             direction: {direction} !important;
@@ -311,10 +350,34 @@ def load_css(lang_code, T):
             font-weight: 500 !important;
             color: var(--text-main) !important;
             letter-spacing: normal;
+            /* The row, not the words. A label shrinks to its text by
+               default, so the selected pill ended at the end of the label —
+               five ragged widths down the sidebar — and the tap target was
+               the text rather than the row the operator aims at. */
+            width: 100%;
+            box-sizing: border-box;
+            /* `!important` because the base `label` rule above sets
+               `display: block !important`, and an important declaration
+               beats a plain one whatever the source order. Under `block` the
+               radio marker fell onto its own line *above* the text, which is
+               why every nav row measured 61px tall instead of 39px. The
+               phone breakpoint already forced flex here; the bug was that
+               nothing did at any wider width, so the desktop sidebar — the
+               one an operator looks at all day — was the broken one. */
+            display: flex !important;
+            align-items: center;
+            gap: 8px;
         }}
 
         section[data-testid="stSidebar"] .stRadio > div > label:hover {{
             background-color: var(--bg-hover);
+        }}
+
+        /* A full-width label gives the flex row free space to distribute;
+           without this the radio marker is the item that absorbs it and
+           deforms into an oval. */
+        section[data-testid="stSidebar"] .stRadio > div > label > div:first-child {{
+            flex: 0 0 auto;
         }}
 
         section[data-testid="stSidebar"] .stRadio > div > label[data-checked="true"],
@@ -370,8 +433,8 @@ def load_css(lang_code, T):
 
         div[data-testid="stMetricLabel"] p {{
             font-size: 0.8rem !important;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
+            text-transform: {caps};
+            letter-spacing: {tracking('0.05em')};
             color: var(--text-secondary) !important;
             font-weight: 600 !important;
         }}
@@ -434,8 +497,8 @@ def load_css(lang_code, T):
 
         .metric-tile-label {{
             font-size: 0.8rem !important;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
+            text-transform: {caps};
+            letter-spacing: {tracking('0.05em')};
             color: var(--text-secondary) !important;
             font-weight: 600 !important;
             text-align: {align};
@@ -544,6 +607,11 @@ def load_css(lang_code, T):
             border: 1px solid transparent;
             cursor: pointer;
             letter-spacing: 0.01em;
+            /* Primary and secondary measured 39px and 41px in the same row,
+               because only one of them carries a border. `border-box` and a
+               floor make a row of buttons line up whatever kind they are. */
+            box-sizing: border-box;
+            min-height: 40px;
         }}
 
         .stButton button[kind="primary"] {{
@@ -567,6 +635,29 @@ def load_css(lang_code, T):
         .stButton button[kind="secondary"]:hover {{
             background-color: var(--bg-hover);
             border-color: var(--text-muted);
+        }}
+
+        /* Keyboard focus. The sheet styled `:hover` on everything and
+           `:focus` on nothing, so a keyboard user got only the browser's own
+           1px ring in its own colour — legible on a white page, much less so
+           against the primary-blue and card surfaces here, and absent from
+           the sidebar nav rows, which are labels rather than buttons.
+           `:focus-visible` (plus `:focus-within` for the nav row, whose real
+           focus lands on the input inside it) shows a 2px ring in the
+           panel's own primary for keyboard users, and does not draw one on
+           every mouse click.
+
+           Measuring this needs care: `.stButton button` carries
+           `transition: all 0.2s`, and Chromium animates `outline`. Sampled
+           ~100ms after Tab it reads "1px" in a colour part-way to the target
+           — which looks exactly like the rule not applying. */
+        .stButton button:focus-visible,
+        .stDownloadButton button:focus-visible,
+        [data-testid="stFormSubmitButton"] button:focus-visible,
+        section[data-testid="stSidebar"] .stRadio > div > label:focus-within,
+        .stTabs [data-baseweb="tab"]:focus-visible {{
+            outline: 2px solid var(--primary) !important;
+            outline-offset: 2px !important;
         }}
 
         /* ===== TABLES & DATA EDITOR ===== */
@@ -624,16 +715,21 @@ def load_css(lang_code, T):
             direction: ltr !important;
         }}
 
-        /* Regular HTML tables (non-Glide, e.g. st.dataframe fallback) */
+        /* Regular HTML tables (non-Glide: st.table, and markdown tables).
+           These follow the page direction. Only the Glide grid above is an
+           LTR island, and for a specific reason — its columns misalign in
+           RTL. A markdown table has no such problem, and hard-coding
+           `text-align: left` here left every Hebrew table ragged against the
+           wrong edge of its own right-aligned box. */
         thead tr th {{
             background-color: var(--bg-secondary) !important;
             color: var(--text-secondary) !important;
             font-weight: 600 !important;
             font-size: 0.8rem !important;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
+            text-transform: {caps};
+            letter-spacing: {tracking('0.04em')};
             padding: 12px 16px !important;
-            text-align: left !important;
+            text-align: {align} !important;
             border-bottom: 2px solid var(--border-color) !important;
         }}
 
@@ -642,7 +738,7 @@ def load_css(lang_code, T):
             color: var(--text-main) !important;
             padding: 12px 16px !important;
             background-color: var(--bg-card) !important;
-            text-align: left !important;
+            text-align: {align} !important;
             border-bottom: 1px solid var(--border-light) !important;
         }}
 
@@ -752,10 +848,14 @@ def load_css(lang_code, T):
             text-align: {align};
         }}
 
+        /* Side is carried by the auto margin alone. `align-self` was also
+           set here and was inert: an auto margin consumes the free space
+           before alignment ever runs, so the two could disagree (and did)
+           without the disagreement being visible. One mechanism, so the
+           side a bubble takes can be read off one line. */
         .user-msg {{
             background-color: var(--chat-user-bg);
             color: var(--chat-user-text);
-            align-self: {'flex-start' if direction == 'rtl' else 'flex-end'};
             border-bottom-{'right' if direction == 'rtl' else 'left'}-radius: 4px;
             margin-{'right' if direction == 'rtl' else 'left'}: auto;
             box-shadow: var(--shadow-sm);
@@ -764,7 +864,6 @@ def load_css(lang_code, T):
         .bot-msg {{
             background-color: var(--chat-bot-bg);
             color: var(--chat-bot-text);
-            align-self: {'flex-end' if direction == 'rtl' else 'flex-start'};
             border-bottom-{'left' if direction == 'rtl' else 'right'}-radius: 4px;
             margin-{'left' if direction == 'rtl' else 'right'}: auto;
             border: 1px solid var(--border-color);
@@ -777,7 +876,11 @@ def load_css(lang_code, T):
             display: flex;
             align-items: center;
             opacity: 0.6;
-            flex-direction: {'row' if direction == 'ltr' else 'row-reverse'};
+            /* Plain `row`, both languages. A flex row already lays out along
+               the inline axis, so under `direction: rtl` it is mirrored
+               once; `row-reverse` mirrored it a second time and put the
+               speaker icon back on the left, after the name. */
+            flex-direction: row;
             gap: 4px;
         }}
 
@@ -828,13 +931,20 @@ def load_css(lang_code, T):
             margin-bottom: 12px;
             font-weight: 700;
             font-size: 0.8rem;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
+            text-transform: {caps};
+            letter-spacing: {tracking('0.04em')};
             direction: {direction};
         }}
 
         .kanban-count {{
-            background-color: rgba(0,0,0,0.08);
+            /* Was `rgba(0,0,0,0.08)`: a black wash over whatever the header
+               is wearing, which reads as a chip on a pale header and as
+               nothing at all on a dark one. An outline in the header's own
+               `currentColor` is legible on both palettes without this rule
+               having to know which one is in play. */
+            background-color: transparent;
+            border: 1px solid currentColor;
+            color: inherit;
             padding: 2px 8px;
             border-radius: 10px;
             font-size: 0.75rem;
@@ -883,8 +993,9 @@ def load_css(lang_code, T):
             gap: 4px;
         }}
 
-        /* ===== STATUS PILLS ===== */
+        /* ===== STATUS PILLS & KANBAN HEADERS ===== */
         {status_pill_css}
+        {status_dark_css}
 
         /* ===== SECTION HEADER ===== */
         .section-header {{
@@ -931,10 +1042,26 @@ def load_css(lang_code, T):
         }}
 
         /* ===== TOAST / ALERTS ===== */
-        .stAlert {{
+        /* This rule used to carry `border-width: 0 0 0 4px`, an accent stripe
+           that never drew: `border-style` was never set, so the computed
+           width was 0 — in both languages, for as long as it existed.
+           It is gone rather than repaired, for two reasons. The side was
+           wrong (a left literal puts it on the far edge of a Hebrew alert),
+           and, more decisively, it cannot be made to mean anything:
+           Streamlit 1.31 tells success from error only by a generated
+           emotion class (`st-al` vs `st-bf`) that changes between builds, so
+           a stripe here would be the same neutral colour on all four kinds.
+           The tinted background Streamlit already gives each kind carries
+           that signal; a uniform bar beside it would only add noise.
+
+           The selector also gains the inner notification, because the outer
+           `.stAlert` wrapper is transparent and zero-bordered — the radius
+           and font size were landing on a box nobody sees. */
+        .stAlert,
+        div[data-testid="stAlert"],
+        div[data-testid="stNotification"] {{
             border-radius: var(--radius-sm) !important;
             font-size: 0.875rem !important;
-            border-width: 0 0 0 4px !important;
         }}
 
         /* ===== DOWNLOAD BUTTON ===== */
@@ -1034,6 +1161,7 @@ def load_css(lang_code, T):
             0%, 100% {{ opacity: 1; }}
             50% {{ opacity: 0.4; }}
         }}
+{rtl_css(direction, align)}
 {responsive_css(direction, align)}
     </style>
     """,
@@ -1143,6 +1271,10 @@ def render_kanban_card(lead, T):
 def render_kanban_column(status, leads, T):
     """Render a full Kanban column with header and cards."""
     colors = STATUS_COLORS.get(status, STATUS_COLORS["new"])
+    # The class has to fall back the same way `colors` does, or an unknown
+    # status would render a header with no rule at all — worse than the
+    # "new" palette it used to borrow.
+    palette = status if status in STATUS_COLORS else "new"
     label = lead_status_label(T, status)
     count = len(leads)
 
@@ -1161,8 +1293,10 @@ def render_kanban_column(status, leads, T):
     <div style="font-size: 0.8rem;">—</div>
 </div>"""
 
+    # Colours come from `.kanban-header--<status>` in the sheet rather than
+    # an inline style, so the dark-mode media query can reach them at all.
     return f"""<div class="kanban-column{empty_class}">
-    <div class="kanban-header" style="background-color: {colors['bg']}; color: {colors['text']}; border: 1px solid {colors['border']};">
+    <div class="kanban-header kanban-header--{palette}">
         <span class="material-symbols-rounded" style="font-size:1rem">{colors['icon']}</span>
         {label}
         <span class="kanban-count">{count}</span>
