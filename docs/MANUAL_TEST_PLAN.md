@@ -463,16 +463,33 @@ localized `T["unknown_pro"]` (`"לא משויך"`) sentinel, consistent with eve
 
 ## Admin panel viewport checklist (responsive slices)
 
-`docs/ADMIN_PANEL_RESPONSIVE_PLAN.md` slice S5. The unit suite
-(`tests/test_admin_responsive.py`) pins the CSS's *structure*; this is the part
-only a browser can answer.
+`docs/ADMIN_PANEL_RESPONSIVE_PLAN.md` slices S3–S6. The unit suites
+(`tests/test_admin_responsive.py`, `tests/test_admin_rtl.py`) pin the CSS's
+*structure*; this is the part only a browser can answer — and S6 exists because
+the first time anyone looked, several things the structure tests were happy with
+were plainly wrong on screen.
 
 ### Producing the evidence
 
 ```bash
 pip install -r requirements-dev.txt            # playwright is dev-only
-python scripts/admin_panel_screenshots.py      # both languages, four widths
+python scripts/admin_panel_screenshots.py                 # both languages,
+                                                          # both pages, 4 widths
+python scripts/admin_panel_screenshots.py --scheme dark   # the dark palette
 ```
+
+`--section forms` is the S3 surface — every action row, rendered twice, once
+marked inline and once not, so the difference is the page's own subject — and
+`--section login` is the login screen alone, which is how it really renders.
+One difference from production worth knowing before reading a login
+screenshot: the real screen has **no sidebar** (`main.py` calls
+`check_password()` and stops before building one), so there the form centres in
+the whole viewport rather than beside a sidebar.
+
+`--section widgets` is the kitchen sink, and the one worth opening first when
+checking Hebrew: alerts, expanders, forms, date/number/multiselect/slider inputs,
+chat bubbles, HTML tables and the data editor. Every RTL defect S6 fixed was in
+chrome the Dashboard happens not to render.
 
 That starts `scripts/admin_panel_layout_preview.py` itself — **real Streamlit and
 real CSS with fake data, so no Mongo, no Redis, no password and no cookie.** Eight
@@ -491,6 +508,10 @@ Two things to check before trusting a run:
   reliable way.
 - **A full-page screenshot is taller than the viewport.** Something that looks far
   down the image may still be above the fold. Measure rather than eyeball.
+- **Do not read a computed style within ~250ms of an interaction.** Buttons carry
+  `transition: all 0.2s` and Chromium animates `outline`, so the focus ring
+  sampled 100ms after a Tab reads "1px" in a part-way colour — indistinguishable
+  from the rule not applying. It cost a wrong diagnosis once already.
 
 ### What was measured, 2026-09-14, Streamlit 1.31.1, Hebrew
 
@@ -505,6 +526,34 @@ At 375 × 812 the pending-review **Assign button sits at y=637, 175px above the 
 so the operator reaches the queue without scrolling. Metric tiles are 72px tall and
 169px wide, and the longest Hebrew label (`ממתין לבדיקת מנהל`) fits on **one** line.
 
+### Hebrew, before and after S6 — measured the same way
+
+| thing | Hebrew before | Hebrew after | English |
+|---|---|---|---|
+| hamburger (375px) | x=4, far left, over the page title | x=334, top right | x=4, unchanged |
+| Streamlit toolbar | x=275–371, under the hamburger | x=4–100, top left | top right, unchanged |
+| sidebar collapse ✕ (1440px) | x=1401, screen edge | x=1166, content edge | x=241, unchanged |
+| sidebar nav rows | 5 widths, 112–158px; 61px tall, marker on its own line | all 235px, 39px tall, marker inline | same shape, same fix |
+| mobile drawer | 336 of 375px (39px sliver) | 319px | 319px |
+| HTML table cells | `text-align: left` | right | left, unchanged |
+| chat-meta icon | left of the name (double flip) | right of the name | left, unchanged |
+| slider thumb (1440px) | x=1508, outside a track ending at 1105 | x=469, on the track | x=749, unchanged |
+| Kanban header, dark mode | `#FFFBEB` cream on a `#0F172A` page | `#422006` | n/a |
+| label tracking | 0.38px on Hebrew letterforms | none | 0.38px, unchanged |
+
+### S3 / S4, measured at 375×812 in Hebrew
+
+| row | unmarked | marked |
+|---|---|---|
+| confirm pair `[1, 1]` | **two rows**, destructive on top | one row, 165 / 165 |
+| save row `[2, 2, 1]` | three rows | one row, **128 / 128 / 59** — weights kept |
+| pagination | two rows | one row, 165 / 165 |
+
+The tab strip is 613px of content in a 343px box and scrolls on one line
+instead of wrapping. The login form is 345px wide at 375px and capped at 400px
+centred on desktop. `st.data_editor` measures 402px tall with 30 rows **and
+with 200** — it self-caps, which is why no `60vh` rule was added.
+
 ### The checklist
 
 Tick per width (375 × 812, 768 × 1024, 1024 × 768, 1440 × 900) in **both** HE and EN,
@@ -514,6 +563,28 @@ light and dark:
       desktop Kanban scroll horizontally, each inside its own container.
 - [ ] Phone: the sidebar starts collapsed and spills nothing; the hamburger opens it;
       language, navigation and auto-refresh are all reachable.
+- [ ] **HE only:** the hamburger is at the *right*, Streamlit's own menu at the left,
+      and the two do not overlap. The sidebar opens from the right and its ✕ is on
+      the edge facing the content, not the screen.
+- [ ] Sidebar nav rows are all the same width, the selected one is highlighted across
+      the whole row, and the radio marker is beside the label rather than above it.
+- [ ] Opening the drawer on a phone still leaves an edge of the page visible behind it.
+- [ ] **HE only:** nothing on the page is left-aligned except the data editor and the
+      slider, which are deliberate LTR islands. Table cells, alerts, form labels,
+      captions and chat bubbles all read from the right.
+- [ ] Dark mode: Kanban headers and status pills use the dark palette, not the pale
+      one. The count chip beside a header is legible on both palettes.
+- [ ] Tab to a button, wait for the transition to finish, and there is a 2px focus
+      ring in the panel's blue.
+- [ ] **Every Yes/No, Save/Cancel and Prev/Next pair is on one row at every width**,
+      and no destructive button is full-width. The rows to check are the delete-pro
+      and reject-pro confirms, the geo save row, generate/clear on the schedule, the
+      delete-lead confirm and the audit pagination.
+- [ ] No confirm row shows an empty third column or a band of nothing beside it.
+- [ ] Login: full width on a phone, 400px centred on desktop, with no empty
+      columns above or beside the form.
+- [ ] Analytics' six tabs scroll sideways on one line; the selected tab is visible
+      and the strip never wraps to a second row.
 - [ ] Metric tiles: 2 per row on a phone, 3 on a tablet, 5 on desktop, same order, and
       the pending-review tile is visibly wider than its neighbours on desktop.
 - [ ] Kanban: one stacked column on a phone with empty statuses hidden; two-up on a

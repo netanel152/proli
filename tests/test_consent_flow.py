@@ -2,6 +2,7 @@
 Tests for the consent flow logic in workflow_service.py.
 Covers: first contact, accept, decline, unclear response, re-ask, pro bypass.
 """
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from app.core.constants import UserStates
@@ -28,7 +29,9 @@ def consent_mocks(monkeypatch, mock_db):
     monkeypatch.setattr(app.services.workflow_service, "has_consent", mock_has_consent)
 
     mock_record_consent = AsyncMock()
-    monkeypatch.setattr(app.services.workflow_service, "record_consent", mock_record_consent)
+    monkeypatch.setattr(
+        app.services.workflow_service, "record_consent", mock_record_consent
+    )
 
     return mock_whatsapp, mock_state, mock_has_consent, mock_record_consent
 
@@ -42,8 +45,12 @@ async def test_first_contact_sends_consent_request(consent_mocks):
 
     await process_incoming_message("972501111111@c.us", "שלום")
 
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Consent.REQUEST)
-    mock_state.set_state.assert_called_with("972501111111@c.us", UserStates.AWAITING_CONSENT)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Consent.REQUEST
+    )
+    mock_state.set_state.assert_called_with(
+        "972501111111@c.us", UserStates.AWAITING_CONSENT
+    )
 
 
 @pytest.mark.asyncio
@@ -57,7 +64,9 @@ async def test_accept_consent(consent_mocks):
 
     mock_record.assert_called_once_with("972501111111@c.us", accepted=True)
     mock_state.clear_state.assert_called_with("972501111111@c.us")
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Consent.ACCEPTED)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Consent.ACCEPTED
+    )
 
 
 @pytest.mark.asyncio
@@ -70,7 +79,9 @@ async def test_accept_consent_alternative_keyword(consent_mocks):
     await process_incoming_message("972501111111@c.us", "אישור")
 
     mock_record.assert_called_once_with("972501111111@c.us", accepted=True)
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Consent.ACCEPTED)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Consent.ACCEPTED
+    )
 
 
 @pytest.mark.asyncio
@@ -84,7 +95,9 @@ async def test_decline_consent(consent_mocks):
 
     mock_record.assert_called_once_with("972501111111@c.us", accepted=False)
     mock_state.clear_state.assert_called_with("972501111111@c.us")
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Consent.DECLINED)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Consent.DECLINED
+    )
 
 
 @pytest.mark.asyncio
@@ -97,7 +110,9 @@ async def test_unclear_consent_response(consent_mocks):
     await process_incoming_message("972501111111@c.us", "מה זה?")
 
     mock_record.assert_not_called()
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Consent.REQUEST)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Consent.REQUEST
+    )
 
 
 @pytest.mark.asyncio
@@ -109,8 +124,12 @@ async def test_declined_user_contacts_again(consent_mocks):
 
     await process_incoming_message("972501111111@c.us", "שלום שוב")
 
-    mock_wa.send_message.assert_called_once_with("972501111111@c.us", Messages.Consent.REQUEST)
-    mock_state.set_state.assert_called_with("972501111111@c.us", UserStates.AWAITING_CONSENT)
+    mock_wa.send_message.assert_called_once_with(
+        "972501111111@c.us", Messages.Consent.REQUEST
+    )
+    mock_state.set_state.assert_called_with(
+        "972501111111@c.us", UserStates.AWAITING_CONSENT
+    )
 
 
 @pytest.mark.asyncio
@@ -123,11 +142,17 @@ async def test_consented_user_passes_through(consent_mocks, monkeypatch):
     # Mock AI so dispatcher path doesn't fail
     mock_ai = MagicMock()
     from app.services.ai_engine_service import AIResponse, ExtractedData
-    mock_ai.analyze_conversation = AsyncMock(return_value=AIResponse(
-        reply_to_user="שלום! איך אפשר לעזור?",
-        extracted_data=ExtractedData(city=None, issue=None, full_address=None, appointment_time=None),
-        transcription=None, is_deal=False,
-    ))
+
+    mock_ai.analyze_conversation = AsyncMock(
+        return_value=AIResponse(
+            reply_to_user="שלום! איך אפשר לעזור?",
+            extracted_data=ExtractedData(
+                city=None, issue=None, full_address=None, appointment_time=None
+            ),
+            transcription=None,
+            is_deal=False,
+        )
+    )
     monkeypatch.setattr(app.services.workflow_service, "ai", mock_ai)
 
     mock_lm = MagicMock()
@@ -151,18 +176,19 @@ async def test_pro_skips_consent(consent_mocks, mock_db):
     """Known professional bypasses consent entirely."""
     mock_wa, mock_state, mock_has_consent, _ = consent_mocks
     mock_state.get_state.return_value = UserStates.PRO_MODE
-    
+
     # Setup pro in DB
-    await mock_db.users.insert_one({
-        "phone_number": "972524828796",
-        "role": "professional",
-        "business_name": "Test Pro",
-        "is_active": True
-    })
+    await mock_db.users.insert_one(
+        {
+            "phone_number": "972524828796",
+            "role": "professional",
+            "business_name": "Test Pro",
+            "is_active": True,
+        }
+    )
 
     # Pro in PRO_MODE -> goes to pro handler, not consent
     await process_incoming_message("972524828796@c.us", "תפריט")
-
 
     # has_consent should NOT have been called
     mock_has_consent.assert_not_called()
@@ -171,4 +197,3 @@ async def test_pro_skips_consent(consent_mocks, mock_db):
     msg = mock_wa.send_message.call_args.args[1]
     assert "שלום" in msg
     assert "דירוג" in msg
-

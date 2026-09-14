@@ -581,8 +581,11 @@ Corollaries:
 ## 13. Documentation
 
 - **`CLAUDE.md` is the operational contract** — the rules that must survive
-  every session, human or agent. It stays short; this document carries the
-  depth.
+  every session, human or agent. It stays short (a size budget in
+  `tests/test_claude_config.py` enforces it); this document carries the
+  depth, and **`.claude/rules/*.md`** carries the per-area reference
+  (service table, constants, configuration, admin panel, testing) as
+  path-scoped rules that load only when a matching file is read.
 - **`docs/ARCHITECTURE.md` describes; this file prescribes.** A change that
   alters the system's shape updates both.
 - **`docs/TESTING.md` is the single source of truth for the test baseline.**

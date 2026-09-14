@@ -186,6 +186,7 @@ def test_str_and_format_mask_every_secret(loaded_settings):
         f"{loaded_settings.WEBHOOK_TOKEN}", context="f-string on a single field"
     )
 
+
 def test_model_dump_and_json_mask_every_secret(loaded_settings):
     """Serialization is the other route out — health payloads, debug endpoints."""
     _assert_no_sentinels(repr(loaded_settings.model_dump()), context="model_dump()")

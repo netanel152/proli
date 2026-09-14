@@ -19,8 +19,10 @@ Two targets:
     # a live panel you already have open
     python scripts/admin_panel_screenshots.py --url http://localhost:8501
 
-Output lands in `artifacts/admin-panel/<lang>-<width>x<height>.png`, which is
-gitignored — these are review aids, not fixtures.
+Output lands in `artifacts/admin-panel/<section>-<lang>-<width>x<height>.png`,
+which is gitignored — these are review aids, not fixtures. `--scheme dark`
+re-shoots the same grid on the dark palette, which has bugs of its own that
+the light one cannot show.
 
 Playwright is a dev-only dependency and deliberately not in `requirements.txt`;
 the script says so and exits cleanly rather than failing obscurely when it is
@@ -49,6 +51,13 @@ VIEWPORTS = [
 
 LANGS = ["HE", "EN"]
 
+# Every page the preview can render. `widgets` exists because every RTL defect
+# that survived the first pass was in chrome the Dashboard happens not to show;
+# `forms` is the S3 surface (the action rows that must not stack) and `login`
+# is its own page because that is how the login screen really renders — alone,
+# with the page cap doing the centring.
+SECTIONS = ["dashboard", "widgets", "forms", "login"]
+
 # Set by the environment this repo's sessions run in; when present it is the
 # browser to use, and downloading another would be both slow and wrong.
 PINNED_CHROMIUM = "/opt/pw-browsers/chromium"
@@ -76,7 +85,7 @@ def _wait_for_http(url, timeout=60):
     return False
 
 
-def _start_preview(lang):
+def _start_preview(lang, section):
     """Run the fake-data preview app; returns (process, url)."""
     port = _free_port()
     proc = subprocess.Popen(
@@ -95,6 +104,8 @@ def _start_preview(lang):
             "--",
             "--lang",
             lang,
+            "--section",
+            section,
         ],
         cwd=REPO_ROOT,
         stdout=subprocess.DEVNULL,
@@ -107,7 +118,7 @@ def _start_preview(lang):
     return proc, url
 
 
-def _shoot(page, url, width, height, label, lang):
+def _shoot(page, url, width, height, label, lang, section):
     page.set_viewport_size({"width": width, "height": height})
     page.goto(url, wait_until="networkidle")
     # Streamlit renders its script asynchronously after the socket connects;
@@ -120,7 +131,7 @@ def _shoot(page, url, width, height, label, lang):
     page.wait_for_timeout(1_500)
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    path = OUT_DIR / f"{lang}-{width}x{height}-{label}.png"
+    path = OUT_DIR / f"{section}-{lang}-{width}x{height}-{label}.png"
     page.screenshot(path=str(path), full_page=True)
     print(f"  {path.relative_to(REPO_ROOT)}")
     return path
@@ -138,6 +149,18 @@ def main():
         action="append",
         help="limit to one language (repeatable); default is both",
     )
+    ap.add_argument(
+        "--section",
+        choices=SECTIONS,
+        action="append",
+        help="limit to one preview page (repeatable); default is both",
+    )
+    ap.add_argument(
+        "--scheme",
+        choices=["light", "dark"],
+        default="light",
+        help="colour scheme to emulate; the dark palette has its own bugs",
+    )
     args = ap.parse_args()
 
     try:
@@ -154,6 +177,7 @@ def main():
         return 2
 
     langs = args.lang or LANGS
+    sections = args.section or SECTIONS
     exe = PINNED_CHROMIUM if Path(PINNED_CHROMIUM).exists() else None
     if exe is None and not shutil.which("chromium"):
         print(
@@ -168,29 +192,37 @@ def main():
         browser = p.chromium.launch(**launch_kwargs)
         try:
             for lang in langs:
-                proc = None
-                try:
-                    if args.url:
-                        url = args.url
-                    else:
-                        proc, url = _start_preview(lang)
+                for section in sections:
+                    proc = None
+                    try:
+                        if args.url:
+                            url = args.url
+                        else:
+                            proc, url = _start_preview(lang, section)
 
-                    print(f"{lang} -> {url}")
-                    # A fresh context per language: Streamlit caches the
-                    # language in session state, and a reused context would
-                    # quietly shoot the previous one.
-                    context = browser.new_context(
-                        locale="he-IL" if lang == "HE" else "en-US",
-                        device_scale_factor=2,
-                    )
-                    page = context.new_page()
-                    for width, height, label in VIEWPORTS:
-                        written.append(_shoot(page, url, width, height, label, lang))
-                    context.close()
-                finally:
-                    if proc:
-                        proc.terminate()
-                        proc.wait(timeout=15)
+                        print(f"{lang} / {section} -> {url}")
+                        # A fresh context per run: Streamlit caches the
+                        # language in session state, and a reused context
+                        # would quietly shoot the previous one.
+                        context = browser.new_context(
+                            locale="he-IL" if lang == "HE" else "en-US",
+                            device_scale_factor=2,
+                            color_scheme=args.scheme,
+                        )
+                        page = context.new_page()
+                        for width, height, label in VIEWPORTS:
+                            written.append(
+                                _shoot(page, url, width, height, label, lang, section)
+                            )
+                        context.close()
+                    finally:
+                        if proc:
+                            proc.terminate()
+                            proc.wait(timeout=15)
+                    if args.url:
+                        # A live panel is one page; shooting it twice would
+                        # only produce identical files under two names.
+                        break
         finally:
             browser.close()
 

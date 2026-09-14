@@ -1,6 +1,7 @@
 """
 Tests for scheduling_service.py: schedule templates, availability, no-shows.
 """
+
 import pytest
 import pytest_asyncio
 from bson import ObjectId
@@ -22,17 +23,20 @@ async def sched_db(mock_db):
     """Create a pro for scheduling tests."""
     existing = await mock_db.users.find_one({"_id": SCHED_PRO_ID})
     if not existing:
-        await mock_db.users.insert_one({
-            "_id": SCHED_PRO_ID,
-            "role": "professional",
-            "is_active": True,
-            "business_name": "Sched Pro",
-            "no_show_count": 0,
-        })
+        await mock_db.users.insert_one(
+            {
+                "_id": SCHED_PRO_ID,
+                "role": "professional",
+                "is_active": True,
+                "business_name": "Sched Pro",
+                "no_show_count": 0,
+            }
+        )
     return mock_db, str(SCHED_PRO_ID), SCHED_PRO_ID
 
 
 # --- Schedule Templates ---
+
 
 @pytest.mark.asyncio
 async def test_get_schedule_template_none(sched_db):
@@ -67,18 +71,22 @@ async def test_get_template_nonexistent_pro(mock_db):
 
 # --- Availability Checks ---
 
+
 @pytest.mark.asyncio
 async def test_check_availability_with_slot(sched_db):
     db, _, pro_oid = sched_db
     from datetime import timedelta
+
     future = datetime.now(timezone.utc) + timedelta(days=1)
 
-    await db.slots.insert_one({
-        "pro_id": pro_oid,
-        "start_time": future,
-        "end_time": future + timedelta(hours=1),
-        "is_taken": False,
-    })
+    await db.slots.insert_one(
+        {
+            "pro_id": pro_oid,
+            "start_time": future,
+            "end_time": future + timedelta(hours=1),
+            "is_taken": False,
+        }
+    )
 
     result = await check_pro_availability(pro_oid)
     assert result is True
@@ -88,7 +96,9 @@ async def test_check_availability_with_slot(sched_db):
 async def test_check_availability_no_slot(mock_db):
     """Fresh pro with no slots at all."""
     empty_pro = ObjectId()
-    await mock_db.users.insert_one({"_id": empty_pro, "role": "professional", "is_active": True})
+    await mock_db.users.insert_one(
+        {"_id": empty_pro, "role": "professional", "is_active": True}
+    )
     result = await check_pro_availability(empty_pro)
     assert result is False
 
@@ -97,14 +107,21 @@ async def test_check_availability_no_slot(mock_db):
 async def test_check_availability_all_taken(mock_db):
     """Pro with only taken slots."""
     from datetime import timedelta
+
     taken_pro = ObjectId()
-    await mock_db.users.insert_one({"_id": taken_pro, "role": "professional", "is_active": True})
+    await mock_db.users.insert_one(
+        {"_id": taken_pro, "role": "professional", "is_active": True}
+    )
     future = datetime.now(timezone.utc) + timedelta(days=1)
 
-    await mock_db.slots.insert_one({
-        "pro_id": taken_pro, "start_time": future,
-        "end_time": future + timedelta(hours=1), "is_taken": True,
-    })
+    await mock_db.slots.insert_one(
+        {
+            "pro_id": taken_pro,
+            "start_time": future,
+            "end_time": future + timedelta(hours=1),
+            "is_taken": True,
+        }
+    )
 
     result = await check_pro_availability(taken_pro)
     assert result is False
@@ -112,29 +129,42 @@ async def test_check_availability_all_taken(mock_db):
 
 # --- Available Slots ---
 
+
 @pytest.mark.asyncio
 async def test_get_available_slots(sched_db):
     db, pro_id_str, pro_oid = sched_db
     from datetime import timedelta
+
     # Use a different pro to avoid data from other tests
     diff_pro = ObjectId()
-    await db.users.insert_one({"_id": diff_pro, "role": "professional", "is_active": True})
+    await db.users.insert_one(
+        {"_id": diff_pro, "role": "professional", "is_active": True}
+    )
     future = datetime.now(timezone.utc) + timedelta(days=2)
 
-    await db.slots.insert_one({
-        "pro_id": diff_pro, "start_time": future,
-        "end_time": future + timedelta(hours=1), "is_taken": False,
-    })
-    await db.slots.insert_one({
-        "pro_id": diff_pro, "start_time": future,
-        "end_time": future + timedelta(hours=1), "is_taken": True,
-    })
+    await db.slots.insert_one(
+        {
+            "pro_id": diff_pro,
+            "start_time": future,
+            "end_time": future + timedelta(hours=1),
+            "is_taken": False,
+        }
+    )
+    await db.slots.insert_one(
+        {
+            "pro_id": diff_pro,
+            "start_time": future,
+            "end_time": future + timedelta(hours=1),
+            "is_taken": True,
+        }
+    )
 
     slots = await get_available_slots(str(diff_pro))
     assert len(slots) == 1  # Only the not-taken one
 
 
 # --- No-Show Tracking ---
+
 
 @pytest.mark.asyncio
 async def test_record_no_show(sched_db):
@@ -151,10 +181,14 @@ async def test_record_no_show(sched_db):
 async def test_get_no_show_count(mock_db):
     """Use a fresh pro to avoid shared state."""
     fresh_pro = ObjectId()
-    await mock_db.users.insert_one({
-        "_id": fresh_pro, "role": "professional",
-        "is_active": True, "no_show_count": 0,
-    })
+    await mock_db.users.insert_one(
+        {
+            "_id": fresh_pro,
+            "role": "professional",
+            "is_active": True,
+            "no_show_count": 0,
+        }
+    )
 
     count = await get_no_show_count(fresh_pro)
     assert count == 0

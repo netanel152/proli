@@ -96,11 +96,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # No lint step yet: `black --check .` currently reformats 55 pre-existing
-      # files and the repo has no flake8 config, so enforcing either here would
-      # fail on day one for reasons unrelated to the change under review. Adding
-      # them is a separate cleanup; `black .` / `flake8 .` stay local commands
+      # Formatting is enforced; linting is not yet. `black .` was applied to
+      # the whole tree once (27 files, AST-identical before and after) and this
+      # step keeps it that way — without it the count creeps back up one edit
+      # at a time. `flake8 .` (config in .flake8) still reports pre-existing
+      # F401/E501 debt, so it stays a local command until that is paid down
       # (see CLAUDE.md).
+      - name: Lint — black --check
+        run: black --check --diff .
+
       - name: Run tests
         run: |
           set -o pipefail

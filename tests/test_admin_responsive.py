@@ -182,11 +182,31 @@ def test_no_fixed_pixel_width_outside_a_media_query(T, monkeypatch):
     """
     css = _rendered_css(T, monkeypatch)
 
-    offenders = re.findall(r"width:\s*\d+px\s*!important", _outside_media(css))
+    # `width` and `min-width` only: both *force* a size the phone cannot
+    # afford, which is the sidebar bug. `max-width` is the opposite shape — it
+    # can only ever reduce a box, so a 400px cap is simply inert on a 375px
+    # screen, and capping is how the login page is centred without a column
+    # row. The original regex ended in `width:` and so caught all three.
+    offenders = re.findall(
+        r"(?<!max-)\bwidth:\s*\d+px\s*!important", _outside_media(css)
+    )
     assert not offenders, (
         "fixed pixel width(s) outside a media query — these apply on phones too "
         f"and fight Streamlit's own sizing: {offenders}"
     )
+
+
+@pytest.mark.parametrize("T", LANGS, ids=["rtl", "ltr"])
+def test_the_fixed_width_guard_still_catches_both_forcing_shapes(T, monkeypatch):
+    """Proving the narrowing above did not hollow the guard out.
+
+    `width` was the sidebar bug; `min-width` forces the same floor by another
+    name. Only `max-width` is allowed through.
+    """
+    pattern = r"(?<!max-)\bwidth:\s*\d+px\s*!important"
+    assert re.search(pattern, "width: 280px !important")
+    assert re.search(pattern, "min-width: 280px !important")
+    assert not re.search(pattern, "max-width: 400px !important")
 
 
 @pytest.mark.parametrize("T", LANGS, ids=["rtl", "ltr"])
@@ -403,9 +423,15 @@ def test_phone_block_sets_touch_targets_and_16px_inputs(T):
     assert ".stTextInput input" in phone
     assert ".stButton button" in phone
 
-    # The base sheet has `label { display: block !important }`; a plain
-    # `display: flex` here is inert and the row centres nothing.
-    assert "display: flex !important" in phone
+    # The nav row's `display: flex !important` used to live here and no
+    # longer does: it was never phone-only, and while it was scoped to this
+    # block the desktop sidebar rendered every radio marker on its own line
+    # above its label. It now sits on the base rule in `components.py`, and
+    # `tests/test_admin_rtl.py` pins it there. This block keeps only the
+    # height, which genuinely is a phone concern.
+    assert (
+        "display: flex !important" not in phone
+    ), "the nav row's display belongs on the base rule, at every width"
 
     # The select carries its size on the inner span and input, not the
     # container, so all three have to be named or the text stays at 15px.

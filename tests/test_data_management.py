@@ -2,6 +2,7 @@
 Tests for data_management_service.py: consent tracking, data export, data deletion.
 GDPR/Israeli Privacy Law compliance functions.
 """
+
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 from bson import ObjectId
@@ -16,6 +17,7 @@ import app.services.data_management_service
 
 
 # --- record_consent ---
+
 
 @pytest.mark.asyncio
 async def test_record_consent_accept(mock_db):
@@ -50,6 +52,7 @@ async def test_record_consent_upsert(mock_db):
 
 # --- has_consent ---
 
+
 @pytest.mark.asyncio
 async def test_has_consent_none(mock_db):
     result = await has_consent("nonexistent@c.us")
@@ -58,11 +61,13 @@ async def test_has_consent_none(mock_db):
 
 @pytest.mark.asyncio
 async def test_has_consent_true(mock_db):
-    await mock_db.consent.insert_one({
-        "chat_id": "972501111111@c.us",
-        "accepted": True,
-        "timestamp": datetime.now(timezone.utc),
-    })
+    await mock_db.consent.insert_one(
+        {
+            "chat_id": "972501111111@c.us",
+            "accepted": True,
+            "timestamp": datetime.now(timezone.utc),
+        }
+    )
 
     result = await has_consent("972501111111@c.us")
     assert result is True
@@ -79,15 +84,21 @@ async def test_has_consent_false(mock_db):
 
 # --- export_user_data ---
 
+
 @pytest.mark.asyncio
 async def test_export_user_data(mock_db):
     chat_id = "972501111111@c.us"
 
-    await mock_db.users.insert_one({
-        "phone_number": "972501111111", "role": "customer",
-    })
+    await mock_db.users.insert_one(
+        {
+            "phone_number": "972501111111",
+            "role": "customer",
+        }
+    )
     await mock_db.leads.insert_one({"chat_id": chat_id, "status": "new"})
-    await mock_db.messages.insert_one({"chat_id": chat_id, "text": "hello", "role": "user"})
+    await mock_db.messages.insert_one(
+        {"chat_id": chat_id, "text": "hello", "role": "user"}
+    )
     await mock_db.consent.insert_one({"chat_id": chat_id, "accepted": True})
 
     result = await export_user_data(chat_id)
@@ -110,6 +121,7 @@ async def test_export_empty_user(mock_db):
 
 # --- delete_user_data ---
 
+
 @pytest.mark.asyncio
 async def test_delete_user_data(mock_db, monkeypatch):
     chat_id = "972509999999@c.us"  # Unique to avoid collision
@@ -124,8 +136,12 @@ async def test_delete_user_data(mock_db, monkeypatch):
     mock_state.clear_state = AsyncMock()
     mock_ctx = MagicMock()
     mock_ctx.clear_context = AsyncMock()
-    monkeypatch.setattr(app.services.data_management_service, "StateManager", mock_state)
-    monkeypatch.setattr(app.services.data_management_service, "ContextManager", mock_ctx)
+    monkeypatch.setattr(
+        app.services.data_management_service, "StateManager", mock_state
+    )
+    monkeypatch.setattr(
+        app.services.data_management_service, "ContextManager", mock_ctx
+    )
 
     result = await delete_user_data(chat_id)
 

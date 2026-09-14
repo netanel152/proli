@@ -1,8 +1,9 @@
 # Admin panel — full mobile + desktop responsive layout (plan)
 
-Status: **S1 and S2 landed (commit 3bba5b0); S3–S5 remain.** This document is the
-implementation plan behind the ticket "Admin panel: full mobile + desktop responsive
-layout". It is the spec the implementing PR is measured against; delete or fold it
+Status: **all six slices landed (S1, S2, S3, S4, S5, S6).** (S6 was not in the
+original five — see the slice for why it had to exist.) This document is the
+implementation plan behind the ticket "Admin panel: full mobile + desktop
+responsive layout". It is the spec the implementing PR is measured against; delete or fold it
 into `docs/ARCHITECTURE.md` once all slices have merged.
 
 ## Why
@@ -109,7 +110,7 @@ Each slice is independently mergeable and leaves the desktop layout pixel-identi
    outcome (full-width picker over a full-width primary button). Only change:
    `st.columns([3, 1], gap="small")` so the desktop row tightens; verify, don't rewrite.
 
-### S3 — Button rows, forms, login (`components.py`, `views/*.py`, `core/auth.py`)
+### S3 — Button rows, forms, login (`components.py`, `views/*.py`, `core/auth.py`) — done
 
 10. **Inline-row marker.** Streamlit 1.31 cannot tag a column, so add
     `mark_row_inline()` to `components.py`: it emits a zero-height
@@ -135,7 +136,7 @@ Each slice is independently mergeable and leaves the desktop layout pixel-identi
     marker so the three actions stay on one line, Cancel narrowest.
 14. **Chat bubbles** (lead detail): `.chat-bubble max-width: 75%` → `92%` at ≤ 640 px.
 
-### S4 — Tabs, tables, analytics (`components.py`, `views/*.py`)
+### S4 — Tabs, tables, analytics (`components.py`, `views/*.py`) — done
 
 15. **Tabs**: `.stTabs [data-baseweb="tab-list"] { overflow-x: auto; flex-wrap:
     nowrap; scrollbar-width: thin; -webkit-overflow-scrolling: touch }` and
@@ -157,7 +158,7 @@ Each slice is independently mergeable and leaves the desktop layout pixel-identi
     the trailing spacer only on desktop (spacer columns are hidden by Streamlit
     on mobile anyway); the prev/next row is covered by item 10.
 
-### S5 — Verification: tests, screenshot script, checklist
+### S5 — Verification: tests, screenshot script, checklist — done
 
 19. **Unit tests** — new `tests/test_admin_responsive.py` (no browser, no Streamlit
     server), in the style of `tests/test_admin_kanban.py`:
@@ -183,6 +184,96 @@ Each slice is independently mergeable and leaves the desktop layout pixel-identi
     width, so the PR can attach a ticked copy as evidence.
 22. `docs/ARCHITECTURE.md` / `CLAUDE.md` Process 3 paragraph: one sentence pointing at
     `responsive.py` as the single home of breakpoints (docs-syncer pass).
+
+### S6 — RTL correctness, the sidebar, and cross-cutting polish — done
+
+Not in the original five. It exists because S5 put the panel in a browser for the
+first time and the Hebrew rendering did not survive the look — and because
+several of the defects were in chrome no slice had been aimed at, so no slice
+would have found them.
+
+The distinction that shapes the fixes, and where each one goes:
+
+- rules that are wrong at a **width** live in `responsive.py`;
+- rules that are wrong in a **language** live in the new `rtl.py`, which
+  overrides Streamlit's and BaseWeb's own sheets where a side is baked in.
+  In LTR it emits nothing at all, which is the claim the module makes about
+  itself and the thing its test pins;
+- anything wrong in **our own** markup is fixed in place in `components.py`.
+
+23. **Streamlit chrome that ignores `direction`** (`rtl.py`): the hamburger
+    (Streamlit pins it `left`, so Hebrew opened a right-hand sidebar from the
+    opposite corner); Streamlit's own top-right toolbar, which has to move the
+    other way or the two overlap exactly; the sidebar's collapse button, pinned
+    to the sidebar's right edge — the content edge in LTR, the screen edge in
+    RTL; and the slider, whose BaseWeb thumb is positioned from a track
+    measurement taken as if the page were LTR and lands off the end of its own
+    track. The slider becomes an LTR island, the same answer the Glide data grid
+    already gets.
+24. **The sidebar itself** (`components.py`): nav rows span the sidebar rather
+    than their own text, so the selected pill stops having five different widths
+    and the tap target is the row; the row is `flex` at *every* width, not only
+    below 640px — under the base sheet's `label { display: block !important }`
+    the radio marker sat on its own line above the label, which is why every
+    desktop nav row measured 61px instead of 39px. The mobile drawer is capped so
+    a real edge of page shows behind it (Streamlit's 336px on a 375px screen
+    leaves a 39px sliver).
+25. **Our own direction-aware rules that were wrong** (`components.py`): HTML
+    tables forced `text-align: left` on Hebrew inside a right-aligned box — only
+    the Glide grid is a deliberate LTR island, and for a reason a markdown table
+    does not share; `.chat-meta` set `row-reverse` *and* inherited `direction:
+    rtl`, flipping twice and putting the speaker icon back on the left; chat
+    bubbles set `align-self` and an auto margin, which disagreed silently (the
+    margin wins); `text-transform: uppercase` and 0.03–0.05em tracking were
+    applied to Hebrew, which has no case and is drawn to sit close.
+26. **Dark mode** (`components.py`): `STATUS_COLORS_DARK` had existed since
+    PRO-46 and was read by nothing, so every pill and Kanban header stayed a pale
+    pastel on a `#0F172A` page. Both palettes are now emitted as classes with the
+    dark set behind `prefers-color-scheme`, which also required the header
+    colours to leave the inline `style` attribute they were in — an inline
+    declaration outranks any media query.
+27. **Polish that is not direction-specific** (`components.py`, `responsive.py`):
+    a `:focus-visible` ring, since the sheet styled `:hover` on everything and
+    `:focus` on nothing; `min-height` on the download and form-submit buttons,
+    the two the `.stButton` touch-target rule does not reach (both measured 38px
+    on a phone); `box-sizing` and a floor on buttons, which measured 39px and
+    41px side by side depending on whether they carried a border.
+28. **The preview grew a second page** (`scripts/admin_panel_layout_preview.py`
+    `--section widgets`): alerts, expander, form, date/number/multiselect/slider,
+    chat, HTML table, data editor, download. Every defect above is in chrome the
+    Dashboard happens not to render — a defect you cannot render is a defect you
+    cannot see.
+
+### What S3 and S4 changed against the plan above
+
+Three items were written before anything had been measured, and measuring
+changed two of them and killed a third.
+
+- **The marker goes *before* the row, not inside its first cell** (item 10).
+  A marker inside a cell earns that cell the vertical block's `1rem` gap, so
+  the two buttons of a confirm pair end up a line apart. As a preceding
+  sibling the rule reaches the row with `+`, and the marker's own container is
+  `display: none` — which also has to sit **outside** the phone media query,
+  because a zero-height flex item still earns the gap: scoped to the phone it
+  pushed the marked desktop rows down by 15, 30 and 45px.
+- **`min-width: 0` alone, not `flex: 1 1 0`** (item 10). The plan's pair would
+  have flattened `[2, 2, 1]` into thirds; clearing `min-width` and leaving
+  `flex-basis` alone keeps Cancel the narrow one. Measured at 375px: 128 /
+  128 / 59.
+- **The login page is capped on `.block-container`, not wrapped in a `<div>`**
+  (item 12). `st.markdown('<div class="login-container">')` wraps nothing —
+  Streamlit parses each markdown call on its own, so the browser closes the
+  div immediately. Measured: the container rendered 400px wide with
+  `children.length == 0` while the form sat beside it at 1100px.
+- **No `60vh` cap on the leads editor** (item 16). `st.data_editor` self-caps
+  at 402px whether it is given 30 rows or 200 — 49vh on a 375x812 phone — so
+  the planned rule could never fire. A rule that cannot fire is the shape this
+  project has already been bitten by (S6's alert accent), so there is none,
+  and `tests/test_admin_action_rows.py` records the measurement.
+- **The fixed-width guard was over-broad.** Its regex ended in `width:`, so it
+  also caught `max-width` — the opposite shape, since a cap can only reduce a
+  box and is inert below itself. Narrowed to `width` and `min-width`, with a
+  test beside it proving both forcing shapes are still caught.
 
 ## Acceptance criteria
 

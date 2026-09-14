@@ -21,9 +21,19 @@ CSS without a running panel, a database or a `.env` — the same reason
   / ``.stDateInput input`` / ``.stTimeInput input`` — text-entry controls
 * ``.stSelectbox div[data-baseweb="select"]`` — the select control
 * ``section[data-testid="stSidebar"] .stRadio > div > label`` — nav items
+* ``.stDownloadButton button`` / ``[data-testid="stFormSubmitButton"] button``
+  — the two buttons `.stButton button` does not reach
+* ``section[data-testid="stSidebar"][aria-expanded="true"]`` — the open
+  mobile drawer
 
 Breakpoints are named constants rather than repeated literals so the CSS and
 the tests cannot drift apart.
+
+Direction is a separate concern and lives in the sibling `rtl.py`: this module
+holds what changes with the *viewport*, that one holds what changes with the
+*language*. A rule that is not width-dependent does not belong here — the
+sidebar nav row's `display: flex` was scoped to the phone breakpoint for
+exactly one release, and the desktop sidebar wore the bug the whole time.
 """
 
 # Phones in portrait (375 / 390 / 430 CSS px). 640 is deliberate: it is also
@@ -157,19 +167,26 @@ def responsive_css(direction, align):
                 padding: 10px 18px;
             }}
 
-            /* `!important` is not decoration here: the base sheet sets
-               `label {{ display: block !important }}`, and an !important
-               declaration beats a plain one whatever the source order — so
-               without it the row is 44px tall with its text stuck at the top,
-               which is the half-fix that looks done. */
+            /* Only the height. The `display: flex` that used to live here
+               (and the `!important` it needs to beat the base sheet's
+               `label {{ display: block !important }}`) has moved to the base
+               sidebar-nav rule in `components.py`: it was never phone-only,
+               and while it was scoped here the desktop sidebar rendered
+               every radio marker on its own line above the text. */
             section[data-testid="stSidebar"] .stRadio > div > label {{
                 min-height: {TOUCH_TARGET_PX}px;
-                display: flex !important;
-                align-items: center;
             }}
 
+            /* One rule, not two: the touch target and the scroll-strip
+               behaviour below are the same selector, and a second block for
+               it further down is how half of it gets missed. `flex: 0 0 auto`
+               is what makes the strip overflow — without it the tabs shrink
+               to fit and there is nothing to scroll. */
             .stTabs [data-baseweb="tab"] {{
                 min-height: {TOUCH_TARGET_PX}px;
+                white-space: nowrap;
+                padding: 8px 12px;
+                flex: 0 0 auto;
             }}
 
             /* The one control the button rule misses, and the most-tapped one
@@ -177,6 +194,63 @@ def responsive_css(direction, align):
                renders it ~40px. */
             .stSelectbox div[data-baseweb="select"] > div {{
                 min-height: {TOUCH_TARGET_PX}px;
+            }}
+
+            /* Two more the `.stButton` rule does not reach, both measured at
+               38px: the download button (the base sheet gives it a smaller
+               padding of its own) and every form's submit, which Streamlit
+               puts under its own test id rather than `.stButton`. */
+            .stDownloadButton button,
+            [data-testid="stFormSubmitButton"] button {{
+                min-height: {TOUCH_TARGET_PX}px;
+                padding: 10px 18px !important;
+            }}
+
+            /* Streamlit's mobile drawer is 336px of a 375px screen, so the
+               page it is covering shows as a 39px sliver — not enough to
+               read as "the panel is still behind this", and not enough to
+               tap to dismiss. Capping it leaves a real edge of page and a
+               real target, in both languages. */
+            section[data-testid="stSidebar"][aria-expanded="true"] {{
+                width: min(320px, 85vw) !important;
+                min-width: min(320px, 85vw) !important;
+            }}
+
+            /* ---- Action rows stay horizontal (S3) ----
+               Streamlit wraps a row by putting
+               `min-width: calc(100% - 22.5px)` on every column here, and
+               nothing in the DOM says whether a row holds buttons or text
+               inputs. `mark_row_inline()` emits a hidden marker before the
+               row; clearing `min-width` on that row's columns is the whole
+               fix. `flex-basis` is deliberately left alone, so a row keeps
+               the weights it was declared with — `[2, 2, 1]` stays 2:2:1
+               rather than collapsing to thirds. */
+            [data-testid="element-container"]:has(.row-inline)
+                + [data-testid="stHorizontalBlock"]
+                > [data-testid="column"] {{
+                min-width: 0 !important;
+            }}
+
+            /* A narrow screen is where a form's padding costs the most. */
+            [data-testid="stForm"] {{
+                padding: 16px !important;
+            }}
+
+            /* A bubble at 75% of 345px is 259px, and Hebrew wraps early in
+               it. The speaker is already carried by the side and the colour. */
+            .chat-bubble {{
+                max-width: 92%;
+            }}
+
+            /* ---- The tab strip scrolls rather than wrapping (S4) ----
+               Analytics has six tabs; wrapped, they push the chart below the
+               fold and the selected one can land on a second row with no
+               indication there is one. */
+            .stTabs [data-baseweb="tab-list"] {{
+                overflow-x: auto;
+                flex-wrap: nowrap;
+                scrollbar-width: thin;
+                -webkit-overflow-scrolling: touch;
             }}
 
             /* Two metric tiles per row, and a tighter tile: five stacked
