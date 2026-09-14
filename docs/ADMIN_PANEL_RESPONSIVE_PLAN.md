@@ -1,9 +1,9 @@
 # Admin panel — full mobile + desktop responsive layout (plan)
 
-Status: **planned, not started.** This document is the implementation plan behind the
-ticket "Admin panel: full mobile + desktop responsive layout". It is the spec the
-implementing PR is measured against; delete or fold it into `docs/ARCHITECTURE.md`
-once the work has merged.
+Status: **S1 and S2 landed (commit 3bba5b0); S3–S5 remain.** This document is the
+implementation plan behind the ticket "Admin panel: full mobile + desktop responsive
+layout". It is the spec the implementing PR is measured against; delete or fold it
+into `docs/ARCHITECTURE.md` once all slices have merged.
 
 ## Why
 
@@ -65,7 +65,7 @@ explicitly so they agree with Streamlit's own toggle behaviour.
 
 Each slice is independently mergeable and leaves the desktop layout pixel-identical.
 
-### S1 — Foundation: sidebar, container, tokens (`main.py`, `components.py`, new `responsive.py`)
+### S1 — Foundation: sidebar, container, tokens (`main.py`, `components.py`, new `responsive.py`) — done
 
 1. `initial_sidebar_state="expanded"` → `"auto"`: Streamlit then expands on desktop
    and collapses to the hamburger on mobile, which is the behaviour operators expect.
@@ -82,7 +82,7 @@ Each slice is independently mergeable and leaves the desktop layout pixel-identi
    `responsive.py`, appended **last** inside `load_css`'s `<style>` so they win the
    cascade against the desktop rules above them without more `!important`.
 
-### S2 — Metric rows and the Kanban board (`components.py`, `views/home.py`, `views/analytics.py`)
+### S2 — Metric rows and the Kanban board (`components.py`, `views/home.py`, `views/analytics.py`) — done
 
 7. **Metric grid helper.** Add `render_metric_grid(items, T)` to `components.py`
    returning a `<div class="metric-grid">` of `.metric-tile` cards, styled with the

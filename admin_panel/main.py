@@ -41,7 +41,11 @@ st.set_page_config(
     page_title="Proli Admin",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="expanded",
+    # "auto", not "expanded": Streamlit then expands the sidebar on a wide
+    # screen and collapses it to the hamburger on a narrow one. Pinned to
+    # "expanded" it opened over the whole phone screen on every load, so the
+    # operator had to dismiss it before reading anything.
+    initial_sidebar_state="auto",
 )
 
 cookie_manager = get_manager()
