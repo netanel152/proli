@@ -73,7 +73,7 @@ redis-cli DEL "state:972523651414@c.us"
 |------|-----------|-------------|----------------------|--------|
 | 1 | 972523651414 | "שלום" | Consent request message (privacy policy) | State = AWAITING_CONSENT |
 | 2 | 972523651414 | "בלה בלה" | Consent request repeated | State still AWAITING_CONSENT |
-| 3 | 972523651414 | "כן" | "תודה! ספר/י לי במה אפשר לעזור?" | State = IDLE, consent saved |
+| 3 | 972523651414 | "כן" | "✅ תודה! אפשר להתחיל." | State = IDLE, consent saved |
 
 **Redis check:** `redis-cli GET "state:972523651414@c.us"` → empty/idle
 
