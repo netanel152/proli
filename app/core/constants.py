@@ -204,8 +204,21 @@ class WorkerConstants:
     # customer whose wording the parser missed was answered with the same
     # question on every message for half a day, with no exit but a reset
     # keyword nobody told them about. The trigger for this gate is a customer
-    # who already has a confirmed job and is trying to raise something else —
-    # including, since the gate sits above the emergency hoist, an emergency.
+    # who already has a confirmed job and is trying to raise something else.
+    #
+    # An emergency is *not* trapped here: `emergency_hoist` runs earlier in
+    # GUARD_CHAIN than `new_or_existing`, and AWAITING_NEW_OR_EXISTING is a
+    # member of EMERGENCY_HOLDING_STATES precisely so the hoist releases it.
+    # An ordinary second request was the one stuck for four hours.
+    #
+    # Two consequences of the shorter window, both deliberate. Expiry defaults
+    # to the "new request" branch — `new_request_prompted` is latched on the
+    # booked lead before the state is written and nothing ever clears it, so
+    # the gate is one-shot and a customer who lets it lapse is routed as a new
+    # request rather than re-asked. And `state_meta` (carrying
+    # `booked_lead_id`) keeps StateManager's fixed 4h TTL, so it outlives this
+    # state by design; its only reader is gated on the state anyway, which is
+    # the same shape PRO-119's loyalty gate already has.
     NEW_OR_EXISTING_TTL_SECONDS = 300
     PRO_APPROVAL_TTL_SECONDS = (
         3600  # 60 min — pro must approve a finalized deal within this window

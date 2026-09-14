@@ -145,14 +145,19 @@ class Messages:
         )
         # PRO-58 §7: the middle line used to read "זמן המענה הממוצע שלו הוא
         # כ-10 דקות" — a per-pro statistic, stated as fact, that nothing
-        # measures. It is replaced by something the code actually does: the
-        # PRO-56 SLA nudges the silent pro at APPROVAL_NUDGE_MINUTES and asks
-        # the customer at APPROVAL_REASSIGN_OFFER_MINUTES whether to look for
-        # someone else (Customer.REASSIGN_OFFER). No invented number, and the
-        # promise is one the scheduler keeps.
+        # measures. It is simply gone.
+        #
+        # The obvious replacement was the PRO-56 SLA's own promise ("if no
+        # answer comes I will ask whether to look for someone else"), and it was
+        # written that way first. Review found that only one of the three
+        # senders arms the state that promise depends on:
+        # admin_flow.assign_lead_to_pro never sets the customer's state at all,
+        # and monitor_service.reassign_lead clears it for a CONTACTED lead, so
+        # check_pro_approval_sla skips both on every tick. That would have been
+        # this issue's own defect, one sentence further along. What is left is
+        # true from all three senders: we will say when it is approved.
         AWAITING_APPROVAL_TRANSPARENT = (
             "✅ העברתי את הפנייה שלך ל{pro_name}.\n"
-            "אם לא תגיע תשובה, אשאל אותך אם לחפש מישהו אחר.\n"
             "אעדכן אותך כאן ברגע שהעבודה תאושר."
         )
         YOU_ARE_WELCOME = "🛠️ בכיף! אני כאן אם צריך עוד משהו."
@@ -1176,13 +1181,16 @@ class Messages:
         GENERIC_ERROR = "משהו השתבש. אפשר לנסות שוב."
         # PRO-21 — graceful throttle messages
         RATE_LIMITED = "⏳ הגיעו ממך הרבה הודעות ברצף. אפשר לנסות שוב בעוד רגע."
-        # PRO-124: the download failed, so nothing the customer just sent will
-        # reach the pro. Saying so is the whole point — silence here reads as
-        # "received". Deliberately says "הקובץ" rather than "התמונה": the fetch
-        # raised before the mime type was known, and it is as likely to have
-        # been a voice note. Infinitives, no gendered verb (style guide §2.1).
+        # PRO-124. Two word choices, both deliberate. "הקובץ" rather than
+        # "התמונה", because the fetch raises before the mime type is known and
+        # it is as likely to have been a voice note. And "לפתוח" rather than
+        # "לקבל", because the file did arrive: `media_urls` is written to the
+        # lead regardless of this failure and the pro is sent links, not bytes
+        # — so the honest claim is that we could not read it, not that it was
+        # lost. Infinitives, no gendered verb (style guide §2.1).
         MEDIA_FETCH_FAILED = (
-            "🙏 לא הצלחתי לקבל את הקובץ ששלחת.\n" "אפשר לשלוח שוב, או פשוט לתאר במילים."
+            "🙏 לא הצלחתי לפתוח את הקובץ ששלחת.\n"
+            "אפשר לשלוח שוב, או פשוט לתאר במילים."
         )
         DAILY_AI_CAP_REACHED = (
             "🙏 הגעת למכסת הפניות היומית. אפשר לנסות שוב מחר — "

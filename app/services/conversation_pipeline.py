@@ -165,24 +165,28 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     # 3. Handle Media
     media_data = None
     media_mime = None
+    media_fetch_failed = False
     if media_url:
         try:
             media_data, media_mime = await detect_and_fetch_media(media_url)
         except Exception as e:
             logger.warning(f"Media fetch failed for {mask_chat_id(chat_id)}: {e}")
-            # PRO-124: tell the customer. Until now this failed silently — the
-            # photo of the leak never reached the pro, and the customer, having
-            # seen no error, believed it had. The AI turn below still runs on
-            # whatever caption came with it.
+            # PRO-124: tell the customer. Until now this failed in silence, and
+            # silence here reads as "received".
+            #
+            # What failed is narrower than it looks, which is why the copy says
+            # "לפתוח" and not "לקבל": `media_urls` is $addToSet-ed onto the lead
+            # further down regardless of this exception, and the pro is sent
+            # *links*, never bytes (notification_service.format_media_links), so
+            # on a transient failure the file still reaches them. The casualty
+            # is this turn's multimodal AI read.
             #
             # Deliberately additive: no early return even when there is no
             # caption to act on. Returning would also skip the sticky gate,
             # which creates the CONTACTED lead for a media-only first contact —
             # a flow change this issue did not ask for.
             await whatsapp.send_message(chat_id, Messages.Errors.MEDIA_FETCH_FAILED)
-            await lead_manager.log_message(
-                chat_id, "model", Messages.Errors.MEDIA_FETCH_FAILED
-            )
+            media_fetch_failed = True  # logged after the history read, below
 
     # 4. Check for existing active lead with assigned pro (skip dispatcher if so)
     active_lead = await leads_collection.find_one(
@@ -256,6 +260,17 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         )
 
     history = await lead_manager.get_chat_history(chat_id)
+
+    # PRO-124: logged here rather than at the send site one screen above.
+    # `history` was just read and feeds this same turn's AI call, so logging the
+    # apology any earlier puts it in the window as the model's last word — and
+    # the dispatcher then reads the customer's caption as a reply *to* the
+    # apology and apologises again. The emergency ack on the fast path below is
+    # ordered after this read for the same reason.
+    if media_fetch_failed:
+        await lead_manager.log_message(
+            chat_id, "model", Messages.Errors.MEDIA_FETCH_FAILED
+        )
 
     # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
     if existing_pro and active_lead:
