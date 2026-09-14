@@ -35,7 +35,7 @@ async def test_detect_stale_lead(mock_db, monkeypatch, mock_whatsapp, mock_match
         minutes=WorkerConstants.SOS_TIMEOUT_MINUTES + 1
     )
 
-    lead_id = await mock_db.leads.insert_one(
+    await mock_db.leads.insert_one(
         {
             "chat_id": "customer@c.us",
             "status": LeadStatus.NEW,
@@ -56,7 +56,7 @@ async def test_detect_stale_lead(mock_db, monkeypatch, mock_whatsapp, mock_match
 
         # Verify it found stale leads
         mock_logger.warning.assert_any_call(
-            f"🕵️ [SOS Healer] Found 1 stale leads. Attempting reassignment..."
+            "🕵️ [SOS Healer] Found 1 stale leads. Attempting reassignment..."
         )
 
         # Verify customer notification

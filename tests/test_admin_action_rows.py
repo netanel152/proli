@@ -24,7 +24,6 @@ on top, which is the single most dangerous shape a phone layout can take.
 """
 
 import ast
-import re
 from pathlib import Path
 
 import pytest

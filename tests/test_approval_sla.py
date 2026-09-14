@@ -21,6 +21,8 @@ from unittest.mock import patch, AsyncMock, MagicMock
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
 from app.services.monitor_service import check_pro_approval_sla
+import app.services.workflow_service
+from app.services.workflow_service import process_incoming_message
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +281,6 @@ async def test_customer_not_in_awaiting_approval_state_is_skipped(
 # ---------------------------------------------------------------------------
 # Customer 1/2 reply handling in workflow_service (AWAITING_PRO_APPROVAL branch)
 # ---------------------------------------------------------------------------
-
-import app.services.workflow_service
-from app.services.workflow_service import process_incoming_message
 
 
 @pytest.fixture

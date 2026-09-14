@@ -121,7 +121,7 @@ async def world(
     """
     # Imported eagerly (not only for the names used below) so every module holding
     # a collection reference is in sys.modules before the rebinding sweep in step 5.
-    import app.scheduler as scheduler_module
+    import app.scheduler  # noqa: F401
     import app.services.admin_flow  # noqa: F401
     import app.services.customer_flow as customer_flow
     import app.services.data_management_service  # noqa: F401
