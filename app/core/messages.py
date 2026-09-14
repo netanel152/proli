@@ -11,6 +11,8 @@ shape what you see below, in the guide's numbering:
   messages agree. Structured cards use bold field labels (§5), not one emoji
   per row.
 * §6 RTL safety — Latin/numeric placeholders end-of-line or on their own line.
+* §7 no unmeasured claims — never state a number or a timeframe the code does
+  not produce. Say what the system will do instead (PRO-58).
 * §8 the product is **פרולי** in Hebrew copy; no trailing whitespace.
 
 Menus are text-only by hard product rule (see CLAUDE.md): nothing here is ever
@@ -141,9 +143,16 @@ class Messages:
             "👍 העברתי את הפרטים ואת המדיה לאיש המקצוע לאישור.\n"
             "אעדכן אותך ממש בקרוב."
         )
+        # PRO-58 §7: the middle line used to read "זמן המענה הממוצע שלו הוא
+        # כ-10 דקות" — a per-pro statistic, stated as fact, that nothing
+        # measures. It is replaced by something the code actually does: the
+        # PRO-56 SLA nudges the silent pro at APPROVAL_NUDGE_MINUTES and asks
+        # the customer at APPROVAL_REASSIGN_OFFER_MINUTES whether to look for
+        # someone else (Customer.REASSIGN_OFFER). No invented number, and the
+        # promise is one the scheduler keeps.
         AWAITING_APPROVAL_TRANSPARENT = (
             "✅ העברתי את הפנייה שלך ל{pro_name}.\n"
-            "זמן המענה הממוצע שלו הוא כ-10 דקות.\n"
+            "אם לא תגיע תשובה, אשאל אותך אם לחפש מישהו אחר.\n"
             "אעדכן אותך כאן ברגע שהעבודה תאושר."
         )
         YOU_ARE_WELCOME = "🛠️ בכיף! אני כאן אם צריך עוד משהו."
