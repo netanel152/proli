@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, timedelta, time
 from admin_panel.core.utils import users_collection, slots_collection
 from admin_panel.core.schedule_queries import EDITOR_COLUMNS, save_daily_schedule
-from admin_panel.ui.components import render_flash, set_flash
+from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from app.core.config import settings
 import pytz
 
@@ -194,6 +194,7 @@ def view_schedule_editor(T):
                 )
 
                 st.markdown("")
+                mark_row_inline()
                 c_gen, c_clear = st.columns(2)
 
                 if c_gen.button(
@@ -253,7 +254,8 @@ def view_schedule_editor(T):
                             "Delete all future non-booked slots in range?",
                         )
                     )
-                    cy, cn, _ = st.columns([1, 1, 4])
+                    mark_row_inline()
+                    cy, cn = st.columns(2)
                     if cy.button(T["confirm_yes"], key="confirm_clear_yes"):
                         res = slots_collection.delete_many(
                             {

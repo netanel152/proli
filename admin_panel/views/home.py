@@ -9,6 +9,7 @@ from admin_panel.core.utils import (
     send_completion_check_sync,
 )
 from admin_panel.ui.components import (
+    mark_row_inline,
     render_chat_bubble,
     render_flash,
     render_kanban_column,
@@ -1213,6 +1214,7 @@ def _render_selected_lead_actions(
         # Delete confirmation
         if st.session_state.get(f"confirm_delete_{k}"):
             st.warning(T.get("confirm_delete", "Are you sure?"))
+            mark_row_inline()
             cy, cn = st.columns(2)
             if cy.button(T["confirm_yes"], key=f"yes_del_{k}"):
                 leads_collection.delete_one({"_id": ObjectId(lid)})

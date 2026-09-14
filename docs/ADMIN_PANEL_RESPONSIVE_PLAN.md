@@ -1,6 +1,6 @@
 # Admin panel — full mobile + desktop responsive layout (plan)
 
-Status: **S1, S2, S5 and S6 landed; S3 and S4 remain.** (S6 was not in the
+Status: **all six slices landed (S1, S2, S3, S4, S5, S6).** (S6 was not in the
 original five — see the slice for why it had to exist.) This document is the
 implementation plan behind the ticket "Admin panel: full mobile + desktop
 responsive layout". It is the spec the implementing PR is measured against; delete or fold it
@@ -110,7 +110,7 @@ Each slice is independently mergeable and leaves the desktop layout pixel-identi
    outcome (full-width picker over a full-width primary button). Only change:
    `st.columns([3, 1], gap="small")` so the desktop row tightens; verify, don't rewrite.
 
-### S3 — Button rows, forms, login (`components.py`, `views/*.py`, `core/auth.py`)
+### S3 — Button rows, forms, login (`components.py`, `views/*.py`, `core/auth.py`) — done
 
 10. **Inline-row marker.** Streamlit 1.31 cannot tag a column, so add
     `mark_row_inline()` to `components.py`: it emits a zero-height
@@ -136,7 +136,7 @@ Each slice is independently mergeable and leaves the desktop layout pixel-identi
     marker so the three actions stay on one line, Cancel narrowest.
 14. **Chat bubbles** (lead detail): `.chat-bubble max-width: 75%` → `92%` at ≤ 640 px.
 
-### S4 — Tabs, tables, analytics (`components.py`, `views/*.py`)
+### S4 — Tabs, tables, analytics (`components.py`, `views/*.py`) — done
 
 15. **Tabs**: `.stTabs [data-baseweb="tab-list"] { overflow-x: auto; flex-wrap:
     nowrap; scrollbar-width: thin; -webkit-overflow-scrolling: touch }` and
@@ -243,6 +243,37 @@ The distinction that shapes the fixes, and where each one goes:
     chat, HTML table, data editor, download. Every defect above is in chrome the
     Dashboard happens not to render — a defect you cannot render is a defect you
     cannot see.
+
+### What S3 and S4 changed against the plan above
+
+Three items were written before anything had been measured, and measuring
+changed two of them and killed a third.
+
+- **The marker goes *before* the row, not inside its first cell** (item 10).
+  A marker inside a cell earns that cell the vertical block's `1rem` gap, so
+  the two buttons of a confirm pair end up a line apart. As a preceding
+  sibling the rule reaches the row with `+`, and the marker's own container is
+  `display: none` — which also has to sit **outside** the phone media query,
+  because a zero-height flex item still earns the gap: scoped to the phone it
+  pushed the marked desktop rows down by 15, 30 and 45px.
+- **`min-width: 0` alone, not `flex: 1 1 0`** (item 10). The plan's pair would
+  have flattened `[2, 2, 1]` into thirds; clearing `min-width` and leaving
+  `flex-basis` alone keeps Cancel the narrow one. Measured at 375px: 128 /
+  128 / 59.
+- **The login page is capped on `.block-container`, not wrapped in a `<div>`**
+  (item 12). `st.markdown('<div class="login-container">')` wraps nothing —
+  Streamlit parses each markdown call on its own, so the browser closes the
+  div immediately. Measured: the container rendered 400px wide with
+  `children.length == 0` while the form sat beside it at 1100px.
+- **No `60vh` cap on the leads editor** (item 16). `st.data_editor` self-caps
+  at 402px whether it is given 30 rows or 200 — 49vh on a 375x812 phone — so
+  the planned rule could never fire. A rule that cannot fire is the shape this
+  project has already been bitten by (S6's alert accent), so there is none,
+  and `tests/test_admin_action_rows.py` records the measurement.
+- **The fixed-width guard was over-broad.** Its regex ended in `width:`, so it
+  also caught `max-width` — the opposite shape, since a cap can only reduce a
+  box and is inert below itself. Narrowed to `width` and `min-width`, with a
+  test beside it proving both forcing shapes are still caught.
 
 ## Acceptance criteria
 
