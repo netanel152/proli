@@ -52,7 +52,7 @@ MARKED_ROWS = {
     "views/professionals.py": 3,  # delete confirm, reject confirm, geo save row
     "views/schedule.py": 2,  # generate/clear, clear-day confirm
     "views/home.py": 1,  # delete-lead confirm
-    "views/settings.py": 1,  # audit pagination
+    "views/settings.py": 2,  # audit pagination, delete-admin confirm
 }
 
 

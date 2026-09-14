@@ -31,6 +31,8 @@ with no `.env` and no database.
 
 from pathlib import Path
 
+import re
+
 import pytest
 
 from admin_panel.core.config import TRANS
@@ -424,20 +426,25 @@ def test_mobile_drawer_leaves_the_page_visible(T, monkeypatch):
 # --- The label rule is scoped, so control rows keep their flex ------------
 
 
+_CSS_COMMENT = re.compile(r"/\*.*?\*/", re.S)
+
+
 def _rules(css):
     """``[(selector, body), ...]`` for every rule in the sheet, media blocks
-    descended into, so a rule can be judged by its own selector text."""
+    descended into, so a rule can be judged by its own selector text.
+
+    Comments are stripped *first*: the sheet's prose quotes CSS (``label {
+    display: block !important }`` is in a comment above the caption rule),
+    and a brace inside a comment would otherwise become a phantom rule and
+    glue the comment's tail onto the next real selector."""
+    css = _CSS_COMMENT.sub("", css)
     out = []
     i = 0
     while True:
         j = css.find("{", i)
         if j < 0:
             return out
-        head = css[max(css.rfind("}", 0, j), css.rfind("{", 0, j)) + 1 : j]
-        while "/*" in head:  # the comment above a rule is not its selector
-            before, _, rest = head.partition("/*")
-            head = before + rest.partition("*/")[2]
-        head = head.strip()
+        head = css[max(css.rfind("}", 0, j), css.rfind("{", 0, j)) + 1 : j].strip()
         if head.startswith("@"):
             i = j + 1  # a media query: keep walking into its rules
             continue
@@ -448,7 +455,7 @@ def _rules(css):
 
 @pytest.mark.parametrize("T", LANGS, ids=["rtl", "ltr"])
 def test_label_typography_is_scoped_to_widget_captions(T, monkeypatch):
-    """`label {{ display: block !important }}` used to apply to every label —
+    """`label { display: block !important }` used to apply to every label —
     including the ones BaseWeb lays out as a *row*: the sidebar radio (which S6
     had to override with a second `!important`), and every checkbox and toggle,
     whose box and text then stacked one above the other (46px tall, measured,

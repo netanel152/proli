@@ -363,14 +363,11 @@ def load_css(lang_code, T):
                the text rather than the row the operator aims at. */
             width: 100%;
             box-sizing: border-box;
-            /* `!important` because the base `label` rule above sets
-               `display: block !important`, and an important declaration
-               beats a plain one whatever the source order. Under `block` the
-               radio marker fell onto its own line *above* the text, which is
-               why every nav row measured 61px tall instead of 39px. The
-               phone breakpoint already forced flex here; the bug was that
-               nothing did at any wider width, so the desktop sidebar — the
-               one an operator looks at all day — was the broken one. */
+            /* Kept `!important` as belt-and-braces. The caption rule above
+               is scoped to `stWidgetLabel` now, so nothing forces this label
+               to `block` any more — but when it did (S6), the radio marker
+               fell onto its own line above the text and every nav row
+               measured 61px instead of 39px at every width but the phone. */
             display: flex !important;
             align-items: center;
             gap: 8px;
@@ -601,11 +598,12 @@ def load_css(lang_code, T):
         }}
 
         /* ===== BUTTONS ===== */
-        /* `st.form_submit_button` renders under `stFormSubmitButton`, not
-           `.stButton`, with `kind="primaryFormSubmit"` rather than
-           `kind="primary"` — so the login button was the only primary in the
-           panel wearing Streamlit's default red (#FF4B4B, measured) while
-           every other one was the blue gradient below. One button, one look. */
+        /* `st.form_submit_button` carries `kind="primaryFormSubmit"` rather
+           than `kind="primary"`, so the `[kind]` variants below missed it and
+           the login button was the one primary in the panel wearing
+           Streamlit's default red (#FF4B4B, measured). On 1.31.1 its wrapper
+           still has the `stButton` class, so naming `stFormSubmitButton` on
+           the base rule is forward-compat for versions that drop it. */
         .stButton button,
         [data-testid="stFormSubmitButton"] button {{
             /* Pinned, not inherited: the per-language arrow in
@@ -1135,14 +1133,6 @@ def load_css(lang_code, T):
             font-size: 3rem;
             margin-bottom: 0.5rem;
             display: block;
-        }}
-
-        /* ===== CHECKBOX TOGGLE STYLE ===== */
-        .stCheckbox label span {{
-            text-transform: none !important;
-            letter-spacing: normal !important;
-            font-size: 0.9rem !important;
-            color: var(--text-main) !important;
         }}
 
         /* ===== RTL / DIRECTION OVERRIDES ===== */

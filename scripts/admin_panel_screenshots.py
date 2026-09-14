@@ -81,6 +81,10 @@ ICON_FONT_CLASS_CSS = """
   word-wrap: normal;
   direction: ltr;
   -webkit-font-smoothing: antialiased;
+  /* The panel links FILL=1 (filled glyphs); a variable-font file renders
+     FILL=0 by default. Advance widths are identical either way, so this is
+     about the look matching production, not the layout. */
+  font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
 }
 """
 
@@ -232,7 +236,12 @@ def main():
 
     langs = args.lang or LANGS
     sections = args.section or SECTIONS
-    extra_css = _icon_font_css(args.icon_font) if args.icon_font else None
+    extra_css = None
+    if args.icon_font:
+        if not Path(args.icon_font).is_file():
+            print(f"--icon-font: no such file: {args.icon_font}", file=sys.stderr)
+            return 2
+        extra_css = _icon_font_css(args.icon_font)
     exe = PINNED_CHROMIUM if Path(PINNED_CHROMIUM).exists() else None
     if exe is None and not shutil.which("chromium"):
         print(

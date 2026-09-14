@@ -315,6 +315,48 @@ defects, one root cause, and a review tool that had been lying.
   and nothing clips. `scripts/admin_panel_screenshots.py --icon-font
   <file.woff2>` embeds a local copy so the evidence shows the real thing.
 
+The same sweep put the `ux-reviewer` agent over every view; it found four
+defects that no screenshot could show, all fixed in the same PR and each
+pinned by a source-level guard in `tests/test_admin_panel_invariants.py`:
+
+- **The weekly-template widgets were keyed without the pro** (`tmpl_en_{day}`,
+  `template_duration`). A keyed widget ignores `value=` once its key is in
+  session state and tab bodies always run, so after switching pro the panel
+  kept showing the previous pro's hours — and Save wrote them onto the new
+  one. Keys carry `pro['_id']` now, the daily editor's own precedent.
+- **The assign options were a bare `users_collection.find()`** — customers and
+  pros still `pending_approval` were offered in the table's Professional
+  column and the Edit Lead form, the exact leak `APPROVED_PRO_FILTER` was
+  extracted to close on the assignment strip. Options come from the filter;
+  display names still cover every professional, so a lead held by a paused
+  pro keeps showing who holds it.
+- **A blank `business_name` collapsed distinct pros onto one entry.**
+  Self-onboarding writes `""`, and `dict.get(k, default)` never fires on it,
+  so unnamed pros rendered as a bold nothing on their card, a blank row in the
+  dropdown, and — keyed by that name — one dict entry between them, so picking
+  the blank row wrote whichever document Mongo returned last, and the schedule
+  selector lost all but one of them. `labels.pro_option_label` /
+  `pro_option_map` give every pro a label that is never blank and never shared.
+- **Admin role and delete flashed success over a no-op**, and Delete wrote on
+  the first click with no confirm, where deleting a lead or a pro asks. Both
+  gated on the write's count; delete is the same two-step the others use.
+
+Smaller, from the same review: Approve runs its geocode under a spinner (a
+second click re-sent the pro's approval message); Create Lead flashes and
+reruns like every other mutation (it left the pre-create board on screen and
+the form filled, which read as "it did not work"); the logout button is a
+plain `st.button` so it lands in its sidebar column instead of the sidebar
+root; login no longer sleeps a second for a message the rerun discarded;
+three Hebrew-only fallbacks became English; and an empty-state chain that
+could end in `""` ends in a sentence.
+
+**Left as design decisions rather than made:** the lead action column at a
+quarter of the width beside a read-only chat log, a six-click status change
+from the Board, inert Kanban cards with the action surface below the whole
+board, and the role selectbox one column away from its Update button. Each
+changes the information hierarchy the operator has learned; they are recorded
+in the PR for the operator to choose.
+
 ## Acceptance criteria
 
 Checked in both `HE` (RTL) and `EN` (LTR), light and dark, at 375×812, 768×1024,

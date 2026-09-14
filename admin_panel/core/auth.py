@@ -331,8 +331,10 @@ def check_password(cookies):
                             "proli_auth_token", secure_token, expires_at=expires
                         )
 
-                    st.success(T_auth.get("connected", "Connected!"))
-                    time.sleep(1)
+                    # No `st.success` + `time.sleep(1)`: the rerun discards
+                    # the message before it paints, so the second was pure
+                    # latency on the one interaction every session starts with.
+                    # The dashboard appearing is the confirmation.
                     st.rerun()
                 else:
                     _record_failed_attempt(identifier)
@@ -343,7 +345,11 @@ def check_password(cookies):
 
 
 def logout(cookie_manager, T):
-    if st.sidebar.button(T["disconnect"]):
+    # Plain `st.button`, not `st.sidebar.button`: `main.py` calls this inside
+    # the sidebar's brand/logout column, and an explicit `st.sidebar.*` call
+    # appends to the sidebar root instead — the column stayed empty and the
+    # button rendered full-width under the brand.
+    if st.button(T["disconnect"]):
         T_logout = TRANS.get(st.session_state.get("lang_code", "HE"), TRANS["HE"])
         st.toast(T_logout.get("disconnecting", "Disconnecting..."))
 

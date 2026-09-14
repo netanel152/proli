@@ -565,8 +565,9 @@ def test_the_preview_reads_only_keys_the_panel_defines():
     from admin_panel.core.config import TRANS
 
     source = _source("scripts", "admin_panel_layout_preview.py")
-    keys = set(re.findall(r'T\.get\(\s*"([^"]+)"', source))
-    keys |= set(re.findall(r'T\["([^"]+)"\]', source))
+    # Both quote styles: a lookup inside an f-string is forced to single quotes.
+    keys = {m.group(2) for m in re.finditer(r"""T\.get\(\s*(['"])([^'"]+)\1""", source)}
+    keys |= {m.group(2) for m in re.finditer(r"""T\[(['"])([^'"]+)\1\]""", source)}
     assert len(keys) > 40, "the key scan found almost nothing — regex drift?"
     for lang in ("HE", "EN"):
         missing = sorted(k for k in keys if k not in TRANS[lang])

@@ -30,6 +30,7 @@ from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import (
     LEAD_STATUSES,
     lead_status_label,
+    pro_option_map,
     status_by_label,
     status_label_map,
 )
@@ -490,6 +491,7 @@ def view_leads_dashboard(T):
     # `set_flash` writes a `(level, message)` tuple — one key holding two shapes
     # turns the next confirmation into an AttributeError painted over the page.
     render_flash("assign_flash")
+    render_flash("create_lead_flash")
 
     # Tabs: Kanban | Table | Create
     tab_kanban, tab_table, tab_create = st.tabs(
@@ -501,15 +503,25 @@ def view_leads_dashboard(T):
     )
 
     # --- Shared Data ---
-    all_pros = list(users_collection.find())
-    pro_map_id_to_name = {
-        p["_id"]: p.get("business_name", T["unnamed_pro"]) for p in all_pros
+    # Every professional, for *display*: a lead whose pro has since been paused
+    # or is still awaiting approval must keep showing who holds it. Labels come
+    # from `pro_option_map`, so an unnamed pro is never a blank row and two pros
+    # with one name never collapse onto one entry.
+    all_pros = list(users_collection.find({"role": "professional"}))
+    label_to_pro = pro_option_map(T, all_pros)
+    pro_map_id_to_name = {p["_id"]: label for label, p in label_to_pro.items()}
+    # Only eligible pros are *offered*: the table's Professional column and
+    # the Edit Lead form both write `pro_id` from these, and a bare
+    # `users_collection.find()` here used to offer customers and pros still
+    # `pending_approval` — the exact leak `APPROVED_PRO_FILTER` was extracted
+    # to close on the assignment strip (PRO-188).
+    eligible_ids = {
+        p["_id"] for p in users_collection.find(APPROVED_PRO_FILTER, {"_id": 1})
     }
     pro_map_name_to_id = {
-        p.get("business_name", T["unnamed_pro"]): p["_id"] for p in all_pros
+        label: p["_id"] for label, p in label_to_pro.items() if p["_id"] in eligible_ids
     }
-    pro_names = [p.get("business_name", T["unnamed_pro"]) for p in all_pros]
-    pro_names.insert(0, T["unknown_pro"])
+    pro_names = [T["unknown_pro"], *pro_map_name_to_id]
 
     # PRO-61: the frame carries localized status labels, so it is cached per
     # language — `lang` exists only to key the cache (no leading underscore:
@@ -885,10 +897,7 @@ def view_leads_dashboard(T):
                     format_func=lambda x: lead_status_label(T, x),
                 )
             with c2:
-                pro_names_create = [
-                    p.get("business_name", T["unnamed_pro"]) for p in all_pros
-                ]
-                pro_names_create.insert(0, T["unknown_pro"])
+                pro_names_create = list(pro_names)
                 selected_pro_name = st.selectbox(
                     T.get("input_pro", "Assign Professional"), options=pro_names_create
                 )
@@ -934,10 +943,17 @@ def view_leads_dashboard(T):
                             "create_lead", {"chat_id": chat_id, "status": new_status}
                         )
                         logger.info(f"Admin manually created lead for {chat_id}")
-                        st.success(
-                            T.get("create_lead_success", "Lead created successfully!")
+                        # Flash + rerun, like every other mutation here: the
+                        # board, the tiles and the table were rendered *above*
+                        # this form in the same run, so without a rerun the new
+                        # lead is nowhere on screen and the form still holds
+                        # what was typed — which reads as "it did not work".
+                        set_flash(
+                            "create_lead_flash",
+                            T.get("create_lead_success", "Lead created successfully!"),
                         )
                         st.cache_data.clear()
+                        st.rerun()
                     except Exception as e:
                         st.error(_t(T, "error_create_lead", "Failed: {error}", error=e))
 
@@ -1076,7 +1092,7 @@ def _render_selected_lead_actions(
                         "" if raw_name is None or pd.isna(raw_name) else str(raw_name)
                     )
                     new_client_name = st.text_input(
-                        T.get("client_name_label", "שם לקוח"),
+                        T.get("client_name_label", "Client Name"),
                         value=current_name,
                         max_chars=40,
                         # Describes the fallback rather than restating the
@@ -1102,7 +1118,7 @@ def _render_selected_lead_actions(
                     # to dial it. st.code carries a copy button, and nothing
                     # about it invites typing — which documents "read-only"
                     # more honestly than a greyed box with a hover tooltip.
-                    st.caption(T.get("phone_number_label", "מספר טלפון"))
+                    st.caption(T.get("phone_number_label", "Phone Number"))
                     st.code(
                         strip_suffix(selected_lead.get("_chat_id", "")),
                         language=None,
@@ -1115,7 +1131,7 @@ def _render_selected_lead_actions(
                     )
                     current_details = str(selected_lead.get("details_summary") or "")
                     new_details = st.text_area(
-                        T.get("details_label", "פרטי הבקשה"),
+                        T.get("details_label", "Request Details"),
                         value=current_details,
                     )
 

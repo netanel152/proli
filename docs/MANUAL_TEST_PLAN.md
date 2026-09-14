@@ -598,7 +598,23 @@ light and dark:
 - [ ] No confirm row shows an empty third column or a band of nothing beside it.
 - [ ] Login: full width on a phone, 400px centred on desktop, with no empty
       columns above or beside the form. Its button is the panel's blue — the same
-      colour as every other primary button — not Streamlit's red.
+      colour as every other primary button — not Streamlit's red. Logging in lands
+      on the dashboard with no one-second pause.
+- [ ] Sidebar: the Logout button sits **beside** the "⚡ Proli" brand, in its own
+      column, not full-width underneath it.
+- [ ] Schedule → Weekly template: set pro A's hours, switch the selector to pro B —
+      B's own hours appear (not A's), and Save writes to B. Save on a pro whose
+      document is gone warns instead of saying "saved".
+- [ ] Dashboard → Table and Edit Lead: the Professional options list only active,
+      approved pros (no customers, nobody awaiting approval); a lead held by a
+      paused pro still shows that pro's name.
+- [ ] An unnamed pro (self-onboarded, blank business name) shows as
+      "ללא שם · <last 4 of phone>" on its card, in the assign dropdown and in the
+      schedule selector — never a blank row, and two unnamed pros stay distinct.
+- [ ] Settings → Admins: Update with the same role warns "unchanged"; Delete asks
+      Yes/No on one row before writing. Approve on a pending pro shows a spinner.
+- [ ] Dashboard → Create: after Create the page reruns onto the board with a
+      success flash and the new lead visible; the form is empty.
 - [ ] Analytics' six tabs scroll sideways on one line; the selected tab is visible
       and the strip never wraps to a second row.
 - [ ] Metric tiles: 2 per row on a phone, 3 on a tablet, 5 on desktop, same order, and

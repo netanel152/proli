@@ -124,7 +124,9 @@ def render_pro_list(T):
                 verified_badge = (
                     f" · ✅ {T['verified']}" if p.get("is_verified") else ""
                 )
-                st.markdown(f"**{p['business_name']}** · {status_txt}{verified_badge}")
+                st.markdown(
+                    f"**{p.get('business_name') or T['unnamed_pro']}** · {status_txt}{verified_badge}"
+                )
 
                 pro_type = profession_label(T, p.get("type", "general"))
                 st.caption(f"{pro_type} · {p.get('phone_number', '')}")
@@ -441,7 +443,14 @@ def render_pending_approvals(T):
                         use_container_width=True,
                     ):
                         try:
-                            _check_then_approve(p, T)
+                            # One geocoder round-trip per service area with
+                            # nothing changing on screen invites a second
+                            # click — and a second click re-runs the write and
+                            # sends the pro a second approval message.
+                            with st.spinner(
+                                T.get("approve_in_progress", "Checking service areas…")
+                            ):
+                                _check_then_approve(p, T)
                         except Exception as e:
                             st.error(T["error_approve_pro"].replace("{error}", str(e)))
 
