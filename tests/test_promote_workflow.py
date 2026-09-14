@@ -5,6 +5,11 @@ replaced by `skip_reason` (a string that must actually say something) plus an
 unconditional "Resolve the verification decision" step (`id: gate`) that both
 verification steps now gate on.
 
+Also covers the "Assert dev's CI is green" step's three-way split of what
+used to be one collapsed annotation for "no pytest check", "pytest still
+running" and "pytest completed but failed" — see the section comment above
+`assert_green_script` below for the incident that motivated it.
+
 Two kinds of test here:
 
 - Behavioural: the `gate` step's shell is extracted verbatim from the parsed
@@ -209,6 +214,169 @@ def test_gate_step_delimiter_injection_does_not_forge_a_verify_output(
     assert "verify=true" in output.get("reason", "")
 
 
+# --- Behavioural: run the real "Assert dev's CI is green" shell ---
+#
+# Pins the three-way split introduced after the 09-14 01:42 run (34796766425):
+# a still-running `pytest` check used to print the exact same annotation as a
+# commit that was never tested at all, which is how "wait ninety seconds" got
+# read as "the tests are broken". The step now tells apart (1) no `pytest`
+# check row, (2) a `pytest` row that isn't `completed` yet, and (3) a
+# `pytest` row that completed without `success` — with distinct wording for
+# each — and it must not block on its own still-running run (`SELF`).
+
+
+def _write_gh_stub(bin_dir, check_runs_lines):
+    """Write an executable `gh` on PATH that ignores its arguments and prints
+    the canned check-runs table. The real step formats its `check-runs`
+    response with `gh api --jq '.check_runs[] | "\\(.name)|\\(.status)|\\(.conclusion)"'`
+    — the stub skips the API call and `--jq` entirely and just emits rows
+    already in that shape, which is all the script ever sees."""
+    canned_path = bin_dir / "canned_check_runs.txt"
+    canned_path.write_text("\n".join(check_runs_lines), encoding="utf-8")
+    gh_path = bin_dir / "gh"
+    gh_path.write_text(
+        "#!/usr/bin/env bash\n" f'cat "{canned_path}"\n',
+        encoding="utf-8",
+    )
+    gh_path.chmod(0o755)
+
+
+def _run_assert_green(script_path, tmp_path, check_runs_lines, self_name="promote"):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _write_gh_stub(bin_dir, check_runs_lines)
+
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["SHA"] = "deadbeefcafe"
+    env["SELF"] = self_name
+    env["REPO"] = "acme/proli"
+
+    return subprocess.run(
+        ["bash", str(script_path)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+
+
+@pytest.fixture(scope="module")
+def assert_green_script(tmp_path_factory):
+    doc = _load_workflow()
+    step = _find_step_by_name(doc, "Assert dev's CI is green")
+    script_dir = tmp_path_factory.mktemp("pro-assert-green")
+    script_path = script_dir / "assert_green.sh"
+    script_path.write_text(step["run"], encoding="utf-8")
+    return script_path
+
+
+@pytest.mark.parametrize(
+    "check_runs, self_name, expected_exit, expected_substring",
+    [
+        pytest.param(
+            ["pytest|completed|success", "verify|completed|success"],
+            "promote",
+            0,
+            None,
+            id="pytest-green-plus-unrelated-green",
+        ),
+        pytest.param(
+            ["verify|completed|success"],
+            "promote",
+            1,
+            "was never tested",
+            id="no-pytest-row-at-all",
+        ),
+        pytest.param(
+            ["pytest|in_progress|"],
+            "promote",
+            1,
+            "still running",
+            id="pytest-row-not-completed-yet",
+        ),
+        pytest.param(
+            ["pytest|completed|failure"],
+            "promote",
+            1,
+            "completed without passing",
+            id="pytest-completed-not-success",
+        ),
+        pytest.param(
+            [],
+            "promote",
+            1,
+            "was never tested",
+            id="no-checks-reported-at-all",
+        ),
+        pytest.param(
+            ["promote|in_progress|", "pytest|completed|success"],
+            "promote",
+            0,
+            None,
+            id="this-jobs-own-in-progress-run-does-not-block-itself",
+        ),
+        pytest.param(
+            ["pytest|completed|success", "flake8|completed|failure"],
+            "promote",
+            1,
+            "failing completed check",
+            id="pytest-green-but-another-check-failed",
+        ),
+    ],
+)
+def test_assert_dev_ci_green_step(
+    assert_green_script,
+    tmp_path,
+    check_runs,
+    self_name,
+    expected_exit,
+    expected_substring,
+):
+    proc = _run_assert_green(
+        assert_green_script, tmp_path, check_runs, self_name=self_name
+    )
+
+    assert (
+        proc.returncode == expected_exit
+    ), f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    if expected_substring is not None:
+        assert expected_substring in proc.stdout
+
+
+def test_assert_dev_ci_green_failure_annotations_are_mutually_distinct(
+    assert_green_script, tmp_path
+):
+    # The whole point of the fix: three genuinely different situations used to
+    # share one sentence. If a future edit re-collapses any two of them —
+    # even by making one a near-duplicate of another — this must fail.
+    cases = [
+        ("never_tested", []),
+        ("still_running", ["pytest|in_progress|"]),
+        ("not_passing", ["pytest|completed|failure"]),
+    ]
+    annotations = {}
+    for case_id, check_runs in cases:
+        case_dir = tmp_path / case_id
+        case_dir.mkdir()
+        proc = _run_assert_green(assert_green_script, case_dir, check_runs)
+        assert proc.returncode == 1, f"{case_id}: {proc.stdout!r} {proc.stderr!r}"
+        error_lines = [
+            line
+            for line in proc.stdout.splitlines()
+            if line.startswith("::error::dev@")
+        ]
+        assert len(error_lines) == 1, proc.stdout
+        annotations[case_id] = error_lines[0]
+
+    values = list(annotations.values())
+    assert len(set(values)) == len(values), annotations
+    for i, a in enumerate(values):
+        for j, b in enumerate(values):
+            if i != j:
+                assert a not in b, f"{annotations} — {a!r} is a substring of {b!r}"
+
+
 # --- Structural: pin the shape of the fix so it can't quietly regress ---
 
 
@@ -245,6 +413,23 @@ def test_verification_steps_gate_towards_verifying_not_towards_skipping(step_nam
     # still verify, which is the whole point of the fail-towards-verifying
     # direction. Pinned explicitly so a future edit can't flip it back.
     assert "== 'true'" not in condition
+
+
+def test_assert_ci_green_step_passes_refs_via_env_not_interpolation():
+    # This is what keeps the behavioural tests above possible: extracting a
+    # `run:` body verbatim and executing it only pins real behaviour if the
+    # body has no `${{ }}` left for the YAML/Actions layer to substitute
+    # before bash ever sees it. A later edit that inlines one of these back
+    # into the script text would silently make every test above a paraphrase
+    # again.
+    doc = _load_workflow()
+    step = _find_step_by_name(doc, "Assert dev's CI is green")
+    env = step.get("env", {})
+
+    assert env.get("SHA") == "${{ steps.refs.outputs.dev }}"
+    assert env.get("SELF") == "${{ github.job }}"
+    assert env.get("REPO") == "${{ github.repository }}"
+    assert "${{" not in step["run"]
 
 
 def test_gate_step_has_no_if_key_or_verification_can_silently_disable_itself():
