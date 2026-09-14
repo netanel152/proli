@@ -2,7 +2,7 @@ import json
 from app.core.redis_client import get_redis_client
 from app.core.logger import logger
 from app.core.constants import UserStates
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 
 class StateManager:

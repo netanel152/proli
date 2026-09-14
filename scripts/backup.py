@@ -14,7 +14,6 @@ Usage:
 import os
 import sys
 import subprocess
-import glob
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -124,7 +123,6 @@ def cleanup_old_backups():
         return
 
     now = datetime.now()
-    cutoff_daily = now - timedelta(days=DAILY_RETENTION)
     cutoff_weekly = now - timedelta(weeks=WEEKLY_RETENTION)
 
     kept = []

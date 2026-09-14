@@ -2,10 +2,8 @@ import uuid
 import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import settings
-from app.core.constants import APIStatus
 import asyncio
 from contextlib import asynccontextmanager
 from app.api.routes import webhook, meta_webhook, health, privacy
@@ -134,7 +132,8 @@ app.include_router(privacy.router)  # PRO-87 — public privacy policy page
 app.include_router(health.router)
 
 if __name__ == "__main__":
-    import os, uvicorn
+    import os
+    import uvicorn
 
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("app.main:app", host="0.0.0.0", port=port)

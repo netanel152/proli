@@ -78,7 +78,7 @@ async def seed_analytics():
     if leads_to_create:
         await leads_collection.insert_many(leads_to_create)
 
-    print(f"✅ Created 80 leads.")
+    print("✅ Created 80 leads.")
 
     print("⭐ Creating some reviews for performance metrics...")
     reviews = []

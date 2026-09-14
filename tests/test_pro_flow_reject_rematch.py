@@ -220,7 +220,7 @@ async def test_reject_with_replacement_does_not_clear_customer_context(
 ):
     """Conversation continues with the new pro, so the customer's context
     must survive the reject-and-rematch."""
-    lead = await _insert_new_lead(mock_db, chat_id="972507654321@c.us")
+    await _insert_new_lead(mock_db, chat_id="972507654321@c.us")
     new_pro = {
         "_id": ObjectId(),
         "business_name": "אבי אינסטלציה",
@@ -259,7 +259,7 @@ async def test_reject_with_replacement_rearms_approval_sla(
     clear_state behaviour silently disarmed the nudge/reassign-offer for
     every reassigned lead."""
     chat_id = "972500009999@c.us"
-    lead = await _insert_new_lead(mock_db, chat_id=chat_id)
+    await _insert_new_lead(mock_db, chat_id=chat_id)
     new_pro = {
         "_id": ObjectId(),
         "business_name": "אבי אינסטלציה",

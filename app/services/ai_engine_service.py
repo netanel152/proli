@@ -10,12 +10,6 @@ import os
 import tempfile
 import asyncio
 from app.core.http_client import get_http_client
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
 from app.core.background_tasks import spawn_background_task
 from app.core.database import users_collection
 from bson import ObjectId

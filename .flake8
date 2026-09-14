@@ -4,12 +4,15 @@
 # and reported ~3 800 findings, most of them E501 on lines black itself had
 # laid out — noise that buried the real F401/F841 findings on every edit.
 #
-# black owns layout: E203 and W503 are the two pycodestyle rules black
-# deliberately violates. 100 columns leaves room for the long Hebrew strings
-# and URLs black cannot wrap while still flagging a genuinely runaway line.
+# black owns layout, and CI enforces `black --check`, so every code line is
+# already at most 88 columns; what E501 has left to report is Hebrew message
+# strings, URLs and comments that black cannot wrap. Ignoring it is the
+# standard black pairing (E203 and W503 are the two pycodestyle rules black
+# deliberately violates). flake8 here is for the pyflakes family: unused
+# imports and locals, undefined names, f-strings without placeholders.
 [flake8]
 max-line-length = 100
-extend-ignore = E203,W503
+extend-ignore = E203,W503,E501
 exclude =
     .git,
     __pycache__,
@@ -26,3 +29,6 @@ per-file-ignores =
     # the panel entrypoint and the auth module import after it on purpose.
     admin_panel/main.py:E402
     admin_panel/core/auth.py:E402
+    # Every script puts the project root on sys.path before importing app.*;
+    # that shim has to precede the imports it makes resolvable.
+    scripts/*.py:E402

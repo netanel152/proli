@@ -155,7 +155,6 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
         location = lead.get("full_address") or lead.get("city")
 
         from app.services.matching_service import determine_best_pro
-        from app.core.database import leads_collection as _leads
 
         pros = []
         excluded = []
