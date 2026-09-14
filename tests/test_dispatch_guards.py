@@ -28,6 +28,7 @@ from app.services.dispatch_guards import (
     guard_admin_wizard,
     guard_booked_cancel_reschedule,
     guard_cancel_confirmation,
+    guard_consent_gate,
     guard_emergency_hoist,
     guard_global_reset,
     guard_help_menu,
@@ -771,3 +772,92 @@ async def test_booked_cancel_reschedule_cancel_arms_confirmation_with_ttl(
         UserStates.AWAITING_CANCEL_CONFIRMATION,
         ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
     )
+
+
+# --------------------------------------------------------------------------
+# guard_consent_gate (PRO-124)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "current_state, normalized_text, consent_status, expected_message",
+    [
+        pytest.param(
+            UserStates.AWAITING_CONSENT,
+            "כן",
+            None,
+            Messages.Consent.ACCEPTED,
+            id="accept",
+        ),
+        pytest.param(
+            UserStates.AWAITING_CONSENT,
+            "לא",
+            None,
+            Messages.Consent.DECLINED,
+            id="decline",
+        ),
+        pytest.param(
+            UserStates.AWAITING_CONSENT,
+            "מה זה",
+            None,
+            Messages.Consent.REQUEST,
+            id="unclear_reply",
+        ),
+        pytest.param(
+            UserStates.IDLE,
+            "שלום",
+            None,
+            Messages.Consent.REQUEST,
+            id="first_contact",
+        ),
+        pytest.param(
+            UserStates.IDLE,
+            "שלום שוב",
+            False,
+            Messages.Consent.REQUEST,
+            id="prior_decline",
+        ),
+    ],
+)
+async def test_consent_gate_logs_both_sides_of_every_branch(
+    deps,
+    monkeypatch,
+    current_state,
+    normalized_text,
+    consent_status,
+    expected_message,
+):
+    """PRO-124: all five consent-gate branches now log the inbound turn AND
+    the outbound reply via the shared `_answer_consent` helper.
+
+    Regression this pins: the pipeline's own step-1 inbound logger never runs
+    here — every branch below returns HANDLED above it, so it was the *only*
+    place the customer's opening message could have been recorded. Drop these
+    two log calls again and that opening message vanishes from history; the
+    dispatcher then reads the customer's next turn as first contact and
+    greets them a second time, having already "forgotten" what they said.
+    """
+    monkeypatch.setattr(
+        workflow_service, "has_consent", AsyncMock(return_value=consent_status)
+    )
+    monkeypatch.setattr(workflow_service, "record_consent", AsyncMock())
+    fake_lead_manager = SimpleNamespace(log_message=AsyncMock())
+    monkeypatch.setattr(workflow_service, "lead_manager", fake_lead_manager)
+    ctx = make_ctx(
+        user_text=normalized_text,
+        normalized_text=normalized_text,
+        current_state=current_state,
+    )
+
+    result = await guard_consent_gate(ctx, deps)
+
+    assert result is HANDLED
+    # The inbound turn that triggered the gate is logged...
+    fake_lead_manager.log_message.assert_any_call(ctx.chat_id, "user", normalized_text)
+    # ...the reply actually sent matches what was logged as the model turn...
+    deps.whatsapp.send_message.assert_awaited_once_with(ctx.chat_id, expected_message)
+    fake_lead_manager.log_message.assert_any_call(
+        ctx.chat_id, "model", expected_message
+    )
+    assert fake_lead_manager.log_message.await_count == 2

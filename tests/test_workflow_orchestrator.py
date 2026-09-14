@@ -2707,3 +2707,63 @@ def test_every_reminder_keyword_is_a_pro_business_keyword():
             f"Messages.Pro.REMINDER advertises {token!r} but it is missing from "
             f"PRO_BUSINESS_KEYWORDS -- its sibling option would route differently."
         )
+
+
+# --- PRO-124: media fetch failure now speaks, and the turn still continues ---
+
+
+@pytest.mark.asyncio
+async def test_media_fetch_failure_notifies_customer_and_continues_turn(
+    wf_mocks, monkeypatch
+):
+    """`detect_and_fetch_media` raising used to fail silently — the photo of
+    the leak never reached the pro, and the customer, seeing no error,
+    believed it had.
+
+    Pin: the customer is told, via `Messages.Errors.MEDIA_FETCH_FAILED`, and —
+    the part a future "early return on failure" refactor would silently
+    break — the turn still continues past the failure: the dispatcher still
+    runs and the sticky gate still creates the CONTACTED lead for a
+    media-only first contact.
+    """
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "detect_and_fetch_media",
+        AsyncMock(side_effect=RuntimeError("download failed")),
+    )
+    chat = "972500117001@c.us"
+    media_url = "http://example.com/leak.jpg"
+
+    await process_incoming_message(chat, "תראה מה קרה", media_url=media_url)
+
+    mock_wa.send_message.assert_any_call(chat, Messages.Errors.MEDIA_FETCH_FAILED)
+    mock_lm.log_message.assert_any_call(
+        chat, "model", Messages.Errors.MEDIA_FETCH_FAILED
+    )
+    # the turn continued past the failure: the dispatcher ran...
+    mock_ai.analyze_conversation.assert_awaited_once()
+    # ...and the sticky gate still created the CONTACTED lead it would have
+    # created had the fetch succeeded.
+    mock_lm.create_lead_from_dict.assert_awaited_once()
+    create_kwargs = mock_lm.create_lead_from_dict.call_args.kwargs
+    assert create_kwargs["status"] == LeadStatus.CONTACTED
+    assert create_kwargs["media_url"] == media_url
+
+
+@pytest.mark.asyncio
+async def test_media_fetch_success_sends_no_failure_message(wf_mocks, monkeypatch):
+    """Mirror of the case above: a successful fetch adds nothing extra."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "detect_and_fetch_media",
+        AsyncMock(return_value=(b"fake-bytes", "image/jpeg")),
+    )
+    chat = "972500117002@c.us"
+    media_url = "http://example.com/leak.jpg"
+
+    await process_incoming_message(chat, "תראה מה קרה", media_url=media_url)
+
+    sent = [c.args[1] for c in mock_wa.send_message.call_args_list]
+    assert Messages.Errors.MEDIA_FETCH_FAILED not in sent
