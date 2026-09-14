@@ -13,6 +13,7 @@ Tests here cover:
   3. Stuck-threshold boundary: a CONTACTED lead just under 24h does NOT
      count as stuck; a CONTACTED lead older than 24h does.
 """
+
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -37,6 +38,7 @@ async def client(mock_db, monkeypatch):
     between tests — otherwise fixtures from earlier tests leak in.
     """
     import app.api.routes.health as health_route
+
     monkeypatch.setattr(health_route, "leads_collection", mock_db.leads)
     await mock_db.leads.delete_many({})
     yield TestClient(app)
@@ -56,7 +58,9 @@ async def test_health_leads_empty_db(client):
     assert body["status"] == "ok"
     assert body["pending_review_count"] == 0
     assert body["stuck_contacted_count"] == 0
-    assert body["stuck_threshold_hours"] == WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS
+    assert (
+        body["stuck_threshold_hours"] == WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS
+    )
 
 
 @pytest.mark.asyncio
@@ -66,16 +70,36 @@ async def test_health_leads_counts_pending_and_stuck(client, mock_db):
     contacted, 1 completed. Expect pending=2, stuck=1.
     """
     now = _now()
-    stale_cutoff = now - timedelta(hours=WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS + 1)
+    stale_cutoff = now - timedelta(
+        hours=WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS + 1
+    )
     fresh = now - timedelta(minutes=5)
 
-    await mock_db.leads.insert_many([
-        {"_id": ObjectId(), "status": LeadStatus.PENDING_ADMIN_REVIEW, "created_at": now},
-        {"_id": ObjectId(), "status": LeadStatus.PENDING_ADMIN_REVIEW, "created_at": now},
-        {"_id": ObjectId(), "status": LeadStatus.CONTACTED, "created_at": fresh},
-        {"_id": ObjectId(), "status": LeadStatus.CONTACTED, "created_at": stale_cutoff},
-        {"_id": ObjectId(), "status": LeadStatus.COMPLETED, "created_at": stale_cutoff},
-    ])
+    await mock_db.leads.insert_many(
+        [
+            {
+                "_id": ObjectId(),
+                "status": LeadStatus.PENDING_ADMIN_REVIEW,
+                "created_at": now,
+            },
+            {
+                "_id": ObjectId(),
+                "status": LeadStatus.PENDING_ADMIN_REVIEW,
+                "created_at": now,
+            },
+            {"_id": ObjectId(), "status": LeadStatus.CONTACTED, "created_at": fresh},
+            {
+                "_id": ObjectId(),
+                "status": LeadStatus.CONTACTED,
+                "created_at": stale_cutoff,
+            },
+            {
+                "_id": ObjectId(),
+                "status": LeadStatus.COMPLETED,
+                "created_at": stale_cutoff,
+            },
+        ]
+    )
 
     resp = client.get("/health/leads")
     assert resp.status_code == 200
@@ -94,12 +118,22 @@ async def test_health_leads_threshold_boundary(client, mock_db):
     now = _now()
     hours = WorkerConstants.UNASSIGNED_LEAD_TIMEOUT_HOURS
     just_under = now - timedelta(hours=hours, minutes=-5)  # 5 min newer than cutoff
-    just_over = now - timedelta(hours=hours, minutes=5)    # 5 min older than cutoff
+    just_over = now - timedelta(hours=hours, minutes=5)  # 5 min older than cutoff
 
-    await mock_db.leads.insert_many([
-        {"_id": ObjectId(), "status": LeadStatus.CONTACTED, "created_at": just_under},
-        {"_id": ObjectId(), "status": LeadStatus.CONTACTED, "created_at": just_over},
-    ])
+    await mock_db.leads.insert_many(
+        [
+            {
+                "_id": ObjectId(),
+                "status": LeadStatus.CONTACTED,
+                "created_at": just_under,
+            },
+            {
+                "_id": ObjectId(),
+                "status": LeadStatus.CONTACTED,
+                "created_at": just_over,
+            },
+        ]
+    )
 
     resp = client.get("/health/leads")
     assert resp.status_code == 200

@@ -9,6 +9,7 @@ Run ONCE after deploying to production Railway.
 Usage:
     python scripts/init_production.py --username admin --password <strong-password>
 """
+
 import asyncio
 import sys
 import os
@@ -28,12 +29,14 @@ async def init_production(username: str, password: str, role: str = "owner"):
         return
 
     password_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
-    await admins_collection.insert_one({
-        "username": username,
-        "password_hash": password_hash,
-        "role": role,
-        "created_at": datetime.now(timezone.utc),
-    })
+    await admins_collection.insert_one(
+        {
+            "username": username,
+            "password_hash": password_hash,
+            "role": role,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
     print(f"Created admin account: username='{username}' role='{role}'")
     print("Production init complete.")
 
@@ -41,8 +44,12 @@ async def init_production(username: str, password: str, role: str = "owner"):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Initialize production admin account")
     parser.add_argument("--username", required=True, help="Admin username")
-    parser.add_argument("--password", required=True, help="Admin password (min 8 chars)")
-    parser.add_argument("--role", default="owner", choices=["owner", "manager", "viewer"])
+    parser.add_argument(
+        "--password", required=True, help="Admin password (min 8 chars)"
+    )
+    parser.add_argument(
+        "--role", default="owner", choices=["owner", "manager", "viewer"]
+    )
     args = parser.parse_args()
 
     if len(args.password) < 8:

@@ -27,10 +27,16 @@ async def detect_and_fetch_media(media_url: str) -> tuple[bytes | None, str | No
             resp = await client.get(media_url)
             if resp.status_code == 200:
                 media_data = resp.content
-                media_mime = resp.headers.get("Content-Type", Defaults.DEFAULT_MIME_TYPE)
-                logger.info(f"Downloaded image media: {len(media_data)} bytes, type: {media_mime}")
+                media_mime = resp.headers.get(
+                    "Content-Type", Defaults.DEFAULT_MIME_TYPE
+                )
+                logger.info(
+                    f"Downloaded image media: {len(media_data)} bytes, type: {media_mime}"
+                )
             else:
-                logger.warning(f"Failed to download media from {media_url}, status: {resp.status_code}")
+                logger.warning(
+                    f"Failed to download media from {media_url}, status: {resp.status_code}"
+                )
 
     except Exception as e:
         logger.error(f"Error handling media check: {e}")

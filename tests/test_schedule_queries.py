@@ -361,7 +361,6 @@ def test_empty_string_id_treated_as_new_row_not_dropped(db):
     assert slots.count_documents({"pro_id": pro_id}) == 1
 
 
-
 # --- colon-less time strings (silently-wrong-midnight guard) ---
 
 

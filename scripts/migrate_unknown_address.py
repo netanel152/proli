@@ -16,6 +16,7 @@ Usage:
 
 Idempotent: safe to run multiple times. A second run will find 0 matches.
 """
+
 import argparse
 import asyncio
 import os
@@ -43,9 +44,13 @@ async def run(dry_run: bool) -> int:
 
     if dry_run:
         print("   (dry-run — no writes)")
-        cursor = leads_collection.find(MATCH, {"_id": 1, "chat_id": 1, "status": 1}).limit(10)
+        cursor = leads_collection.find(
+            MATCH, {"_id": 1, "chat_id": 1, "status": 1}
+        ).limit(10)
         async for doc in cursor:
-            print(f"   · {doc['_id']}  chat={doc.get('chat_id')}  status={doc.get('status')}")
+            print(
+                f"   · {doc['_id']}  chat={doc.get('chat_id')}  status={doc.get('status')}"
+            )
         if count > 10:
             print(f"   · ... and {count - 10} more")
         return count
