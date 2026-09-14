@@ -155,10 +155,14 @@ jobs:
         if: steps.refs.outputs.noop == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
+          # Passed as env rather than interpolated into the script body, so the
+          # step can be extracted and run verbatim by tests/test_promote_workflow.py
+          # — the same reason the `gate` step does it.
+          SHA: ${{ steps.refs.outputs.dev }}
+          SELF: ${{ github.job }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          SHA='${{ steps.refs.outputs.dev }}'
-          SELF='${{ github.job }}'
 
           # Two check runs must be excluded or this job blocks itself:
           #   - this run, which is in progress, so conclusion is null
@@ -166,7 +170,7 @@ jobs:
           #     make the branch permanently unpromotable
           # Filtering by name covers both, and `status == completed` also drops
           # anything else still running rather than reading null as a failure.
-          ALL=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs" \
+          ALL=$(gh api "repos/$REPO/commits/$SHA/check-runs" \
             --jq '.check_runs[] | "\(.name)|\(.status)|\(.conclusion)"' || true)
           echo "all check runs on $SHA:"
           echo "${ALL:-  (none reported)}" | sed 's/^/  /'
@@ -177,8 +181,30 @@ jobs:
           # check is what catches an admin merge or a direct push that bypassed
           # the branch protection — "nothing failed" would also be true of a
           # commit that was never tested at all.
+          #
+          # Three very different situations fail that assertion, and collapsing
+          # them into one message is how "wait ninety seconds" came to read
+          # exactly like "the tests are broken": the 09-14 01:42 run, fired 45 s
+          # after a merge, was annotated as an unverified commit when pytest was
+          # simply still going. The operator re-ran it two minutes later and it
+          # passed. The table printed above has always distinguished the cases,
+          # but the ::error:: is what the Actions list shows, and a red run
+          # nobody can read at a glance is one people learn to wave through.
           if ! echo "$OTHERS" | grep -qxF 'pytest|completed|success'; then
-            echo "::error::dev@$SHA has no successful 'pytest' check. Refusing to promote an unverified commit."
+            PYTEST=$(echo "$ALL" | awk -F'|' '$1 == "pytest"')
+            # "Still running" is tested FIRST, and the order is the point. A
+            # re-run in flight after a failure matches both arms, and calling
+            # that one "the tests broke" would reproduce this commit's own bug
+            # one layer down: the actionable answer is still to wait.
+            if echo "$PYTEST" | grep -q '|queued|\||in_progress|'; then
+              echo "::error::dev@$SHA — 'pytest' is still running. Nothing is wrong with the commit: wait for CI to finish, then run this workflow again."
+            elif [ -z "$PYTEST" ]; then
+              echo "::error::dev@$SHA has no 'pytest' check at all — this commit was never tested. An admin merge or a direct push bypassing branch protection does this. Refusing to promote."
+            else
+              # Also the landing place for a cancelled run, hence "re-run CI":
+              # blocking is right there, but "fix dev" would be wrong advice.
+              echo "::error::dev@$SHA — 'pytest' completed without passing (see its conclusion in the table above). Fix dev, or re-run CI if it was cancelled, before promoting."
+            fi
             exit 1
           fi
 
