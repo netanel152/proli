@@ -3,6 +3,7 @@ from typing import List, Optional, Dict, Any
 from app.core.redis_client import get_redis_client
 from app.core.logger import logger
 
+
 class ContextManager:
     TTL = 14400  # 4 hours expiration (allows longer conversations)
 
@@ -17,10 +18,10 @@ class ContextManager:
             key = f"context:{chat_id}"
             # Fetch all items from the list
             items = await redis.lrange(key, 0, -1)
-            
+
             if not items:
                 return None
-            
+
             # Redis returns list of strings (bytes decoded if decode_responses=True)
             # We need to parse each JSON string back to dict
             history = [json.loads(item) for item in items]
@@ -37,13 +38,13 @@ class ContextManager:
         try:
             redis = await get_redis_client()
             key = f"context:{chat_id}"
-            
+
             # Construct the message object consistent with get_chat_history format
             msg = {"role": role, "parts": [content]}
-            
+
             # Append to list (RPUSH)
             await redis.rpush(key, json.dumps(msg))
-            
+
             # Reset Expiration
             await redis.expire(key, cls.TTL)
         except Exception as e:
@@ -57,10 +58,10 @@ class ContextManager:
         try:
             redis = await get_redis_client()
             key = f"context:{chat_id}"
-            
+
             # clear existing to be safe (though set_history implies overwrite)
             await redis.delete(key)
-            
+
             if messages:
                 # Convert all dicts to JSON strings
                 dumped_msgs = [json.dumps(m) for m in messages]
