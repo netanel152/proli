@@ -403,9 +403,15 @@ def test_phone_block_sets_touch_targets_and_16px_inputs(T):
     assert ".stTextInput input" in phone
     assert ".stButton button" in phone
 
-    # The base sheet has `label { display: block !important }`; a plain
-    # `display: flex` here is inert and the row centres nothing.
-    assert "display: flex !important" in phone
+    # The nav row's `display: flex !important` used to live here and no
+    # longer does: it was never phone-only, and while it was scoped to this
+    # block the desktop sidebar rendered every radio marker on its own line
+    # above its label. It now sits on the base rule in `components.py`, and
+    # `tests/test_admin_rtl.py` pins it there. This block keeps only the
+    # height, which genuinely is a phone concern.
+    assert (
+        "display: flex !important" not in phone
+    ), "the nav row's display belongs on the base rule, at every width"
 
     # The select carries its size on the inner span and input, not the
     # container, so all three have to be named or the text stays at 15px.
