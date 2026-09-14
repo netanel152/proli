@@ -56,13 +56,17 @@ TEMPLATES: dict[str, TemplateSpec] = {
     spec.key: spec
     for spec in (
         # Professional-facing. `source` names the catalog constant each
-        # template's body must be worded from (PRO-168) — P2 folded into P1, so
-        # lead_offer carries the navigation line's constant alongside it.
+        # template's body must be worded from (PRO-168). PRO-59 unfolded P2
+        # from P1: the navigation link is no longer sent with the offer, so a
+        # template worded from the old pointer would get a nav line — which
+        # resolves the exact address — approved for the one send that must not
+        # carry it. The post-approval card needs no entry of its own: it
+        # replies inside the 24h window the pro's own אשר just opened.
         TemplateSpec(
             "lead_offer",
             "proli_lead_offer",
-            source="Messages.Pro.APPROVAL_REQUEST + Messages.Pro.NAVIGATE_TO",
-        ),  # P1 (+P2 folded in)
+            source="Messages.Pro.APPROVAL_REQUEST",
+        ),  # P1
         TemplateSpec(
             "lead_offer_reassigned",
             "proli_lead_offer_reassigned",

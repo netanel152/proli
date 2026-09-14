@@ -73,7 +73,9 @@ floor, apartment) → provide a time → receive the AI estimate → **(P)** app
 **Expected:**
 - Bot asks for exactly the missing address parts; only proceeds when all five (street, number, city, floor, apartment) are present.
 - **No `[DEAL:]` / marker text ever appears in a customer-facing message** (PRO-44 — in code).
-- Pro's approval request shows customer name, phone, full address, floor/apartment, issue, time, **and the AI-quoted price** (`💰 הערכת מחיר שניתנה ללקוח`) when the AI gave an estimate (PRO-55). The **same** figure is shown to the customer on approval (`PRO_FOUND`) — single source of truth. A deal with no estimate shows no price line (not a broken/empty line).
+- Pro's approval request shows customer name, street + city, issue, time, **and the AI-quoted price** (`💰 הערכת מחיר שניתנה ללקוח`) when the AI gave an estimate (PRO-55). The **same** figure is shown to the customer on approval (`PRO_FOUND`) — single source of truth. A deal with no estimate shows no price line (not a broken/empty line).
+- **PRO-59 — the approval request must NOT contain the customer's phone, their floor/apartment, or a navigation link.** All three arrive in one message the moment the pro sends *אשר*, together with the approval confirmation. Check both halves: a pro who can reach the customer before approving can reject in-bot and take the job off-platform, and a pro who approves and gets no contact details cannot do the job at all.
+- A customer who types *נציג* **while still waiting for approval** must page the pro *without* their phone number — the pro is told to approve first. Only a BOOKED lead's SOS carries the number.
 - Booking confirmed to C; slot marked taken; completion + rating recorded.
 - [ ] Pass  ·  [ ] File: ______
 

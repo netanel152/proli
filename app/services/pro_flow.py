@@ -432,10 +432,16 @@ async def _handle_approve(pro, lead_manager, whatsapp):
     raw_customer_phone = lead.get("customer_phone") or strip_suffix(
         lead.get("chat_id", "")
     )
+    card_address = lead.get("full_address") or Messages.Fallbacks.UNKNOWN
     response_text += Messages.Pro.CONTACT_CARD.format(
         customer_phone=to_local_phone(raw_customer_phone),
-        customer_phone_intl=raw_customer_phone,
-        full_address=lead.get("full_address") or Messages.Fallbacks.UNKNOWN,
+        # Normalised rather than passed through: wa.me needs international
+        # digits, and a local 05… would build a dead link. The strip_suffix
+        # fallback above already yields 972…, so this only matters if
+        # customer_phone is ever written in local form.
+        customer_phone_intl=strip_suffix(to_chat_id(raw_customer_phone)),
+        full_address=card_address,
+        address_encoded=urllib.parse.quote(card_address),
     )
     # Only when there is something to say — format_lead_extra_info renders '-'
     # placeholders for a missing floor and apartment, and a card advertising
@@ -489,25 +495,6 @@ async def _handle_approve(pro, lead_manager, whatsapp):
     await whatsapp.send_message(lead["chat_id"], customer_msg)
     # Clear AWAITING_PRO_APPROVAL state so customer can continue normally
     await StateManager.clear_state(lead["chat_id"])
-
-    # PRO-59: the navigation link moved here from the two pre-approval senders
-    # (workflow_service and notify_pro_new_lead). Sent after the booking is
-    # claimed, so it can no longer resolve the exact address for a pro who has
-    # not taken the job. Best-effort: the booking already stands and the card
-    # above carries the address in text, so a failed map link is a degraded
-    # confirmation, not a lost one — the same fail-open stance
-    # notify_pro_new_lead takes for the offer's own link.
-    if lead.get("full_address") and pro.get("phone_number"):
-        try:
-            # to_chat_id, not the raw number: send_location_link takes a
-            # chat_id, as every other caller passes it.
-            await whatsapp.send_location_link(
-                to_chat_id(pro["phone_number"]),
-                lead["full_address"],
-                Messages.Pro.NAVIGATE_TO,
-            )
-        except Exception as e:
-            logger.error(f"Failed to send navigation link for lead {lead['_id']}: {e}")
 
     logger.info(f"Pro {pro['_id']} approved lead {lead['_id']}")
     return response_text
