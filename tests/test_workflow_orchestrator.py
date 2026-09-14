@@ -2527,7 +2527,14 @@ async def test_booked_customer_new_message_asks_new_or_existing(wf_mocks, mock_d
 
     await process_incoming_message(chat, "יש לי בעיה אחרת")
 
-    mock_state.set_state.assert_any_call(chat, UserStates.AWAITING_NEW_OR_EXISTING)
+    # PRO-193: the gate is bounded now — the ttl is part of the call, and
+    # asserting it here is what keeps a future bare set_state from
+    # silently restoring the 4h default.
+    mock_state.set_state.assert_any_call(
+        chat,
+        UserStates.AWAITING_NEW_OR_EXISTING,
+        ttl=WorkerConstants.NEW_OR_EXISTING_TTL_SECONDS,
+    )
     sent = " ".join(str(c.args[1]) for c in mock_wa.send_message.call_args_list)
     assert (
         static_prefix(Messages.Customer.EXISTING_JOB_PROMPT) in sent
