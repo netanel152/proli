@@ -15,7 +15,7 @@ new job must carry, with the ticket that explains each item. No value here overr
 code — intervals, TTLs and boot-slot positions are owned by `app/scheduler.py` and
 `app/core/constants.py`.
 
-## The wrapper every job gets
+## The wrapper a job gets
 
 ```python
 @with_scheduler_lock("run_<job>", ttl=<slightly under the interval, in seconds>)
@@ -32,7 +32,10 @@ async def run_<job>():
   Outermost, so a lock-skipped run is not counted by the decorator under it.
 - **`@track_mongo_auth_failures`** (PRO-112) — counts Mongo auth failures across jobs and
   pages CRITICAL past `SCHEDULER_MONGO_AUTH_TRIP_THRESHOLD`; always re-raises so
-  `_on_job_error` still captures to Sentry.
+  `_on_job_error` still captures to Sentry. **Only if the callee lets Mongo errors
+  propagate.** When the service catches `Exception` itself (the pro-approval SLA check, the
+  stale-lead nudger) the decorator would be dead code implying coverage it does not give —
+  leave it off and add the one-line note the code uses above `run_pro_approval_sla`.
 - **Gating.** A job that *cold-messages a customer* (a nudge, a deflection, a janitor
   rejection) goes through `_customer_cold_job_allowed(toggle)` — business hours **and** a
   per-job toggle in `settings.scheduler_config` that defaults **off** (PRO-73). A job that
@@ -51,8 +54,10 @@ after `scheduler.start()`, and the in-memory job store forgets that countdown on
 deploy, so a deploy cadence shorter than the interval starves the job silently. The kwargs
 also set `coalesce=True` and the long `misfire_grace_time`, so a tick that comes due while
 the loop is busy runs late instead of being dropped. Positions are distinct integers; take
-the next free one and add the job to `LONG_JOB_IDS_BY_POSITION` in
-`tests/test_scheduler_boot_run.py`.
+the next free one. Add the job to `LONG_JOB_IDS_BY_POSITION` in
+`tests/test_scheduler_boot_run.py` when it registers in every environment; a
+production-gated job (the backup freshness watchdog, position 3) is pinned in
+`tests/test_scheduler.py` instead, because the boot-run suite runs without `is_production`.
 
 Cron jobs (a time of day) use `CronTrigger(..., timezone=IL_TZ)`; give them `coalesce` and
 the long misfire grace too (PRO-185's treatment of the backup cron).

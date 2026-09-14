@@ -38,11 +38,11 @@ is a guard or a formatter, and "no Python" must degrade to "no extra guard", nev
 | event | script | contract |
 |---|---|---|
 | `SessionStart` | `session-start-context.sh` | prints branch, last commit and dirty files into context; informs, never blocks |
-| `SessionStart` | `session-start-web-setup.sh` | **cloud sessions only** (`CLAUDE_CODE_REMOTE=true`): creates `venv/`, installs `requirements.txt` + flake8, writes a placeholder `.env` if none, puts the venv on `PATH` via `CLAUDE_ENV_FILE`, sets `core.hooksPath`; synchronous, idempotent, exit 0 always |
+| `SessionStart` | `session-start-web-setup.sh` | **cloud sessions only** (`CLAUDE_CODE_REMOTE=true`): creates `venv/`, installs `requirements.txt` (black and flake8 are pinned there), writes a placeholder `.env` if none, puts the venv on `PATH` via `CLAUDE_ENV_FILE`, sets `core.hooksPath`; synchronous, idempotent, exit 0 always |
 | `PreToolUse(Bash)` | `pre-bash-guard.py` | exit 2 blocks: `rm -rf` on dangerous targets, redirects into `.env`, force-push to protected branches, commit/push while on `dev`/`production`, mongo `dropDatabase`/`drop()`. Logic is `evaluate(command, branch)`, pinned by `tests/test_pre_bash_guard.py` |
 | `PreToolUse(Edit\|Write\|MultiEdit)` | `pre-edit-protect.py` | blocks edits to `.env` and anything under `.git/` |
-| `PostToolUse(Edit\|Write\|MultiEdit)` | `post-edit-format.py` | runs `black --quiet` on the touched `.py`, reports `flake8` findings on stderr; silent no-op without the tools |
-| `Stop` | `stop-docs-guard.py` | exit 2 (once per turn — `stop_hook_active` ends it) when a `.py` under `app/`, `admin_panel/` or `scripts/` is dirty and no `.md` is: the docs-syncer reminder made enforceable. Logic is `evaluate(dirty_paths, stop_hook_active)`, pinned by `tests/test_stop_docs_guard.py`; fail-open on any error |
+| `PostToolUse(Edit\|Write\|MultiEdit)` | `post-edit-format.py` | runs `black --quiet` on the touched `.py`, reports `flake8` findings (config in `.flake8`) on stderr; silent no-op without the tools |
+| `Stop` | `stop-docs-guard.py` | exit 2 (once per turn — `stop_hook_active` ends it) when **this session** wrote a `.py` under `app/`, `admin_panel/` or `scripts/` (read from the transcript's Edit/Write calls; dirty-tree fallback) and no `.md` was written by the session, is dirty in the tree, or is committed on the branch since `origin/dev`: the docs-syncer reminder made enforceable without blaming a parallel session's edits. Logic is `evaluate(written, dirty, branch, stop_hook_active)`, pinned by `tests/test_stop_docs_guard.py`; fail-open on any error |
 
 Adding a hook: script in `.claude/hooks/`, wired in `settings.json` through `run-hook.sh`
 (Python) or `sh` (shell), decision logic in a pure function with its own test file. An
@@ -51,14 +51,18 @@ unwired script fails `test_hook_scripts_are_not_orphaned`.
 ## Permissions
 
 The allowlist is **read-only operations plus the PR-open path**: `gh pr create/view/list/
-checks`, `gh run list/view`, `gh api`, read-only `git`, read-only Railway CLI and MCP
+checks`, `gh run list/view` (not `gh api` — an arbitrary REST client can merge a PR or delete a
+branch, so it prompts), read-only `git`, read-only Railway CLI and MCP
 tools, the MongoDB plugin's read tools, Linear read + issue/comment save, and the
 test/format/lint commands in every interpreter layout (Windows venv, POSIX venv, bare).
+Bash patterns use the documented `Bash(cmd:*)` prefix form throughout (`Bash(pytest:*)` matches
+both `pytest` and `pytest -q`; a trailing ` *` does not).
 MCP tool names must match what the server actually exposes — Railway's are hyphenated
 (`list-projects`), Linear's underscored (`get_issue`), MongoDB's carry the plugin prefix
 (`mcp__plugin_mongodb_mongodb__find`) — an entry spelled otherwise matches nothing and only
-looks like a grant. The denylist names what must always prompt or never run: Railway
-variable writes and deletes, `gh pr merge`.
+looks like a grant. Sentry, Context7 and Redis read tools are allowlisted too, so `/triage`, `/user-debug` and
+a docs lookup do not prompt. The denylist names what must always prompt or never run: Railway
+variable writes and deletes, Redis `delete`, Sentry `update_issue`, `gh pr merge`.
 
 ## Rules and skills: the drift contract
 

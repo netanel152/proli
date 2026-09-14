@@ -46,9 +46,6 @@ else
     echo "web-setup: pip install failed — tests may not run; last lines:" >&2
     tail -5 /tmp/web-setup-pip.err >&2
 fi
-if ! venv/bin/python -m pip install -q flake8 2>/dev/null; then
-    echo "web-setup: flake8 not installed (black still is)" >&2
-fi
 
 # 3. Placeholder .env so Settings constructs. Same values CI uses; nothing
 #    here can reach a real service (WHATSAPP_DRY_RUN=true, no Mongo URI ->
@@ -72,7 +69,9 @@ fi
 
 # 4. Put the venv first on PATH for every Bash command this session, so
 #    `pytest`, `black` and `flake8` resolve without a venv/bin/ prefix.
-if [ -n "${CLAUDE_ENV_FILE:-}" ]; then
+#    SessionStart also fires on resume/clear/compact, so append only once —
+#    otherwise PATH accumulates a venv/bin entry per compaction.
+if [ -n "${CLAUDE_ENV_FILE:-}" ] && ! grep -qs "$PWD/venv/bin" "$CLAUDE_ENV_FILE"; then
     {
         echo "export PATH=\"$PWD/venv/bin:\$PATH\""
         echo "export VIRTUAL_ENV=\"$PWD/venv\""

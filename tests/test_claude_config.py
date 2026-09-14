@@ -119,7 +119,9 @@ def test_hook_commands_use_the_project_dir_variable():
 def test_hook_scripts_are_not_orphaned():
     """Every script in .claude/hooks/ is wired to something (or is the launcher)."""
     wired = " ".join(_hook_commands())
-    for script in _HOOKS.glob("*.py"):
+    for script in _HOOKS.iterdir():
+        if script.name == "run-hook.sh" or not script.is_file():
+            continue
         assert script.name in wired, f"{script.name} is never invoked by settings.json"
 
 
@@ -233,9 +235,13 @@ def test_claude_md_indexes_every_rule():
 # forbidding skills. A cited path that no longer exists is exactly the rot
 # PRO-67 feared; this test turns it into a red build.
 
+# A backticked repo path, optionally with a `::symbol` suffix naming a test or
+# a module-level name inside it — the form the skills use to point at the test
+# that pins a fact. The symbol is checked too: a renamed test that leaves the
+# file in place is the same rot as a deleted file.
 _PATH_CITATION = re.compile(
     r"`((?:app|admin_panel|tests|docs|scripts|\.claude|\.github)/[\w./-]+"
-    r"\.(?:py|md|yml|yaml|json|sh))`"
+    r"\.(?:py|md|yml|yaml|json|sh))(?:::(\w+))?`"
 )
 
 
@@ -244,7 +250,10 @@ _LOCAL_ONLY = {".claude/settings.local.json"}
 
 
 def _cited_paths(text):
-    return sorted(set(_PATH_CITATION.findall(text)) - _LOCAL_ONLY)
+    """``(path, symbol-or-empty)`` pairs, deduplicated, local-only files dropped."""
+    return sorted(
+        {(p, sym) for p, sym in _PATH_CITATION.findall(text) if p not in _LOCAL_ONLY}
+    )
 
 
 def test_every_skill_has_a_description_and_scoped_globs_that_match():
@@ -282,9 +291,17 @@ def test_rules_skills_and_claude_md_cite_only_paths_that_exist():
     )
     broken = []
     for path in files:
-        for cited in _cited_paths(path.read_text(encoding="utf-8")):
-            if not (_ROOT / cited).exists():
+        for cited, symbol in _cited_paths(path.read_text(encoding="utf-8")):
+            target = _ROOT / cited
+            if not target.exists():
                 broken.append(f"{path.relative_to(_ROOT)}: cites missing {cited}")
+                continue
+            if symbol and not re.search(
+                rf"\b{re.escape(symbol)}\b", target.read_text(encoding="utf-8")
+            ):
+                broken.append(
+                    f"{path.relative_to(_ROOT)}: {cited} has no symbol {symbol}"
+                )
     assert not broken, "stale path citations:\n  " + "\n  ".join(broken)
 
 

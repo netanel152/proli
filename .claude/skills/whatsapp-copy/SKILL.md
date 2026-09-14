@@ -17,7 +17,7 @@ guide it points at; nothing here is a value to trust over them.
 ## Where copy lives
 
 - **Every string** in the `Messages` catalog, `app/core/messages.py`, under the class for its
-  audience (`Customer`, `Pro`, `Admin`, `SOS`, `Onboarding`, `Consent`, `System`, `Errors`)
+  audience (`Customer`, `Pro`, `Admin`, `SOS`, `Alerts`, `Onboarding`, `Consent`, `System`, `Errors`)
   — never inline at a call site (`docs/ARCHITECTURE_STANDARD.md` §10).
 - **Keywords and digits** the bot accepts in `Messages.Keywords`; **empty-value fallbacks**
   in `Messages.Fallbacks`; **AI example utterances** in `app/core/prompts.py`.

@@ -17,6 +17,12 @@ calls `send_interactive`), and **all outbound traffic goes through `app/provider
 no `CloudAPIProvider(`/`DryRunProvider(` construction outside the facade package. CI greps
 for both.
 
+`customer_flow.py`, `pro_flow.py` and the guard chain receive their collaborators (`whatsapp`,
+`lead_manager`, `state_manager`, …) **as parameters** — `workflow_service.py` passes its shared
+instances — so a flow function is testable against fakes without monkeypatching. Helpers that
+still live in `workflow_service` are resolved per call through the module, never imported at
+module top, because the suite monkeypatches them late.
+
 ### Service Layer (`app/services/`)
 
 | Service | Responsibility |

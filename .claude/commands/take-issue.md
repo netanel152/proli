@@ -1,7 +1,7 @@
 ---
 description: Pull a Linear issue, implement it on a feature branch, review + test + sync docs via subagents, open a PR, and move the issue to In Review. One issue per run.
 argument-hint: <ISSUE-ID> (e.g. PRO-123)
-allowed-tools: Task, Bash(git:*), Bash(gh:*), Bash(venv/Scripts/python.exe -m pytest:*), Bash(python -m pytest:*), Read, Grep, Glob, Edit, Write, mcp__linear__get_issue, mcp__linear__list_issues, mcp__linear__save_issue, mcp__linear__save_comment, mcp__linear__list_comments
+allowed-tools: Agent, Task, Bash(git:*), Bash(gh:*), Bash(venv/Scripts/python.exe -m pytest:*), Bash(venv/bin/python -m pytest:*), Bash(python -m pytest:*), Read, Grep, Glob, Edit, Write, mcp__linear__get_issue, mcp__linear__list_issues, mcp__linear__save_issue, mcp__linear__save_comment, mcp__linear__list_comments
 model: opus
 ---
 
