@@ -47,11 +47,11 @@ Unit tests use `mongomock_motor` (in-memory MongoDB) and mock `whatsapp` and `ai
 
 **That refresh job cannot actually open its PR in this repo**, and has never been observed doing so: `gh pr create` returns *"GitHub Actions is not permitted to create or approve pull requests"* because **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and approve pull requests** is off. It pushes the `chore/refresh-test-baseline-<sha>` branch and then goes red at the last step. The workflow's own header treats that red run as the signal to bump the line by hand, which works — but it means a red 🔢 run on `dev` says *"the line drifted"*, not *"the tests broke"*, and the branch it pushed is left dangling. Turning the setting on makes the job do what the sentence above promises.
 
-Still rebase before pushing — the *content* of `docs/TESTING.md` (and every other file) conflicts normally:
+Still sync `dev` in before pushing — the *content* of `docs/TESTING.md` (and every other file) conflicts normally. Merge, never rebase (`.claude/hooks/pre-bash-guard.py` refuses `gh pr create`/`gh pr merge` from a branch that hasn't):
 
 ```bash
-git fetch origin && git rebase origin/dev
+git fetch origin && git merge origin/dev
 pytest -q   # inside the project venv; the count comes from the summary line
 # bumping the line yourself is welcome but optional — the refresh workflow catches it
-git push --force-with-lease
+git push
 ```
