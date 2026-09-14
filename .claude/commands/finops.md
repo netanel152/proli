@@ -1,6 +1,6 @@
 ---
 description: Generate a Gemini token usage report per professional (FinOps)
-allowed-tools: Bash(python:*), Bash(venv/Scripts/python.exe:*), Read
+allowed-tools: Bash(python:*), Bash(venv/Scripts/python.exe:*), Bash(venv/bin/python:*), Read
 ---
 
 Generate a token usage report for professionals.

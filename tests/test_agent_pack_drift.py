@@ -28,14 +28,17 @@ is a substring of an existing one (e.g. ``pending`` vs ``pending_admin_review``)
 is still caught. TTL values are matched with a trailing non-digit boundary so a
 constant shortened ``600 → 60`` against a stale doc is not a false pass.
 
-Skills decision (PRO-67): the three never-built skills — ``whatsapp-message``,
-``fsm-transition``, ``add-scheduler-job`` — were **dropped**, not committed.
-They existed only in a past planning conversation, nothing in the repo
-referenced them, and the existing ``.claude/commands/`` (``add-pro``,
-``simulate``, etc.) already cover the quick-action need. Adding three
-speculative skills would be more surface area to keep from drifting — the exact
-problem this issue exists to prevent. Recorded here and on the Linear issue so
-the inventory question is closed; no ``.claude/skills/`` directory is created.
+Skills decision (PRO-67, revisited September 2026): the three skills PRO-67
+dropped — ``whatsapp-message``, ``fsm-transition``, ``add-scheduler-job`` —
+were dropped because a skill that *embeds* facts is more surface area to keep
+from drifting. ``.claude/skills/`` now exists (``whatsapp-copy``,
+``dispatch-guard``, ``scheduler-job``) under a different contract: each skill
+is a *procedure* that points at the code, the style guide and the tests that
+pin a fact, and embeds no value the code owns. The drift objection is answered
+structurally — ``tests/test_claude_config.py`` fails the build when a path or
+test a skill cites no longer exists, and the docs-syncer audits those
+citations — so this file keeps pinning only the two agents that do embed
+constants.
 """
 
 import re

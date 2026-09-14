@@ -169,6 +169,26 @@ Expected result: the full unit suite passes. The authoritative pass/skip baselin
 | [Railway Setup](docs/RAILWAY_SETUP.md) | Cloud deployment guide |
 | [Production Readiness](docs/PRODUCTION_READINESS.md) | Pre-launch checklist |
 | [Scaling Guide](docs/SCALING_GUIDE.md) | Horizontal scaling strategies |
+| [Parallel Tracks](docs/PARALLEL_TRACKS.md) | One worktree per issue, the Windows shell traps, teardown |
+
+## Working with Claude Code
+
+The repo carries its own Claude Code configuration, shared through git and validated in the
+normal `pytest` run (`tests/test_claude_config.py`):
+
+| what | where |
+|------|-------|
+| Always-loaded rulebook (size-budgeted) | `CLAUDE.md` |
+| Path-scoped reference — loads when a matching file is read | `.claude/rules/*.md` |
+| Skills Claude picks up by context (`whatsapp-copy`, `dispatch-guard`, `scheduler-job`) | `.claude/skills/<name>/SKILL.md` |
+| Operator commands (`/take-issue`, `/triage`, `/test`, `/health`, …) | `.claude/commands/*.md` |
+| Subagents (`code-reviewer`, `test-runner`, `test-writer`, `docs-syncer`, `flow-tracer`, `ux-reviewer`) | `.claude/agents/*.md` |
+| Hooks — branch/tree context, dangerous-command guard, `.env` protection, `black`/`flake8`, docs-sync reminder, web-session setup | `.claude/settings.json` → `.claude/hooks/` |
+| MCP servers (Linear, Sentry, Context7, Railway, Redis; MongoDB via plugin) | `.mcp.json` |
+
+Per-developer overrides go in `CLAUDE.local.md` and `.claude/settings.local.json`, both gitignored.
+On Claude Code on the web the `SessionStart` hook builds the venv and a placeholder `.env`, so
+tests and linters run there without any manual setup.
 
 ---
 

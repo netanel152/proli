@@ -1,0 +1,28 @@
+# flake8 is run by the PostToolUse hook (.claude/hooks/post-edit-format.py) on
+# every .py Claude edits, and by hand (`flake8 .`). Without this file it ran at
+# pycodestyle's 79-column default against a black-formatted (88-column) tree
+# and reported ~3 800 findings, most of them E501 on lines black itself had
+# laid out — noise that buried the real F401/F841 findings on every edit.
+#
+# black owns layout: E203 and W503 are the two pycodestyle rules black
+# deliberately violates. 100 columns leaves room for the long Hebrew strings
+# and URLs black cannot wrap while still flagging a genuinely runaway line.
+[flake8]
+max-line-length = 100
+extend-ignore = E203,W503
+exclude =
+    .git,
+    __pycache__,
+    venv,
+    .venv,
+    env,
+    .pytest_cache,
+    .claude-flow,
+    backups,
+    artifacts,
+    node_modules
+per-file-ignores =
+    # Streamlit requires st.set_page_config() before any other st.* call, so
+    # the panel entrypoint and the auth module import after it on purpose.
+    admin_panel/main.py:E402
+    admin_panel/core/auth.py:E402

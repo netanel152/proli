@@ -52,16 +52,20 @@ List all `.py` files in `scripts/`. This is the authoritative script list.
 
 Read each file below in full. Check every listed claim against Phase 1 ground truth. Mark each claim as **✓ correct**, **✗ stale**, or **? needs update**.
 
-### `CLAUDE.md`
-| Section | What to check |
+### `CLAUDE.md` (lean rulebook) and `.claude/rules/*.md` (its path-scoped bulk)
+| File · section | What to check |
 |---------|---------------|
-| Service layer table | Every service listed; description matches actual responsibilities |
-| `UserStates` list | Exactly matches Phase 1.1 — no missing, no extra, correct names |
-| `WorkerConstants` list | Values match Phase 1.1 |
-| `LeadStatus` flow | Matches Phase 1.1 enum order |
-| Process 1 routes | Lists all routes from Phase 1.4 |
-| Process 2 APScheduler summary | Scheduler job list is plausible (need not be exhaustive, but must not be wrong) |
-| Test count (`N passed, M skipped`) | Matches Phase 1.6 |
+| `CLAUDE.md` · Process 1 routes | Lists all routes from Phase 1.4 |
+| `CLAUDE.md` · Process 2 APScheduler summary | Scheduler job list is plausible (need not be exhaustive, but must not be wrong) |
+| `CLAUDE.md` · Service Layer paragraph, Key Constants line, Configuration paragraph | The one-paragraph summaries agree with the rule files they point at |
+| `CLAUDE.md` · Path-scoped rules index | Every file under `.claude/rules/` has a row; globs match the file's `paths:` frontmatter |
+| `.claude/rules/services.md` · table | Every service listed; description matches actual responsibilities |
+| `.claude/rules/constants.md` | `UserStates` list exactly matches Phase 1.1; `WorkerConstants` values match Phase 1.1; `LeadStatus` flow matches enum order |
+| `.claude/rules/config-secrets.md` | Env-var list and the SecretStr field set match `app/core/config.py` |
+| `.claude/rules/admin-panel.md` | Module names, breakpoints and script names exist |
+| `.claude/rules/testing.md` | Fixture and test-file names exist; commands run |
+| `.claude/rules/claude-config.md` | Hook table matches `settings.json`; MCP table matches `.mcp.json` |
+| `.claude/skills/*/SKILL.md` | Every cited file path and test name exists (procedure text is not audited here) |
 
 ### `README.md`
 | Section | What to check |
@@ -183,6 +187,7 @@ Print a structured summary:
 
 ### Changes Made
 - `CLAUDE.md` — <what changed and why> | (no changes needed)
+- `.claude/rules/<file>.md` — <what changed and why> | (no changes needed)
 - `README.md` — <what changed and why> | (no changes needed)
 - `docs/ARCHITECTURE.md` — <what changed and why> | (no changes needed)
 - `docs/TESTING.md` — <what changed and why> | (no changes needed)
