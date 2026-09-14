@@ -164,3 +164,142 @@ def test_pushing_from_a_feature_worktree_is_allowed():
     assert guard.evaluate(
         "git -C /d/Projects/proli-wt/pro-162 push -u origin HEAD", "chore/parallel"
     ) == (0, "")
+
+
+# --- Sync before the merge: the PR-open guard --------------------------------
+#
+# The merge into `dev` is a pull request, so `gh pr create` is where the branch
+# and its base first have to agree. `merge_base_branch` decides *whether* a
+# command is that moment and *which* base it names; `evaluate` decides on the
+# measured distance. The two are split so neither needs a repo: the fetch and
+# the rev-list live in `_behind_count`, which is the impure half.
+
+
+def test_merge_base_branch_defaults_to_dev():
+    """`gh pr create` with no --base opens against the repo's default branch."""
+    assert guard.merge_base_branch("gh pr create --fill") == "dev"
+    assert guard.merge_base_branch("gh pr merge 181 --squash") == "dev"
+
+
+def test_merge_base_branch_reads_an_explicit_base_in_every_spelling():
+    for flag in ("--base dev", "--base=dev", "-B dev", "-B=dev"):
+        assert (
+            guard.merge_base_branch(f"gh pr create {flag} --fill") == "dev"
+        ), f"{flag} was not read"
+
+
+def test_merge_base_branch_reads_a_base_that_is_not_dev():
+    """The rule is about the base being ahead, whichever base that is."""
+    assert guard.merge_base_branch("gh pr create --base production") == "production"
+    assert (
+        guard.merge_base_branch('gh pr create --base "feature/epic" --fill')
+        == "feature/epic"
+    )
+
+
+def test_merge_base_branch_ignores_everything_that_is_not_a_merge():
+    # `git merge` is the *sync* this guard asks for — gating it would refuse
+    # the fix in its own message.
+    for command in (
+        "git merge origin/dev",
+        "gh pr view 181",
+        "gh pr list --state open",
+        "gh pr checks",
+        "git push -u origin feature/x",
+        "pytest -q",
+    ):
+        assert guard.merge_base_branch(command) is None, f"{command} read as a merge"
+
+
+def test_opening_a_pr_from_a_branch_the_base_has_moved_past_is_blocked():
+    code, msg = guard.evaluate("gh pr create --fill", "feature/x", behind_base=7)
+    assert code == 2
+    assert "7 commits behind" in msg
+    assert "git fetch origin dev && git merge origin/dev" in msg
+    # With one worktree per issue, "this branch" does not say which tree the
+    # guard read.
+    assert "feature/x" in msg
+
+
+def test_the_block_says_this_branch_when_the_branch_is_unknown():
+    _, msg = guard.evaluate("gh pr create --fill", "", behind_base=3)
+    assert "this branch is 3 commits behind" in msg
+
+
+# A command that *writes about* the rule is not the rule being broken. Both
+# cases below were found by the guard firing on the commit that added it: the
+# heredoc that edited CLAUDE.md to document this rule contained the words
+# `gh pr create`, and got blocked.
+
+
+def test_a_heredoc_body_that_mentions_opening_a_pr_is_not_opening_one():
+    # The body line *starts* with the words, which is the case the
+    # command-position rule alone cannot tell from a real invocation — writing
+    # a runbook or a fenced example into a doc looks exactly like this.
+    command = "cat <<'EOF' > docs/runbook.md\nThen run:\ngh pr create --fill\nEOF"
+    assert guard.merge_base_branch(command) is None
+    assert guard.evaluate(command, "feature/x", behind_base=9) == (0, "")
+
+
+def test_a_real_command_after_a_heredoc_still_counts():
+    """Stripping the body must not swallow what follows the delimiter."""
+    command = "cat <<'EOF' > notes.md\nsome notes\nEOF\ngh pr create --fill"
+    assert guard.merge_base_branch(command) == "dev"
+
+
+def test_the_words_only_count_in_command_position():
+    for quoted in (
+        'echo "gh pr create --fill"',
+        "grep -rn 'gh pr create' .claude/",
+        "git commit -m 'document gh pr create in the guard'",
+    ):
+        assert guard.merge_base_branch(quoted) is None, f"{quoted} read as a merge"
+
+
+def test_command_position_survives_a_shell_separator():
+    for command in (
+        "pytest -q && gh pr create --fill",
+        "git push -u origin HEAD; gh pr create --fill",
+        "cd /wt/pro-162 && gh pr create --fill",
+    ):
+        assert guard.merge_base_branch(command) == "dev", f"{command} was missed"
+
+
+def test_the_block_message_names_the_actual_base():
+    code, msg = guard.evaluate(
+        "gh pr create --base production", "feature/x", behind_base=2
+    )
+    assert code == 2
+    assert "origin/production" in msg
+    assert "git fetch origin production && git merge origin/production" in msg
+
+
+def test_one_commit_behind_is_still_one_commit_behind():
+    """Singular, because a message that says '1 commits' reads as a bug in the
+    guard and gets ignored — and one commit is the common case."""
+    _, msg = guard.evaluate("gh pr create --fill", "feature/x", behind_base=1)
+    assert "1 commit behind" in msg
+    assert "commits" not in msg.split("behind")[0]
+
+
+def test_a_branch_level_with_its_base_opens_its_pr():
+    assert guard.evaluate("gh pr create --fill", "feature/x", behind_base=0) == (0, "")
+
+
+def test_an_unmeasurable_distance_fails_open():
+    """`_behind_count` returns None for a missing remote, a dead network or a
+    directory that is not a repo. Blocking the PR-open path because the network
+    is down would be worse than the conflicts this prevents."""
+    assert guard.evaluate("gh pr create --fill", "feature/x", behind_base=None) == (
+        0,
+        "",
+    )
+    assert guard.evaluate("gh pr create --fill", "feature/x") == (0, "")
+
+
+def test_a_stale_branch_does_not_change_any_other_verdict():
+    """`behind_base` gates one rule. A command that was allowed stays allowed,
+    and one that was blocked keeps the message that explains why."""
+    assert guard.evaluate("git status", "feature/x", behind_base=9) == (0, "")
+    code, msg = guard.evaluate("git commit -m x", "dev", behind_base=9)
+    assert code == 2 and "dev" in msg
