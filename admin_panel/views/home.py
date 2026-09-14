@@ -49,7 +49,7 @@ import pytz
 import os
 import sys
 from app.core.logger import logger
-from app.core.constants import AdminDefaults, Defaults, LeadStatus, Actor
+from app.core.constants import AdminDefaults, LeadStatus, Actor
 from app.core.phone import to_chat_id, strip_suffix
 from app.core.lead_history import status_history_entry
 
@@ -331,7 +331,10 @@ def _render_pending_review_strip(T):
         leads_collection.find({"status": LeadStatus.PENDING_ADMIN_REVIEW}).limit(
             PENDING_STRIP_FETCH_MAX
         ),
-        key=lambda l: (not l.get("is_emergency"), _pending_since(l) or datetime.max),
+        key=lambda lead: (
+            not lead.get("is_emergency"),
+            _pending_since(lead) or datetime.max,
+        ),
     )
 
     # Who may be offered a lead is `matching_service`'s question, not this
@@ -531,12 +534,12 @@ def view_leads_dashboard(T):
         # save_lead_edits (PRO-161) and the PRO-140/158 query extractions.
         data = [
             build_lead_row(
-                l,
+                lead,
                 pro_map_id_to_name=pro_map_id_to_name,
                 unknown_pro_label=T["unknown_pro"],
                 status_labels=status_labels,
             )
-            for l in leads
+            for lead in leads
         ]
 
         # `pd.DataFrame(rows, columns=...)` is a *reindex*, not a validation: a

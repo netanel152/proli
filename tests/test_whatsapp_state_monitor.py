@@ -19,7 +19,7 @@ have zero external dependencies and full nx/ex control without fakeredis.
 import time
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import app.services.monitor_service as monitor_module
 import app.services.notification_service as notif_module

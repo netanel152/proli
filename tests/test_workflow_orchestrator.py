@@ -6,7 +6,7 @@ Covers: reset, pro auto-detect, address collection, onboarding, deal finalizatio
 import re
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from bson import ObjectId
 from app.core.constants import UserStates, LeadStatus, WorkerConstants, Actor
 from app.core.messages import Messages

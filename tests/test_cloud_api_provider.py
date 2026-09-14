@@ -200,7 +200,7 @@ async def test_send_text_with_window_open_posts_and_records_delivery(
     }
     assert len(recorder.requests) == 1
     request = recorder.requests[0]
-    assert request.url == (f"https://graph.facebook.com/v23.0/1234567890/messages")
+    assert request.url == "https://graph.facebook.com/v23.0/1234567890/messages"
     body = json.loads(request.content)
     assert body["messaging_product"] == "whatsapp"
     assert body["to"] == "972501234567"  # no @c.us suffix

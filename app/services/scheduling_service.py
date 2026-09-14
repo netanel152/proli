@@ -7,8 +7,11 @@ and no-show tracking.
 
 from datetime import datetime, timedelta, timezone, time
 from bson.objectid import ObjectId
-from app.core.database import users_collection, slots_collection, leads_collection
-from app.core.constants import LeadStatus
+from app.core.database import (  # noqa: F401 — leads_collection is a monkeypatch seam
+    users_collection,
+    slots_collection,
+    leads_collection,  # unused here; tests/conftest.py rebinds it, so it must exist
+)
 from app.core.logger import logger
 import pytz
 

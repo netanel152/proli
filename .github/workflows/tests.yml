@@ -96,14 +96,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Formatting is enforced; linting is not yet. `black .` was applied to
-      # the whole tree once (27 files, AST-identical before and after) and this
-      # step keeps it that way — without it the count creeps back up one edit
-      # at a time. `flake8 .` (config in .flake8) still reports pre-existing
-      # F401/E501 debt, so it stays a local command until that is paid down
-      # (see CLAUDE.md).
+      # Formatting and linting are both enforced. `black .` was applied to the
+      # whole tree once (27 files, AST-identical before and after); flake8's
+      # pre-existing debt (unused imports and locals, f-strings without
+      # placeholders, mid-file imports) was paid down once, with E501 left to
+      # black and the sys.path shims in scripts/ allowed in .flake8. These two
+      # steps keep both at zero — without them the counts creep back one edit
+      # at a time.
       - name: Lint — black --check
         run: black --check --diff .
+
+      - name: Lint — flake8
+        run: flake8 --count .
 
       - name: Run tests
         run: |

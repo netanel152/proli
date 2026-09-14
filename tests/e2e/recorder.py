@@ -20,9 +20,7 @@ message key or a template name.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from typing import Any
 
 from app.providers.whatsapp.base import NormalizedMessage, WhatsAppProvider
 

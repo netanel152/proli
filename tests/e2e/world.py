@@ -273,8 +273,6 @@ class World:
         media_kind: str | None = None,
     ) -> dict:
         """A synthetic legacy-envelope ``incomingMessageReceived`` payload."""
-        from app.core.config import settings
-
         sender = chat_id or self.customer
         if media_kind:
             _, mime = MEDIA_FIXTURES[media_kind]

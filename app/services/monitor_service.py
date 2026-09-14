@@ -26,7 +26,6 @@ from app.services.notification_service import (
 from app.core.messages import Messages
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
-from bson import ObjectId
 
 whatsapp = get_whatsapp()
 

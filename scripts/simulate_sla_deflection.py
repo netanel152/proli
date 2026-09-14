@@ -62,9 +62,9 @@ async def simulate_sla_deflection(chat_id: str):
     )
     print(f"✅ Set Redis state to PAUSED_FOR_HUMAN for {chat_id}")
 
-    print(f"\n🚀 Simulation ready! Make sure the worker is running.")
+    print("\n🚀 Simulation ready! Make sure the worker is running.")
     print(
-        f"The SLA Monitor (APScheduler job) runs every 5 minutes and will pick this up."
+        "The SLA Monitor (APScheduler job) runs every 5 minutes and will pick this up."
     )
 
 

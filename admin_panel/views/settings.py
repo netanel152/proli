@@ -30,7 +30,6 @@ from admin_panel.core.rbac import (
 )
 
 from admin_panel.core.auth import _audit_col
-from app.core.config import settings as app_settings
 import pytz
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")

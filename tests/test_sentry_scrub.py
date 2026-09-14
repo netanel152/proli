@@ -11,8 +11,6 @@ dicts), so this file is collection-safe for
 ``tests/test_fire_test_page.py``'s "sentry_sdk was never imported" assertion.
 """
 
-import pytest
-
 import app.core.sentry as sentry_module
 from app.core.sentry import _scrub_event, _scrub_string, _walk
 

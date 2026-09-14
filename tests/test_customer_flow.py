@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 from bson import ObjectId
 from datetime import datetime, timedelta, timezone
-from app.core.constants import LeadStatus, Defaults, WorkerConstants
+from app.core.constants import LeadStatus, WorkerConstants
 from app.core.messages import Messages
 from app.core.phone import to_chat_id
 from tests.copy_util import static_prefix, longest_static_chunk

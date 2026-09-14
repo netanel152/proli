@@ -1006,7 +1006,6 @@ async def test_assign_lead_to_pro_core_does_not_notify_customer_when_offer_not_s
 async def test_assign_lead_to_pro_core_lookup_miss_returns_none_and_skips_notify(
     patch_admin_collections, mock_whatsapp, monkeypatch
 ):
-    db = patch_admin_collections
     notify = AsyncMock(return_value=True)
     monkeypatch.setattr(admin_flow, "notify_pro_new_lead", notify)
     # The write still lands (lead_manager_service uses its own leads_collection

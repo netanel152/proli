@@ -131,7 +131,7 @@ The baseline is the "Current status" line in `docs/TESTING.md`, enforced by CI a
 
 ```bash
 black .    # enforced: CI runs `black --check --diff .` and fails the build on an unformatted file
-flake8 .   # config in .flake8 — black-compatible, 100 columns; advisory until the pre-existing debt is paid
+flake8 .   # enforced too: CI runs `flake8 --count .`; config in .flake8 (E501 left to black, sys.path shims in scripts/ allowed)
 ```
 
 ## Architecture

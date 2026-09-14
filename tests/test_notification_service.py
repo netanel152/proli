@@ -6,11 +6,10 @@ failures are swallowed (best-effort), not retried via SMS.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from bson import ObjectId
 from datetime import datetime, timezone
 from app.core.constants import LeadStatus, WorkerConstants
-from app.core.messages import Messages
 from app.core.config import settings
 from app.services.notification_service import send_pro_reminder, send_sos_alert
 import app.services.notification_service

@@ -219,7 +219,7 @@ async def test_pro_assignment_logic_db(integration_db):
     }
     # Insert Pros
     res_good = await integration_db.users.insert_one(pro_good)
-    res_avg = await integration_db.users.insert_one(pro_avg)
+    await integration_db.users.insert_one(pro_avg)
     res_busy = await integration_db.users.insert_one(pro_busy)
 
     # Overload "Pro Busy" with 3 active jobs
