@@ -190,14 +190,20 @@ jobs:
           # passed. The table printed above has always distinguished the cases,
           # but the ::error:: is what the Actions list shows, and a red run
           # nobody can read at a glance is one people learn to wave through.
-          PYTEST=$(echo "$ALL" | awk -F'|' '$1 == "pytest"')
           if ! echo "$OTHERS" | grep -qxF 'pytest|completed|success'; then
-            if [ -z "$PYTEST" ]; then
-              echo "::error::dev@$SHA has no 'pytest' check at all — this commit was never tested. An admin merge or a direct push bypassing branch protection does this. Refusing to promote."
-            elif ! echo "$PYTEST" | grep -q '|completed|'; then
+            PYTEST=$(echo "$ALL" | awk -F'|' '$1 == "pytest"')
+            # "Still running" is tested FIRST, and the order is the point. A
+            # re-run in flight after a failure matches both arms, and calling
+            # that one "the tests broke" would reproduce this commit's own bug
+            # one layer down: the actionable answer is still to wait.
+            if echo "$PYTEST" | grep -q '|queued|\||in_progress|'; then
               echo "::error::dev@$SHA — 'pytest' is still running. Nothing is wrong with the commit: wait for CI to finish, then run this workflow again."
+            elif [ -z "$PYTEST" ]; then
+              echo "::error::dev@$SHA has no 'pytest' check at all — this commit was never tested. An admin merge or a direct push bypassing branch protection does this. Refusing to promote."
             else
-              echo "::error::dev@$SHA — 'pytest' completed without passing (see the table above). Fix dev before promoting."
+              # Also the landing place for a cancelled run, hence "re-run CI":
+              # blocking is right there, but "fix dev" would be wrong advice.
+              echo "::error::dev@$SHA — 'pytest' completed without passing (see its conclusion in the table above). Fix dev, or re-run CI if it was cancelled, before promoting."
             fi
             exit 1
           fi
