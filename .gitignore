@@ -49,3 +49,6 @@ backups/
 # Screenshot output from scripts/admin_panel_screenshots.py — review aids for a
 # PR, regenerated on demand, never fixtures.
 artifacts/
+
+# Per-developer CLAUDE.md overrides (Claude Code reads it next to CLAUDE.md; never shared)
+CLAUDE.local.md
