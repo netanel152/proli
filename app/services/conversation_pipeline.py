@@ -216,7 +216,14 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             await StateManager.set_metadata(
                 chat_id, {"booked_lead_id": str(booked_lead["_id"])}
             )
-            await StateManager.set_state(chat_id, UserStates.AWAITING_NEW_OR_EXISTING)
+            # PRO-193: bounded, like every other confirmation gate. Expiry
+            # releases the customer to normal routing rather than trapping them
+            # behind a question they could not phrase an answer to.
+            await StateManager.set_state(
+                chat_id,
+                UserStates.AWAITING_NEW_OR_EXISTING,
+                ttl=WorkerConstants.NEW_OR_EXISTING_TTL_SECONDS,
+            )
             prompt = Messages.Customer.EXISTING_JOB_PROMPT.format(
                 pro_name=pro_name,
                 issue=booked_lead.get("issue_type") or "העבודה",
