@@ -16,6 +16,8 @@ from admin_panel.core.labels import (
     LEAD_STATUSES,
     PROFESSION_TYPES,
     lead_status_label,
+    pro_option_label,
+    pro_option_map,
     profession_label,
     status_by_label,
     status_label_map,
@@ -71,3 +73,36 @@ def test_status_by_label_is_exact_inverse_of_status_label_map_for_every_status()
 
 def test_profession_types_matches_catalog_keys_in_order():
     assert PROFESSION_TYPES == tuple(Messages.Onboarding.TYPE_LABELS)
+
+
+# --- pro_option_label / pro_option_map -----------------------------------
+
+
+@pytest.mark.parametrize("lang", ["HE", "EN"])
+def test_pro_option_label_never_renders_an_empty_string(lang):
+    """Self-onboarding writes ``business_name: ""``, and ``dict.get(k, default)``
+    does not fire on an empty string — so every ``p.get("business_name",
+    T["unnamed_pro"])`` in the panel rendered nothing at all."""
+    T = TRANS[lang]
+    assert pro_option_label(T, {"business_name": "אבי שרברב"}) == "אבי שרברב"
+    for pro in ({"business_name": ""}, {"business_name": "  "}, {}):
+        label = pro_option_label(T, {**pro, "phone_number": "972501234567"})
+        assert label.startswith(T["unnamed_pro"]), label
+        assert label.endswith("4567"), "the phone tail keeps two unnamed pros apart"
+    assert pro_option_label(T, {}) == T["unnamed_pro"]
+
+
+def test_pro_option_map_keeps_every_pro_reachable():
+    """A name-keyed dict silently dropped every unnamed pro but one from the
+    schedule selector, and would do the same to two pros sharing a name."""
+    T = TRANS["HE"]
+    pros = [
+        {"_id": "a1", "business_name": "אבי שרברב"},
+        {"_id": "b2", "business_name": "אבי שרברב"},
+        {"_id": "c3", "business_name": "", "phone_number": "972500000001"},
+        {"_id": "d4", "business_name": "", "phone_number": "972500000002"},
+    ]
+    out = pro_option_map(T, pros)
+    assert len(out) == 4, out.keys()
+    assert {p["_id"] for p in out.values()} == {"a1", "b2", "c3", "d4"}
+    assert "אבי שרברב" in out and "אבי שרברב · b2" in out

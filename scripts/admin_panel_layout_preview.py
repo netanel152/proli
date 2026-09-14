@@ -161,8 +161,8 @@ def render_dashboard():
     tab_kanban, tab_table, tab_create = st.tabs(
         [
             T.get("tab_kanban", "Board"),
-            T.get("tab_table", "Table"),
-            T.get("tab_create", "New"),
+            T.get("tab_dashboard", "Table"),
+            T.get("tab_create_lead", "New"),
         ]
     )
 
@@ -221,7 +221,10 @@ def render_dashboard():
             st.markdown("")
             st.button(T.get("delete_btn", "Delete Lead"), key="del", type="secondary")
         with c2:
-            st.text_input(T.get("input_details", "Details"), key="details")
+            st.text_input(T.get("details_label", "Details"), key="details")
+            # Marked exactly as `views/home.py` marks its delete confirm: the
+            # preview must stack or not stack where the real view does.
+            mark_row_inline()
             cy, cn = st.columns(2)
             cy.button(T.get("confirm_yes", "Yes"), key="yes", type="primary")
             cn.button(T.get("confirm_no", "No"), key="no")
@@ -252,9 +255,9 @@ def render_dashboard():
         )
 
     with tab_create:
-        st.text_input(T.get("input_client", "Client"), key="new_client")
-        st.text_input(T.get("input_phone", "Phone"), key="new_phone")
-        st.button(T.get("action_save", "Save"), key="save", type="primary")
+        st.text_input(T.get("client_name_label", "Client"), key="new_client")
+        st.text_input(T.get("input_client_phone", "Phone"), key="new_phone")
+        st.button(T.get("save_btn", "Save"), key="save", type="primary")
 
 
 def render_widgets():
@@ -282,7 +285,7 @@ def render_widgets():
     # --- Form + inputs -----------------------------------------------------
     st.subheader("Form")
     with st.form("preview_form"):
-        st.text_input(T.get("input_client", "Client"), key="w_client")
+        st.text_input(T.get("client_name_label", "Client"), key="w_client")
         c1, c2 = st.columns(2)
         c1.date_input(T.get("sch_date", "Date"), key="w_date")
         c2.time_input(T.get("sch_start_hour", "Start"), key="w_time")
@@ -295,7 +298,7 @@ def render_widgets():
         )
         st.slider(T.get("metric_total", "Total"), 0, 100, 40, key="w_slider")
         st.checkbox(T.get("auto_refresh", "Auto-refresh"), key="w_check")
-        st.form_submit_button(T.get("action_save", "Save"), type="primary")
+        st.form_submit_button(T.get("save_btn", "Save"), type="primary")
 
     # --- Status pills and chat --------------------------------------------
     st.subheader("Status pills")
@@ -338,7 +341,7 @@ def render_widgets():
 
     st.subheader("Download")
     st.download_button(
-        T.get("action_export", "Export CSV"), "a,b\n1,2", "preview.csv", key="w_dl"
+        T.get("export_csv", "Export CSV"), "a,b\n1,2", "preview.csv", key="w_dl"
     )
 
 
@@ -417,7 +420,7 @@ def render_forms():
         use_container_width=True,
         key="f_editor",
     )
-    st.button(T.get("action_save", "Save"), key="f_editor_save", type="primary")
+    st.button(T.get("save_btn", "Save"), key="f_editor_save", type="primary")
 
 
 def render_login():

@@ -67,3 +67,38 @@ def status_by_label(T, statuses=None):
     label-valued twin column and maps the choice back through this on save.
     """
     return {label: s for s, label in status_label_map(T, statuses).items()}
+
+
+def pro_option_label(T, pro):
+    """The name a selector or card shows for a professional — never blank.
+
+    Self-onboarding writes ``business_name: ""`` (``pro_onboarding_service``),
+    and ``dict.get(key, default)`` only fires on a *missing* key, so every
+    ``p.get("business_name", T["unnamed_pro"])`` in the panel rendered the empty
+    string: a bold nothing on the pro card, a blank row in the assign dropdown,
+    and — because the maps were keyed by that name — every unnamed pro collapsing
+    onto one dict entry, so picking the blank row wrote whichever document Mongo
+    returned last. The tail of the phone number keeps two unnamed pros apart.
+    """
+    name = (pro.get("business_name") or "").strip()
+    if name:
+        return name
+    tail = str(pro.get("phone_number") or pro.get("_id") or "")[-4:]
+    return f"{T['unnamed_pro']} · {tail}" if tail else T["unnamed_pro"]
+
+
+def pro_option_map(T, pros):
+    """``{label: pro}`` with one entry per pro, labels made unique.
+
+    Two pros can share a business name (two "אבי שרברב"s); a name-keyed dict
+    silently drops one of them from every selector that reads it. A duplicate
+    gets the id tail appended so both stay reachable and the selector still
+    reads as a name.
+    """
+    out = {}
+    for pro in pros:
+        label = pro_option_label(T, pro)
+        if label in out:
+            label = f"{label} · {str(pro.get('_id', ''))[-4:]}"
+        out[label] = pro
+    return out

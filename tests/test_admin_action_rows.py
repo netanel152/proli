@@ -52,7 +52,7 @@ MARKED_ROWS = {
     "views/professionals.py": 3,  # delete confirm, reject confirm, geo save row
     "views/schedule.py": 2,  # generate/clear, clear-day confirm
     "views/home.py": 1,  # delete-lead confirm
-    "views/settings.py": 1,  # audit pagination
+    "views/settings.py": 2,  # audit pagination, delete-admin confirm
 }
 
 
@@ -340,3 +340,48 @@ def test_leads_editor_takes_no_explicit_height():
         "if a height is added here, re-measure first: the default is already "
         "under 60vh on a phone"
     )
+
+
+# --- The preview stacks exactly where the real views stack -----------------
+
+
+def test_the_preview_marks_its_dashboard_confirm_like_the_real_view():
+    """`views/home.py` marks its delete confirm; the preview's copy of that
+    row did not, so every phone screenshot of the dashboard showed the two
+    buttons stacked — a regression that was not there. The preview is the
+    evidence a reviewer reads, so it has to carry the same markers."""
+    source = (REPO_ROOT / "scripts" / "admin_panel_layout_preview.py").read_text(
+        encoding="utf-8"
+    )
+    tree = ast.parse(source)
+    dashboard = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef) and n.name == "render_dashboard"
+    )
+    marked = 0
+    for block in ast.walk(dashboard):
+        stmts = getattr(block, "body", None)
+        if not isinstance(stmts, list):
+            continue
+        for prev, nxt in zip(stmts, stmts[1:]):
+            call = getattr(nxt, "value", None)
+            if not (
+                isinstance(nxt, ast.Assign)
+                and isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "columns"
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+                and call.args[0].value == 2
+            ):
+                continue
+            assert (
+                isinstance(prev, ast.Expr)
+                and isinstance(prev.value, ast.Call)
+                and getattr(prev.value.func, "id", None) == "mark_row_inline"
+            ), f"preview confirm row at line {nxt.lineno} is not marked"
+            marked += 1
+    assert (
+        marked == 1
+    ), f"expected one marked confirm row in the preview, found {marked}"
