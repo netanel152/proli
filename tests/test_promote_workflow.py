@@ -219,46 +219,68 @@ def test_gate_step_delimiter_injection_does_not_forge_a_verify_output(
 # Pins the three-way split introduced after the 09-14 01:42 run (34796766425):
 # a still-running `pytest` check used to print the exact same annotation as a
 # commit that was never tested at all, which is how "wait ninety seconds" got
-# read as "the tests are broken". The step now tells apart (1) no `pytest`
-# check row, (2) a `pytest` row that isn't `completed` yet, and (3) a
-# `pytest` row that completed without `success` — with distinct wording for
-# each — and it must not block on its own still-running run (`SELF`).
+# read as "the tests are broken". The step tells apart (1) a `pytest` row
+# that isn't `completed` yet, (2) no `pytest` row at all, and (3) a `pytest`
+# row that completed without `success` — with distinct wording for each.
+#
+# The classification order is itself load-bearing, not incidental: a re-run
+# in flight after a prior failure produces *two* `pytest` rows for the same
+# commit (one `completed|failure`, one still `in_progress`), which matches
+# both the "still running" and "completed without passing" arms. Testing
+# "still running" first is what keeps that case reading as "wait", which is
+# the actionable answer — the alternative was this same commit's own bug one
+# layer down. `gh api --jq` renders a check with no conclusion yet as the
+# literal string `null`, not an empty field, so the fixture rows below use
+# `null` rather than a trailing empty segment.
 
 
-def _write_gh_stub(bin_dir, check_runs_lines):
-    """Write an executable `gh` on PATH that ignores its arguments and prints
-    the canned check-runs table. The real step formats its `check-runs`
-    response with `gh api --jq '.check_runs[] | "\\(.name)|\\(.status)|\\(.conclusion)"'`
-    — the stub skips the API call and `--jq` entirely and just emits rows
-    already in that shape, which is all the script ever sees."""
+def _write_gh_stub(bin_dir, check_runs_lines, argv_log_path):
+    """Write an executable `gh` on PATH that records its full argv (so a
+    test can assert on the actual `gh api` call — the URL, `--jq`, etc. —
+    rather than trusting the script called `gh` correctly) and then prints
+    the canned check-runs table, already in the
+    `name|status|conclusion` shape `gh api --jq` would have produced."""
     canned_path = bin_dir / "canned_check_runs.txt"
     canned_path.write_text("\n".join(check_runs_lines), encoding="utf-8")
     gh_path = bin_dir / "gh"
     gh_path.write_text(
-        "#!/usr/bin/env bash\n" f'cat "{canned_path}"\n',
+        "#!/usr/bin/env bash\n"
+        f'printf \'%s\\n\' "$*" >> "{argv_log_path}"\n'
+        f'cat "{canned_path}"\n',
         encoding="utf-8",
     )
     gh_path.chmod(0o755)
 
 
-def _run_assert_green(script_path, tmp_path, check_runs_lines, self_name="promote"):
+def _run_assert_green(
+    script_path,
+    tmp_path,
+    check_runs_lines,
+    self_name="promote",
+    repo="acme/proli",
+    sha="deadbeefcafe",
+):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    _write_gh_stub(bin_dir, check_runs_lines)
+    argv_log_path = tmp_path / "gh_argv.log"
+    argv_log_path.write_text("", encoding="utf-8")
+    _write_gh_stub(bin_dir, check_runs_lines, argv_log_path)
 
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
-    env["SHA"] = "deadbeefcafe"
+    env["SHA"] = sha
     env["SELF"] = self_name
-    env["REPO"] = "acme/proli"
+    env["REPO"] = repo
 
-    return subprocess.run(
+    proc = subprocess.run(
         ["bash", str(script_path)],
         env=env,
         capture_output=True,
         text=True,
         timeout=10,
     )
+    gh_invocation = argv_log_path.read_text(encoding="utf-8")
+    return proc, gh_invocation
 
 
 @pytest.fixture(scope="module")
@@ -289,7 +311,7 @@ def assert_green_script(tmp_path_factory):
             id="no-pytest-row-at-all",
         ),
         pytest.param(
-            ["pytest|in_progress|"],
+            ["pytest|in_progress|null"],
             "promote",
             1,
             "still running",
@@ -310,11 +332,11 @@ def assert_green_script(tmp_path_factory):
             id="no-checks-reported-at-all",
         ),
         pytest.param(
-            ["promote|in_progress|", "pytest|completed|success"],
+            ["promote|completed|failure", "pytest|completed|success"],
             "promote",
             0,
             None,
-            id="this-jobs-own-in-progress-run-does-not-block-itself",
+            id="an-earlier-failed-run-of-this-same-job-does-not-block",
         ),
         pytest.param(
             ["pytest|completed|success", "flake8|completed|failure"],
@@ -322,6 +344,13 @@ def assert_green_script(tmp_path_factory):
             1,
             "failing completed check",
             id="pytest-green-but-another-check-failed",
+        ),
+        pytest.param(
+            ["pytest|completed|failure", "pytest|in_progress|null"],
+            "promote",
+            1,
+            "still running",
+            id="rerun-in-flight-after-a-prior-failure-reads-as-still-running",
         ),
     ],
 )
@@ -333,7 +362,7 @@ def test_assert_dev_ci_green_step(
     expected_exit,
     expected_substring,
 ):
-    proc = _run_assert_green(
+    proc, _gh_invocation = _run_assert_green(
         assert_green_script, tmp_path, check_runs, self_name=self_name
     )
 
@@ -344,22 +373,46 @@ def test_assert_dev_ci_green_step(
         assert expected_substring in proc.stdout
 
 
+def test_assert_dev_ci_green_step_queries_the_correct_check_runs_url(
+    assert_green_script, tmp_path
+):
+    # The `gh` stub ignores its argv when producing output, so every case
+    # above would pass unchanged if `REPO`/`SHA` were swapped in the URL, or
+    # `--jq` were dropped. This is the one test that looks at the call itself.
+    proc, gh_invocation = _run_assert_green(
+        assert_green_script,
+        tmp_path,
+        ["pytest|completed|success"],
+        self_name="promote",
+        repo="acme/proli",
+        sha="deadbeefcafe",
+    )
+
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "repos/acme/proli/commits/deadbeefcafe/check-runs" in gh_invocation
+    assert "--jq" in gh_invocation
+
+
 def test_assert_dev_ci_green_failure_annotations_are_mutually_distinct(
     assert_green_script, tmp_path
 ):
     # The whole point of the fix: three genuinely different situations used to
-    # share one sentence. If a future edit re-collapses any two of them —
-    # even by making one a near-duplicate of another — this must fail.
+    # share one sentence. This catches the annotations collapsing back to
+    # identical text, or one becoming a literal substring of another — it
+    # does not catch near-duplicate wording (e.g. two messages differing only
+    # by punctuation), which needs a human reading the diff, not this assert.
     cases = [
+        ("still_running", ["pytest|in_progress|null"]),
         ("never_tested", []),
-        ("still_running", ["pytest|in_progress|"]),
         ("not_passing", ["pytest|completed|failure"]),
     ]
     annotations = {}
     for case_id, check_runs in cases:
         case_dir = tmp_path / case_id
         case_dir.mkdir()
-        proc = _run_assert_green(assert_green_script, case_dir, check_runs)
+        proc, _gh_invocation = _run_assert_green(
+            assert_green_script, case_dir, check_runs
+        )
         assert proc.returncode == 1, f"{case_id}: {proc.stdout!r} {proc.stderr!r}"
         error_lines = [
             line
