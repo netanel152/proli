@@ -177,8 +177,16 @@ def responsive_css(direction, align):
                 min-height: {TOUCH_TARGET_PX}px;
             }}
 
+            /* One rule, not two: the touch target and the scroll-strip
+               behaviour below are the same selector, and a second block for
+               it further down is how half of it gets missed. `flex: 0 0 auto`
+               is what makes the strip overflow — without it the tabs shrink
+               to fit and there is nothing to scroll. */
             .stTabs [data-baseweb="tab"] {{
                 min-height: {TOUCH_TARGET_PX}px;
+                white-space: nowrap;
+                padding: 8px 12px;
+                flex: 0 0 auto;
             }}
 
             /* The one control the button rule misses, and the most-tapped one
@@ -206,6 +214,43 @@ def responsive_css(direction, align):
             section[data-testid="stSidebar"][aria-expanded="true"] {{
                 width: min(320px, 85vw) !important;
                 min-width: min(320px, 85vw) !important;
+            }}
+
+            /* ---- Action rows stay horizontal (S3) ----
+               Streamlit wraps a row by putting
+               `min-width: calc(100% - 22.5px)` on every column here, and
+               nothing in the DOM says whether a row holds buttons or text
+               inputs. `mark_row_inline()` emits a hidden marker before the
+               row; clearing `min-width` on that row's columns is the whole
+               fix. `flex-basis` is deliberately left alone, so a row keeps
+               the weights it was declared with — `[2, 2, 1]` stays 2:2:1
+               rather than collapsing to thirds. */
+            [data-testid="element-container"]:has(.row-inline)
+                + [data-testid="stHorizontalBlock"]
+                > [data-testid="column"] {{
+                min-width: 0 !important;
+            }}
+
+            /* A narrow screen is where a form's padding costs the most. */
+            [data-testid="stForm"] {{
+                padding: 16px !important;
+            }}
+
+            /* A bubble at 75% of 345px is 259px, and Hebrew wraps early in
+               it. The speaker is already carried by the side and the colour. */
+            .chat-bubble {{
+                max-width: 92%;
+            }}
+
+            /* ---- The tab strip scrolls rather than wrapping (S4) ----
+               Analytics has six tabs; wrapped, they push the chart below the
+               fold and the selected one can land on a second row with no
+               indication there is one. */
+            .stTabs [data-baseweb="tab-list"] {{
+                overflow-x: auto;
+                flex-wrap: nowrap;
+                scrollbar-width: thin;
+                -webkit-overflow-scrolling: touch;
             }}
 
             /* Two metric tiles per row, and a tighter tile: five stacked
