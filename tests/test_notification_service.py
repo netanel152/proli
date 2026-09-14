@@ -11,6 +11,9 @@ from bson import ObjectId
 from datetime import datetime, timezone
 from app.core.constants import LeadStatus, WorkerConstants
 from app.core.config import settings
+from app.core.messages import Messages
+from app.core.phone import to_local_phone
+from tests.copy_util import static_prefix
 from app.services.notification_service import send_pro_reminder, send_sos_alert
 import app.services.notification_service
 
@@ -149,13 +152,15 @@ async def test_pro_reminder_below_cap_sends_and_increments(notif_mocks):
 
 @pytest.mark.asyncio
 async def test_sos_alert_with_pro_and_lead(notif_mocks, pages):
+    """Assigned pro, lead already BOOKED (approved) — the pro has earned the
+    number, so PRO_ALERT (with phone) goes out."""
     mock_wa, db = notif_mocks
     pro_id = ObjectId()
     await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
     await db.leads.insert_one(
         {
             "chat_id": "972501111111@c.us",
-            "status": LeadStatus.CONTACTED,
+            "status": LeadStatus.BOOKED,
             "issue_type": "נזילה",
             "full_address": "תל אביב",
             "appointment_time": "10:00",
@@ -170,7 +175,8 @@ async def test_sos_alert_with_pro_and_lead(notif_mocks, pages):
     assert mock_wa.send_message.call_count == 1
     calls = {c.args[0]: c.args[1] for c in mock_wa.send_message.call_args_list}
     assert "972500000000@c.us" in calls
-    assert "הלקוח שלך צריך עזרה" in calls["972500000000@c.us"]
+    assert static_prefix(Messages.SOS.PRO_ALERT) in calls["972500000000@c.us"]
+    assert to_local_phone("972501111111@c.us") in calls["972500000000@c.us"]
 
     admin_chat = f"{settings.ADMIN_PHONE}@c.us"
     assert admin_chat not in calls, "admin must no longer receive WhatsApp"
@@ -179,6 +185,64 @@ async def test_sos_alert_with_pro_and_lead(notif_mocks, pages):
     assert len(pages) == 1
     assert "נזילה" in pages[0]
     assert "SOS" in pages[0]
+
+
+# --- PRO-59: the SOS pro-alert is a fourth path to the customer's phone —
+# gated on the lead being BOOKED, same as CONTACT_CARD. guard_sos's own query
+# still matches NEW/CONTACTED/BOOKED, so this re-read+gate inside
+# send_sos_alert is the only thing standing between a pre-approval pro and
+# the number. ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [LeadStatus.NEW, LeadStatus.CONTACTED])
+async def test_sos_alert_pre_approval_lead_gets_pending_alert_no_phone(
+    notif_mocks, pages, status
+):
+    """A pro offered (NEW) or barely-briefed (CONTACTED) on the lead has not
+    approved it — PRO_ALERT_PENDING goes out instead, carrying no phone in
+    either form, and the operator page is unaffected."""
+    mock_wa, db = notif_mocks
+    pro_id = ObjectId()
+    await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
+    await db.leads.insert_one(
+        {
+            "chat_id": "972501111111@c.us",
+            "status": status,
+            "issue_type": "נזילה",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    await send_sos_alert("972501111111@c.us", "אני צריך עזרה", pro_id)
+
+    calls = {c.args[0]: c.args[1] for c in mock_wa.send_message.call_args_list}
+    pro_msg = calls["972500000000@c.us"]
+    assert static_prefix(Messages.SOS.PRO_ALERT_PENDING) in pro_msg
+    assert to_local_phone("972501111111@c.us") not in pro_msg
+    assert "972501111111" not in pro_msg
+
+    assert len(pages) == 1  # admin/operator page unaffected either way
+
+
+@pytest.mark.asyncio
+async def test_sos_alert_missing_lead_takes_phone_free_branch(notif_mocks, pages):
+    """No active lead at all for this chat_id (re-read comes back None) — the
+    gate fails closed: not BOOKED, so no phone."""
+    mock_wa, db = notif_mocks
+    pro_id = ObjectId()
+    await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
+    # No lead inserted — active_lead re-read returns None.
+
+    await send_sos_alert("972501111111@c.us", "אני צריך עזרה", pro_id)
+
+    calls = {c.args[0]: c.args[1] for c in mock_wa.send_message.call_args_list}
+    pro_msg = calls["972500000000@c.us"]
+    assert static_prefix(Messages.SOS.PRO_ALERT_PENDING) in pro_msg
+    assert to_local_phone("972501111111@c.us") not in pro_msg
+    assert "972501111111" not in pro_msg
+
+    assert len(pages) == 1
 
 
 @pytest.mark.asyncio

@@ -12,7 +12,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
-from tests.copy_util import static_prefix
+from tests.copy_util import longest_static_chunk, static_prefix
 from app.services.pro_flow import handle_pro_text_command, _handle_search
 import app.services.pro_flow
 
@@ -559,12 +559,19 @@ async def test_approve_lost_race_with_recent_response_returns_already_responded(
 
 
 @pytest.mark.asyncio
-async def test_approve_delivers_contact_card_and_sends_navlink_to_pro_chat_id(
+async def test_approve_delivers_contact_card_with_inline_navlink(
     pro_setup, mock_wa, mock_lm, monkeypatch
 ):
-    """Approving reveals the phone, wa.me link and full address in the reply
-    (CONTACT_CARD), and the post-approval navigation link is sent to the
-    pro's *chat_id*, not the raw stored phone number."""
+    """Approving reveals the phone, wa.me link, full address and a waze
+    navigation line — all inline in the reply text (CONTACT_CARD). There is
+    no separate `send_location_link` call any more (it used to arrive
+    *before* the handler's own return value, a context-free waze URL ahead
+    of the approval itself).
+
+    No `customer_phone` field on the lead — production never writes one;
+    `_handle_approve` always falls back to `strip_suffix(chat_id)`, which
+    this test's `chat_id` already supplies.
+    """
     pro_doc, db = pro_setup
     lead_id = ObjectId()
     await db.leads.insert_one(
@@ -573,7 +580,6 @@ async def test_approve_delivers_contact_card_and_sends_navlink_to_pro_chat_id(
             "pro_id": pro_doc["_id"],
             "status": LeadStatus.NEW,
             "chat_id": "972501112222@c.us",
-            "customer_phone": "972501112222",
             "issue_type": "נזילה",
             "full_address": "תל אביב, הרצל 10",
             "appointment_time": "10:00",
@@ -590,13 +596,11 @@ async def test_approve_delivers_contact_card_and_sends_navlink_to_pro_chat_id(
     assert "0501112222" in result  # local display form
     assert "https://wa.me/972501112222" in result
     assert "תל אביב, הרצל 10" in result
+    assert longest_static_chunk(Messages.Pro.CONTACT_CARD) in result  # the waze line
     # No floor/apartment on this lead — CONTACT_CARD_EXTRA must not appear.
     assert static_prefix(Messages.Pro.CONTACT_CARD_EXTRA) not in result
 
-    mock_wa.send_location_link.assert_awaited_once()
-    nav_args = mock_wa.send_location_link.await_args.args
-    assert nav_args[0] == f"{PRO_PHONE}@c.us"  # chat_id, not the raw phone
-    assert nav_args[1] == "תל אביב, הרצל 10"
+    mock_wa.send_location_link.assert_not_awaited()
 
     await db.leads.delete_many({"_id": lead_id})
 
@@ -678,6 +682,9 @@ async def test_approve_lost_race_leaks_no_phone_or_navlink(
     assert "972501114444" not in result
     assert static_prefix(Messages.Pro.CONTACT_CARD) not in result
     mock_wa.send_location_link.assert_not_awaited()
+    # The other half of "lost the race": no slot burned for a lead this pro
+    # no longer owns.
+    mock_book_slot.assert_not_awaited()
 
     await db.leads.delete_many({"_id": lead_id})
 
