@@ -11,6 +11,8 @@ shape what you see below, in the guide's numbering:
   messages agree. Structured cards use bold field labels (§5), not one emoji
   per row.
 * §6 RTL safety — Latin/numeric placeholders end-of-line or on their own line.
+* §7 no unmeasured claims — never state a number or a timeframe the code does
+  not produce. Say what the system will do instead (PRO-58).
 * §8 the product is **פרולי** in Hebrew copy; no trailing whitespace.
 
 Menus are text-only by hard product rule (see CLAUDE.md): nothing here is ever
@@ -141,9 +143,21 @@ class Messages:
             "👍 העברתי את הפרטים ואת המדיה לאיש המקצוע לאישור.\n"
             "אעדכן אותך ממש בקרוב."
         )
+        # PRO-58 §7: the middle line used to read "זמן המענה הממוצע שלו הוא
+        # כ-10 דקות" — a per-pro statistic, stated as fact, that nothing
+        # measures. It is simply gone.
+        #
+        # The obvious replacement was the PRO-56 SLA's own promise ("if no
+        # answer comes I will ask whether to look for someone else"), and it was
+        # written that way first. Review found that only one of the three
+        # senders arms the state that promise depends on:
+        # admin_flow.assign_lead_to_pro never sets the customer's state at all,
+        # and monitor_service.reassign_lead clears it for a CONTACTED lead, so
+        # check_pro_approval_sla skips both on every tick. That would have been
+        # this issue's own defect, one sentence further along. What is left is
+        # true from all three senders: we will say when it is approved.
         AWAITING_APPROVAL_TRANSPARENT = (
             "✅ העברתי את הפנייה שלך ל{pro_name}.\n"
-            "זמן המענה הממוצע שלו הוא כ-10 דקות.\n"
             "אעדכן אותך כאן ברגע שהעבודה תאושר."
         )
         YOU_ARE_WELCOME = "🛠️ בכיף! אני כאן אם צריך עוד משהו."
@@ -813,7 +827,12 @@ class Messages:
             "*כן* — להמשיך\n"
             "*לא* — לביטול"
         )
-        ACCEPTED = "✅ תודה! אפשר להתחיל. במה אוכל לעזור?"
+        # PRO-124: a bare ack. It used to end "במה אוכל לעזור?", which the
+        # dispatcher's own opening question then repeated on the very next
+        # turn — two invitations to describe the same problem, back to back.
+        # The greeting and the question belong to the dispatcher; this line
+        # only confirms the consent was recorded.
+        ACCEPTED = "✅ תודה! אפשר להתחיל."
         DECLINED = "🙏 הבנתי, לא נשמור מידע עליך. אם תשנה/י את דעתך — פשוט לשלוח הודעה."
         ACCEPT_KEYWORDS = [
             "כן",
@@ -1162,6 +1181,17 @@ class Messages:
         GENERIC_ERROR = "משהו השתבש. אפשר לנסות שוב."
         # PRO-21 — graceful throttle messages
         RATE_LIMITED = "⏳ הגיעו ממך הרבה הודעות ברצף. אפשר לנסות שוב בעוד רגע."
+        # PRO-124. Two word choices, both deliberate. "הקובץ" rather than
+        # "התמונה", because the fetch raises before the mime type is known and
+        # it is as likely to have been a voice note. And "לפתוח" rather than
+        # "לקבל", because the file did arrive: `media_urls` is written to the
+        # lead regardless of this failure and the pro is sent links, not bytes
+        # — so the honest claim is that we could not read it, not that it was
+        # lost. Infinitives, no gendered verb (style guide §2.1).
+        MEDIA_FETCH_FAILED = (
+            "🙏 לא הצלחתי לפתוח את הקובץ ששלחת.\n"
+            "אפשר לשלוח שוב, או פשוט לתאר במילים."
+        )
         DAILY_AI_CAP_REACHED = (
             "🙏 הגעת למכסת הפניות היומית. אפשר לנסות שוב מחר — "
             "ואם זה דחוף, לכתוב *נציג*."

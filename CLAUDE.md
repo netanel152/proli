@@ -267,6 +267,7 @@ Protected by bcrypt cookie-based auth. Views for lead management, professional p
 - `WorkerConstants.PAUSE_TTL_SECONDS = 900`: 15-minute rolling TTL for PAUSED_FOR_HUMAN state
 - `WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS = 300`: 5-minute window for a customer to confirm a cancel keyword on a BOOKED job (`AWAITING_CANCEL_CONFIRMATION`, PRO-118); expiry leaves the job booked
 - `WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS = 300`: 5-minute window for a customer to answer the "want your previous pro?" offer (`AWAITING_LOYALTY_CONFIRMATION`, PRO-119); expiry releases to normal routing instead of the old unbounded 4h default
+- `WorkerConstants.NEW_OR_EXISTING_TTL_SECONDS = 300`: 5-minute window for a customer with a BOOKED lead to answer the "new request or about the existing job?" gate (`AWAITING_NEW_OR_EXISTING`, PRO-116/PRO-193); expiry releases to normal routing, and the gate is one-shot (`new_request_prompted` never re-arms) so a lapsed reply is routed as a new request rather than re-asked
 - `WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS = 600`: 10-minute per-pro cool-down on the `מצא` proactive stuck-lead search
 - `WorkerConstants.PRO_LIST_PAGE_SIZE = 10`: rows per page in the pro's job lists (`עבודות`/`פרטים` and the `סיימתי`/`ביטול` selection prompts); a longer list states how many rows it is showing out of how many, with `עוד` for the next page (PRO-147)
 - `WorkerConstants.COMMISSION_RATE = 0.10`: platform take-rate applied to a recorded `final_price` → `commission_amount` (PRO-33; GMV/commission surfaced in the admin analytics Revenue tab)
