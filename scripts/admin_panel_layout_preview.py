@@ -23,13 +23,18 @@ is covered by the unit suite. Screenshot it with
 
     streamlit run scripts/admin_panel_layout_preview.py -- --lang HE
     streamlit run scripts/admin_panel_layout_preview.py -- --lang HE --section widgets
+    streamlit run scripts/admin_panel_layout_preview.py -- --lang HE --section forms
 
 `--lang` (HE default, EN the other) and `--section` (`dashboard` default,
 `widgets` the other) are read from `sys.argv`, since Streamlit forwards
 everything after `--` to the script.
 
 The **widgets** section is the kitchen sink: every control class the panel
-actually uses, one of each, on one page. It exists because the RTL defects
+actually uses, one of each, on one page. The **forms** section is the S3/S4
+surface: every *action* row the panel has (confirm pairs, save rows,
+pagination), the login screen, and the six-tab strip — the places where
+Streamlit's mobile stacking turns a row of buttons into a vertical stack with
+the destructive one on top. It exists because the RTL defects
 that survived the first pass were all in chrome the Dashboard happens not to
 render — alerts, expanders, forms, date and number inputs, sliders, HTML
 tables, chat bubbles. A defect you cannot render is a defect you cannot see.
@@ -46,6 +51,8 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from admin_panel.core.config import TRANS  # noqa: E402
 from admin_panel.ui.components import (  # noqa: E402
     load_css,
+    mark_login_page,
+    mark_row_inline,
     render_chat_bubble,
     render_kanban_column,
     render_metric_grid,
@@ -102,7 +109,7 @@ def _flag(name, allowed, default):
     return default
 
 
-SECTIONS = ("dashboard", "widgets")
+SECTIONS = ("dashboard", "widgets", "forms", "login")
 
 LANG = _flag("--lang", TRANS, "HE")
 SECTION = _flag("--section", SECTIONS, "dashboard")
@@ -335,7 +342,115 @@ def render_widgets():
     )
 
 
+def render_forms():
+    """The S3/S4 surface: action rows, the login screen, the tab strip.
+
+    Every row here is a copy of a real one in `admin_panel/views/`, with the
+    same column weights, so a measurement taken on this page is a measurement
+    of the panel. The pairs are rendered twice — once marked inline, once not
+    — because the whole question this page answers is what the marker does.
+    """
+    # Short headings on purpose: a long English one inside an RTL page wraps
+    # across the gutter and reads as an overflow bug in a screenshot.
+    st.title(T.get("nav_settings", "Forms"))
+    st.caption("preview · action rows")
+
+    st.subheader("Confirm — unmarked")
+    st.warning(T.get("confirm_delete", "Are you sure?"))
+    cy, cn = st.columns(2)
+    cy.button(T["confirm_yes"], key="u_yes", type="primary")
+    cn.button(T["confirm_no"], key="u_no")
+
+    st.subheader("Confirm — marked")
+    st.warning(T.get("confirm_delete", "Are you sure?"))
+    mark_row_inline()
+    cy2, cn2 = st.columns(2)
+    cy2.button(T["confirm_yes"], key="m_yes", type="primary")
+    cn2.button(T["confirm_no"], key="m_no")
+
+    # professionals.py's geo re-check row: three actions, deliberately unequal.
+    st.subheader("Save row — marked, [2, 2, 1]")
+    mark_row_inline()
+    c_save, c_anyway, c_cancel = st.columns([2, 2, 1])
+    c_save.button(T.get("geo_recheck_btn", "Save and re-check"), key="f_save")
+    c_anyway.button(T.get("geo_approve_anyway_btn", "Approve anyway"), key="f_any")
+    c_cancel.button(T["confirm_no"], key="f_cancel")
+
+    st.subheader("Pagination — marked")
+    mark_row_inline()
+    c_prev, c_next = st.columns(2)
+    c_prev.button(T.get("audit_prev_page", "Previous"), key="f_prev")
+    c_next.button(T.get("audit_next_page", "Next"), key="f_next")
+
+    # The real login screen is the whole page, so the preview cannot show it
+    # beside anything else — `--section login` renders it on its own.
+    st.subheader("Login form")
+    st.title("🔐 Proli Admin")
+    with st.form("preview_login"):
+        st.text_input(T.get("admin_username_label", "Username"), key="f_user")
+        st.text_input(
+            T.get("admin_password_label", "Password"), type="password", key="f_pw"
+        )
+        st.checkbox(T.get("remember_me", "Remember me"), key="f_remember")
+        st.form_submit_button(T.get("login_button", "Log in"), type="primary")
+
+    st.subheader("Six tabs")
+    tabs = st.tabs(
+        [
+            T.get("tab_funnel", "Lead Funnel"),
+            T.get("tab_volume", "Daily Volume"),
+            T.get("tab_pro_perf", "Pro Performance"),
+            T.get("tab_by_type", "By Service Type"),
+            T.get("tab_revenue", "Revenue (GMV)"),
+            T.get("tab_finops", "FinOps"),
+        ]
+    )
+    with tabs[0]:
+        st.write(T.get("no_data", "No data available for this period."))
+
+    st.subheader("Leads editor + Save")
+    st.data_editor(
+        [
+            {"client": f"לקוח {i}", "status": "חדש", "city": "תל אביב"}
+            for i in range(200)
+        ],
+        use_container_width=True,
+        key="f_editor",
+    )
+    st.button(T.get("action_save", "Save"), key="f_editor_save", type="primary")
+
+
+def render_login():
+    """The login screen, alone on the page — which is how it really renders.
+
+    `mark_login_page()` plus the `.block-container:has(.login-page)` rule is
+    the whole centring mechanism, so this page is the only place it can be
+    measured.
+
+    One difference from production, worth knowing before reading a screenshot:
+    the real login screen has **no sidebar** — `main.py` calls
+    `check_password()` and stops before it builds one — so there the form
+    centres in the whole viewport rather than in the area beside the sidebar.
+    The preview always renders the sidebar; the cap and the centring are the
+    same either way.
+    """
+    mark_login_page()
+    st.title("🔐 Proli Admin")
+    st.markdown(f"### {T.get('welcome_message', 'Welcome back')}")
+    with st.form("preview_login_page"):
+        st.text_input(T.get("admin_username_label", "Username"), key="lp_user")
+        st.text_input(
+            T.get("admin_password_label", "Password"), type="password", key="lp_pw"
+        )
+        st.checkbox(T.get("remember_me", "Remember me"), key="lp_remember")
+        st.form_submit_button(T.get("login_button", "Log in"), type="primary")
+
+
 if SECTION == "widgets":
     render_widgets()
+elif SECTION == "forms":
+    render_forms()
+elif SECTION == "login":
+    render_login()
 else:
     render_dashboard()

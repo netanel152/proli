@@ -12,6 +12,7 @@ from app.core.config import settings
 from admin_panel.core.audit_queries import write_audit_entry
 from admin_panel.core.config import TRANS
 from admin_panel.core.rbac import AdminRole
+from admin_panel.ui.components import mark_login_page
 import certifi
 
 # --- Login brute-force lockout (sync Redis, fail-open) ---
@@ -251,91 +252,92 @@ def check_password(cookies):
                 return True
 
     # --- Login Screen ---
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        st.title("🔐 Proli Admin")
-        st.markdown(f"### {T_auth['welcome_message']}")
+    # Centred by a marker plus one CSS rule rather than by a `[1, 2, 1]`
+    # column row. Two reasons, both measured. Below 640px every column row
+    # stacks, so the two empty side columns became empty *rows* and the form
+    # was left at full width under a band of nothing. And the obvious
+    # alternative — opening a `<div class="login-container">` in one
+    # `st.markdown` and closing it in another — does not wrap anything:
+    # Streamlit parses each markdown call on its own, so the browser closes
+    # the div immediately and the widgets that follow are its siblings. The
+    # div measured 400px wide, empty, with the form full-width beside it.
+    mark_login_page()
+    st.title("🔐 Proli Admin")
+    st.markdown(f"### {T_auth['welcome_message']}")
 
-        with st.form("login_form"):
-            # Show username field if DB admins exist
-            if has_db_admins:
-                username = st.text_input(
-                    T_auth.get("admin_username_label", "Username"), placeholder="admin"
-                )
-            else:
-                username = ""
-
-            password = st.text_input(
-                T_auth["admin_password_label"],
-                type="password",
-                placeholder=T_auth["admin_password_placeholder"],
+    with st.form("login_form"):
+        # Show username field if DB admins exist
+        if has_db_admins:
+            username = st.text_input(
+                T_auth.get("admin_username_label", "Username"), placeholder="admin"
             )
-            remember_me = st.checkbox(T_auth["remember_me"])
-            submitted = st.form_submit_button(T_auth["login_button"], type="primary")
+        else:
+            username = ""
 
-            if submitted:
-                identifier = username or "env"
+        password = st.text_input(
+            T_auth["admin_password_label"],
+            type="password",
+            placeholder=T_auth["admin_password_placeholder"],
+        )
+        remember_me = st.checkbox(T_auth["remember_me"])
+        submitted = st.form_submit_button(T_auth["login_button"], type="primary")
 
-                # Brute-force guard: block further attempts after MAX_FAILED_ATTEMPTS
-                locked, seconds_left = _is_locked(identifier)
-                if locked:
-                    minutes_left = max(1, seconds_left // 60)
-                    logger.warning(
-                        f"Admin login locked out: {identifier} ({seconds_left}s remaining)"
-                    )
-                    st.error(
-                        T_auth["login_locked"].replace("{minutes}", str(minutes_left))
-                    )
+        if submitted:
+            identifier = username or "env"
+
+            # Brute-force guard: block further attempts after MAX_FAILED_ATTEMPTS
+            locked, seconds_left = _is_locked(identifier)
+            if locked:
+                minutes_left = max(1, seconds_left // 60)
+                logger.warning(
+                    f"Admin login locked out: {identifier} ({seconds_left}s remaining)"
+                )
+                st.error(T_auth["login_locked"].replace("{minutes}", str(minutes_left)))
+            else:
+                auth_result = None
+
+                # Try DB auth first if admins exist
+                if has_db_admins and username:
+                    auth_result = _authenticate_admin(username, password)
+
+                # Fallback to env var auth
+                if not auth_result:
+                    auth_result = _authenticate_env(password)
+
+                if auth_result:
+                    admin_username = auth_result.get("username", "admin")
+                    admin_role = auth_result.get("role", AdminRole.OWNER)
+
+                    _reset_attempts(identifier)
+
+                    logger.info(f"Admin login: {admin_username} (role: {admin_role})")
+                    st.session_state["authenticated"] = True
+                    st.session_state["admin_username"] = admin_username
+                    st.session_state["admin_role"] = admin_role
+
+                    _log_audit_sync(admin_username, "login")
+
+                    if remember_me:
+                        secure_token = secrets.token_hex(32)
+                        expires = datetime.now() + timedelta(days=7)
+                        session_data = {
+                            "expiry": expires,
+                            "username": admin_username,
+                            "role": admin_role,
+                        }
+                        _active_sessions[secure_token] = session_data
+                        _persist_session(secure_token, session_data)
+                        cookie_manager.set(
+                            "proli_auth_token", secure_token, expires_at=expires
+                        )
+
+                    st.success(T_auth.get("connected", "Connected!"))
+                    time.sleep(1)
+                    st.rerun()
                 else:
-                    auth_result = None
-
-                    # Try DB auth first if admins exist
-                    if has_db_admins and username:
-                        auth_result = _authenticate_admin(username, password)
-
-                    # Fallback to env var auth
-                    if not auth_result:
-                        auth_result = _authenticate_env(password)
-
-                    if auth_result:
-                        admin_username = auth_result.get("username", "admin")
-                        admin_role = auth_result.get("role", AdminRole.OWNER)
-
-                        _reset_attempts(identifier)
-
-                        logger.info(
-                            f"Admin login: {admin_username} (role: {admin_role})"
-                        )
-                        st.session_state["authenticated"] = True
-                        st.session_state["admin_username"] = admin_username
-                        st.session_state["admin_role"] = admin_role
-
-                        _log_audit_sync(admin_username, "login")
-
-                        if remember_me:
-                            secure_token = secrets.token_hex(32)
-                            expires = datetime.now() + timedelta(days=7)
-                            session_data = {
-                                "expiry": expires,
-                                "username": admin_username,
-                                "role": admin_role,
-                            }
-                            _active_sessions[secure_token] = session_data
-                            _persist_session(secure_token, session_data)
-                            cookie_manager.set(
-                                "proli_auth_token", secure_token, expires_at=expires
-                            )
-
-                        st.success(T_auth.get("connected", "Connected!"))
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        _record_failed_attempt(identifier)
-                        logger.warning(
-                            f"Failed admin login attempt (user: {identifier})"
-                        )
-                        st.error(T_auth["wrong_password"])
+                    _record_failed_attempt(identifier)
+                    logger.warning(f"Failed admin login attempt (user: {identifier})")
+                    st.error(T_auth["wrong_password"])
 
     return False
 

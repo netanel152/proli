@@ -10,7 +10,7 @@ from admin_panel.core.utils import (
 )
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import PROFESSION_TYPES, profession_label
-from admin_panel.ui.components import render_flash, set_flash
+from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from admin_panel.core.rbac import can_edit, has_permission
 from app.services.geocoding_service import (
     ServiceAreaResolution,
@@ -162,7 +162,8 @@ def render_pro_list(T):
                         "Are you sure you want to delete this professional?",
                     )
                 )
-                c_yes, c_no, _ = st.columns([1, 1, 4])
+                mark_row_inline()
+                c_yes, c_no = st.columns(2)
                 if c_yes.button(T.get("confirm_yes", "Yes"), key=f"yes_del_{pro_id}"):
                     # Cascade: unassign open leads so healer/janitor can re-route them
                     leads_collection.update_many(
@@ -454,7 +455,8 @@ def render_pending_approvals(T):
 
             if st.session_state.get(f"confirm_reject_{pro_id}"):
                 st.warning(T.get("confirm_reject_pro", "Reject this professional?"))
-                c_yes, c_no, _ = st.columns([1, 1, 4])
+                mark_row_inline()
+                c_yes, c_no = st.columns(2)
                 if c_yes.button(
                     T.get("confirm_yes", "Yes"), key=f"yes_reject_{pro_id}"
                 ):
@@ -587,6 +589,7 @@ def _render_service_area_correction(
         key=f"geo_fix_{pro_id}",
         help=T["geo_fix_areas_help"],
     )
+    mark_row_inline()
     c_save, c_anyway, c_cancel = st.columns([2, 2, 1])
 
     if c_save.button(T["geo_recheck_btn"], key=f"geo_recheck_{pro_id}"):

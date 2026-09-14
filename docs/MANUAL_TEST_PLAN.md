@@ -463,7 +463,7 @@ localized `T["unknown_pro"]` (`"לא משויך"`) sentinel, consistent with eve
 
 ## Admin panel viewport checklist (responsive slices)
 
-`docs/ADMIN_PANEL_RESPONSIVE_PLAN.md` slices S5 and S6. The unit suites
+`docs/ADMIN_PANEL_RESPONSIVE_PLAN.md` slices S3–S6. The unit suites
 (`tests/test_admin_responsive.py`, `tests/test_admin_rtl.py`) pin the CSS's
 *structure*; this is the part only a browser can answer — and S6 exists because
 the first time anyone looked, several things the structure tests were happy with
@@ -478,7 +478,15 @@ python scripts/admin_panel_screenshots.py                 # both languages,
 python scripts/admin_panel_screenshots.py --scheme dark   # the dark palette
 ```
 
-`--section widgets` is the second page, and the one worth opening first when
+`--section forms` is the S3 surface — every action row, rendered twice, once
+marked inline and once not, so the difference is the page's own subject — and
+`--section login` is the login screen alone, which is how it really renders.
+One difference from production worth knowing before reading a login
+screenshot: the real screen has **no sidebar** (`main.py` calls
+`check_password()` and stops before building one), so there the form centres in
+the whole viewport rather than beside a sidebar.
+
+`--section widgets` is the kitchen sink, and the one worth opening first when
 checking Hebrew: alerts, expanders, forms, date/number/multiselect/slider inputs,
 chat bubbles, HTML tables and the data editor. Every RTL defect S6 fixed was in
 chrome the Dashboard happens not to render.
@@ -533,6 +541,19 @@ so the operator reaches the queue without scrolling. Metric tiles are 72px tall 
 | Kanban header, dark mode | `#FFFBEB` cream on a `#0F172A` page | `#422006` | n/a |
 | label tracking | 0.38px on Hebrew letterforms | none | 0.38px, unchanged |
 
+### S3 / S4, measured at 375×812 in Hebrew
+
+| row | unmarked | marked |
+|---|---|---|
+| confirm pair `[1, 1]` | **two rows**, destructive on top | one row, 165 / 165 |
+| save row `[2, 2, 1]` | three rows | one row, **128 / 128 / 59** — weights kept |
+| pagination | two rows | one row, 165 / 165 |
+
+The tab strip is 613px of content in a 343px box and scrolls on one line
+instead of wrapping. The login form is 345px wide at 375px and capped at 400px
+centred on desktop. `st.data_editor` measures 402px tall with 30 rows **and
+with 200** — it self-caps, which is why no `60vh` rule was added.
+
 ### The checklist
 
 Tick per width (375 × 812, 768 × 1024, 1024 × 768, 1440 × 900) in **both** HE and EN,
@@ -555,6 +576,15 @@ light and dark:
       one. The count chip beside a header is legible on both palettes.
 - [ ] Tab to a button, wait for the transition to finish, and there is a 2px focus
       ring in the panel's blue.
+- [ ] **Every Yes/No, Save/Cancel and Prev/Next pair is on one row at every width**,
+      and no destructive button is full-width. The rows to check are the delete-pro
+      and reject-pro confirms, the geo save row, generate/clear on the schedule, the
+      delete-lead confirm and the audit pagination.
+- [ ] No confirm row shows an empty third column or a band of nothing beside it.
+- [ ] Login: full width on a phone, 400px centred on desktop, with no empty
+      columns above or beside the form.
+- [ ] Analytics' six tabs scroll sideways on one line; the selected tab is visible
+      and the strip never wraps to a second row.
 - [ ] Metric tiles: 2 per row on a phone, 3 on a tablet, 5 on desktop, same order, and
       the pending-review tile is visibly wider than its neighbours on desktop.
 - [ ] Kanban: one stacked column on a phone with empty statuses hidden; two-up on a

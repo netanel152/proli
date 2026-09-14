@@ -51,9 +51,12 @@ VIEWPORTS = [
 
 LANGS = ["HE", "EN"]
 
-# Both pages the preview can render. `widgets` exists because every RTL defect
-# that survived the first pass was in chrome the Dashboard happens not to show.
-SECTIONS = ["dashboard", "widgets"]
+# Every page the preview can render. `widgets` exists because every RTL defect
+# that survived the first pass was in chrome the Dashboard happens not to show;
+# `forms` is the S3 surface (the action rows that must not stack) and `login`
+# is its own page because that is how the login screen really renders — alone,
+# with the page cap doing the centring.
+SECTIONS = ["dashboard", "widgets", "forms", "login"]
 
 # Set by the environment this repo's sessions run in; when present it is the
 # browser to use, and downloading another would be both slow and wrong.

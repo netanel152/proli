@@ -182,11 +182,31 @@ def test_no_fixed_pixel_width_outside_a_media_query(T, monkeypatch):
     """
     css = _rendered_css(T, monkeypatch)
 
-    offenders = re.findall(r"width:\s*\d+px\s*!important", _outside_media(css))
+    # `width` and `min-width` only: both *force* a size the phone cannot
+    # afford, which is the sidebar bug. `max-width` is the opposite shape — it
+    # can only ever reduce a box, so a 400px cap is simply inert on a 375px
+    # screen, and capping is how the login page is centred without a column
+    # row. The original regex ended in `width:` and so caught all three.
+    offenders = re.findall(
+        r"(?<!max-)\bwidth:\s*\d+px\s*!important", _outside_media(css)
+    )
     assert not offenders, (
         "fixed pixel width(s) outside a media query — these apply on phones too "
         f"and fight Streamlit's own sizing: {offenders}"
     )
+
+
+@pytest.mark.parametrize("T", LANGS, ids=["rtl", "ltr"])
+def test_the_fixed_width_guard_still_catches_both_forcing_shapes(T, monkeypatch):
+    """Proving the narrowing above did not hollow the guard out.
+
+    `width` was the sidebar bug; `min-width` forces the same floor by another
+    name. Only `max-width` is allowed through.
+    """
+    pattern = r"(?<!max-)\bwidth:\s*\d+px\s*!important"
+    assert re.search(pattern, "width: 280px !important")
+    assert re.search(pattern, "min-width: 280px !important")
+    assert not re.search(pattern, "max-width: 400px !important")
 
 
 @pytest.mark.parametrize("T", LANGS, ids=["rtl", "ltr"])

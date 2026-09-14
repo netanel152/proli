@@ -660,6 +660,25 @@ def load_css(lang_code, T):
             outline-offset: 2px !important;
         }}
 
+        /* The `mark_row_inline()` marker. It must occupy nothing at *every*
+           width, not only on a phone: a zero-height flex item still earns the
+           vertical block's `gap`, which would push each marked row ~1rem down
+           on desktop — and desktop being unchanged is this work's own
+           acceptance criterion. `display: none` removes it from flex layout
+           entirely, and a `display: none` element is still matched by `+`, so
+           the phone rule that reads it still works. */
+        [data-testid="element-container"]:has(.row-inline),
+        [data-testid="element-container"]:has(.login-page) {{
+            display: none !important;
+        }}
+
+        /* The login screen is the whole page when it renders at all, so
+           the cap goes on the container rather than on each element. */
+        .block-container:has(.login-page) {{
+            max-width: 400px !important;
+            margin-inline: auto !important;
+        }}
+
         /* ===== TABLES & DATA EDITOR ===== */
         div[data-testid="stDataFrame"] {{
             border: 1px solid var(--border-color);
@@ -1167,6 +1186,49 @@ def load_css(lang_code, T):
     """,
         unsafe_allow_html=True,
     )
+
+
+ROW_INLINE_MARKER = '<span class="row-inline" hidden></span>'
+LOGIN_PAGE_MARKER = '<span class="login-page" hidden></span>'
+
+
+def mark_login_page():
+    """Mark the page as the login screen, so the CSS can narrow it.
+
+    The same marker mechanism as `mark_row_inline()` and for the same reason —
+    Streamlit gives no handle on a container — but scoped to the *page*: the
+    rule caps `.block-container` itself, which carries the title, the welcome
+    line and the form together. On a phone the cap is wider than the screen
+    and the ordinary container padding applies, so the form is full width.
+    """
+    st.markdown(LOGIN_PAGE_MARKER, unsafe_allow_html=True)
+
+
+def mark_row_inline():
+    """Emit the marker that keeps the *next* `st.columns` row horizontal.
+
+    Call it immediately before a row of **actions** — a Yes/No confirm, a
+    Save/Cancel, a Prev/Next — and never before a row of inputs, which should
+    stack on a phone.
+
+    Why a marker at all: below 640px Streamlit puts
+    `min-width: calc(100% - 22.5px)` on every `[data-testid="column"]`, which
+    is what makes a row wrap. Nothing distinguishes a row of buttons from a
+    row of text inputs in the DOM, and Streamlit 1.31 takes no `key` on
+    `st.columns`, so there is no handle to style one row and not another. The
+    marker is that handle.
+
+    It sits *before* the row rather than inside its first cell — the shape the
+    plan originally sketched — because a marker inside a cell adds the
+    vertical block's `1rem` gap to that cell alone, and the two buttons of a
+    confirm pair then sit a line apart. As a preceding sibling the CSS reaches
+    the row with `+`, and the marker's own container is `display: none`, so it
+    occupies nothing and contributes no gap.
+
+    Returns nothing and renders nothing visible; it is `st.markdown` because
+    that is the only way to put a class into Streamlit's DOM.
+    """
+    st.markdown(ROW_INLINE_MARKER, unsafe_allow_html=True)
 
 
 def set_flash(key, message, level="success"):

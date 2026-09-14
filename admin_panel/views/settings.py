@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, time
 from admin_panel.core.utils import settings_collection
-from admin_panel.ui.components import render_flash, set_flash
+from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from admin_panel.core.audit_queries import (
     DEFAULT_PAGE_SIZE,
     PAGE_SIZE_OPTIONS,
@@ -439,7 +439,8 @@ def view_system_settings(T):
             page = clamp_page(st.session_state["audit_page"], total, page_size)
             st.session_state["audit_page"] = page
 
-            c_prev, c_next, _c_pad = st.columns([1, 1, 4])
+            mark_row_inline()
+            c_prev, c_next = st.columns(2)
             with c_prev:
                 # Plain words, no chevrons. `‹`/`›` are mirrored by the bidi
                 # algorithm so they happen to point correctly in Hebrew, but
