@@ -469,3 +469,62 @@ def test_pending_strip_row_carries_no_no_op_gap():
 
     assert 'st.columns([3, 1], gap="small")' not in home
     assert "col_pick, col_go = st.columns([3, 1])" in home
+
+
+# --- S5: the screenshot tooling ---------------------------------------------
+
+
+def test_screenshot_tooling_parses_and_declares_the_four_viewports():
+    """The scripts are review tooling, so nothing else would catch a syntax error.
+
+    They are never imported by the app or the suite, which is exactly why a
+    typo in them stays invisible until the day somebody needs the evidence.
+    """
+    import ast
+
+    shots = REPO_ROOT / "scripts" / "admin_panel_screenshots.py"
+    preview = REPO_ROOT / "scripts" / "admin_panel_layout_preview.py"
+
+    for path in (shots, preview):
+        assert path.is_file(), f"missing {path.name}"
+        ast.parse(path.read_text(encoding="utf-8"))
+
+    source = shots.read_text(encoding="utf-8")
+    # The widths the plan's acceptance criteria name.
+    for width, height in ((375, 812), (768, 1024), (1024, 768), (1440, 900)):
+        assert f"({width}, {height}" in source, f"{width}x{height} not shot"
+
+    # Both languages, or the RTL half of the evidence is missing.
+    assert 'LANGS = ["HE", "EN"]' in source
+
+
+def test_screenshot_output_is_not_committed():
+    """Screenshots are review aids regenerated on demand, never fixtures."""
+    gitignore = _source(".gitignore")
+
+    assert "artifacts/" in gitignore
+
+
+def test_playwright_is_dev_only():
+    """The panel needs no browser at runtime; a runtime pin would be wrong."""
+    assert "playwright" in _source("requirements-dev.txt")
+    assert "playwright" not in _source("requirements.txt")
+
+
+def test_the_preview_app_needs_no_database():
+    """Its whole value is that a reviewer can render the layout without Mongo.
+
+    If it ever imports the panel's data layer, it stops being runnable by
+    anyone who does not already have the full stack up — which is the friction
+    that left the layout unreviewed in the first place.
+    """
+    source = _source("scripts", "admin_panel_layout_preview.py")
+
+    for forbidden in (
+        "admin_panel.core.utils",
+        "lead_queries",
+        "analytics_queries",
+        "pymongo",
+        "MongoClient",
+    ):
+        assert forbidden not in source, f"preview app reaches for {forbidden}"

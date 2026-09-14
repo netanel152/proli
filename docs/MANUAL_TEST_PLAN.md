@@ -460,3 +460,71 @@ displayed `professional` name; `pro_id` stayed pointed at the old pro (ghost ass
 so matching/healer/pro-flow still treated the lead as owned. The option now uses the
 localized `T["unknown_pro"]` (`"לא משויך"`) sentinel, consistent with every other view.
 
+
+## Admin panel viewport checklist (responsive slices)
+
+`docs/ADMIN_PANEL_RESPONSIVE_PLAN.md` slice S5. The unit suite
+(`tests/test_admin_responsive.py`) pins the CSS's *structure*; this is the part
+only a browser can answer.
+
+### Producing the evidence
+
+```bash
+pip install -r requirements-dev.txt            # playwright is dev-only
+python scripts/admin_panel_screenshots.py      # both languages, four widths
+```
+
+That starts `scripts/admin_panel_layout_preview.py` itself — **real Streamlit and
+real CSS with fake data, so no Mongo, no Redis, no password and no cookie.** Eight
+PNGs land in `artifacts/` (gitignored). To shoot the live panel instead, run it and
+pass `--url http://localhost:8501`.
+
+Two things to check before trusting a run:
+
+- **The Streamlit version must be the pinned 1.31.1.** A newer frontend changes the
+  sidebar DOM, and a mixed install renders a layout the pilot will never see. This
+  bit once: a screenshot showed the collapsed sidebar spilling its content down the
+  page as a column of single characters, which turned out to be Streamlit 1.63
+  serving under a 1.31.1 dist-info. Check with
+  `python -c "import streamlit; print(streamlit.__version__)"` **and** that only one
+  `streamlit-*.dist-info` exists. A clean venv from `requirements.txt` is the
+  reliable way.
+- **A full-page screenshot is taller than the viewport.** Something that looks far
+  down the image may still be above the fold. Measure rather than eyeball.
+
+### What was measured, 2026-09-14, Streamlit 1.31.1, Hebrew
+
+| width | metric tiles per row | Kanban | page scrolls sideways |
+|---|---|---|---|
+| 375 × 812 | 2 | 2 columns stacked, 6 empty hidden | no |
+| 768 × 1024 | 3 | all 8, 6 empty packed four-up | no |
+| 1024 × 768 | 3 | all 8, 6 empty packed four-up | no |
+| 1440 × 900 | 5 | 8-across scroller (unchanged) | no |
+
+At 375 × 812 the pending-review **Assign button sits at y=637, 175px above the fold**,
+so the operator reaches the queue without scrolling. Metric tiles are 72px tall and
+169px wide, and the longest Hebrew label (`ממתין לבדיקת מנהל`) fits on **one** line.
+
+### The checklist
+
+Tick per width (375 × 812, 768 × 1024, 1024 × 768, 1440 × 900) in **both** HE and EN,
+light and dark:
+
+- [ ] The page body never scrolls sideways. Only the data grids, the tab strip and the
+      desktop Kanban scroll horizontally, each inside its own container.
+- [ ] Phone: the sidebar starts collapsed and spills nothing; the hamburger opens it;
+      language, navigation and auto-refresh are all reachable.
+- [ ] Metric tiles: 2 per row on a phone, 3 on a tablet, 5 on desktop, same order, and
+      the pending-review tile is visibly wider than its neighbours on desktop.
+- [ ] Kanban: one stacked column on a phone with empty statuses hidden; two-up on a
+      tablet with empties packed small; unchanged 8-across on desktop.
+      `pending_admin_review` leads at every width.
+- [ ] The pending-review Assign control is reachable in the first viewport on a phone.
+- [ ] Buttons, sidebar nav rows, tab headers and the assign picker are all at least
+      44px tall on a phone; focusing an input does not zoom the page on iOS.
+- [ ] Desktop at 1440px is visually identical to the same shot taken from `dev`.
+
+**Not covered by any of this:** a real iOS or Android browser. Chromium at a 375px
+viewport is not Safari, and the zoom-on-focus behaviour the 16px rule exists to
+prevent can only be confirmed on a real handset. That check rides along with the
+PRO-64 pilot run.

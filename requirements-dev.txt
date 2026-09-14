@@ -1,3 +1,7 @@
 # Dev-only dependencies (test tooling). Runtime deps live in requirements.txt.
 -r requirements.txt
 pytest-xdist==3.6.1
+# Drives scripts/admin_panel_screenshots.py (responsive slice S5). Dev-only:
+# the panel never needs a browser at runtime, and the script exits with a
+# clear message rather than a traceback when this is absent.
+playwright==1.49.1
