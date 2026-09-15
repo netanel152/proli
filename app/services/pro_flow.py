@@ -6,13 +6,14 @@ from app.core.database import users_collection, leads_collection, reviews_collec
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
-from app.core.phone import strip_suffix, to_local_phone
+from app.core.phone import strip_suffix, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.core.redis_client import get_redis_client
 from app.services.matching_service import book_slot_for_lead, is_pro_eligible_for_lead
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
 from app.services import agenda_service
+from app.services import notification_service
 from datetime import datetime, timedelta, timezone
 
 # PRO-166: label vocabulary lives in the catalog; LeadStatus is a str Enum,
@@ -424,6 +425,32 @@ async def _handle_approve(pro, lead_manager, whatsapp):
     if booking_success:
         response_text += Messages.Pro.CALENDAR_UPDATE_SUCCESS
 
+    # PRO-59: the contact details the offer withheld. Composed only past the
+    # atomic claim above — every early return between the find_one and here
+    # (ALREADY_RESPONDED, NO_PENDING_APPROVALS) leaves without it, which is
+    # the point: a pro who loses the race must not learn the phone number.
+    raw_customer_phone = lead.get("customer_phone") or strip_suffix(
+        lead.get("chat_id", "")
+    )
+    card_address = lead.get("full_address") or Messages.Fallbacks.UNKNOWN
+    response_text += Messages.Pro.CONTACT_CARD.format(
+        customer_phone=to_local_phone(raw_customer_phone),
+        # Normalised rather than passed through: wa.me needs international
+        # digits, and a local 05… would build a dead link. The strip_suffix
+        # fallback above already yields 972…, so this only matters if
+        # customer_phone is ever written in local form.
+        customer_phone_intl=strip_suffix(to_chat_id(raw_customer_phone)),
+        full_address=card_address,
+        address_encoded=urllib.parse.quote(card_address),
+    )
+    # Only when there is something to say — format_lead_extra_info renders '-'
+    # placeholders for a missing floor and apartment, and a card advertising
+    # "פרטים נוספים: קומה -, דירה -" is noise dressed as information.
+    if lead.get("floor") or lead.get("apartment"):
+        response_text += Messages.Pro.CONTACT_CARD_EXTRA.format(
+            extra_info=notification_service.format_lead_extra_info(lead)
+        )
+
     pro_name = pro.get("business_name", Defaults.EXPERT_NAME)
     raw_phone = pro.get("phone_number", "")
     pro_phone = to_local_phone(raw_phone)
@@ -468,6 +495,7 @@ async def _handle_approve(pro, lead_manager, whatsapp):
     await whatsapp.send_message(lead["chat_id"], customer_msg)
     # Clear AWAITING_PRO_APPROVAL state so customer can continue normally
     await StateManager.clear_state(lead["chat_id"])
+
     logger.info(f"Pro {pro['_id']} approved lead {lead['_id']}")
     return response_text
 

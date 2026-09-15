@@ -419,6 +419,26 @@ class Messages:
         )
         APPROVE_SUCCESS = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
         CALENDAR_UPDATE_SUCCESS = "\nהיומן עודכן בהצלחה."
+        # PRO-59: everything APPROVAL_REQUEST withholds, sent the moment the
+        # approval is *claimed* — after the atomic status write, never before,
+        # so a pro who loses the PRO-123 race gets ALREADY_RESPONDED and no
+        # contact details at all. Field order and the wa.me/waze lines mirror
+        # DETAILS_ROW, so the pro reads the same layout here and under פרטים.
+        # The navigation link is inlined rather than sent separately: a second
+        # send arrives *before* the handler's own return value, so the pro read
+        # a context-free waze URL and then the approval. One message, and one
+        # fewer egress call to fail.
+        # §6: every Latin/numeric value ends its own line.
+        CONTACT_CARD = (
+            "\n\n*פרטי הלקוח:*\n"
+            "*טלפון:* {customer_phone}\n"
+            "*צ'אט:* https://wa.me/{customer_phone_intl}\n"
+            "*כתובת מלאה:* {full_address}\n"
+            "*ניווט:* https://waze.com/ul?q={address_encoded}"
+        )
+        # Appended to CONTACT_CARD only when the lead carries a floor or an
+        # apartment; '-' placeholders would otherwise render an empty promise.
+        CONTACT_CARD_EXTRA = "\n*פרטים נוספים:* {extra_info}"
         NO_PENDING_APPROVE = "לא מצאתי עבודה חדשה לאישור."
         ALREADY_RESPONDED = "כבר הגבת לקריאה זו, ולא ניתן לשנות את הבחירה כעת."
         # PRO-117: sent only after the rematch actually happened, so the copy
@@ -466,30 +486,40 @@ class Messages:
         DEAL_CONFIRMED_HEADER = "✅ *הלקוח אישר! פרטי העבודה:*"
         EMERGENCY_LEAD_HEADER = "🚨 *קריאת חירום דחופה!*"
         NEW_LEAD_HEADER = "📢 *הצעת עבודה חדשה*"
+        # PRO-59: the reassignment/admin offer is the same pre-approval moment
+        # as APPROVAL_REQUEST, so it withholds the same things. It never
+        # carried the phone; the floor/apartment line goes for the same reason
+        # the phone does, and both arrive in CONTACT_CARD on approval.
         NEW_LEAD_DETAILS = (
             "*לקוח:* {customer_name}\n"
             "*כתובת:* {full_address}\n"
-            "*פרטים נוספים:* {extra_info}\n"
             "*תקלה:* {issue_type}\n"
             "*מועד מועדף:* {appointment_time}"
         )
         NEW_LEAD_TRANSCRIPTION = "\n*תמליל:* {transcription}"
         NEW_LEAD_FOOTER = "\n\n*אשר* — לקבלת העבודה\n*דחה* — לדחייה"
-        # Floor/apartment line rendered into {extra_info} of NEW_LEAD_DETAILS and
-        # APPROVAL_REQUEST. '-' placeholders keep the line shape stable when a
-        # field is missing, so the pro sees the same layout on every offer.
+        # Floor/apartment line rendered into {extra_info} of CONTACT_CARD_EXTRA.
+        # PRO-59 took it out of both pre-approval offers, so this is now shown
+        # only after the pro has approved. The '-' placeholders are why the
+        # caller checks for a floor or apartment first: "קומה -, דירה -" is a
+        # line that says nothing while looking like information.
         EXTRA_INFO_LINE = "קומה {floor}, דירה {apartment}"
         # Header for the numbered media-links block appended to a lead offer.
         # Media is always sent as text links, never re-sent as files — see
         # notification_service.format_media_links for the policy.
         MEDIA_ATTACHED_HEADER = "*מדיה מצורפת:*"
-        # §6: the customer's phone is Latin/numeric, so it ends its own line.
+        # PRO-59: no phone and no floor/apartment before the pro approves. A
+        # pro who can call the customer from the offer can reject in-bot and
+        # take the job off-platform, which is the disintermediation leak the
+        # commission model (PRO-33) cannot survive. The street and city stay,
+        # because a pro cannot judge whether to accept without knowing where
+        # it is. Everything withheld here is sent by CONTACT_CARD the moment
+        # the approval is claimed — this delays the contact details, it does
+        # not deny them.
         APPROVAL_REQUEST = (
             "📋 *פרטי עבודה חדשה לאישורך*\n\n"
             "*לקוח:* {customer_name}\n"
-            "*טלפון:* {customer_phone}\n"
             "*כתובת:* {full_address}\n"
-            "*פרטים נוספים:* {extra_info}\n"
             "*תקלה:* {issue_type}\n"
             "*מועד:* {appointment_time}\n"
             "{price_line}"
@@ -797,6 +827,21 @@ class Messages:
         TO_USER_NO_PRO = (
             "✅ קיבלתי! העברתי את פנייתך לצוות התמיכה של פרולי.\n"
             "נחזור אליך בהקדם האפשרי."
+        )
+        # PRO-59: the SOS pro-alert is the fourth path to the customer's phone,
+        # and the only one not gated on the lead being taken. `guard_sos` fires
+        # on a lead in NEW or CONTACTED too — "offered, not yet approved" and
+        # "early lead", where the pro has been shown no contact details at all
+        # — so a customer typing נציג while waiting on approval used to hand
+        # their number to a pro who could then reject in-bot and call them.
+        # This variant carries the cry for help without the number, and says
+        # plainly how to earn it.
+        PRO_ALERT_PENDING = (
+            "⚠️ *הלקוח שממתין לתשובתך ביקש עזרה*\n\n"
+            "*הודעה:* {last_message}\n\n"
+            "כדי לקבל את פרטי הקשר שלו:\n"
+            "*אשר* — לאישור העבודה\n"
+            "*דחה* — לדחייה"
         )
         PRO_ALERT = (
             "⚠️ *הלקוח שלך צריך עזרה*\n\n"

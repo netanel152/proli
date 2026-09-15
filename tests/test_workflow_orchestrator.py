@@ -1076,6 +1076,91 @@ async def test_deal_without_quoted_price_omits_price_line(
     assert "quoted_price" not in updated_lead
 
 
+# --- PRO-59: the customer's phone stays hidden from the pro until approval --
+
+
+@pytest.mark.asyncio
+async def test_deal_finalization_offer_omits_customer_phone_and_nav_link(
+    wf_mocks, monkeypatch, mock_db
+):
+    """The initial approval offer sent to the pro must not carry the
+    customer's phone (local or international form) or a pre-approval
+    navigation link — a pro who can call/navigate to the customer before
+    approving can reject in-bot and take the job off-platform. Both arrive
+    only via CONTACT_CARD once the pro claims the approval
+    (pro_flow._handle_approve)."""
+    mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
+    chat_id = "972501110099@c.us"
+
+    pro_id = ObjectId()
+    pro_doc = {
+        "_id": pro_id,
+        "business_name": "Test Pro",
+        "phone_number": "972500000099",
+        "service_areas": ["Tel Aviv"],
+        "is_active": True,
+    }
+
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "issue_type": "נזילה",
+            "full_address": "תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+
+    dispatcher_resp = AIResponse(
+        reply_to_user="רגע, מוצא לך בעל מקצוע",
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="נזילה", full_address=None, appointment_time=None
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+    pro_resp = AIResponse(
+        reply_to_user="[DEAL: 10:00 | הרצל 10, תל אביב | נזילה]",
+        extracted_data=ExtractedData(
+            city="תל אביב",
+            issue="נזילה",
+            street="הרצל",
+            street_number="10",
+            floor="2",
+            apartment="4",
+            appointment_time="10:00",
+        ),
+        transcription=None,
+        is_deal=True,
+    )
+    mock_ai.analyze_conversation.side_effect = [dispatcher_resp, pro_resp]
+
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "determine_best_pro",
+        AsyncMock(return_value=pro_doc),
+    )
+
+    await process_incoming_message(chat_id, "אפשר לקבוע ל-10?")
+
+    approval_calls = [
+        c
+        for c in mock_wa.send_message.call_args_list
+        if c.args[0] == "972500000099@c.us"
+        and static_prefix(Messages.Pro.APPROVAL_REQUEST) in c.args[1]
+    ]
+    assert len(approval_calls) == 1
+    approval_msg = approval_calls[0].args[1]
+
+    from app.core.phone import strip_suffix, to_local_phone
+
+    assert strip_suffix(chat_id) not in approval_msg
+    assert to_local_phone(chat_id) not in approval_msg
+    mock_wa.send_location_link.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_estimate_turn_persists_quoted_price_sticky_without_deal(
     wf_mocks, monkeypatch, mock_db
