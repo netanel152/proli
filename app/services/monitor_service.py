@@ -10,7 +10,7 @@ from app.core.constants import (
     Actor,
     ISRAEL_CITIES_COORDS,
 )
-from app.core.phone import to_chat_id, to_local_phone
+from app.core.phone import mask_chat_id, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.core.logger import logger, page_critical
 from app.core.redis_client import get_redis_client
@@ -506,11 +506,13 @@ async def auto_reject_unassigned_leads():
                 try:
                     await whatsapp.send_message(chat_id, Messages.SOS.NO_PRO_AVAILABLE)
                 except Exception as e:
-                    logger.error(f"Failed to notify customer {chat_id} of closure: {e}")
+                    logger.error(
+                        f"Failed to notify customer {mask_chat_id(chat_id)} of closure: {e}"
+                    )
                 await ContextManager.clear_context(chat_id)
 
             logger.info(
-                f"🧹 [Janitor] Closed unassigned lead {lead_id} (chat: {chat_id})"
+                f"🧹 [Janitor] Closed unassigned lead {lead_id} (chat: {mask_chat_id(chat_id)})"
             )
 
     except Exception as e:
@@ -985,7 +987,7 @@ async def check_sla_deflection():
 
             # It's been 15 mins of silence. Trigger deflection.
             logger.warning(
-                f"⏰ [SLA Monitor] SLA exceeded for {chat_id}. Deflecting to phone check."
+                f"⏰ [SLA Monitor] SLA exceeded for {mask_chat_id(chat_id)}. Deflecting to phone check."
             )
 
             # 1. Clear state
@@ -1003,7 +1005,7 @@ async def check_sla_deflection():
             )
 
             logger.info(
-                f"✅ [SLA Monitor] Deflected customer {chat_id} after inactivity."
+                f"✅ [SLA Monitor] Deflected customer {mask_chat_id(chat_id)} after inactivity."
             )
 
     except Exception as e:
@@ -1105,7 +1107,7 @@ async def remind_stale_booked_leads():
                 )
             except Exception as e:
                 logger.error(
-                    f"❌ [Stale Lead Nudger] Failed to send reminder to {pro_phone}: {e}"
+                    f"❌ [Stale Lead Nudger] Failed to send reminder to {mask_chat_id(pro_phone)}: {e}"
                 )
 
     except Exception as e:

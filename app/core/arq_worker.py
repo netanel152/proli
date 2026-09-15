@@ -5,6 +5,7 @@ from arq.worker import Retry
 from app.core.config import settings
 from app.services.workflow_service import process_incoming_message, whatsapp
 from app.core.logger import logger, mask_pii, new_trace_id, page_critical
+from app.core.phone import mask_chat_id
 from app.core.sentry import sentry_active
 from app.core.database import client
 from app.core.http_client import close_http_client
@@ -140,7 +141,7 @@ async def _process_message(
 ):
     """The task body, split out so all of it — the ``except`` arms included —
     runs inside the ``trace_id`` binding."""
-    logger.info(f"Task started: processing message for {chat_id}")
+    logger.info(f"Task started: processing message for {mask_chat_id(chat_id)}")
     if sentry_active():
         # PRO-134: tags set at task start (not in an except) so they ride
         # every event and breadcrumb this job produces. ArqIntegration
@@ -158,20 +159,23 @@ async def _process_message(
     except ChatLockBusyError:
         # Another worker is mid-flight for this chat_id — defer so we preserve
         # message order without duplicate-processing.
-        logger.info(f"Chat lock busy for {chat_id} — requeuing with 2s defer")
+        logger.info(
+            f"Chat lock busy for {mask_chat_id(chat_id)} — requeuing with 2s defer"
+        )
         raise Retry(defer=2)
     except Exception as e:
         # sentry_skip: the re-raise below propagates to ArqIntegration, which
         # captures the full exception — the bridge reporting this log line
         # too would double-count every task failure.
         logger.bind(sentry_skip=True).error(
-            f"Error in process_message_task for {chat_id}: {e}", exc_info=True
+            f"Error in process_message_task for {mask_chat_id(chat_id)}: {e}",
+            exc_info=True,
         )
         # Send user-friendly fallback message
         try:
             await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
         except Exception:
-            logger.error(f"Failed to send error message to {chat_id}")
+            logger.error(f"Failed to send error message to {mask_chat_id(chat_id)}")
         raise
 
 

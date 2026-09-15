@@ -1,6 +1,7 @@
 import json
 from app.core.redis_client import get_redis_client
 from app.core.logger import logger
+from app.core.phone import mask_chat_id
 from app.core.constants import UserStates
 from typing import Dict, Any
 
@@ -20,7 +21,7 @@ class StateManager:
                 return state
             return UserStates.IDLE
         except Exception as e:
-            logger.error(f"Error getting state for {chat_id}: {e}")
+            logger.error(f"Error getting state for {mask_chat_id(chat_id)}: {e}")
             return UserStates.IDLE
 
     @classmethod
@@ -35,10 +36,10 @@ class StateManager:
             prev = await redis.get(f"state:{chat_id}")
             await redis.set(f"state:{chat_id}", state_value, ex=effective_ttl)
             logger.info(
-                f"🔄 FSM {chat_id}: {prev or UserStates.IDLE} → {state_value} (ttl={effective_ttl}s)"
+                f"🔄 FSM {mask_chat_id(chat_id)}: {prev or UserStates.IDLE} → {state_value} (ttl={effective_ttl}s)"
             )
         except Exception as e:
-            logger.error(f"Error setting state for {chat_id}: {e}")
+            logger.error(f"Error setting state for {mask_chat_id(chat_id)}: {e}")
 
     @classmethod
     async def clear_state(cls, chat_id: str):
@@ -50,9 +51,9 @@ class StateManager:
             prev = await redis.get(f"state:{chat_id}")
             await redis.delete(f"state:{chat_id}", f"state_meta:{chat_id}")
             if prev:
-                logger.info(f"🔄 FSM {chat_id}: {prev} → IDLE (cleared)")
+                logger.info(f"🔄 FSM {mask_chat_id(chat_id)}: {prev} → IDLE (cleared)")
         except Exception as e:
-            logger.error(f"Error clearing state for {chat_id}: {e}")
+            logger.error(f"Error clearing state for {mask_chat_id(chat_id)}: {e}")
 
     @classmethod
     async def get_metadata(cls, chat_id: str) -> Dict[str, Any]:
@@ -66,7 +67,7 @@ class StateManager:
                 return json.loads(data)
             return {}
         except Exception as e:
-            logger.error(f"Error getting metadata for {chat_id}: {e}")
+            logger.error(f"Error getting metadata for {mask_chat_id(chat_id)}: {e}")
             return {}
 
     @classmethod
@@ -78,4 +79,4 @@ class StateManager:
             redis = await get_redis_client()
             await redis.set(f"state_meta:{chat_id}", json.dumps(data), ex=cls.TTL)
         except Exception as e:
-            logger.error(f"Error setting metadata for {chat_id}: {e}")
+            logger.error(f"Error setting metadata for {mask_chat_id(chat_id)}: {e}")

@@ -22,7 +22,7 @@ from app.core.database import (  # noqa: F401 — slots_collection is a monkeypa
 )
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
-from app.core.phone import strip_suffix
+from app.core.phone import mask_chat_id, strip_suffix
 from app.core.logger import logger
 
 
@@ -39,7 +39,9 @@ async def record_consent(chat_id: str, accepted: bool) -> None:
         },
         upsert=True,
     )
-    logger.info(f"Consent {'accepted' if accepted else 'declined'} for {chat_id}")
+    logger.info(
+        f"Consent {'accepted' if accepted else 'declined'} for {mask_chat_id(chat_id)}"
+    )
 
 
 async def has_consent(chat_id: str) -> bool | None:
@@ -104,5 +106,5 @@ async def delete_user_data(chat_id: str) -> dict:
     await ContextManager.clear_context(chat_id)
 
     # Mark consent as deleted (not remove user profile if they're a pro)
-    logger.info(f"Deleted user data for {chat_id}: {results}")
+    logger.info(f"Deleted user data for {mask_chat_id(chat_id)}: {results}")
     return results

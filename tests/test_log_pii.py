@@ -9,16 +9,22 @@ rule for *paging*: mask the phone to its last digits, never send the street
 Log Explorer, so the same leak class applies to a plain `logger.info(f"...")`
 call — it is now exactly as searchable as the page was.
 
-This file is a **ratchet**, not a blanket check. PRO-191 fixed the 31 log
-lines the issue scoped (`dispatch_guards.py`, `workflow_service.py`) — those
-two files must NOT appear in `KNOWN_VIOLATIONS` below, because their absence is
-exactly what makes assertion 1 mean something. The remaining 38, across 12
-files in `app/` and `admin_panel/`, are recorded debt: the three assertions
-below make that number payable-down only — never inflated, and never left stale
-once somebody *does* pay it down.
+PRO-195 took this from a ratchet to a floor. PRO-191 fixed the 31 log lines
+it scoped (`dispatch_guards.py`, `workflow_service.py`) and carried the other
+38, across 12 files, as an enumerated `KNOWN_VIOLATIONS` allowlist that could
+only shrink. PRO-195 paid all 38 down, so the allowlist is gone and the rule is
+now unconditional: **zero violations anywhere under `app/` and `admin_panel/`.**
 
-Counts to trust are the ones in the dict, not any figure in prose. The review
-of this PR found two ways the first cut miscounted, both worth remembering:
+The allowlist was deleted rather than left empty on purpose. With no entries,
+its two companion assertions — *no file above its count*, *none below it
+either* — iterate over nothing and pass forever without testing anything, and a
+rule that cannot fire is worse than no rule (the PRO-179 dead `60vh` cap). What
+replaces them is `test_the_repo_scan_is_not_vacuous`: the failure mode of an
+unconditional scan is that it silently walks nothing — a wrong `SCAN_ROOTS`, a
+tree that moved — and stays green while proving nothing.
+
+The review of PRO-191 found two ways its first cut miscounted, both still worth
+remembering because both are properties of the detector this file still uses:
 `mask_chat_id` is imported aliased (`as _mask`) in four modules, so a substring
 rule booked eight already-masked lines as debt and left three files unable to
 regress visibly; and chained calls (`logger.bind(...).error(...)`) were excluded
@@ -96,24 +102,6 @@ _UNSAFE_FIELD_NAMES = {
     # Other people's numbers are no less personal than the sender's.
     "pro_phone",
     "phone_number",
-}
-
-# Exact known debt, file -> violation count, as of PRO-191. `dispatch_guards.py`
-# and `workflow_service.py` are the two files this PR cleaned and must never
-# reappear here — that omission is what makes assertion 1 below mean anything.
-KNOWN_VIOLATIONS = {
-    "admin_panel/views/home.py": 1,
-    "app/api/routes/webhook.py": 1,
-    "app/core/arq_worker.py": 4,
-    "app/core/redis_client.py": 2,
-    "app/services/context_manager_service.py": 5,
-    "app/services/customer_flow.py": 2,
-    "app/services/data_management_service.py": 2,
-    "app/services/monitor_service.py": 5,
-    "app/services/notification_service.py": 2,
-    "app/services/pro_flow.py": 6,
-    "app/services/security_service.py": 1,
-    "app/services/state_manager_service.py": 7,
 }
 
 
@@ -281,56 +269,56 @@ def _scan_repo() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_no_new_unmasked_pii_log_interpolations_outside_known_violations():
-    """Assertion 1: a file not already carrying recorded debt must have zero
-    violations. This is what stops a new one appearing anywhere — including
-    back in `dispatch_guards.py`/`workflow_service.py`, which this PR just
-    cleaned and which must therefore never gain an entry in
-    `KNOWN_VIOLATIONS`."""
+def test_no_unmasked_pii_log_interpolations_anywhere():
+    """The floor, and since PRO-195 the whole contract: not one `logger.*`
+    f-string slot under `app/` or `admin_panel/` may render an unmasked chat id
+    or a structural reference to an address, a name or somebody else's number.
+
+    There is no allowlist to add a file to. That is the point — the escape
+    hatch is what let 38 lines sit for two days after the ticket that named
+    them, and this repo already runs `black --check` and `flake8 --count` at
+    zero with no per-file exemptions."""
     scanned = _scan_repo()
-    unexpected = {
-        path: len(v) for path, v in scanned.items() if path not in KNOWN_VIOLATIONS
-    }
-    assert not unexpected, (
-        "Unmasked chat_id/address/name interpolation(s) in logger calls, in "
-        f"files with no recorded ratchet debt: {unexpected}. Mask the chat id "
-        "(chat_id[-8:], mask_chat_id(), strip_suffix()) or drop the address/"
-        "name field from the log line — city is fine, the street/name is not."
+    counts = {path: len(v) for path, v in scanned.items()}
+    assert not counts, (
+        f"Unmasked chat_id/address/name interpolation(s) in logger calls: {counts}. "
+        "Mask the chat id with `mask_chat_id()` from `app/core/phone.py`, or drop "
+        "the address/name field from the log line — city is fine, the street/name "
+        "is not. Offending expressions: "
+        f"{ {path: [e for _, e in v] for path, v in scanned.items()} }"
     )
 
 
-def test_known_violation_files_do_not_exceed_recorded_count():
-    """Assertion 2: no backsliding in a file that already has debt."""
-    scanned = _scan_repo()
-    regressed = {
-        path: (expected, len(scanned.get(path, [])))
-        for path, expected in KNOWN_VIOLATIONS.items()
-        if len(scanned.get(path, [])) > expected
-    }
-    assert not regressed, (
-        "Violation count increased in file(s) already carrying ratchet debt "
-        f"(expected, actual): {regressed}. Revert the new interpolation(s) or "
-        "mask them before raising the recorded count."
+def test_the_repo_scan_is_not_vacuous():
+    """An unconditional 'zero violations' assertion has exactly one silent
+    failure mode: a scan that walks nothing passes it.
+
+    While `KNOWN_VIOLATIONS` existed, assertion 3 covered this incidentally —
+    a scan returning nothing made every recorded count look stale and went
+    red. With the allowlist gone that cover is gone with it, so the scan's own
+    reach is asserted directly: both roots exist, both hold modules, and the
+    walk parses a realistic number of them rather than zero."""
+    for root in SCAN_ROOTS:
+        assert (
+            root.is_dir()
+        ), f"SCAN_ROOTS names something that is not a directory: {root}"
+        assert list(
+            root.rglob("*.py")
+        ), f"No Python files under {root} — the scan is blind there"
+
+    # 79 modules across the two roots at PRO-195. The bound sits far below that
+    # deliberately: it is here to catch a tree that moved out from under the
+    # scan, not to track the file count, which would make it a chore.
+    scanned_files = [path for root in SCAN_ROOTS for path in root.rglob("*.py")]
+    assert len(scanned_files) >= 50, (
+        f"Only {len(scanned_files)} Python files under {[str(r) for r in SCAN_ROOTS]} — "
+        "the scan has lost its tree, and the zero-violations assertion above is "
+        "passing because it looked at nothing."
     )
 
-
-def test_known_violation_files_are_not_below_recorded_count():
-    """Assertion 3: `KNOWN_VIOLATIONS` must track reality exactly, not just
-    bound it — a count that is only ever a ceiling silently rots into a
-    blanket exemption for that file. When a fix lowers the real count, this
-    test fails and says exactly which number to write (or that the entry can
-    be deleted)."""
-    scanned = _scan_repo()
-    stale = {
-        path: len(scanned.get(path, []))
-        for path, expected in KNOWN_VIOLATIONS.items()
-        if len(scanned.get(path, [])) < expected
-    }
-    assert not stale, (
-        "KNOWN_VIOLATIONS is stale — these files now have fewer violations "
-        "than recorded. Lower KNOWN_VIOLATIONS to match (or delete the entry "
-        f"if it reached 0): {stale}"
-    )
+    # And the detector still fires on the shape it exists for, through the same
+    # entry point the repo scan uses.
+    assert find_violations('logger.info(f"x {chat_id}")')
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +390,76 @@ def test_detector_ignores_chat_id_in_a_non_logger_call():
         """
     )
     assert find_violations(src) == []
+
+
+def test_detector_catches_a_name_that_merely_contains_chat_id():
+    """`customer_chat_id` is somebody else's number and reads as plainly as the
+    sender's. The rule is a substring of the expression source rather than an
+    exact name match, which is what catches this — three of the lines PRO-195
+    fixed in `pro_flow.py` were this shape, and an exact-name rule would have
+    certified all three as clean."""
+    src = textwrap.dedent(
+        """
+        def handler():
+            logger.info(f"Pro {pro['_id']} paused bot for customer {customer_chat_id}")
+        """
+    )
+    assert len(find_violations(src)) == 1
+
+    masked = textwrap.dedent(
+        """
+        def handler():
+            logger.info(
+                f"Pro {pro['_id']} paused bot for customer {mask_chat_id(customer_chat_id)}"
+            )
+        """
+    )
+    assert find_violations(masked) == []
+
+
+def test_detector_accepts_mask_chat_id_on_a_pro_phone():
+    """`mask_chat_id` is not only for chat ids: it strips `@c.us` if present and
+    takes the last four digits either way, so it is also the right treatment for
+    a bare `pro_phone`. `monitor_service.py`'s stale-lead nudger — the one
+    non-chat-id line in the PRO-195 batch — logs exactly this."""
+    raw = textwrap.dedent(
+        """
+        def handler():
+            logger.error(f"Failed to send reminder to {pro_phone}: {e}")
+        """
+    )
+    assert len(find_violations(raw)) == 1
+
+    masked = textwrap.dedent(
+        """
+        def handler():
+            logger.error(f"Failed to send reminder to {mask_chat_id(pro_phone)}: {e}")
+        """
+    )
+    assert find_violations(masked) == []
+
+
+def test_detector_catches_the_fsm_transition_line():
+    """The highest-traffic line in the PRO-195 batch, and the one that makes the
+    case: `state_manager_service` logs a transition on every state write, so a
+    single unmasked slot there puts the number beside a searchable state name on
+    every turn of every conversation. The masked form keeps the diagnostic value
+    — which user, which transition — and drops the identity."""
+    raw = textwrap.dedent(
+        """
+        def handler():
+            logger.info(f"FSM {chat_id}: {prev} -> {state_value} (ttl={ttl}s)")
+        """
+    )
+    assert len(find_violations(raw)) == 1
+
+    masked = textwrap.dedent(
+        """
+        def handler():
+            logger.info(f"FSM {mask_chat_id(chat_id)}: {prev} -> {state_value} (ttl={ttl}s)")
+        """
+    )
+    assert find_violations(masked) == []
 
 
 if __name__ == "__main__":  # pragma: no cover

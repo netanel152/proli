@@ -51,7 +51,7 @@ import os
 import sys
 from app.core.logger import logger
 from app.core.constants import AdminDefaults, LeadStatus, Actor
-from app.core.phone import to_chat_id, strip_suffix
+from app.core.phone import mask_chat_id, to_chat_id, strip_suffix
 from app.core.lead_history import status_history_entry
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -942,7 +942,9 @@ def view_leads_dashboard(T):
                         log_audit(
                             "create_lead", {"chat_id": chat_id, "status": new_status}
                         )
-                        logger.info(f"Admin manually created lead for {chat_id}")
+                        logger.info(
+                            f"Admin manually created lead for {mask_chat_id(chat_id)}"
+                        )
                         # Flash + rerun, like every other mutation here: the
                         # board, the tiles and the table were rendered *above*
                         # this form in the same run, so without a rerun the new

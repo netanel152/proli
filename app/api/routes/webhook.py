@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from app.schemas.whatsapp import WebhookPayload
 from app.core.logger import logger, new_trace_id
+from app.core.phone import mask_chat_id
 from app.core.config import settings
 from app.core.constants import APIStatus
 from app.core.messages import Messages
@@ -107,7 +108,9 @@ async def _handle_webhook(payload: WebhookPayload, trace_id: str):
                             latitude=loc.latitude, longitude=loc.longitude
                         )
                     )
-                    logger.info(f"Location message from {chat_id}: {user_text}")
+                    logger.info(
+                        f"Location message from {mask_chat_id(chat_id)}: {user_text}"
+                    )
             elif msg_data.typeMessage in [
                 "imageMessage",
                 "audioMessage",

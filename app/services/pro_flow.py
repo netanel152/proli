@@ -6,7 +6,7 @@ from app.core.database import users_collection, leads_collection, reviews_collec
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
-from app.core.phone import strip_suffix, to_chat_id, to_local_phone
+from app.core.phone import mask_chat_id, strip_suffix, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.core.redis_client import get_redis_client
 from app.services.matching_service import book_slot_for_lead, is_pro_eligible_for_lead
@@ -194,7 +194,7 @@ async def handle_pro_text_command(
         try:
             is_service_intent = await ai.detect_service_intent(text)
         except Exception as e:
-            logger.warning(f"Intent detection failed for {chat_id}: {e}")
+            logger.warning(f"Intent detection failed for {mask_chat_id(chat_id)}: {e}")
             is_service_intent = False
         if is_service_intent:
             await whatsapp.send_message(chat_id, Messages.Pro.INTENT_DETECTED)
@@ -206,7 +206,9 @@ async def handle_pro_text_command(
             meta = await StateManager.get_metadata(chat_id) or {}
             meta.pop("intent_reprompted", None)
             await StateManager.set_metadata(chat_id, meta)
-            logger.info(f"Pro {chat_id} received intent-switch prompt for: {text[:60]}")
+            logger.info(
+                f"Pro {mask_chat_id(chat_id)} received intent-switch prompt for: {text[:60]}"
+            )
             return (
                 ""  # sentinel: handled internally, caller must not send PRO_HELP_MENU
             )
@@ -231,7 +233,7 @@ async def handle_pro_text_command(
                 {"$set": {"paused_at": datetime.now(timezone.utc)}},
             )
             logger.info(
-                f"Pro {chat_id} sent a message; reset PAUSED_FOR_HUMAN TTL and updated paused_at for customer {customer_chat_id}"
+                f"Pro {mask_chat_id(chat_id)} sent a message; reset PAUSED_FOR_HUMAN TTL and updated paused_at for customer {mask_chat_id(customer_chat_id)}"
             )
 
     # Fallback: show dashboard if no match
@@ -631,7 +633,9 @@ async def _handle_pause_bot(pro, whatsapp):
     )
 
     await whatsapp.send_message(customer_chat_id, Messages.Customer.BOT_PAUSED_BY_PRO)
-    logger.info(f"Pro {pro['_id']} paused bot for customer {customer_chat_id}")
+    logger.info(
+        f"Pro {pro['_id']} paused bot for customer {mask_chat_id(customer_chat_id)}"
+    )
     return Messages.Pro.PAUSE_ACK
 
 
@@ -652,7 +656,9 @@ async def _handle_resume(pro):
         await leads_collection.update_one(
             {"_id": lead["_id"]}, {"$set": {"is_paused": False}}
         )
-        logger.info(f"Pro {pro['_id']} resumed bot for customer {customer_chat_id}")
+        logger.info(
+            f"Pro {pro['_id']} resumed bot for customer {mask_chat_id(customer_chat_id)}"
+        )
         return Messages.Pro.BOT_RESUMED
     return Messages.Pro.BOT_ALREADY_ACTIVE
 
