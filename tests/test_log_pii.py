@@ -62,7 +62,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 #: Both trees are scanned. The admin panel logs too, and leaving it out would
 #: have meant a guard that stops at the boundary of the code it was written
-#: from — `admin_panel/views/home.py` has a bare `{chat_id}` today.
+#: from — `admin_panel/views/home.py` carried a bare `{chat_id}` when this file
+#: was written, and PRO-195 masked it.
 SCAN_ROOTS = (REPO_ROOT / "app", REPO_ROOT / "admin_panel")
 
 #: Slice forms that mask a chat id. Tolerated because they predate
