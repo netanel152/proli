@@ -31,15 +31,30 @@ jobs:
       - uses: actions/checkout@v7
 
       # PRO-86: the legacy WhatsApp vendor is gone (PRO-85 — instance deleted,
-      # The provider facade is only a single egress if nothing can reach a vendor
       # tariff cancelled). The provider facade is only a single egress if nothing
-      # can reach a vendor endpoint directly, so any reintroduction of that vendor's
-      # URL — in app code,
-      # a script, a test fixture or a doc — fails the build rather than quietly
-      # recreating the bypass class that caused the yellowCard incident.
-      # The pattern below is the one place the retired host may still be named:
-      # it is the detector itself, and `.github` is excluded from its own scan.
+      # can reach a vendor endpoint directly, so any reintroduction of that
+      # vendor's URL — in app code, a script or a test fixture — fails the build
+      # rather than quietly recreating the bypass class that caused the
+      # yellowCard incident.
+      #
+      # This is a ratchet, not a detector: it has found nothing since it landed,
+      # which is the point. It costs under a second and it exists so that code
+      # pasted back out of git history, or copied from a nine-month-old branch,
+      # cannot re-open that path in silence.
+      #
+      # `*.md` is excluded on purpose (2026-09-14). A document that *names* the
+      # retired vendor is history, not a bypass — the account is deleted, so a
+      # doc cannot lead anyone to a live endpoint — while scanning prose made
+      # writing about this rule trip it, and CLAUDE.md had to carry a warning
+      # telling people to spell the domain in two pieces. A guard whose main
+      # observable effect is a papercut on the docs that explain it is aimed
+      # slightly wrong. Code, scripts and fixtures are still scanned, which is
+      # where an egress bypass can actually live.
+      #
+      # `.github` is excluded from its own scan: the pattern below is the one
+      # place in the repo the retired host may still be named.
       - name: Guard — no legacy WhatsApp vendor references
+        id: vendor-guard
         run: |
           if grep -rInE 'greenapi\.com|green-api\.com' \
                --exclude-dir=.git \
@@ -47,13 +62,15 @@ jobs:
                --exclude-dir=venv \
                --exclude-dir=__pycache__ \
                --exclude-dir=logs \
+               --exclude='*.md' \
                . ; then
             echo ""
-            echo "::error::Legacy WhatsApp vendor reference found. Proli left that vendor in PRO-85;"
-            echo "::error::all WhatsApp traffic goes through app/providers/whatsapp/."
+            echo "::error::Legacy WhatsApp vendor reference found in code. Proli left that vendor"
+            echo "::error::in PRO-85; all WhatsApp traffic goes through app/providers/whatsapp/."
+            echo "::error::Prose may name it (*.md is not scanned) — code, scripts and fixtures may not."
             exit 1
           fi
-          echo "OK — no legacy WhatsApp vendor references."
+          echo "OK — no legacy WhatsApp vendor references in code."
 
       # ARCHITECTURE_STANDARD.md §6.2 — the single-egress rule, mechanised.
       # Two ways to bypass the facade's circuit breaker / kill switch / dry-run:

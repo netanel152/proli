@@ -63,7 +63,7 @@ Requirement levels follow the usual convention:
    scheduled. Nobody is asked to stop feature work and refactor.
 
 Some rules here are already enforced harder than review: the CI guard fails
-the build on any reference to the old vendor's domain, and the test suite
+the build on any reference to the old vendor's domain in code, and the test suite
 fails on a regression against the baseline in [`TESTING.md`](./TESTING.md).
 Where a rule has teeth, the section says so.
 
@@ -327,7 +327,9 @@ Rules:
   and adopting buttons is a product decision not yet made (PRO-88).
 - Two CI guards enforce this mechanically (the "Guard" steps in
   `.github/workflows/tests.yml`): the build fails on any reference to the
-  old vendor's domain, on an `httpx`/`requests` import under
+  old vendor's domain **in code** — `*.md` is excluded, so prose may name the
+  retired vendor; a document is history, not an egress bypass — on an
+  `httpx`/`requests` import under
   `app/services/` (allowlist: `geocoding_service.py`, a non-vendor HTTP
   consumer), and on provider construction outside `app/providers/whatsapp/`.
   The `send_interactive` rule remains review-enforced.
