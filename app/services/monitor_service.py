@@ -987,7 +987,8 @@ async def check_sla_deflection():
 
             # It's been 15 mins of silence. Trigger deflection.
             logger.warning(
-                f"⏰ [SLA Monitor] SLA exceeded for {mask_chat_id(chat_id)}. Deflecting to phone check."
+                f"⏰ [SLA Monitor] SLA exceeded for {mask_chat_id(chat_id)} "
+                f"on lead {lead['_id']}. Deflecting to phone check."
             )
 
             # 1. Clear state
@@ -1005,7 +1006,8 @@ async def check_sla_deflection():
             )
 
             logger.info(
-                f"✅ [SLA Monitor] Deflected customer {mask_chat_id(chat_id)} after inactivity."
+                f"✅ [SLA Monitor] Deflected customer {mask_chat_id(chat_id)} "
+                f"on lead {lead['_id']} after inactivity."
             )
 
     except Exception as e:
@@ -1107,7 +1109,8 @@ async def remind_stale_booked_leads():
                 )
             except Exception as e:
                 logger.error(
-                    f"❌ [Stale Lead Nudger] Failed to send reminder to {mask_chat_id(pro_phone)}: {e}"
+                    f"❌ [Stale Lead Nudger] Failed to send reminder to pro {pro_id} "
+                    f"for lead {lead_id}: {e}"
                 )
 
     except Exception as e:
