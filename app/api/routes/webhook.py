@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from app.schemas.whatsapp import WebhookPayload
 from app.core.logger import logger, new_trace_id
+from app.core.phone import mask_chat_id
 from app.core.config import settings
 from app.core.constants import APIStatus
 from app.core.messages import Messages
@@ -107,7 +108,18 @@ async def _handle_webhook(payload: WebhookPayload, trace_id: str):
                             latitude=loc.latitude, longitude=loc.longitude
                         )
                     )
-                    logger.info(f"Location message from {chat_id}: {user_text}")
+                    # PRO-195 review: `user_text` here is the place name,
+                    # the street address and the exact lat/long. The GPS pair
+                    # survives every sink filter (`_HOUSE_NUMBER` refuses digit
+                    # runs containing `.`) and a Latin-script street survives
+                    # `_ADDRESS_PATTERN` — so masking the chat id and keeping
+                    # this rendered the weakest identifier safe and left the
+                    # strongest one in the clear. The length is what the line
+                    # was actually used for: proof a location arrived at all.
+                    logger.info(
+                        f"Location message from {mask_chat_id(chat_id)} "
+                        f"({len(user_text)} chars)"
+                    )
             elif msg_data.typeMessage in [
                 "imageMessage",
                 "audioMessage",

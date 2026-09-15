@@ -321,7 +321,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                         last_message=last_message
                     )
                 await _send_best_effort(pro_chat_id, pro_msg)
-                logger.info(f"SOS alert sent to Pro {pro_id} for user {chat_id}")
+                logger.info(f"SOS alert sent to Pro {pro_id} for user {_mask(chat_id)}")
 
         # 2. Always page the Admin — via Sentry, not WhatsApp (PRO-88).
         # The customer's message is deliberately NOT included: it is free-form
@@ -336,4 +336,4 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
         )
 
     except Exception as e:
-        logger.error(f"Error in send_sos_alert for user {chat_id}: {e}")
+        logger.error(f"Error in send_sos_alert for user {_mask(chat_id)}: {e}")

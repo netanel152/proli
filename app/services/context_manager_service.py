@@ -2,6 +2,7 @@ import json
 from typing import List, Optional, Dict, Any
 from app.core.redis_client import get_redis_client
 from app.core.logger import logger
+from app.core.phone import mask_chat_id
 
 
 class ContextManager:
@@ -27,7 +28,7 @@ class ContextManager:
             history = [json.loads(item) for item in items]
             return history
         except Exception as e:
-            logger.error(f"Redis get_history error for {chat_id}: {e}")
+            logger.error(f"Redis get_history error for {mask_chat_id(chat_id)}: {e}")
             return None
 
     @classmethod
@@ -48,7 +49,7 @@ class ContextManager:
             # Reset Expiration
             await redis.expire(key, cls.TTL)
         except Exception as e:
-            logger.error(f"Redis update_history error for {chat_id}: {e}")
+            logger.error(f"Redis update_history error for {mask_chat_id(chat_id)}: {e}")
 
     @classmethod
     async def set_history(cls, chat_id: str, messages: List[Dict[str, Any]]):
@@ -69,7 +70,7 @@ class ContextManager:
                 await redis.rpush(key, *dumped_msgs)
                 await redis.expire(key, cls.TTL)
         except Exception as e:
-            logger.error(f"Redis set_history error for {chat_id}: {e}")
+            logger.error(f"Redis set_history error for {mask_chat_id(chat_id)}: {e}")
 
     @classmethod
     async def clear_context(cls, chat_id: str):
@@ -81,6 +82,8 @@ class ContextManager:
             key = f"context:{chat_id}"
             prev_len = await redis.llen(key)
             await redis.delete(key)
-            logger.info(f"🧹 Context cleared for {chat_id} (had {prev_len} messages)")
+            logger.info(
+                f"🧹 Context cleared for {mask_chat_id(chat_id)} (had {prev_len} messages)"
+            )
         except Exception as e:
-            logger.error(f"Redis clear_context error for {chat_id}: {e}")
+            logger.error(f"Redis clear_context error for {mask_chat_id(chat_id)}: {e}")

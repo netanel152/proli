@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 
 from app.core.redis_client import get_redis_client
 from app.core.logger import logger
+from app.core.phone import mask_chat_id
 from app.core.config import settings
 
 
@@ -39,7 +40,7 @@ class SecurityService:
 
         except Exception as e:
             # Fail Open Policy: If Redis fails, allow the request to prevent downtime
-            logger.error(f"Rate Limit Check Failed for {chat_id}: {e}")
+            logger.error(f"Rate Limit Check Failed for {mask_chat_id(chat_id)}: {e}")
             return True
 
     @staticmethod

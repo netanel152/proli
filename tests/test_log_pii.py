@@ -9,16 +9,22 @@ rule for *paging*: mask the phone to its last digits, never send the street
 Log Explorer, so the same leak class applies to a plain `logger.info(f"...")`
 call — it is now exactly as searchable as the page was.
 
-This file is a **ratchet**, not a blanket check. PRO-191 fixed the 31 log
-lines the issue scoped (`dispatch_guards.py`, `workflow_service.py`) — those
-two files must NOT appear in `KNOWN_VIOLATIONS` below, because their absence is
-exactly what makes assertion 1 mean something. The remaining 38, across 12
-files in `app/` and `admin_panel/`, are recorded debt: the three assertions
-below make that number payable-down only — never inflated, and never left stale
-once somebody *does* pay it down.
+PRO-195 took this from a ratchet to a floor. PRO-191 fixed the 31 log lines
+it scoped (`dispatch_guards.py`, `workflow_service.py`) and carried the other
+38, across 12 files, as an enumerated `KNOWN_VIOLATIONS` allowlist that could
+only shrink. PRO-195 paid all 38 down, so the allowlist is gone and the rule is
+now unconditional: **zero violations anywhere under `app/` and `admin_panel/`.**
 
-Counts to trust are the ones in the dict, not any figure in prose. The review
-of this PR found two ways the first cut miscounted, both worth remembering:
+The allowlist was deleted rather than left empty on purpose. With no entries,
+its two companion assertions — *no file above its count*, *none below it
+either* — iterate over nothing and pass forever without testing anything, and a
+rule that cannot fire is worse than no rule (the PRO-179 dead `60vh` cap). What
+replaces them is `test_the_repo_scan_is_not_vacuous`: the failure mode of an
+unconditional scan is that it silently walks nothing — a wrong `SCAN_ROOTS`, a
+tree that moved — and stays green while proving nothing.
+
+The review of PRO-191 found two ways its first cut miscounted, both still worth
+remembering because both are properties of the detector this file still uses:
 `mask_chat_id` is imported aliased (`as _mask`) in four modules, so a substring
 rule booked eight already-masked lines as debt and left three files unable to
 regress visibly; and chained calls (`logger.bind(...).error(...)`) were excluded
@@ -56,7 +62,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 #: Both trees are scanned. The admin panel logs too, and leaving it out would
 #: have meant a guard that stops at the boundary of the code it was written
-#: from — `admin_panel/views/home.py` has a bare `{chat_id}` today.
+#: from — `admin_panel/views/home.py` carried a bare `{chat_id}` when this file
+#: was written, and PRO-195 masked it.
 SCAN_ROOTS = (REPO_ROOT / "app", REPO_ROOT / "admin_panel")
 
 #: Slice forms that mask a chat id. Tolerated because they predate
@@ -96,25 +103,26 @@ _UNSAFE_FIELD_NAMES = {
     # Other people's numbers are no less personal than the sender's.
     "pro_phone",
     "phone_number",
+    # PRO-195 review: the inbound location payload. `user_text` on that path is
+    # the place name, the street and the exact lat/long, and none of it is
+    # reachable by the sink filters — `_HOUSE_NUMBER` refuses digit runs
+    # containing `.`, so the GPS pair survives every one of them, and a
+    # Latin-script street survives `_ADDRESS_PATTERN`. Costs nothing: no line
+    # in either tree logs any of the three today.
+    "user_text",
+    "latitude",
+    "longitude",
 }
 
-# Exact known debt, file -> violation count, as of PRO-191. `dispatch_guards.py`
-# and `workflow_service.py` are the two files this PR cleaned and must never
-# reappear here — that omission is what makes assertion 1 below mean anything.
-KNOWN_VIOLATIONS = {
-    "admin_panel/views/home.py": 1,
-    "app/api/routes/webhook.py": 1,
-    "app/core/arq_worker.py": 4,
-    "app/core/redis_client.py": 2,
-    "app/services/context_manager_service.py": 5,
-    "app/services/customer_flow.py": 2,
-    "app/services/data_management_service.py": 2,
-    "app/services/monitor_service.py": 5,
-    "app/services/notification_service.py": 2,
-    "app/services/pro_flow.py": 6,
-    "app/services/security_service.py": 1,
-    "app/services/state_manager_service.py": 7,
-}
+#: Matched **only** as a record-field access — `doc["name"]` or
+#: `doc.get("name")` — never as a bare `name` or an `obj.name`.
+#:
+#: The distinction is the whole reason this set exists separately. Putting
+#: `name` in `_UNSAFE_FIELD_NAMES` flags 17 lines, and 16 of them are a
+#: provider's name, a city's name or an enum member's `.name`; the seventeenth
+#: is a person. A rule that cries wolf sixteen times out of seventeen gets
+#: switched off, so it is narrowed to the access shape a *record field* takes.
+_UNSAFE_RECORD_FIELD_NAMES = {"name"}
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +206,8 @@ def _references_unsafe_field(expr: ast.AST) -> bool:
     if isinstance(expr, ast.Attribute) and expr.attr in _UNSAFE_FIELD_NAMES:
         return True
     if isinstance(expr, ast.Subscript):
-        if _subscript_const_str_key(expr) in _UNSAFE_FIELD_NAMES:
+        key = _subscript_const_str_key(expr)
+        if key in _UNSAFE_FIELD_NAMES or key in _UNSAFE_RECORD_FIELD_NAMES:
             return True
     if isinstance(expr, ast.Call):
         if _callee_name(expr) in _UNSAFE_CALLEES:
@@ -209,7 +218,10 @@ def _references_unsafe_field(expr: ast.AST) -> bool:
                 if (
                     isinstance(arg, ast.Constant)
                     and isinstance(arg.value, str)
-                    and arg.value in _UNSAFE_FIELD_NAMES
+                    and (
+                        arg.value in _UNSAFE_FIELD_NAMES
+                        or arg.value in _UNSAFE_RECORD_FIELD_NAMES
+                    )
                 ):
                     return True
 
@@ -261,76 +273,118 @@ def find_violations(source: str) -> list[tuple[int, str]]:
 
 
 @functools.lru_cache(maxsize=1)
-def _scan_repo() -> dict:
-    """`{relative/posix/path.py: [(lineno, expr), ...]}` for every file under
-    `SCAN_ROOTS` that has at least one violation. Cached — three tests below
-    all want the same scan and a fresh `ast.parse` of the whole tree per test
-    would be pure waste."""
+def _scan_repo() -> tuple[dict, dict]:
+    """`({relative/posix/path.py: [(lineno, expr), ...]}, {root_name: parsed})`.
+
+    The second half is the non-vacuity evidence and is deliberately counted
+    *here*, per root, rather than re-derived by the test with its own
+    `rglob`. A test that measures its own walk proves nothing about this
+    function: add an exclusion in the loop below (`if "migrations" in
+    path.parts: continue`) and a self-measuring test stays green while the
+    floor quietly stops covering that subtree. This number is what was
+    actually parsed.
+
+    Cached — both tests below want the same scan, and a fresh `ast.parse` of
+    the whole tree per test would be pure waste."""
     results = {}
+    parsed = {}
     for root in SCAN_ROOTS:
+        count = 0
         for path in sorted(root.rglob("*.py")):
             source = path.read_text(encoding="utf-8")
+            count += 1
             violations = find_violations(source)
             if violations:
                 results[path.relative_to(REPO_ROOT).as_posix()] = violations
-    return results
+        parsed[root.name] = count
+    return results, parsed
 
 
 # ---------------------------------------------------------------------------
-# The ratchet, against the real tree.
+# The floor, against the real tree.
 # ---------------------------------------------------------------------------
 
 
-def test_no_new_unmasked_pii_log_interpolations_outside_known_violations():
-    """Assertion 1: a file not already carrying recorded debt must have zero
-    violations. This is what stops a new one appearing anywhere — including
-    back in `dispatch_guards.py`/`workflow_service.py`, which this PR just
-    cleaned and which must therefore never gain an entry in
-    `KNOWN_VIOLATIONS`."""
-    scanned = _scan_repo()
-    unexpected = {
-        path: len(v) for path, v in scanned.items() if path not in KNOWN_VIOLATIONS
-    }
-    assert not unexpected, (
-        "Unmasked chat_id/address/name interpolation(s) in logger calls, in "
-        f"files with no recorded ratchet debt: {unexpected}. Mask the chat id "
-        "(chat_id[-8:], mask_chat_id(), strip_suffix()) or drop the address/"
-        "name field from the log line — city is fine, the street/name is not."
+def test_no_unmasked_pii_log_interpolations_anywhere():
+    """The floor, and since PRO-195 the whole contract: not one `logger.*`
+    f-string slot under `app/` or `admin_panel/` may render an unmasked chat id
+    or a structural reference to an address, a name or somebody else's number.
+
+    There is no allowlist to add a file to. That is the point — the escape
+    hatch is what let 38 lines sit for two days after the ticket that named
+    them, and this repo already runs `black --check` and `flake8 --count` at
+    zero with no per-file exemptions."""
+    scanned, _ = _scan_repo()
+    found = {path: [f"{ln}: {expr}" for ln, expr in v] for path, v in scanned.items()}
+    assert not found, (
+        f"Unmasked chat_id/address/name interpolation(s) in logger calls: {found}. "
+        "Mask the chat id with `mask_chat_id()` from `app/core/phone.py`, or drop "
+        "the address/name field from the log line — city is fine, the street/name "
+        "is not."
     )
 
 
-def test_known_violation_files_do_not_exceed_recorded_count():
-    """Assertion 2: no backsliding in a file that already has debt."""
-    scanned = _scan_repo()
-    regressed = {
-        path: (expected, len(scanned.get(path, [])))
-        for path, expected in KNOWN_VIOLATIONS.items()
-        if len(scanned.get(path, [])) > expected
-    }
-    assert not regressed, (
-        "Violation count increased in file(s) already carrying ratchet debt "
-        f"(expected, actual): {regressed}. Revert the new interpolation(s) or "
-        "mask them before raising the recorded count."
-    )
+#: Both trees, by name, and a floor on each. Checked per root rather than in
+#: total: `app/` alone holds 58 modules, so a total-only bound of 50 passes
+#: happily with `admin_panel/` — 21 modules, and the tree the guard was
+#: extended to cover on purpose — dropped from `SCAN_ROOTS` entirely. The
+#: first cut of this test had exactly that hole, and it was demonstrated
+#: rather than argued: deleting `admin_panel` from `SCAN_ROOTS` left the file
+#: at 11 passed.
+_EXPECTED_ROOTS = {"app": 15, "admin_panel": 15}
 
 
-def test_known_violation_files_are_not_below_recorded_count():
-    """Assertion 3: `KNOWN_VIOLATIONS` must track reality exactly, not just
-    bound it — a count that is only ever a ceiling silently rots into a
-    blanket exemption for that file. When a fix lowers the real count, this
-    test fails and says exactly which number to write (or that the entry can
-    be deleted)."""
-    scanned = _scan_repo()
-    stale = {
-        path: len(scanned.get(path, []))
-        for path, expected in KNOWN_VIOLATIONS.items()
-        if len(scanned.get(path, [])) < expected
-    }
-    assert not stale, (
-        "KNOWN_VIOLATIONS is stale — these files now have fewer violations "
-        "than recorded. Lower KNOWN_VIOLATIONS to match (or delete the entry "
-        f"if it reached 0): {stale}"
+def test_the_repo_scan_is_not_vacuous():
+    """An unconditional 'zero violations' assertion has one silent failure
+    mode: a scan that walks less than it claims passes it.
+
+    While `KNOWN_VIOLATIONS` existed, that was covered incidentally — a scan
+    returning nothing made every recorded count look stale and went red. With
+    the allowlist gone the cover goes with it, so the scan's reach is asserted
+    directly, in the two ways it can shrink: a root can disappear, or a root
+    can stop being walked.
+
+    The per-root counts come from `_scan_repo` itself, not from a second
+    `rglob` here — see its docstring for why a self-measuring test proves
+    nothing about the function it is guarding."""
+    assert {root.name for root in SCAN_ROOTS} == set(_EXPECTED_ROOTS), (
+        "SCAN_ROOTS no longer covers both trees — the floor above is only as "
+        f"wide as this list: {[str(r) for r in SCAN_ROOTS]}"
     )
+    for root in SCAN_ROOTS:
+        assert (
+            root.is_dir()
+        ), f"SCAN_ROOTS names something that is not a directory: {root}"
+
+    _, parsed = _scan_repo()
+    for root in SCAN_ROOTS:
+        # 58 and 21 modules at PRO-195. The bounds sit far below that on
+        # purpose: they catch a tree that moved out from under the scan, and
+        # are not meant to track the file count, which would make this a chore.
+        minimum = _EXPECTED_ROOTS[root.name]
+        assert parsed.get(root.name, 0) >= minimum, (
+            f"`_scan_repo` parsed only {parsed.get(root.name, 0)} modules under "
+            f"{root.name}/ (expected at least {minimum}) — the floor is passing "
+            "because it looked at almost nothing."
+        )
+
+        # And it parsed *everything* there, which a floor cannot express: an
+        # exclusion added inside `_scan_repo`'s loop (`if "migrations" in
+        # path.parts: continue`) leaves a subtree uncovered while every bound
+        # above still passes — `app/services/` alone is ~20 modules, well
+        # inside the slack of any bound loose enough not to be a chore. This
+        # walk is the independent reference the equality is taken against;
+        # that is what makes measuring it here sound rather than circular.
+        on_disk = len(list(root.rglob("*.py")))
+        assert parsed.get(root.name, 0) == on_disk, (
+            f"`_scan_repo` parsed {parsed.get(root.name, 0)} of the {on_disk} "
+            f"modules under {root.name}/ — something in it is skipping files, "
+            "so the floor does not cover the tree it claims to."
+        )
+
+    # And the detector still fires on the shape it exists for, through the same
+    # entry point the repo scan uses.
+    assert find_violations('logger.info(f"x {chat_id}")')
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +456,128 @@ def test_detector_ignores_chat_id_in_a_non_logger_call():
         """
     )
     assert find_violations(src) == []
+
+
+def test_detector_catches_a_name_that_merely_contains_chat_id():
+    """`customer_chat_id` is somebody else's number and reads as plainly as the
+    sender's. The rule is a substring of the expression source rather than an
+    exact name match, which is what catches this — three of the lines PRO-195
+    fixed in `pro_flow.py` were this shape, and an exact-name rule would have
+    certified all three as clean."""
+    src = textwrap.dedent(
+        """
+        def handler():
+            logger.info(f"Pro {pro['_id']} paused bot for customer {customer_chat_id}")
+        """
+    )
+    assert len(find_violations(src)) == 1
+
+    masked = textwrap.dedent(
+        """
+        def handler():
+            logger.info(
+                f"Pro {pro['_id']} paused bot for customer {mask_chat_id(customer_chat_id)}"
+            )
+        """
+    )
+    assert find_violations(masked) == []
+
+
+def test_detector_accepts_mask_chat_id_on_a_pro_phone():
+    """`mask_chat_id` is not only for chat ids: it strips `@c.us` if present and
+    takes the last four digits either way, so it is also the right treatment for
+    a bare `pro_phone`. `monitor_service.py`'s stale-lead nudger — the one
+    non-chat-id line in the PRO-195 batch — logs exactly this."""
+    raw = textwrap.dedent(
+        """
+        def handler():
+            logger.error(f"Failed to send reminder to {pro_phone}: {e}")
+        """
+    )
+    assert len(find_violations(raw)) == 1
+
+    masked = textwrap.dedent(
+        """
+        def handler():
+            logger.error(f"Failed to send reminder to {mask_chat_id(pro_phone)}: {e}")
+        """
+    )
+    assert find_violations(masked) == []
+
+
+def test_detector_catches_the_fsm_transition_line():
+    """The highest-traffic line in the PRO-195 batch, and the one that makes the
+    case: `state_manager_service` logs a transition on every state write, so a
+    single unmasked slot there puts the number beside a searchable state name on
+    every turn of every conversation. The masked form keeps the diagnostic value
+    — which user, which transition — and drops the identity."""
+    raw = textwrap.dedent(
+        """
+        def handler():
+            logger.info(f"FSM {chat_id}: {prev} -> {state_value} (ttl={ttl}s)")
+        """
+    )
+    assert len(find_violations(raw)) == 1
+
+    masked = textwrap.dedent(
+        """
+        def handler():
+            logger.info(f"FSM {mask_chat_id(chat_id)}: {prev} -> {state_value} (ttl={ttl}s)")
+        """
+    )
+    assert find_violations(masked) == []
+
+
+def test_detector_flags_a_record_name_and_not_a_things_name():
+    """`name` is the one field where the access shape carries the meaning, so
+    the rule is narrowed to the record form rather than dropped.
+
+    Flagging bare `name` too would have cost 16 false positives against 1 real
+    hit — a provider's name, a city's name from the geocoder, an enum member's
+    `.name` — and a guard that is wrong sixteen times out of seventeen is a
+    guard somebody turns off."""
+    person = textwrap.dedent(
+        """
+        def handler():
+            logger.info(f"New pending pro created: {result.inserted_id} ({data.get('name')})")
+        """
+    )
+    assert len(find_violations(person)) == 1
+
+    also_person = textwrap.dedent(
+        """
+        def handler():
+            logger.info(f"pro {pro['name']} approved")
+        """
+    )
+    assert len(find_violations(also_person)) == 1
+
+    not_a_person = textwrap.dedent(
+        """
+        def handler():
+            logger.info(f"WhatsApp egress using provider '{provider.name}'")
+            logger.info(f"Geocoded {name} to {lat},{lon}")
+            logger.info(f"File is {file_status.state.name}")
+        """
+    )
+    assert find_violations(not_a_person) == []
+
+
+def test_detector_flags_the_inbound_location_payload():
+    """The sink filters cannot reach this one, which is why it is in the field
+    list rather than left to them: `_HOUSE_NUMBER` refuses digit runs
+    containing `.`, so a lat/long pair survives every scrubber, and
+    `_ADDRESS_PATTERN` is Hebrew-shaped, so a Latin-script street does too."""
+    for src in (
+        'logger.info(f"Location message from {chat} ({user_text})")',
+        'logger.info(f"at {latitude}, {longitude}")',
+    ):
+        assert find_violations(src), f"not flagged: {src}"
+
+    assert (
+        find_violations('logger.info(f"Location message ({len(user_text)} chars)")')
+        == []
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover
