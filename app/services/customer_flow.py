@@ -8,7 +8,7 @@ from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.text_matching import contains_keyword, is_emergency_text
 from app.core.constants import LeadStatus, Defaults, Actor, WorkerConstants
-from app.core.phone import to_chat_id, to_local_phone
+from app.core.phone import mask_chat_id, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.services.notification_service import page_operator
 from app.services.scheduling_service import record_no_show
@@ -157,7 +157,7 @@ async def _handle_completion_check_decline(
         return None
 
     logger.info(
-        f"[CompletionCheck] Customer {chat_id} answered 'not yet' for lead "
+        f"[CompletionCheck] Customer {mask_chat_id(chat_id)} answered 'not yet' for lead "
         f"{lead['_id']} — cooldown restarted."
     )
     return Messages.Customer.COMPLETION_NOT_YET_ACK
@@ -868,7 +868,7 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
             ),
         )
     logger.success(
-        f"📅 Lead {lead['_id']} rescheduled to {new_time} by customer {chat_id}"
+        f"📅 Lead {lead['_id']} rescheduled to {new_time} by customer {mask_chat_id(chat_id)}"
     )
 
 

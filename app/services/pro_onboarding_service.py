@@ -188,5 +188,5 @@ async def _create_pending_pro(chat_id: str, data: dict):
         pro_doc["location"] = location
 
     result = await users_collection.insert_one(pro_doc)
-    logger.info(f"New pending pro created: {result.inserted_id} ({data.get('name')})")
+    logger.info(f"New pending pro created: {result.inserted_id}")
     return result.inserted_id

@@ -5,6 +5,7 @@ from arq import create_pool
 from arq.connections import RedisSettings
 from app.core.config import settings
 from app.core.logger import logger
+from app.core.phone import mask_chat_id
 from typing import Optional
 
 _redis_client: Optional[Redis] = None
@@ -33,7 +34,9 @@ async def acquire_chat_lock(chat_id: str, ttl: int = 10) -> bool:
         result = await redis.set(f"lock:chat:{chat_id}", "1", ex=ttl, nx=True)
         return bool(result)
     except Exception as e:
-        logger.warning(f"acquire_chat_lock Redis error for {chat_id}: {e} — degrading")
+        logger.warning(
+            f"acquire_chat_lock Redis error for {mask_chat_id(chat_id)}: {e} — degrading"
+        )
         return True
 
 
@@ -43,7 +46,7 @@ async def release_chat_lock(chat_id: str) -> None:
         redis = await get_redis_client()
         await redis.delete(f"lock:chat:{chat_id}")
     except Exception as e:
-        logger.debug(f"release_chat_lock swallow for {chat_id}: {e}")
+        logger.debug(f"release_chat_lock swallow for {mask_chat_id(chat_id)}: {e}")
 
 
 def with_scheduler_lock(key: str, ttl: int):
