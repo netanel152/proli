@@ -94,12 +94,19 @@ async def test_happy_path_inbound_to_rating(world):
         static_prefix(Messages.Pro.APPROVAL_REQUEST),
         "דנה",
         "דיזנגוף 50, תל אביב",
-        Messages.Pro.EXTRA_INFO_LINE.format(floor="3", apartment="12"),
         "מחר ב-10:00",
         "450₪",
     )
     assert media_url_for("image") in approval.body, "media links belong in the approval"
-    world.recorder.assert_text_to(pro_chat, Messages.Pro.NAVIGATE_TO, "waze.com")
+    # PRO-59: the offer withholds the floor/apartment line, the navigation
+    # link and the customer's phone until the pro approves — this e2e drives
+    # the real _finalize_deal → 'אשר' sequence against a real recorder, so it
+    # is the one place the whole property is pinned end to end.
+    assert Messages.Pro.EXTRA_INFO_LINE.format(floor="3", apartment="12") not in (
+        approval.body
+    )
+    assert "waze.com" not in approval.body
+    assert to_local_phone(world.customer) not in approval.body
 
     # --- approval: BOOKED, the exact slot is reserved, customer told
     world.recorder.clear()
@@ -117,7 +124,14 @@ async def test_happy_path_inbound_to_rating(world):
         "אינסטלטור",
         "450₪",
     )
-    world.recorder.assert_text_to(pro_chat, Messages.Pro.APPROVE_SUCCESS)
+    approved = world.recorder.assert_text_to(
+        pro_chat,
+        Messages.Pro.APPROVE_SUCCESS,
+        Messages.Pro.EXTRA_INFO_LINE.format(floor="3", apartment="12"),
+        longest_static_chunk(Messages.Pro.CONTACT_CARD),  # the waze nav line
+    )
+    # The details the offer withheld arrive now, in the same message.
+    assert to_local_phone(world.customer) in approved.body
 
     # --- completion: customer is asked to rate
     world.recorder.clear()

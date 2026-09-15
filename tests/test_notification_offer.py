@@ -47,11 +47,23 @@ def test_offer_contains_all_lead_fields():
     msg = build_new_lead_message(_full_lead())
     assert "דנה לוי" in msg
     assert "הרצל 12, תל אביב" in msg
-    assert Messages.Pro.EXTRA_INFO_LINE.format(floor="3", apartment="7") in msg
     assert "נזילה" in msg
     assert "מחר 10:00" in msg
     assert msg.startswith(Messages.Pro.NEW_LEAD_HEADER)
     assert Messages.Pro.NEW_LEAD_FOOTER.strip() in msg
+
+
+def test_offer_omits_phone_and_floor_apartment_pre_approval():
+    """PRO-59: the reassignment/admin offer is the same pre-approval moment
+    as the initial offer, and withholds the same things — floor/apartment
+    and the customer's phone — until the pro approves and gets CONTACT_CARD
+    (pro_flow._handle_approve). Keeps the two pre-approval paths from
+    drifting apart again."""
+    lead = _full_lead(customer_phone="972501234567")
+    msg = build_new_lead_message(lead)
+    assert Messages.Pro.EXTRA_INFO_LINE.format(floor="3", apartment="7") not in msg
+    assert "972501234567" not in msg
+    assert "0501234567" not in msg
 
 
 def test_emergency_lead_gets_emergency_header():
@@ -77,7 +89,6 @@ def test_missing_fields_fall_back_in_hebrew_only():
     assert Messages.Fallbacks.CUSTOMER_NAME in msg
     assert Messages.Fallbacks.UNKNOWN in msg
     assert Messages.Fallbacks.TIME_ASAP in msg
-    assert Messages.Pro.EXTRA_INFO_LINE.format(floor="-", apartment="-") in msg
     assert "Unknown" not in msg
     assert "Pending" not in msg
 
@@ -131,7 +142,11 @@ def _mock_whatsapp():
 
 
 @pytest.mark.asyncio
-async def test_notify_sends_offer_and_navigation_link():
+async def test_notify_sends_offer_without_navigation_link():
+    """PRO-59: no pre-approval navigation link — it resolves the exact
+    address the offer already withholds nothing else about (street/city stay,
+    but a map pin is more precise). pro_flow._handle_approve sends it once
+    the approval is claimed, to the pro's chat_id."""
     whatsapp = _mock_whatsapp()
     ok = await notify_pro_new_lead(
         _full_lead(), {"phone_number": "0501234567"}, whatsapp
@@ -140,18 +155,6 @@ async def test_notify_sends_offer_and_navigation_link():
     whatsapp.send_message.assert_awaited_once()
     sent_text = whatsapp.send_message.await_args.args[1]
     assert sent_text == build_new_lead_message(_full_lead())
-    whatsapp.send_location_link.assert_awaited_once()
-    assert whatsapp.send_location_link.await_args.args[1] == "הרצל 12, תל אביב"
-
-
-@pytest.mark.asyncio
-async def test_notify_skips_navigation_link_without_address():
-    whatsapp = _mock_whatsapp()
-    ok = await notify_pro_new_lead(
-        _full_lead(full_address=None), {"phone_number": "0501234567"}, whatsapp
-    )
-    assert ok is True
-    whatsapp.send_message.assert_awaited_once()
     whatsapp.send_location_link.assert_not_awaited()
 
 
@@ -197,19 +200,6 @@ async def test_notify_returns_false_when_offer_send_is_blocked():
     )
     assert ok is False
     whatsapp.send_location_link.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_notify_still_true_when_only_the_nav_link_is_blocked():
-    """Only the offer send gates the return — a missing navigation link is a
-    degraded offer, not a lost one."""
-    whatsapp = _mock_whatsapp()
-    whatsapp.send_location_link = AsyncMock(return_value=None)
-    ok = await notify_pro_new_lead(
-        _full_lead(), {"phone_number": "0501234567"}, whatsapp
-    )
-    assert ok is True
-    whatsapp.send_location_link.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------

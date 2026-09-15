@@ -184,16 +184,19 @@ floor/apartment line and media-links header moved into the catalog
 (`Messages.Pro.EXTRA_INFO_LINE`, `MEDIA_ATTACHED_HEADER`) — no inline Hebrew
 remains at any of the three sites. The monitor and admin call sites each
 shrank to one call; the initial-offer path keeps its `APPROVAL_REQUEST`
-template and shares `format_lead_extra_info` / `format_media_links` so the
-pieces cannot drift. Tests are in `tests/test_notification_offer.py`,
-including regression guards for the English-fallback and dropped-media bugs.
+template and shares `format_media_links` so the media policy cannot drift.
+(`format_lead_extra_info` was also shared at the time; PRO-59 moved the
+floor/apartment line out of both offers and into the post-approval contact
+card, so as of that change only `format_media_links` is still shared between
+the two builders.) Tests are in `tests/test_notification_offer.py`, including
+regression guards for the English-fallback and dropped-media bugs.
 
 | Metric                          | Before               | After             |
 | ------------------------------- | -------------------- | ----------------- |
 | Copies of the offer builder     | 3, all different     | 1                 |
 | Fallback languages              | 2 (+1 crash path)    | 1                 |
 | Paths that drop customer media  | 1 (`admin_flow`)     | 0                 |
-| Paths without a navigation link | 1 (`admin_flow`)     | 0                 |
+| Paths without a navigation link | 1 (`admin_flow`)     | 0 (PRO-59 later removed the navigation link from both paths) |
 | Media policies                  | 2                    | 1 (text links)    |
 | Dead variables                  | 1                    | 0                 |
 | Call-site lines (monitor/admin) | 33 / 32              | 2 / 2             |
@@ -202,10 +205,12 @@ including regression guards for the English-fallback and dropped-media bugs.
 ### Left alone
 
 - **The two templates stay two templates.** The initial offer
-  (`APPROVAL_REQUEST` — asks for a decision, includes the price line and
-  the customer's phone) and the assignment notice (`NEW_LEAD_DETAILS`) say
-  different things on purpose. Whether reassignment should ask for approval
-  like the initial offer does is a product question, not a refactor.
+  (`APPROVAL_REQUEST` — asks for a decision, includes the price line) and
+  the assignment notice (`NEW_LEAD_DETAILS`) say different things on
+  purpose. Whether reassignment should ask for approval like the initial
+  offer does is a product question, not a refactor. (Neither template has
+  carried the customer's phone since PRO-59 — it now arrives only in the
+  post-approval contact card.)
 - **The media policy chosen is text links** — the one the initial-offer path
   had already chosen deliberately, with a written reason ("avoid re-sending
   files"). This changes what a reassigned pro sees (links instead of

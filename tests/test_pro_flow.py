@@ -12,7 +12,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
-from tests.copy_util import static_prefix
+from tests.copy_util import longest_static_chunk, static_prefix
 from app.services.pro_flow import handle_pro_text_command, _handle_search
 import app.services.pro_flow
 
@@ -50,6 +50,10 @@ async def pro_setup(mock_db):
 def mock_wa():
     wa = MagicMock()
     wa.send_message = AsyncMock()
+    # PRO-59: _handle_approve now sends the post-approval navigation link
+    # itself (whatsapp.send_location_link) — must be an AsyncMock like every
+    # other awaited dependency, or an unrelated approve test raises on await.
+    wa.send_location_link = AsyncMock()
     return wa
 
 
@@ -549,6 +553,140 @@ async def test_approve_lost_race_with_recent_response_returns_already_responded(
     mock_wa.send_message.assert_not_called()
 
     await db.leads.delete_many({"_id": {"$in": [lead_id, recent_booked_id]}})
+
+
+# --- PRO-59: contact details withheld from the offer, delivered on approval --
+
+
+@pytest.mark.asyncio
+async def test_approve_delivers_contact_card_with_inline_navlink(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """Approving reveals the phone, wa.me link, full address and a waze
+    navigation line — all inline in the reply text (CONTACT_CARD). There is
+    no separate `send_location_link` call any more (it used to arrive
+    *before* the handler's own return value, a context-free waze URL ahead
+    of the approval itself).
+
+    No `customer_phone` field on the lead — production never writes one;
+    `_handle_approve` always falls back to `strip_suffix(chat_id)`, which
+    this test's `chat_id` already supplies.
+    """
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501112222@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=ObjectId())
+    )
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert static_prefix(Messages.Pro.CONTACT_CARD) in result
+    assert "0501112222" in result  # local display form
+    assert "https://wa.me/972501112222" in result
+    assert "תל אביב, הרצל 10" in result
+    assert longest_static_chunk(Messages.Pro.CONTACT_CARD) in result  # the waze line
+    # No floor/apartment on this lead — CONTACT_CARD_EXTRA must not appear.
+    assert static_prefix(Messages.Pro.CONTACT_CARD_EXTRA) not in result
+
+    mock_wa.send_location_link.assert_not_awaited()
+
+    await db.leads.delete_many({"_id": lead_id})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "floor,apartment,extra_expected",
+    [
+        ("2", None, True),
+        (None, "4", True),
+        (None, None, False),
+    ],
+)
+async def test_approve_contact_card_extra_only_with_floor_or_apartment(
+    pro_setup, mock_wa, mock_lm, monkeypatch, floor, apartment, extra_expected
+):
+    """CONTACT_CARD_EXTRA is appended only when the lead carries a floor or
+    an apartment — format_lead_extra_info would otherwise render the noise
+    line 'קומה -, דירה -'."""
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    lead_doc = {
+        "_id": lead_id,
+        "pro_id": pro_doc["_id"],
+        "status": LeadStatus.NEW,
+        "chat_id": "972501113333@c.us",
+        "issue_type": "נזילה",
+        "full_address": "תל אביב, הרצל 10",
+        "appointment_time": "10:00",
+        "created_at": datetime.now(timezone.utc),
+    }
+    if floor is not None:
+        lead_doc["floor"] = floor
+    if apartment is not None:
+        lead_doc["apartment"] = apartment
+    await db.leads.insert_one(lead_doc)
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=ObjectId())
+    )
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert (static_prefix(Messages.Pro.CONTACT_CARD_EXTRA) in result) is extra_expected
+
+    await db.leads.delete_many({"_id": lead_id})
+
+
+@pytest.mark.asyncio
+async def test_approve_lost_race_leaks_no_phone_or_navlink(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """PRO-59 inverted: a pro who loses the PRO-123 approval race must not
+    learn the customer's phone number either. The reply is a plain
+    NO_PENDING_APPROVALS/ALREADY_RESPONDED with no CONTACT_CARD, and the
+    navigation link — sent only past the atomic claim — never goes out."""
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501114444@c.us",
+            "customer_phone": "972501114444",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    mock_lm.update_lead_status = AsyncMock(return_value=None)
+    mock_book_slot = AsyncMock(return_value=ObjectId())
+    monkeypatch.setattr(app.services.pro_flow, "book_slot_for_lead", mock_book_slot)
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert result == Messages.Pro.NO_PENDING_APPROVALS
+    assert "0501114444" not in result
+    assert "972501114444" not in result
+    assert static_prefix(Messages.Pro.CONTACT_CARD) not in result
+    mock_wa.send_location_link.assert_not_awaited()
+    # The other half of "lost the race": no slot burned for a lead this pro
+    # no longer owns.
+    mock_book_slot.assert_not_awaited()
+
+    await db.leads.delete_many({"_id": lead_id})
 
 
 # --- Reject ---
@@ -1793,6 +1931,11 @@ async def test_details_command_lists_booked_only(
     assert "חיפה" not in result  # NEW lead excluded
     assert "חשמל" in result
     assert "אינסטלציה" in result
+    # PRO-59: _handle_details fetches only LeadStatus.BOOKED
+    # (_fetch_jobs_chronological(pro, [LeadStatus.BOOKED])) — a pro cannot
+    # read the phone of an unapproved (NEW) lead through this command either.
+    assert "0501111111" not in result
+    assert "972501111111" not in result
 
 
 @pytest.mark.asyncio

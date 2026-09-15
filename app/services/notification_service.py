@@ -114,7 +114,11 @@ async def send_oncall_alert(message: str, *, assume_authorized: bool = False) ->
 
 
 def format_lead_extra_info(lead: dict) -> str:
-    """Floor/apartment line shown to the pro inside a lead offer."""
+    """Floor/apartment line shown to the pro in the post-approval contact card.
+
+    PRO-59: no longer rendered into either lead *offer* — the exact unit is
+    part of what approval buys. Called from pro_flow._handle_approve.
+    """
     return Messages.Pro.EXTRA_INFO_LINE.format(
         floor=lead.get("floor") or "-", apartment=lead.get("apartment") or "-"
     )
@@ -143,10 +147,13 @@ def build_new_lead_message(lead: dict) -> str:
     (Hebrew, from Messages.Fallbacks) and the media policy. Pure — no I/O — so
     the message shape is testable without a database or a send.
 
-    The *initial* offer (workflow_service) uses the richer APPROVAL_REQUEST
-    template (customer phone, price line, loyalty header) and stays separate on
-    purpose; it shares format_lead_extra_info and format_media_links so the
-    pieces cannot drift.
+    The *initial* offer (workflow_service) uses the APPROVAL_REQUEST template,
+    which additionally carries the price line and the loyalty header, and stays
+    separate on purpose. Since PRO-59 the two agree on what a pre-approval
+    offer may contain — no phone, no floor/apartment, no navigation link — and
+    they still share format_media_links. That agreement is now held by tests
+    rather than by a shared helper: format_lead_extra_info is called from
+    neither, so nothing structural stops the two drifting apart again.
     """
     header = (
         Messages.Pro.EMERGENCY_LEAD_HEADER
@@ -156,7 +163,6 @@ def build_new_lead_message(lead: dict) -> str:
     details = Messages.Pro.NEW_LEAD_DETAILS.format(
         customer_name=lead.get("customer_name") or Messages.Fallbacks.CUSTOMER_NAME,
         full_address=lead.get("full_address") or Messages.Fallbacks.UNKNOWN,
-        extra_info=format_lead_extra_info(lead),
         issue_type=lead.get("issue_type") or Messages.Fallbacks.UNKNOWN,
         appointment_time=lead.get("appointment_time") or Messages.Fallbacks.TIME_ASAP,
     )
@@ -170,7 +176,7 @@ def build_new_lead_message(lead: dict) -> str:
 
 
 async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
-    """Send the lead offer (and a navigation link) to a pro.
+    """Send the lead offer to a pro.
 
     Fails open: a failed send is logged at ERROR and returns False rather than
     raising — the callers (reassignment, admin assignment) have already updated
@@ -181,8 +187,11 @@ async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
     "Failed" covers a send the facade *blocked* as well as one that raised: a
     ``None`` from ``send_message`` means breaker, kill switch, or a closed 24h
     window with no approved fallback template (PRO-159), and the pro did not
-    get the offer in any of those cases. Only the offer itself gates the
-    return — a missing navigation link is a degraded offer, not a lost one.
+    get the offer in any of those cases.
+
+    PRO-59 removed the navigation link this used to send alongside the offer:
+    a map pin resolves the exact address the offer now withholds until the pro
+    approves. ``pro_flow._handle_approve`` carries it instead.
 
     What this does **not** do is tell the pro or the customer that the offer
     never arrived; PRO-125 owns that. This only keeps the return value honest
@@ -214,10 +223,10 @@ async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
                 "blocked, not sent — the pro has no offer to answer."
             )
             return False
-        if lead.get("full_address"):
-            await whatsapp.send_location_link(
-                pro_chat_id, lead["full_address"], Messages.Pro.NAVIGATE_TO
-            )
+        # PRO-59: no navigation link before approval. This is the same
+        # pre-approval moment as the initial offer, and a map pin resolves the
+        # exact address the message now withholds. pro_flow._handle_approve
+        # sends it once the approval is claimed, on both paths.
         return True
     except Exception as e:
         logger.error(
@@ -296,9 +305,21 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
             pro = await users_collection.find_one({"_id": pro_id})
             if pro and pro.get("phone_number"):
                 pro_chat_id = to_chat_id(pro["phone_number"])
-                pro_msg = Messages.SOS.PRO_ALERT.format(
-                    phone=customer_phone_display, last_message=last_message
-                )
+                # PRO-59: the number only goes to a pro who has taken the job.
+                # The lead re-read above uses the same three-status query the
+                # callers do, and NEW ("offered, not approved") and CONTACTED
+                # ("early lead") are both pre-approval — in the second the pro
+                # has seen nothing but an issue and a city. Fails closed: an
+                # absent lead is not BOOKED, so it takes the phone-free branch
+                # rather than assuming the pro has earned the number.
+                if (active_lead or {}).get("status") == LeadStatus.BOOKED:
+                    pro_msg = Messages.SOS.PRO_ALERT.format(
+                        phone=customer_phone_display, last_message=last_message
+                    )
+                else:
+                    pro_msg = Messages.SOS.PRO_ALERT_PENDING.format(
+                        last_message=last_message
+                    )
                 await _send_best_effort(pro_chat_id, pro_msg)
                 logger.info(f"SOS alert sent to Pro {pro_id} for user {chat_id}")
 
