@@ -17,7 +17,10 @@ would fire on that healthy configuration.
 
 from pathlib import Path
 
+from loguru import logger as loguru_logger
+
 from app.core.config import Settings
+from app.core.startup_checks import warn_if_admin_phone_unconfigured
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,6 +30,11 @@ _BASE_REQUIRED = dict(
     CLOUDINARY_API_KEY="k2",
     CLOUDINARY_API_SECRET="s",
 )
+
+# A prod-like construction additionally satisfies `require_webhook_auth_in_prod_like`
+# (PRO-86). Kept separate from _BASE_REQUIRED so the development-environment
+# cases stay minimal and it is obvious which field exists for which validator.
+_PROD_LIKE_REQUIRED = dict(_BASE_REQUIRED, WEBHOOK_TOKEN="t")
 
 # Read off the model rather than hardcoding it a second time here — if the
 # default ever changes, this test moves with it instead of silently comparing
@@ -66,7 +74,7 @@ def test_admin_phone_set_to_the_default_value_is_still_configured():
     equal the built-in default (production's actual configuration as of
     2026-09-16, because the default *is* the operator's own number) is
     correctly configured and must not warn. If this property is ever
-    "simplified" to `self.ADMIN_PHONE == "972524828796"`, this is the test
+    "simplified" to a comparison against the default value, this is the test
     that must go red — that comparison fires on exactly this healthy state.
     """
     s = Settings(_env_file=None, **_BASE_REQUIRED, ADMIN_PHONE=_DEFAULT_ADMIN_PHONE)
@@ -74,33 +82,106 @@ def test_admin_phone_set_to_the_default_value_is_still_configured():
     assert s.admin_phone_unconfigured is False
 
 
-def test_boot_paths_consult_the_guard_and_gate_on_is_prod_like():
-    """Both app/main.py's lifespan and app/core/arq_worker.py's startup must
-    warn exactly when a prod-like deploy has an unconfigured ADMIN_PHONE.
+def test_admin_phone_from_a_real_env_var_is_configured(monkeypatch):
+    """The path production actually uses.
 
-    Source-level rather than exercising the real lifespan/startup: both pull
-    in Mongo/Redis connect-with-retry, index creation, the APScheduler start
-    and the heartbeat loop for behaviour that is a single `if` plus a log
-    call — mocking all of that to observe one warning is disproportionate to
-    what PRO-48 added. Mirrors the repo-scan style of
-    tests/test_log_pii.py and tests/test_admin_view_call_arity.py.
+    The three cases above supply ADMIN_PHONE as an ``__init__`` kwarg, and
+    kwargs and environment variables are different pydantic-settings sources.
+    They both land in ``model_fields_set`` today — but the whole design rests
+    on the env-var half, so if a future pydantic-settings bump changed that,
+    every other test here would stay green while every production boot emitted
+    a false report. The value is the default on purpose: env-var provenance
+    *and* the value-equals-default case, together, in the one shape that ships.
     """
-    guarded_files = (
-        Path("app") / "main.py",
-        Path("app") / "core" / "arq_worker.py",
+    monkeypatch.setenv("ADMIN_PHONE", _DEFAULT_ADMIN_PHONE)
+
+    s = Settings(_env_file=None, **_BASE_REQUIRED)
+
+    assert s.admin_phone_unconfigured is False
+    assert s.ADMIN_PHONE == _DEFAULT_ADMIN_PHONE
+
+
+def test_an_explicitly_empty_admin_phone_counts_as_unconfigured(monkeypatch):
+    """``ADMIN_PHONE=`` is worse than the default, not better.
+
+    Railway allows an empty variable and ``docker-compose.prod.yml`` uses the
+    bare ``VAR=`` idiom deliberately, so this is a shape the repo really
+    produces. The field lands in ``model_fields_set``, so a provenance-only
+    check would call it configured — while ``to_chat_id("")`` sends nowhere and
+    the masked log line degrades to ``"***"``, which cannot even say who was
+    missed. ``validate_environment`` rejects an empty ENVIRONMENT for the same
+    reason.
+    """
+    for empty in ("", "   "):
+        monkeypatch.setenv("ADMIN_PHONE", empty)
+        assert (
+            Settings(_env_file=None, **_BASE_REQUIRED).admin_phone_unconfigured is True
+        )
+
+
+def test_the_report_fires_only_in_a_prod_like_environment(caplog):
+    """The helper itself, not the shape of the source that calls it.
+
+    This replaces a scan that asserted the literal
+    ``settings.is_prod_like and settings.admin_phone_unconfigured`` appeared in
+    both boot files. That pin went red on reorderings and reformats that
+    preserve behaviour, and stayed green on a report buried in dead code —
+    wrong in both directions. Exercising the function covers what matters, and
+    `test_both_boot_paths_run_the_check` below keeps the call sites honest.
+    """
+    unset = Settings(_env_file=None, ENVIRONMENT="development", **_BASE_REQUIRED)
+    assert unset.admin_phone_unconfigured is True
+    assert warn_if_admin_phone_unconfigured(unset) is False, (
+        "development is not prod-like — an unset ADMIN_PHONE is normal locally "
+        "and must not be reported"
     )
-    for relative in guarded_files:
-        source = (REPO_ROOT / relative).read_text(encoding="utf-8")
-        idx = source.find("settings.is_prod_like and settings.admin_phone_unconfigured")
-        assert idx != -1, (
-            f"{relative} no longer gates a boot warning on "
-            "`settings.is_prod_like and settings.admin_phone_unconfigured` "
-            "(PRO-48) — an unconfigured ADMIN_PHONE in a prod-like "
-            "deployment would go unnoticed."
-        )
-        # Not just a truthy guard — it has to actually warn somebody.
-        tail = source[idx : idx + 400]
-        assert "logger.warning" in tail, (
-            f"{relative}: the PRO-48 guard is present but no logger.warning "
-            "follows it within range — the check would be silent."
-        )
+
+    for env in ("staging", "production"):
+        s = Settings(_env_file=None, ENVIRONMENT=env, **_PROD_LIKE_REQUIRED)
+        assert warn_if_admin_phone_unconfigured(s) is True, f"{env} must report"
+
+    configured = Settings(
+        _env_file=None,
+        ENVIRONMENT="production",
+        ADMIN_PHONE="972501234567",
+        **_PROD_LIKE_REQUIRED,
+    )
+    assert warn_if_admin_phone_unconfigured(configured) is False
+
+
+def test_the_report_names_the_number_by_its_last_four_only():
+    """A full number in a log line is the thing PRO-191/PRO-195 spent two days
+    removing; four digits answer "is that warning about me?" without it."""
+    s = Settings(_env_file=None, ENVIRONMENT="production", **_PROD_LIKE_REQUIRED)
+
+    records = []
+    sink_id = loguru_logger.add(records.append, level="ERROR")
+    try:
+        assert warn_if_admin_phone_unconfigured(s) is True
+    finally:
+        loguru_logger.remove(sink_id)
+
+    assert len(records) == 1
+    message = records[0].record["message"]
+    assert f"***{_DEFAULT_ADMIN_PHONE[-4:]}" in message
+    assert _DEFAULT_ADMIN_PHONE not in message
+
+
+def test_both_boot_paths_run_the_check():
+    """The api and the worker are separate Railway services that boot
+    independently and each read their own variable set, so either can be the
+    misconfigured one and neither can observe the other. Names only — the
+    behaviour is covered above."""
+    for module in ("app/main.py", "app/core/arq_worker.py"):
+        source = (REPO_ROOT / module).read_text(encoding="utf-8")
+        assert (
+            "warn_if_admin_phone_unconfigured(settings)" in source
+        ), f"{module} no longer runs the PRO-48 boot check"
+
+
+if __name__ == "__main__":  # pragma: no cover
+    import sys
+
+    import pytest
+
+    sys.exit(pytest.main([__file__, "-q"]))

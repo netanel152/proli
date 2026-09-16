@@ -157,7 +157,7 @@ how the two silently re-merge.
 | `SENTRY_DSN` | **distinct** | separate Sentry project per environment, so staging noise cannot pollute production ingest and a leaked staging DSN is worthless |
 | `GEMINI_API_KEY` | **distinct** | a staging leak or quota burn must not affect production |
 | `META_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_PHONE_NUMBER_ID` | **distinct** | production holds the real pilot number. Staging runs `WHATSAPP_DRY_RUN=true` until it has its **own** test number / test WABA — never point staging at production's phone-number id with dry-run off, because staging sends are then production sends (same number, same Meta quality rating) |
-| `WHATSAPP_DRY_RUN` | **distinct** | Both `true` today — **production is muted until the PRO-102 cutover**, and goes `false` there, not before. Measured on 2026-09-16; this row previously read "Production `false`" and was wrong in the direction that matters, since it is the row an operator reads while configuring an environment |
+| `WHATSAPP_DRY_RUN` | **distinct** *(same value today)* | Both `true` today — **production is muted until the PRO-102 cutover**, and goes `false` there, not before. Measured on 2026-09-16; this row previously read "Production `false`" and was wrong in the direction that matters, since it is the row an operator reads while configuring an environment |
 | `CLOUDINARY_*` | shared *(pilot decision)* | media is non-sensitive and a second account is friction with little pilot-stage payoff; revisit post-pilot |
 | `GOOGLE_MAPS_API_KEY` | shared *(pilot decision)* | geocoding only; restrict by API + quota in the Google console; revisit post-pilot |
 | `ADMIN_PHONE`, `ONCALL_PHONE` | shared | not secrets — the same operator is paged from both |

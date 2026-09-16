@@ -391,7 +391,7 @@ python scripts/generate_admin_hash.py
 | `REDIS_PORT` | `6379` | Redis port |
 | `REDIS_URL` | — | Full Redis DSN (overrides HOST/PORT) |
 | `ADMIN_PASSWORD` | — | Plain-text password (hashed on startup) |
-| `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts |
+| `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts. Leaving it unset (or empty) in a prod-like environment is reported at ERROR on every api/worker boot — PRO-48; the default is a real number, so an unconfigured deploy pages whoever it names |
 | `WEBHOOK_TOKEN` | — | Enables `?token=<value>` webhook auth. **Required** (boot fails without it) when `ENVIRONMENT` is `staging`/`production` — PRO-86 removed the other half of webhook authentication (the sender instance-id check) |
 | `WHATSAPP_PROVIDER` | `dryrun` | Outbound transport: `dryrun` (logs, never transmits) or `cloud` (the PRO-89 `CloudAPIProvider` — Meta Graph API, code-complete but not yet onboarded, see PRO-87). An unrecognised value falls back to `dryrun` |
 | `META_ACCESS_TOKEN` | — | Secret. Meta Graph API System User token; required once `WHATSAPP_PROVIDER=cloud` and `WHATSAPP_DRY_RUN` is not `true` |

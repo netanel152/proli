@@ -195,10 +195,32 @@ class Settings(BaseSettings):
         would fire on that correct configuration, and a guard that goes off on
         the healthy state is one somebody turns off.
 
+        **An explicitly empty value counts as unconfigured.** Railway allows
+        an empty variable and `docker-compose.prod.yml` uses the bare `VAR=`
+        idiom deliberately, so `ADMIN_PHONE=` is a shape this repo really
+        produces — and it is worse than the default, not better: the field
+        lands in `model_fields_set`, `to_chat_id("")` returns `""`, and
+        `notification_service.py`'s `"***" + oncall[-4:]` renders `"***"`, so
+        the page goes nowhere and the log line cannot even say who was missed.
+        `validate_environment` already rejects an empty `ENVIRONMENT` for this
+        same reason; this honours the same convention.
+
         Reported at boot rather than raised: refusing to start over an alerting
-        phone number would take down a service that is otherwise healthy.
+        phone number would take down a service that is otherwise healthy. The
+        report itself is `app/core/startup_checks.py`.
+
+        One trap for anyone reading this off the module singleton inside a
+        test: pydantic v2's ``__setattr__`` adds the field to
+        ``__pydantic_fields_set__``, and ``monkeypatch``'s undo restores the
+        *value* but not the membership — so a single
+        ``monkeypatch.setattr(settings, "ADMIN_PHONE", ...)`` anywhere in the
+        session flips this to ``False`` on that instance for good. Build a
+        fresh ``Settings`` instead, as `tests/test_settings_admin_phone.py`
+        does.
         """
-        return "ADMIN_PHONE" not in self.model_fields_set
+        if "ADMIN_PHONE" not in self.model_fields_set:
+            return True
+        return not (self.ADMIN_PHONE or "").strip()
 
     # PRO-86: which transport the outbound facade uses.
     #   dryrun — logs, never transmits (the offline test suite + E2E harness)

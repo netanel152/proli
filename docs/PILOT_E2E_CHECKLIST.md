@@ -5,6 +5,11 @@ The automated suite (`docs/TESTING.md`) proves the units work; this proves the
 **product** works end-to-end on real WhatsApp. The first real customer must never be
 the first real test.
 
+> **Prerequisite:** production runs `WHATSAPP_DRY_RUN=true` and is muted until the
+> PRO-102 cutover (see `docs/RAILWAY_SETUP.md`). Nothing transmits with the mute on,
+> so a "Pass" on any scenario below would mean nothing — this checklist cannot start
+> until that flips. Same rule `SANDBOX_E2E_RUNSHEET.md` states for its Part 2.
+>
 > Run against **production** configuration after all Wave-1 launch fixes have merged.
 > Every failure → open a Linear ticket **before** the pilot, fix, then **re-run the
 > whole checklist** until it is 100% green. Record the run in the sign-off table.
@@ -127,7 +132,7 @@ the **customer** receives the "pending review" message; the admin is paged via
 admin panel's pending-review view and via the `ניהול` wizard.
 - Verify the **Sentry email** arrives (reuses the PRO-18 / PRO-75 paging path).
 - ⚠️ **Note:** this `page_critical` fires on *every* unmatchable lead — expect one email each. If that's too noisy for a routine no-pro case, downgrade the log level (separate ticket).
-- `ADMIN_PHONE`/`ONCALL_PHONE` not-hard-coded (PRO-48) is verified via the **SOS/handoff** path (scenario 7), which *does* WhatsApp the admin.
+- `ADMIN_PHONE`/`ONCALL_PHONE` reaching the operator (PRO-48) is verified via the **SOS/handoff** path (scenario 7), which *does* WhatsApp the admin. The check is that the message arrives — not that the value differs from the default, which it legitimately does not.
 - [ ] Pass  · [ ] File: ______
 
 ### 9. Voice-note intake
