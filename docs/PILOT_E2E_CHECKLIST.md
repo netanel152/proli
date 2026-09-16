@@ -56,7 +56,7 @@ ticket merges. Re-verify this table before each run.
 | **PRO-60** (`is_verified` not auto-true) | ✅ holds — defaults false in admin, absent in onboarding | Scenario 10 valid |
 | **PRO-55** (quoted price to pro) | ✅ built — `quoted_price` persisted, shown in `APPROVAL_REQUEST` **and** `PRO_FOUND` | Scenario 1's price check is valid |
 | **PRO-56** (10-min nudge / 25-min offer) | ✅ built — `check_pro_approval_sla` job runs every 5 min | Scenario 3 is a valid regression |
-| **PRO-48** (ADMIN_PHONE not hard-coded) | ⚠️ config check | Verify the admin phone is set via env, not the default |
+| **PRO-48** (ADMIN_PHONE reaches the operator) | ⚠️ config check | Verify `ADMIN_PHONE` is **set** in the environment and is the operator's number. Do **not** check it against the default value: production is legitimately set to a number equal to the default, because the default is the operator's own. The boot warning covers the case this row used to test — an environment where nothing set it at all |
 
 ---
 
