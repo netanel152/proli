@@ -39,6 +39,17 @@ async def startup(ctx):
         raise e  # Stop startup if DB is down
 
     # 2. Start Scheduler
+    # PRO-48: nothing set ADMIN_PHONE, so SOS reports, admin alerts and the
+    # on-call pager all route to the built-in default. Warn rather than refuse:
+    # the service is otherwise healthy, and a dead alerting path is the kind of
+    # thing that is only ever noticed when an incident fails to reach anyone.
+    if settings.is_prod_like and settings.admin_phone_unconfigured:
+        logger.warning(
+            "⚠️ ADMIN_PHONE is not set in this environment — SOS reports, "
+            "admin alerts and on-call pages route to the built-in default. "
+            "Set it explicitly (PRO-48)."
+        )
+
     logger.info("⏳ Starting Scheduler within Worker...")
     ctx["scheduler"] = start_scheduler()
 
