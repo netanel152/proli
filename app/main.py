@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import settings
+from app.core.startup_checks import warn_if_admin_phone_unconfigured
 import asyncio
 from contextlib import asynccontextmanager
 from app.api.routes import webhook, meta_webhook, health, privacy
@@ -98,16 +99,7 @@ async def lifespan(app: FastAPI):
     await _connect_with_retry("MongoDB", _probe_mongo)
     await _connect_with_retry("Redis", _probe_redis)
 
-    # PRO-48: nothing set ADMIN_PHONE, so SOS reports, admin alerts and the
-    # on-call pager all route to the built-in default. Warn rather than refuse:
-    # the service is otherwise healthy, and a dead alerting path is the kind of
-    # thing that is only ever noticed when an incident fails to reach anyone.
-    if settings.is_prod_like and settings.admin_phone_unconfigured:
-        logger.warning(
-            "⚠️ ADMIN_PHONE is not set in this environment — SOS reports, "
-            "admin alerts and on-call pages route to the built-in default. "
-            "Set it explicitly (PRO-48)."
-        )
+    warn_if_admin_phone_unconfigured(settings)  # PRO-48
 
     # Ensure all MongoDB indexes exist (idempotent — safe to run on every startup)
     try:
