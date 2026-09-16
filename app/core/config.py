@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     # In production, set to your actual domain(s). Defaults to localhost only.
     BACKEND_CORS_ORIGINS: list[str] = ["http://localhost:8501", "http://localhost:3000"]
     MAX_CHAT_HISTORY: int = 20
+    # PRO-48: the default is a real number, so an unconfigured deployment
+    # pages somebody rather than failing loudly. `admin_phone_unconfigured`
+    # below is what detects that; see its docstring for why the check is
+    # provenance and not the value.
     ADMIN_PHONE: str = "972524828796"
     # On-call number for high-urgency infra alerts (e.g. WhatsApp deauth).
     # When unset, falls back to ADMIN_PHONE. Set to a separate operator's
@@ -172,6 +176,29 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.ENVIRONMENT == PRODUCTION_ENV
+
+    @property
+    def admin_phone_unconfigured(self) -> bool:
+        """True when no source supplied ``ADMIN_PHONE`` and the default is live.
+
+        PRO-48. Every SOS report, admin alert and on-call page routes here
+        (``ONCALL_PHONE`` falls back to it), so a deployment that never set it
+        pages whoever the default happens to name.
+
+        **The check is provenance, not value.** ``model_fields_set`` carries the
+        field only when a source — env var or ``.env`` — actually provided it,
+        so a deployment that sets ``ADMIN_PHONE`` to a number that happens to
+        equal the default is correctly silent. That is not hypothetical: on
+        2026-09-16 production was measured set to exactly the default, because
+        the default *is* the operator's own number. Comparing against the
+        default value — which is how PRO-48 originally proposed this guard —
+        would fire on that correct configuration, and a guard that goes off on
+        the healthy state is one somebody turns off.
+
+        Reported at boot rather than raised: refusing to start over an alerting
+        phone number would take down a service that is otherwise healthy.
+        """
+        return "ADMIN_PHONE" not in self.model_fields_set
 
     # PRO-86: which transport the outbound facade uses.
     #   dryrun — logs, never transmits (the offline test suite + E2E harness)
