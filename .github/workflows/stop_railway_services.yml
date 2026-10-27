@@ -50,6 +50,7 @@ jobs:
       # the token and the environment name can never disagree with what was
       # just resolved.
       - name: Stop Services in ${{ steps.target.outputs.target }}
+        id: stop
         env:
           RAILWAY_TOKEN: ${{ steps.target.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
           # Explicit rather than relying on the token's default environment, so a
@@ -58,7 +59,38 @@ jobs:
         run: |
           set -uo pipefail
           echo "Stopping services in $RAILWAY_ENV..."
-          railway down --service api    --environment "$RAILWAY_ENV" -y || echo "api: no active deployment"
-          railway down --service worker --environment "$RAILWAY_ENV" -y || echo "worker: no active deployment"
-          railway down --service admin  --environment "$RAILWAY_ENV" -y || echo "admin: no active deployment"
+
+          # "Already stopped" is the only failure that means success — it is what
+          # makes a second run idempotent. Anything else (a rejected token above
+          # all) used to be swallowed by a blanket `|| echo "no active
+          # deployment"`, after which the job printed "All services stopped" and
+          # went green having stopped nothing. This is the workflow an operator
+          # reaches for when something must stop NOW, so a green check that is not
+          # evidence is the worst thing it can emit (PRO-128 / PRO-183's shape).
+          failed=""
+          for svc in api worker admin; do
+            rc=0
+            out=$(railway down --service "$svc" --environment "$RAILWAY_ENV" -y 2>&1) || rc=$?
+            echo "$out"
+            if [ "$rc" -eq 0 ]; then
+              echo "$svc: stopped"
+            elif printf '%s' "$out" | grep -qi "no deployments found"; then
+              echo "$svc: no active deployment (already stopped)"
+            else
+              echo "::error::$svc was NOT stopped (railway exit $rc) — see the output above."
+              failed="$failed $svc"
+            fi
+          done
+
+          if [ -n "$failed" ]; then
+            echo "::error::NOT stopped in $RAILWAY_ENV:$failed. Stop them from the Railway dashboard (docs/RAILWAY_SETUP.md, 'The credentials CI holds' — the staging token is known broken)."
+            if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo "### ❌ NOT stopped in $RAILWAY_ENV:$failed"
+                echo ""
+                echo "The services above are **still running**. Stop them from the Railway dashboard."
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            exit 1
+          fi
           echo "All services stopped (redis left running)."
