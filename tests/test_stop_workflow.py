@@ -168,3 +168,130 @@ def test_run_name_names_the_target_and_is_a_single_line():
     assert "PRODUCTION" in run_name
     assert "staging" in run_name
     assert "github.ref_name" in run_name
+
+
+# --- Behavioural: run the real "Stop Services" shell against a fake `railway` --
+#
+# The step used to end every `railway down` with `|| echo "…: no active
+# deployment"`. A *rejected token* took that path too, so the job printed "All
+# services stopped" and went green having stopped nothing — measured on
+# staging, 2026-09-22 and 2026-10-06 (the step ran in 2 s, against 13 s when
+# production genuinely had something to remove). Only "already stopped" may
+# count as success; everything else must fail the job.
+
+_FAKE_RAILWAY = """#!/usr/bin/env bash
+# Behaviour is chosen per service by FAKE_<SERVICE>: ok | nodeploy | badtoken.
+svc=""
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--service" ]; then svc="$2"; fi
+  shift
+done
+mode_var="FAKE_$(printf '%s' "$svc" | tr '[:lower:]' '[:upper:]')"
+case "${!mode_var:-ok}" in
+  ok)       echo "Deployment removed"; exit 0 ;;
+  nodeploy) echo "No deployments found"; exit 1 ;;
+  badtoken) echo "Invalid RAILWAY_TOKEN. Please check that it is valid and has access to the resource you're trying to use."; exit 1 ;;
+esac
+exit 99
+"""
+
+
+@pytest.fixture(scope="module")
+def stop_script(tmp_path_factory):
+    step = _find_step(_load_workflow(), "stop")
+    base = tmp_path_factory.mktemp("stop-run")
+    script_path = base / "stop.sh"
+    script_path.write_text(step["run"], encoding="utf-8")
+    bin_dir = base / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "railway"
+    fake.write_text(_FAKE_RAILWAY, encoding="utf-8")
+    fake.chmod(0o755)
+    return script_path, bin_dir
+
+
+def _run_stop(stop_script, tmp_path, **modes):
+    script_path, bin_dir = stop_script
+    summary = tmp_path / "summary.md"
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    env["RAILWAY_ENV"] = "Staging"
+    env["GITHUB_STEP_SUMMARY"] = str(summary)
+    for svc, mode in modes.items():
+        env[f"FAKE_{svc.upper()}"] = mode
+    # `bash -e` because that is how GitHub runs every `run:` block: errexit is
+    # already on before the script's first line (the PR #162 lesson).
+    proc = subprocess.run(
+        ["bash", "-e", str(script_path)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    text = summary.read_text(encoding="utf-8") if summary.exists() else ""
+    return proc, text
+
+
+def test_all_services_stopped_succeeds(stop_script, tmp_path):
+    proc, summary = _run_stop(stop_script, tmp_path)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "All services stopped" in proc.stdout
+    assert summary == "", "a clean run must not write a failure summary"
+
+
+def test_an_already_stopped_environment_is_success(stop_script, tmp_path):
+    # Idempotence is the reason the old `|| echo` existed (cc51936): a second
+    # click on an environment that is already down must stay green.
+    proc, summary = _run_stop(
+        stop_script, tmp_path, api="nodeploy", worker="nodeploy", admin="nodeploy"
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "already stopped" in proc.stdout
+    assert "NOT stopped" not in proc.stdout
+    assert summary == ""
+
+
+def test_a_rejected_token_fails_the_job_instead_of_reporting_success(
+    stop_script, tmp_path
+):
+    proc, summary = _run_stop(
+        stop_script, tmp_path, api="badtoken", worker="badtoken", admin="badtoken"
+    )
+
+    assert proc.returncode != 0
+    assert "All services stopped" not in proc.stdout
+    assert "no active deployment" not in proc.stdout
+    # Railway's own words stay in the log, so the operator sees *why*.
+    assert "Invalid RAILWAY_TOKEN" in proc.stdout
+    for svc in ("api", "worker", "admin"):
+        assert f"{svc} was NOT stopped" in proc.stdout
+    assert "still running" in summary
+
+
+def test_one_failure_among_successes_still_fails_and_names_only_that_service(
+    stop_script, tmp_path
+):
+    # A partial stop is the dangerous case: two green lines can hide the one
+    # service that kept sending. It must also keep going after the first
+    # failure rather than leaving the remaining services untouched.
+    proc, summary = _run_stop(
+        stop_script, tmp_path, api="ok", worker="badtoken", admin="nodeploy"
+    )
+
+    assert proc.returncode != 0
+    assert "worker was NOT stopped" in proc.stdout
+    assert "api was NOT stopped" not in proc.stdout
+    assert "admin was NOT stopped" not in proc.stdout
+    assert "api: stopped" in proc.stdout
+    assert "admin: no active deployment (already stopped)" in proc.stdout
+    assert "NOT stopped in Staging: worker" in summary
+
+
+def test_a_failure_on_the_first_service_does_not_skip_the_rest(stop_script, tmp_path):
+    proc, _ = _run_stop(stop_script, tmp_path, api="badtoken", worker="ok", admin="ok")
+
+    assert proc.returncode != 0
+    assert "worker: stopped" in proc.stdout
+    assert "admin: stopped" in proc.stdout
