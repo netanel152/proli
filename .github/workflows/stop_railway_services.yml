@@ -43,8 +43,18 @@ jobs:
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "Branch '$REF_NAME' → stopping $TARGET."
 
+      # Pinned, not `latest`. This is the workflow reached for when something
+      # must stop NOW, and an unpinned install let the CLI change underneath it:
+      # between the 2026-10-06 run (5.63.3: "Invalid RAILWAY_TOKEN") and 2026-10-28
+      # (12 releases later: "error decoding response body") the failure mode
+      # changed with no change in this repo, so nobody could say whether the token,
+      # the CLI or Railway's API was at fault. 5.63.3 is the version the last
+      # readable run used. Bump it on purpose, not by accident — and the version
+      # is printed so every run records which CLI it actually ran.
       - name: Install Railway CLI
-        run: npm install -g @railway/cli
+        run: |
+          npm install -g @railway/cli@5.63.3
+          railway --version
 
       # Keyed on the resolve step's output, not on the branch name again, so
       # the token and the environment name can never disagree with what was
@@ -83,7 +93,7 @@ jobs:
           done
 
           if [ -n "$failed" ]; then
-            echo "::error::NOT stopped in $RAILWAY_ENV:$failed. Stop them from the Railway dashboard (docs/RAILWAY_SETUP.md, 'The credentials CI holds' — the staging token is known broken)."
+            echo "::error::NOT stopped in $RAILWAY_ENV:$failed. Stop them from the Railway dashboard. What the CLI printed is above; docs/RAILWAY_SETUP.md ('The credentials CI holds') records what has been ruled out."
             if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
               {
                 echo "### ❌ NOT stopped in $RAILWAY_ENV:$failed"
