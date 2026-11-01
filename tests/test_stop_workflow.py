@@ -15,6 +15,7 @@ through `${{ }}`).
 """
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -295,3 +296,23 @@ def test_a_failure_on_the_first_service_does_not_skip_the_rest(stop_script, tmp_
     assert proc.returncode != 0
     assert "worker: stopped" in proc.stdout
     assert "admin: stopped" in proc.stdout
+
+
+def test_the_railway_cli_is_pinned_to_an_exact_version_and_reports_it():
+    # An unpinned `npm install -g @railway/cli` let the CLI change under the
+    # workflow: 2026-10-06 printed "Invalid RAILWAY_TOKEN", 2026-10-28 (twelve
+    # releases later) printed "error decoding response body", with no change in
+    # this repo — so nobody could say whether the token, the CLI or Railway's API
+    # was at fault. This is the workflow reached for when something must stop NOW;
+    # a floating dependency in that path is how it stops working unnoticed.
+    install = next(
+        s for s in _steps(_load_workflow()) if s.get("name") == "Install Railway CLI"
+    )
+
+    assert re.search(r"@railway/cli@\d+\.\d+\.\d+(\s|$)", install["run"]), (
+        "pin @railway/cli to an exact x.y.z — `latest` or no version at all lets "
+        "the stop button change behaviour without a commit"
+    )
+    # The version in the log is what turns the next surprise into a one-line
+    # diagnosis instead of a week of eliminating suspects.
+    assert "railway --version" in install["run"]
