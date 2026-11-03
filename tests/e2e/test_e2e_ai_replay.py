@@ -89,8 +89,9 @@ async def test_a_recorded_response_drives_a_real_flow(world):
     Two recorded turns, because the dispatcher prompt forbids extracting the
     issue on the customer's first message (PRO-169 re-record: the model now
     obeys that rule, where the pre-PRO-169 recording did not). Turn one is the
-    greeting question; turn two carries the answer that completes city + issue
-    and routes the lead to a pro."""
+    greeting question: the recording extracts the city but not the issue, so it
+    opens an unassigned CONTACTED shell. Turn two carries the answer that
+    completes city + issue and routes the lead to a pro."""
     from app.core.constants import LeadStatus
 
     await world.standard_cast()
@@ -101,9 +102,11 @@ async def test_a_recorded_response_drives_a_real_flow(world):
     first = world.recorder.assert_text_to(world.customer, "איך קוראים לך")
     assert first.body.startswith("👋"), "one emoji, leading (COPY_STYLE_GUIDE §4)"
     lead = await world.lead()
-    # A city-only turn may open a CONTACTED shell whose issue_type is the
-    # placeholder default — what must not be there is the real issue.
-    assert lead is None or "נזילה" not in (
+    # The city-only turn opens a CONTACTED shell with no pro yet, whose
+    # issue_type is the placeholder default — what must not be there is the
+    # real issue.
+    assert lead is not None and lead.get("pro_id") is None
+    assert "נזילה" not in (
         lead.get("issue_type") or ""
     ), "the first message must not extract the issue — the prompt says so"
 
@@ -112,7 +115,7 @@ async def test_a_recorded_response_drives_a_real_flow(world):
     lead = await world.lead()
     assert lead is not None
     assert lead["status"] == LeadStatus.CONTACTED
-    assert lead["city"] == "תל אביב" or lead["full_address"] == "תל אביב"
+    assert lead["city"] == "תל אביב"
     assert "נזילה" in lead["issue_type"]
     assert lead["pro_id"] == pro["_id"], "city + issue is enough to route"
 

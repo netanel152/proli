@@ -99,9 +99,8 @@ class Settings(BaseSettings):
     CLOUDINARY_API_SECRET: SecretStr
     AI_MODELS: list[str] = [
         "gemini-3.1-flash-lite",
-        "gemini-3.5-flash",
-        "gemini-2.5-flash",
-        "gemini-1.5-flash",
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
     ]
     TIMEZONE: str = "Asia/Jerusalem"
 
