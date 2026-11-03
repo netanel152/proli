@@ -1,7 +1,7 @@
 {
   "intents": {
     "יש לי נזילה מתחת לכיור": true,
-    "מתי מגיע הטכנאי שלי": false
+    "מתי מגיע הטכנאי שלי": true
   },
   "responses": {
     "dispatcher|text|דנה. הנזילה מתחת לכיור במטבח, התחילה הבוקר": {
@@ -18,7 +18,7 @@
         "street_number": null
       },
       "is_deal": false,
-      "reply_to_user": "נעים להכיר דנה. הבנתי, נזילה מתחת לכיור במטבח שהתחילה הבוקר. האם זה דחוף, או שאפשר לחכות?",
+      "reply_to_user": "נעים להכיר דנה. הבנתי, נזילה במטבח שהתחילה הבוקר. רק לוודא — זה בתל אביב, נכון?",
       "transcription": null
     },
     "dispatcher|text|יש לי נזילה מתחת לכיור בתל אביב": {
@@ -26,7 +26,7 @@
         "apartment": null,
         "appointment_datetime": null,
         "appointment_time": null,
-        "city": null,
+        "city": "תל אביב",
         "customer_name": null,
         "floor": null,
         "issue": null,
@@ -46,20 +46,20 @@
         "city": "תל אביב",
         "customer_name": "דנה",
         "floor": null,
-        "issue": "נזילה מתחת לכיור במטבח",
+        "issue": "נזילה מתחת לכיור",
         "quoted_price": null,
         "street": null,
         "street_number": null
       },
       "is_deal": false,
-      "reply_to_user": "נעים להכיר דנה, כאן נתנאל אינסטלציה. אני מבין שיש נזילה מתחת לכיור במטבח. כדי שאבין טוב יותר, הנזילה מגיעה מהסיפון או מהחיבורים של הברז? בנוסף, אפשר לשלוח תמונה או סרטון קצר של אזור הנזילה?",
+      "reply_to_user": "שלום דנה, כאן נתנאל אינסטלציה. הבנתי שיש נזילה מתחת לכיור, אני אטפל בזה. כדי להבין את המצב טוב יותר, אפשר לשלוח תמונה או סרטון קצר של הנזילה?",
       "transcription": null
     },
     "pro|text|סבבה מתאים לי": {
       "extracted_data": {
         "apartment": "12",
-        "appointment_datetime": "2026-08-31T10:00:00",
-        "appointment_time": "מחר ב-10:00",
+        "appointment_datetime": "2026-11-05T10:00:00",
+        "appointment_time": "מחר ב-10",
         "city": "תל אביב",
         "customer_name": "דנה",
         "floor": "3",

@@ -352,7 +352,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | API framework | FastAPI | Async, OpenAPI built-in |
 | Task queue | ARQ | Lightweight, Redis-backed |
 | Scheduler | APScheduler | 11 cron/interval jobs |
-| AI | Google Gemini (google-genai) | Flash Lite 3.1 → Flash 3.5 → Flash 2.5 → Flash 1.5 fallback |
+| AI | Google Gemini (google-genai) | Flash Lite 3.1 → Flash 3.8 → Flash 3.6 fallback |
 | Database | MongoDB 6.0 + Motor | Async driver |
 | Cache/State | Redis | Context, FSM, rate limit, idempotency |
 | Admin UI | Streamlit | |
