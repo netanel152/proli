@@ -16,8 +16,6 @@ from app.core.database import client
 from app.core.http_client import close_http_client
 from app.core.redis_client import get_redis_client, ChatLockBusyError
 from app.core.messages import Messages
-from app.providers.whatsapp.cloud_api import META_MEDIA_SCHEME, fetch_meta_media
-from app.services.cloudinary_client_service import upload_media_bytes
 from app.scheduler import start_scheduler
 
 # Redis configuration for ARQ
@@ -87,31 +85,6 @@ async def shutdown(ctx):
     await close_http_client()
 
 
-async def _resolve_inbound_media(media_url: str | None) -> str | None:
-    """PRO-89: turn a ``meta-media://<id>`` marker into a permanent URL.
-
-    Meta webhooks carry a media *id*; the real CDN URL needs an authorized
-    fetch and expires within minutes, so the route enqueues the marker and the
-    worker re-hosts the bytes on Cloudinary here — downstream code (lead
-    ``media_urls``, the pro's offer message, the AI engine) then sees an
-    ordinary public URL, exactly as it always has. Failure degrades to
-    text-only processing (returns ``None``), never to a crashed task.
-    """
-    if not media_url or not media_url.startswith(META_MEDIA_SCHEME):
-        return media_url
-    media_id = media_url[len(META_MEDIA_SCHEME) :]
-    data, _mime = await fetch_meta_media(media_id)
-    if data is None:
-        logger.warning(f"Could not fetch Meta media {media_id} — processing text only.")
-        return None
-    hosted_url = await asyncio.to_thread(upload_media_bytes, data)
-    if hosted_url is None:
-        logger.warning(
-            f"Could not re-host Meta media {media_id} — processing text only."
-        )
-    return hosted_url
-
-
 async def process_message_task(
     ctx,
     chat_id: str,
@@ -163,7 +136,6 @@ async def _process_message(
         if message_id:
             scope.set_tag("wamid", message_id)
     try:
-        media_url = await _resolve_inbound_media(media_url)
         await process_incoming_message(chat_id, user_text, media_url)
     except ChatLockBusyError:
         # Another worker is mid-flight for this chat_id — defer so we preserve
@@ -201,6 +173,8 @@ class WorkerSettings:
     job_timeout = 300  # 5 minutes per job
     max_tries = 5  # Retry transient failures up to 5 times
     retry_jobs = True
-    # Keep results in Redis for 7 days so failed jobs are visible for debugging
-    keep_result = 604800  # 7 days in seconds
+    # A result stores the job's args, and the args are the customer's message, so
+    # keeping them would hold text from someone who declined consent. Nothing
+    # reads results: failures reach Sentry and the logs.
+    keep_result = 0
     keep_result_forever = False
