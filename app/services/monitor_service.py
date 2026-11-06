@@ -705,7 +705,7 @@ _QUALITY_PAGE_TEXT = {
     "rating": "quality rating left GREEN",
     "phone": "Meta flagged the number",
     "waba": "account cannot send freely",
-    "poll": "the quality watchdog cannot read Meta, so the rating is unknown",
+    "poll": "the quality watchdog cannot fully read Meta",
 }
 _QUALITY_PAGE_ACTION = (
     "Rating prompts and loyalty offers are paused; dispatch continues."
@@ -720,11 +720,19 @@ _QUALITY_PAGE_ACTION_BLOCKED = (
 def _page_as_new_issue(condition: str, message: str) -> None:
     """Page with a fingerprint of its own. Sentry groups by message otherwise, so
     a repeat would land in the existing issue and could send no email."""
-    import sentry_sdk
+    paged = False
+    try:
+        import sentry_sdk
 
-    with sentry_sdk.isolation_scope() as scope:
-        scope.fingerprint = ["whatsapp-quality", condition, uuid.uuid4().hex]
-        page_critical(message)
+        with sentry_sdk.isolation_scope() as scope:
+            scope.fingerprint = ["whatsapp-quality", condition, uuid.uuid4().hex]
+            paged = True
+            page_critical(message)
+    except Exception as e:
+        logger.warning(f"[WA Quality] could not set the page's fingerprint: {e}")
+        # A page without its own issue beats no page, but never send two.
+        if not paged:
+            page_critical(message)
 
 
 async def check_whatsapp_quality():
@@ -742,6 +750,10 @@ async def check_whatsapp_quality():
     previous_readable = True
     try:
         previous = await quality.read_snapshot() or {}
+    except ValueError as e:
+        # Corrupt, not unreachable: this tick's write is what repairs it.
+        logger.warning(f"[WA Quality] stored snapshot corrupt, replacing it: {e}")
+        previous = {}
     except Exception as e:
         logger.warning(f"[WA Quality] previous snapshot unreadable: {e}")
         previous = {}

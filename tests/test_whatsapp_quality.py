@@ -7,6 +7,7 @@ faked: the reading is what Meta would say, the page is what the operator would g
 
 import json
 import logging
+import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -436,6 +437,70 @@ async def test_an_unreadable_snapshot_is_not_overwritten(
     pages.assert_called_once()
 
 
+@pytest.mark.parametrize("stored", ["not json", "[1, 2]", "null", '"text"'])
+@pytest.mark.asyncio
+async def test_a_corrupt_snapshot_is_replaced_by_the_next_tick(
+    production, pages, poll, fake_redis, stored
+):
+    await fake_redis.set("wa:quality:snapshot", stored)
+
+    # Until a tick repairs it, nobody can vouch for the number.
+    assert await quality.non_essential_sends_paused() is True
+    fields = await quality.health_fields(transmits=True)
+    assert fields["quality_poll"]["status"] == "unreadable"
+
+    await poll()
+
+    assert (await quality.read_snapshot())["quality_rating"] == "GREEN"
+    assert await quality.non_essential_sends_paused() is False
+
+
+@pytest.mark.asyncio
+async def test_a_good_poll_without_a_limit_does_not_keep_the_old_tier(production, poll):
+    await poll(reading(messaging_tier="TIER_2K"))
+    await poll(reading(messaging_tier=None))
+
+    fields = await quality.health_fields(transmits=True)
+    assert fields["quality_poll"]["status"] == "ok"
+    assert fields["messaging_tier"] == "UNKNOWN"
+    assert fields["business_initiated_24h"]["cap"] == 250
+
+
+@pytest.mark.asyncio
+async def test_a_failed_poll_keeps_the_last_known_tier(production, poll):
+    await poll(reading(messaging_tier="TIER_2K"))
+    await poll(None)
+
+    assert (await quality.read_snapshot())["messaging_tier"] == "TIER_2K"
+
+
+@pytest.mark.asyncio
+async def test_a_page_survives_a_broken_sentry_scope(
+    production, pages, poll, monkeypatch
+):
+    monkeypatch.setattr(
+        sentry_sdk, "isolation_scope", MagicMock(side_effect=RuntimeError("boom"))
+    )
+
+    await poll(reading(quality_rating="RED"))
+
+    pages.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_a_failing_scope_exit_after_paging_does_not_page_twice(
+    production, pages, poll, monkeypatch
+):
+    scope = MagicMock()
+    scope.__enter__.return_value = MagicMock()
+    scope.__exit__.side_effect = RuntimeError("boom")
+    monkeypatch.setattr(sentry_sdk, "isolation_scope", MagicMock(return_value=scope))
+
+    await poll(reading(quality_rating="RED"))
+
+    pages.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "can_send,dispatch_line",
     [
@@ -857,7 +922,7 @@ async def test_tightened_still_reminds_the_pro_on_the_same_tick(
     reminder.assert_awaited_once()
 
 
-async def _finish_job(monkeypatch):
+async def _finish_job(monkeypatch, send_error=None):
     monkeypatch.setattr(
         "app.services.pro_flow.ContextManager.clear_context", AsyncMock()
     )
@@ -866,6 +931,7 @@ async def _finish_job(monkeypatch):
     status = AsyncMock()
     monkeypatch.setattr("app.services.pro_flow.set_lead_status", status)
     whatsapp = AsyncMock()
+    whatsapp.send_message.side_effect = send_error
     await _execute_finish(
         {"_id": "lead-1", "chat_id": "972501111111@c.us"},
         {"_id": "pro-1", "business_name": "Pro"},
@@ -898,9 +964,35 @@ async def test_finish_completes_without_a_review_request_while_tightened(
     line = whatsapp.send_message.await_args.args[1]
     assert line == Messages.Customer.RATE_SERVICE.format(pro_name="Pro").split("\n")[0]
     assert Messages.Customer.RATING_SCALE_LINE not in line
+    assert "?" not in line, "a question here would invite a reply nothing reads"
     # The rating window must stay shut, or a later stray digit reads as a rating.
     assert extra_set["waiting_for_rating"] is False
     assert extra_set["completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_completion_line_does_not_abort_the_finish(
+    production, poll, monkeypatch
+):
+    await poll(reading(quality_rating="RED"))
+
+    whatsapp, extra_set = await _finish_job(
+        monkeypatch, send_error=RuntimeError("Meta rejected it")
+    )
+
+    whatsapp.send_message.assert_awaited_once()
+    assert extra_set["completed_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_rating_prompt_still_propagates_when_green(
+    production, poll, monkeypatch
+):
+    """The guard is for the paused line only; the normal send is unchanged."""
+    await poll()
+
+    with pytest.raises(RuntimeError):
+        await _finish_job(monkeypatch, send_error=RuntimeError("Meta rejected it"))
 
 
 def test_the_gate_has_exactly_one_call_in_each_allowed_file():
@@ -908,9 +1000,8 @@ def test_the_gate_has_exactly_one_call_in_each_allowed_file():
     root = Path(__file__).resolve().parent.parent / "app"
     calls = {}
     for path in root.rglob("*.py"):
-        count = path.read_text(encoding="utf-8").count(
-            "await non_essential_sends_paused()"
-        )
+        text = path.read_text(encoding="utf-8")
+        count = len(re.findall(r"(?<!def )non_essential_sends_paused\(", text))
         if count:
             calls[path.relative_to(root).as_posix()] = count
 

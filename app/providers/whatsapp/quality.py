@@ -57,11 +57,17 @@ _LOCAL_PAGE_CLAIMS: dict[str, float] = {}
 
 
 async def read_snapshot() -> dict[str, Any] | None:
-    """The stored snapshot, ``None`` when absent. Raises on a Redis error so
-    each caller picks its own failure direction."""
+    """The stored snapshot, ``None`` when absent. Raises on a Redis error, and
+    ``ValueError`` on stored content that isn't a snapshot, so each caller picks
+    its own failure direction."""
     redis = await get_redis_client()
     raw = await redis.get(_SNAPSHOT_KEY)
-    return json.loads(raw) if raw else None
+    if not raw:
+        return None
+    snapshot = json.loads(raw)
+    if not isinstance(snapshot, dict):
+        raise ValueError("stored snapshot is not an object")
+    return snapshot
 
 
 async def write_snapshot(snapshot: dict[str, Any]) -> None:
@@ -76,10 +82,11 @@ def merge_reading(
 ) -> dict[str, Any]:
     """Fold one poll into the previous snapshot.
 
-    A value Meta did not return keeps its last known value, so a condition
-    cannot clear itself just because the poll failed. A poll counts as good only
-    when it carried both the rating and the health status: a 200 without either
-    is blindness too. A missing limit is not, it only leaves the tier unknown.
+    On a failed poll, a value Meta did not return keeps its last known value, so
+    a condition cannot clear itself. A poll counts as good only when it carried
+    both the rating and the health status: a 200 without either is blindness too.
+    A missing limit is not, but a good poll without one leaves the tier unknown
+    rather than passing an old tier off as current.
     """
     snapshot = dict(previous)
     if reading:
@@ -90,6 +97,7 @@ def merge_reading(
     snapshot["poll_ok"] = poll_ok
     snapshot["last_attempt_at"] = time.time()
     if poll_ok:
+        snapshot["messaging_tier"] = reading.get("messaging_tier")
         snapshot["last_success_at"] = snapshot["last_attempt_at"]
         snapshot["consecutive_failures"] = 0
     else:
