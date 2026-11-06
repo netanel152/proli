@@ -2,17 +2,22 @@
 onboarding messages, and the PUBLIC_BASE_ORIGIN validator."""
 
 import re
+from pathlib import Path
 
 import httpx
 import pytest
-from pydantic import ValidationError
+from loguru import logger as loguru_logger
 
 from app.core import legal_links
 from app.core.config import Settings, settings
 from app.core.messages import Messages
-from app.core.startup_checks import warn_if_terms_enabled_on_draft
+from app.core.startup_checks import (
+    warn_if_public_origin_malformed,
+    warn_if_terms_enabled_on_draft,
+)
 from app.main import app
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 ORIGIN = "https://example.test"
 _REQUIRED = dict(
     GEMINI_API_KEY="k",
@@ -204,30 +209,103 @@ def test_welcome_links_terms_and_still_ends_on_its_question(monkeypatch, approve
         ("https://proli.example", "https://proli.example"),
         ("  https://proli.example/  ", "https://proli.example"),
         ("https://proli.example:8443", "https://proli.example:8443"),
+        ("https://proli.example:65535", "https://proli.example:65535"),
+        ("https://www.xn--4dbrk0ce.example", "https://www.xn--4dbrk0ce.example"),
+        ("https://8.8.8.8", "https://8.8.8.8"),
         ("", None),
         ("   ", None),
     ],
 )
 def test_origin_is_normalized(raw, expected):
-    assert Settings(**_REQUIRED, PUBLIC_BASE_ORIGIN=raw).PUBLIC_BASE_ORIGIN == expected
+    s = Settings(**_REQUIRED, PUBLIC_BASE_ORIGIN=raw)
+
+    assert s.PUBLIC_BASE_ORIGIN == expected
+    assert s.public_base_origin_malformed is False
+    assert warn_if_public_origin_malformed(s) is False
 
 
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "proli.example",
-        "http://proli.example",
-        "https://",
-        "http://localhost:8000",
-        "https://localhost",
-        "https://127.0.0.1:8000",
-        "https://0.0.0.0",
-        "https://[::1]",
-        "https://proli.example/privacy",
-        "https://proli.example?x=1",
-        "https://user:pw@proli.example",
-    ],
-)
-def test_origin_rejects_what_would_be_a_broken_link(raw):
-    with pytest.raises(ValidationError, match="PUBLIC_BASE_ORIGIN"):
-        Settings(**_REQUIRED, PUBLIC_BASE_ORIGIN=raw)
+def test_unset_origin_stays_silent():
+    s = Settings(**_REQUIRED)
+
+    assert s.PUBLIC_BASE_ORIGIN is None
+    assert warn_if_public_origin_malformed(s) is False
+
+
+MALFORMED_ORIGINS = [
+    "proli.example",
+    "http://proli.example",
+    "https://",
+    "http://localhost:8000",
+    "https://localhost",
+    "https://localhost.",
+    "https://foo.localhost",
+    "https://printer.local",
+    "https://foo.railway.internal",
+    "https://api",
+    "https://127.0.0.1:8000",
+    "https://127.0.0.2",
+    "https://127.1",
+    "https://0x7f.1",
+    "https://2130706433",
+    "https://0.0.0.0",
+    "https://10.0.0.5",
+    "https://192.168.1.1",
+    "https://169.254.169.254",
+    "https://[::1]",
+    "https://proli.example/privacy",
+    "https://proli.example?x=1",
+    "https://p.example#",
+    "https://p.example?",
+    "https://p.example:",
+    "https://p.example:abc",
+    "https://p.example:0",
+    "https://p.example:99999",
+    "https://p .example",
+    "https://.",
+    "https://-",
+    "https://-p.example",
+    "https://p.example\\",
+    "https://p.example\n.evil",
+    "https://user:pw@proli.example",
+]
+
+
+@pytest.mark.parametrize("raw", MALFORMED_ORIGINS)
+def test_malformed_origin_boots_with_no_link(monkeypatch, raw):
+    s = Settings(**_REQUIRED, PUBLIC_BASE_ORIGIN=raw)
+    monkeypatch.setattr(settings, "PUBLIC_BASE_ORIGIN", s.PUBLIC_BASE_ORIGIN)
+
+    assert s.public_base_origin_malformed is True
+    assert legal_links.consent_request_text() == Messages.Consent.REQUEST
+
+
+def test_malformed_origin_is_reported_without_its_value():
+    s = Settings(**_REQUIRED, PUBLIC_BASE_ORIGIN="https://user:hunter2@p.example")
+
+    records = []
+    sink_id = loguru_logger.add(records.append, level="ERROR")
+    try:
+        assert warn_if_public_origin_malformed(s) is True
+    finally:
+        loguru_logger.remove(sink_id)
+
+    assert len(records) == 1
+    assert "PUBLIC_BASE_ORIGIN" in records[0].record["message"]
+    assert "hunter2" not in records[0].record["message"]
+    assert "hunter2" not in repr(s)
+
+
+def test_both_boot_paths_report_a_malformed_origin():
+    for module in ("app/main.py", "app/core/arq_worker.py"):
+        source = (REPO_ROOT / module).read_text(encoding="utf-8")
+        assert "warn_if_public_origin_malformed(settings)" in source, module
+
+
+@pytest.mark.parametrize("blank", ["", " "])
+def test_blank_terms_enabled_is_off(blank):
+    assert Settings(**_REQUIRED, TERMS_ENABLED=blank).TERMS_ENABLED is False
+
+
+@pytest.mark.parametrize("value, expected", [("true", True), ("false", False)])
+def test_terms_enabled_still_parses_a_real_value(value, expected):
+    assert Settings(**_REQUIRED, TERMS_ENABLED=value).TERMS_ENABLED is expected

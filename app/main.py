@@ -6,6 +6,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import settings
 from app.core.startup_checks import (
     warn_if_admin_phone_unconfigured,
+    warn_if_public_origin_malformed,
     warn_if_terms_enabled_on_draft,
 )
 import asyncio
@@ -104,6 +105,7 @@ async def lifespan(app: FastAPI):
 
     warn_if_admin_phone_unconfigured(settings)  # PRO-48
     warn_if_terms_enabled_on_draft(settings)
+    warn_if_public_origin_malformed(settings)
 
     # Ensure all MongoDB indexes exist (idempotent — safe to run on every startup)
     try:
