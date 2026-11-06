@@ -1,3 +1,5 @@
+import asyncio
+import uuid
 from types import SimpleNamespace
 from app.providers.whatsapp import get_whatsapp
 from app.services.ai_engine_service import AIEngine
@@ -20,6 +22,7 @@ from app.core.datetime_utils import parse_iso_to_utc
 from app.core.redis_client import (
     acquire_chat_lock,
     release_chat_lock,
+    keep_chat_lock,
     ChatLockBusyError,
 )
 from app.core.text_matching import is_emergency_text
@@ -290,13 +293,15 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     task wrapper can requeue; on Redis failure the helper returns True and we
     proceed in degraded mode.
     """
-    acquired = await acquire_chat_lock(chat_id, ttl=10)
+    token = uuid.uuid4().hex
+    acquired = await acquire_chat_lock(chat_id, token=token)
     if not acquired:
         logger.info(
             f"🔒 Chat lock held for {mask_chat_id(chat_id)} — another task is mid-flight; deferring"
         )
         raise ChatLockBusyError(chat_id)
 
+    renewal = asyncio.create_task(keep_chat_lock(chat_id, token))
     try:
         spawn_background_task(
             whatsapp.send_chat_state_typing(chat_id),
@@ -304,7 +309,8 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         )
         await _process_incoming_message_inner(chat_id, user_text, media_url)
     finally:
-        await release_chat_lock(chat_id)
+        renewal.cancel()
+        await release_chat_lock(chat_id, token)
 
 
 async def _decline_loyalty_offer(chat_id) -> None:
@@ -754,15 +760,31 @@ async def _process_incoming_message_inner(
         await run_customer_pipeline(ctx, deps)
     except BaseException:
         # BaseException because a worker shutdown cancels the job and arq re-runs
-        # it. The held messages left Redis but never reached the history, so put
-        # them back and re-open the gate: the re-run, or the customer's next
-        # *yes*, replays them. Past step 1 this is empty, so nothing replays twice.
-        if ctx.held_messages:
-            await StateManager.hold_message(
-                chat_id, ctx.held_messages["text"], ctx.held_messages["media_url"]
-            )
-            await StateManager.set_state(chat_id, UserStates.AWAITING_CONSENT)
+        # it. The opening is in the history and is not replayed, but the re-run's
+        # text is only the customer's "yes", so nothing would flag the emergency.
+        if ctx.replayed_held_messages and ctx.is_emergency_detected:
+            await page_emergency_turn(chat_id, "failed right after consent")
         raise
+
+
+async def page_emergency_turn(chat_id: str, what: str) -> None:
+    """Page about an emergency turn that did not finish, with something to look up."""
+    try:
+        lead = await leads_collection.find_one(
+            {"chat_id": chat_id}, sort=[("created_at", -1)]
+        )
+    except Exception:
+        lead = None
+    handle = (
+        f"Latest lead: {lead['_id']}."
+        if lead
+        else "No lead found, so nothing to open in the panel: the full number is "
+        "in the `consent` collection, under the chat id ending in those digits."
+    )
+    notification_service.page_operator(
+        f"Emergency message from {mask_chat_id(chat_id)} {what}. {handle} "
+        "Contact the customer."
+    )
 
 
 # --- Private Helpers ---

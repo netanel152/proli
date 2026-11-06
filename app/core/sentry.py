@@ -340,6 +340,8 @@ def init_sentry(service: str) -> bool:
         # URI). _scrub_event only walks the event dict, not what never
         # enters it. Locals stay off. Non-negotiable.
         include_local_variables=False,
+        # A webhook body is the customer's message, consent or no consent.
+        max_request_body_size="never",
     )
     # Self-check, not positional trust: disabled_integrations is a no-op if a
     # different sentry_sdk.init already installed the integration earlier in

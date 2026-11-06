@@ -227,10 +227,10 @@ class WorkerConstants:
     # the same shape PRO-119's loyalty gate already has.
     NEW_OR_EXISTING_TTL_SECONDS = 300
     # What a customer wrote before answering the consent question, held in Redis
-    # and nowhere else (StateManager.hold_message). Refreshed by each new message.
-    # Expiry drops it: a later *yes* gets the bare ack and they describe the
-    # problem again. Shorter than AWAITING_CONSENT's 4h on purpose: content
-    # nobody agreed to store should not sit for as long as a state flag does.
+    # (StateManager.hold_message); the only other copy is the queued job's args,
+    # until it runs. Each new message refreshes this TTL, so a customer who keeps
+    # writing can extend it past AWAITING_CONSENT's fixed 4h. Expiry drops it: a
+    # later *yes* gets the bare ack and they describe the problem again.
     CONSENT_HOLD_TTL_SECONDS = 3600
     # One customer writing past this before answering is not describing a problem.
     CONSENT_HOLD_MAX_MESSAGES = 5
@@ -288,8 +288,8 @@ class WorkerConstants:
     WA_QUALITY_POLL_FAILURE_THRESHOLD = 3
     # No poll attempted for this long means the watchdog itself is not running.
     WA_QUALITY_STALE_MINUTES = 45
-    # One page per condition per episode, and a flapping condition stays quiet
-    # for this long after it clears (the PRO-162 unbounded-page lesson).
+    # At most one page per condition per window, standing or flapping, matching
+    # the other standing alerts (the PRO-162 unbounded-page lesson).
     WA_QUALITY_PAGE_COOLDOWN_HOURS = 24
     # Alert when business-initiated conversations reach this share of the cap.
     # The cap itself follows Meta's live limit, see Settings.WA_BUSINESS_INITIATED_CAP.

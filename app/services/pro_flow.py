@@ -765,9 +765,17 @@ async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
         await ContextManager.clear_context(lead["chat_id"])
 
     pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME)
+    feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
     if ask_for_rating:
-        feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
         await whatsapp.send_message(lead["chat_id"], feedback_msg)
+    else:
+        # The customer still hears the job closed; its first line says only that.
+        # The number is already degraded, so a rejection here is likely, and it
+        # must not abort a finish whose COMPLETED is already written.
+        try:
+            await whatsapp.send_message(lead["chat_id"], feedback_msg.split("\n")[0])
+        except Exception as e:
+            logger.warning(f"Completion line for lead {lead['_id']} not sent: {e}")
     logger.info(f"Lead {lead['_id']} marked as COMPLETED by pro {pro['_id']}")
 
     # PRO-33: job is COMPLETED; now ask (optionally) what was charged. The lead id
