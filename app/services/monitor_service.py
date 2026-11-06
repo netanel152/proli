@@ -1,6 +1,7 @@
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
+from app.core.config import settings
 from app.core.database import leads_collection, users_collection
 from app.core.constants import (
     LeadStatus,
@@ -16,6 +17,7 @@ from app.core.logger import logger, page_critical
 from app.core.redis_client import get_redis_client
 from app.core.datetime_utils import within_business_hours
 from app.providers.whatsapp import get_whatsapp, record_account_state
+from app.providers.whatsapp import quality
 from app.providers.whatsapp.facade import _PAUSE_KEY
 from app.services import matching_service
 from app.services.notification_service import (
@@ -695,6 +697,83 @@ async def send_periodic_admin_report():
 
     except Exception as e:
         logger.error(f"❌ [SOS Reporter] Error: {e}")
+
+
+# What each condition from `quality.active_conditions` tells the operator.
+_QUALITY_PAGE_TEXT = {
+    "rating": "quality rating left GREEN",
+    "phone": "Meta flagged the number",
+    "waba": "WABA cannot send freely",
+    "poll": "the quality watchdog cannot read Meta, so the rating is unknown",
+}
+
+
+async def check_whatsapp_quality():
+    """PRO-90 — early warning on the number's quality rating, tier and health.
+
+    Staging runs on Meta's Test Number, whose WABA is BLOCKED by design until
+    billing and verification land, and it has no reputation worth protecting. So
+    staging polls and reports on /health but never pages or tightens; only
+    production acts. Every page is deduped by `quality.claim_page`.
+    """
+    if not whatsapp.provider.transmits:
+        return
+
+    reading = await whatsapp.get_quality()
+    try:
+        previous = await quality.read_snapshot() or {}
+    except Exception as e:
+        logger.warning(f"[WA Quality] previous snapshot unreadable: {e}")
+        previous = {}
+    snapshot = quality.merge_reading(reading, previous)
+    conditions = quality.active_conditions(snapshot)
+    snapshot["conditions"] = conditions
+    snapshot["tightened"] = settings.is_production and bool(conditions)
+    try:
+        await quality.write_snapshot(snapshot)
+    except Exception as e:
+        logger.warning(f"[WA Quality] snapshot not written: {e}")
+
+    tier = snapshot.get("messaging_tier")
+    if conditions != previous.get("conditions", []) or tier != previous.get(
+        "messaging_tier"
+    ):
+        logger.warning(
+            f"[WA Quality] conditions={conditions} tier={tier} "
+            f"(was {previous.get('conditions', [])}, "
+            f"{previous.get('messaging_tier')})"
+        )
+
+    if not settings.is_production:
+        return
+
+    summary = (
+        f"rating={snapshot.get('quality_rating')} tier={tier} "
+        f"can_send={snapshot.get('can_send_message')} "
+        f"errors={snapshot.get('health_errors') or []}"
+    )
+    for condition in conditions:
+        if await quality.claim_page(condition):
+            kind = condition.split(":", 1)[0]
+            page_critical(
+                f"🚨 WhatsApp {_QUALITY_PAGE_TEXT[kind]} ({condition}): {summary}. "
+                "Review requests and loyalty offers are paused; dispatch continues. "
+                "See docs/RUNBOOK_WHATSAPP_OUTAGE.md §8."
+            )
+
+    count = await quality.business_initiated_count()
+    cap = quality.business_initiated_cap(tier)
+    threshold = cap * WorkerConstants.WA_BUSINESS_INITIATED_ALERT_RATIO
+    if (
+        count is not None
+        and count >= threshold
+        and await quality.claim_page(f"cap:{cap}")
+    ):
+        page_critical(
+            f"🚨 WhatsApp business-initiated conversations at {count}/{cap} in the "
+            "last 24h. Meta blocks new ones at the cap. "
+            "See docs/RUNBOOK_WHATSAPP_OUTAGE.md §8."
+        )
 
 
 async def check_whatsapp_instance_state():

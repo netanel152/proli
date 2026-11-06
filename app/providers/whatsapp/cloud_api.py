@@ -398,9 +398,14 @@ class CloudAPIProvider(WhatsAppProvider):
 
         ``CONNECTED`` maps to ``"authorized"`` so the PRO-20 watchdog, the
         PRO-71/82 breaker and ``record_account_state`` work unchanged for this
-        provider. Anything else (``FLAGGED``, ``RESTRICTED``, ``BANNED``, …)
-        is passed through lowercased — the watchdog treats any non-authorized
-        answer as unhealthy. ``None`` means the probe itself failed.
+        provider. So does ``FLAGGED``: Meta's limits docs describe it as a quality
+        warning that lowers the limit after 7 days, and halting there would take
+        dispatch down at the exact moment PRO-90 has to keep it alive, so the
+        quality watchdog owns it. If Meta does reject those sends, they fail loudly
+        at the send rather than being held back here.
+        Anything else (``RESTRICTED``, ``BANNED``, …) is passed through
+        lowercased — the watchdog treats any non-authorized answer as unhealthy.
+        ``None`` means the probe itself failed.
         """
         if settings.META_ACCESS_TOKEN is None or not settings.META_PHONE_NUMBER_ID:
             return None
@@ -409,24 +414,87 @@ class CloudAPIProvider(WhatsAppProvider):
             response = await client.get(
                 f"{_GRAPH_ROOT}/{settings.META_GRAPH_API_VERSION}"
                 f"/{settings.META_PHONE_NUMBER_ID}",
-                params={"fields": "status,quality_rating"},
+                params={"fields": "status"},
                 headers=self._auth_headers(),
             )
             response.raise_for_status()
             data = response.json()
             status = str(data.get("status") or "").strip()
-            quality = data.get("quality_rating")
-            if quality:
-                # Breadcrumb for PRO-90 (quality/tier monitoring). Debug, not
-                # info: the PRO-20 watchdog probes every 2 minutes and ~720
-                # identical INFO lines/day is noise, not signal.
-                logger.debug(f"Meta phone-number quality_rating={quality}")
             if not status:
                 return None
-            return "authorized" if status.upper() == "CONNECTED" else status.lower()
+            if status.upper() in ("CONNECTED", "FLAGGED"):
+                return "authorized"
+            return status.lower()
         except Exception as e:
             logger.warning(f"Meta state probe failed: {e}")
             return None
+
+    async def get_quality(self) -> dict[str, Any] | None:
+        """Read-only: ``quality_rating``, ``messaging_tier``, ``phone_status``
+        off the phone node, ``can_send_message``, ``health_errors`` off the WABA.
+
+        ``None`` when the phone node cannot be read. A WABA that cannot be read,
+        or that ``META_WABA_ID`` does not name, leaves its two keys ``None`` and
+        keeps the rating, which is the half of the reading that matters most.
+        """
+        if settings.META_ACCESS_TOKEN is None or not settings.META_PHONE_NUMBER_ID:
+            return None
+        root = f"{_GRAPH_ROOT}/{settings.META_GRAPH_API_VERSION}"
+        reading: dict[str, Any] = {"can_send_message": None, "health_errors": None}
+        try:
+            client = await get_http_client()
+            response = await client.get(
+                f"{root}/{settings.META_PHONE_NUMBER_ID}",
+                params={
+                    "fields": "status,quality_rating,"
+                    "whatsapp_business_manager_messaging_limit"
+                },
+                headers=self._auth_headers(),
+            )
+            response.raise_for_status()
+            phone = response.json()
+        except Exception as e:
+            logger.warning(f"Meta quality probe failed: {e}")
+            return None
+        reading["quality_rating"] = self._upper(phone.get("quality_rating"))
+        # Meta deprecated `messaging_limit_tier`; this replaces it. The limit is
+        # set per business portfolio and shared by all its numbers.
+        reading["messaging_tier"] = self._upper(
+            phone.get("whatsapp_business_manager_messaging_limit")
+        )
+        reading["phone_status"] = self._upper(phone.get("status"))
+
+        if settings.META_WABA_ID:
+            try:
+                response = await client.get(
+                    f"{root}/{settings.META_WABA_ID}",
+                    params={"fields": "health_status"},
+                    headers=self._auth_headers(),
+                )
+                response.raise_for_status()
+                health = response.json().get("health_status") or {}
+                reading["can_send_message"] = self._upper(
+                    health.get("can_send_message")
+                )
+                reading["health_errors"] = self._health_error_codes(health)
+            except Exception as e:
+                logger.warning(f"Meta WABA health probe failed: {e}")
+        return reading
+
+    @staticmethod
+    def _upper(value: Any) -> str | None:
+        return str(value).strip().upper() or None if value else None
+
+    @staticmethod
+    def _health_error_codes(health: dict[str, Any]) -> list[str]:
+        """Error codes only, from the node and its per-entity breakdown. Meta's
+        descriptions stay out of pages and ``/health``."""
+        errors = list(health.get("errors") or [])
+        for entity in health.get("entities") or []:
+            errors.extend(entity.get("errors") or [])
+        return sorted(
+            {str(e.get("error_code") or e.get("code") or "unknown") for e in errors}
+        )
 
     def parse_webhook(self, payload: Any) -> NormalizedMessage | None:
         return parse_meta_webhook(payload)

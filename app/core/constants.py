@@ -272,6 +272,20 @@ class WorkerConstants:
     # polarity is inverted: an expired pause key releases the breaker, an expired
     # confirmation key engages it.
     WA_STATE_CONFIRM_TTL_SECONDS = 360  # 6 min (3× the 2-min poll interval)
+    # PRO-90 — quality-rating watchdog. Meta's rating reflects recent days of
+    # messages, so 15 minutes is ample, and it also runs once after boot (PRO-176
+    # boot slot) so a deploy immediately has a real reading on /health.
+    WA_QUALITY_CHECK_INTERVAL_MINUTES = 15
+    # Consecutive failed polls before "can't read Meta" becomes a page (45 min).
+    WA_QUALITY_POLL_FAILURE_THRESHOLD = 3
+    # No poll attempted for this long means the watchdog itself is not running.
+    WA_QUALITY_STALE_MINUTES = 45
+    # One page per condition per episode, and a flapping condition stays quiet
+    # for this long after it clears (the PRO-162 unbounded-page lesson).
+    WA_QUALITY_PAGE_COOLDOWN_HOURS = 24
+    # Alert when business-initiated conversations reach this share of the cap.
+    # The cap itself follows Meta's live limit, see Settings.WA_BUSINESS_INITIATED_CAP.
+    WA_BUSINESS_INITIATED_ALERT_RATIO = 0.8
     # PRO-89 — Meta Cloud API 24h customer-service window. Free-form messages
     # are deliverable only inside the 24 hours following the recipient's most
     # recent inbound message; outside it only a pre-approved template can be
