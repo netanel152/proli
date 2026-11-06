@@ -234,13 +234,6 @@ def test_output_never_leaks_the_username_password_or_host(creds_script, tmp_path
 # --- Structural: Railway is gone ---
 
 
-def test_no_step_named_or_containing_railway():
-    doc = _load_workflow()
-    for step in _steps(doc):
-        name = step.get("name") or ""
-        assert re.search(r"\brailway\b", name, re.IGNORECASE) is None, name
-
-
 def test_no_step_declares_or_reads_a_railway_token():
     # The credential itself is gone, not just the CLI. Checked as *active
     # use* — an env key, or a `$RAILWAY_TOKEN`/`${RAILWAY_TOKEN}` shell

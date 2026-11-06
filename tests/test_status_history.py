@@ -6,7 +6,6 @@ Covers:
   B. app.services.lead_manager_service.set_lead_status (canonical writer)
   C. Full lead lifecycle -> ordered status_history via LeadManager + set_lead_status
   D. Backward compatibility with pre-existing leads that lack status_history
-  E. admin_panel/views/analytics.py::_get_status_history_metrics importability
   F. Architectural guard: no direct '$set' of 'status' outside the helper
 """
 
@@ -330,21 +329,6 @@ async def test_set_lead_status_creates_history_array_for_legacy_lead_without_fie
     assert len(updated["status_history"]) == 1
     assert updated["status_history"][0]["by"] == Actor.CUSTOMER
     assert updated["status_history"][0]["status"] == LeadStatus.COMPLETED
-
-
-# ---------------------------------------------------------------------------
-# E. Analytics — the status-history aggregation moved to
-# admin_panel/core/analytics_queries.py (PRO-140) and is now FULLY tested with
-# a sync mongomock database in tests/test_analytics_queries.py (median,
-# conversion rate, pre-feature leads skipped). Keep only the importability
-# guard here, pointed at the new home.
-# ---------------------------------------------------------------------------
-
-
-def test_status_history_metrics_function_is_importable_and_callable():
-    from admin_panel.core import analytics_queries
-
-    assert callable(analytics_queries.get_status_history_metrics)
 
 
 # ---------------------------------------------------------------------------

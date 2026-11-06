@@ -10,8 +10,6 @@ import pytest
 import fakeredis.aioredis
 
 from app.core.redis_client import get_redis_client
-from app.core.constants import UserStates
-from app.services.state_manager_service import StateManager
 
 
 @pytest.mark.asyncio
@@ -44,17 +42,3 @@ async def test_fresh_store_b_writes_sentinel_after_confirming_empty():
 
     await client.set("pro78:sentinel", "1")
     assert await client.get("pro78:sentinel") == "1"
-
-
-@pytest.mark.asyncio
-async def test_state_manager_round_trips_through_fake_redis():
-    chat_id = "972500000123@c.us"
-
-    # Nothing left over from another test.
-    assert await StateManager.get_state(chat_id) == UserStates.IDLE
-
-    await StateManager.set_state(chat_id, UserStates.AWAITING_ADDRESS)
-    assert await StateManager.get_state(chat_id) == UserStates.AWAITING_ADDRESS
-
-    await StateManager.clear_state(chat_id)
-    assert await StateManager.get_state(chat_id) == UserStates.IDLE

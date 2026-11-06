@@ -1067,11 +1067,11 @@ ARRANGERS = {
 def _cases():
     for state, row in MATRIX.items():
         for input_class in INPUT_CLASSES:
-            cell = row[input_class]
-            marks = [pytest.mark.skip(reason=cell.na)] if cell.na else []
-            yield pytest.param(
-                state, input_class, id=f"{state.value}-{input_class}", marks=marks
-            )
+            # An N/A cell has nothing to drive; the guards below read MATRIX itself.
+            if not row[input_class].na:
+                yield pytest.param(
+                    state, input_class, id=f"{state.value}-{input_class}"
+                )
 
 
 @pytest.mark.asyncio
