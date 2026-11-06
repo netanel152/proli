@@ -1,0 +1,2 @@
+# netlify.toml's CSP hashes these files byte for byte; a CRLF checkout would change the hash.
+site/*.html text eol=lf

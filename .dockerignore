@@ -26,6 +26,8 @@ docker-compose.override.yml
 README.md
 pytest.ini
 tests/
+site/
+netlify.toml
 
 # OS files
 .DS_Store
