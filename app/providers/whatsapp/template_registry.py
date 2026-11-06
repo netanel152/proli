@@ -37,7 +37,7 @@ _VARIABLE = re.compile(r"\{\{(\d+)\}\}")
 _BODY_MAX_CHARS = 1024
 # shortcut: Meta rejects "too many variables relative to the message length" but
 # publishes no ratio, so this floor is ours. Change it if a review says otherwise.
-_MIN_FIXED_CHARS_PER_VARIABLE = 15
+_MIN_FIXED_CHARS_PER_VARIABLE = 20
 _LINE_BREAKS_AND_TABS = re.compile(r"[\r\n\t\v\f\x85\u2028\u2029]+")
 _LONG_SPACE_RUN = re.compile(r" {4,}")
 # A long customer message must not overflow the body and lose the alert. Meta
