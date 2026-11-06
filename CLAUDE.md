@@ -140,7 +140,7 @@ Proli is an AI-powered WhatsApp CRM for Israeli service professionals (plumbers,
 
 ### Process 1: FastAPI Backend (`app/`)
 
-Entry point for inbound WhatsApp webhooks. Its only job is to validate the incoming payload, enqueue a task to Redis via ARQ, and immediately return `200 OK`. All heavy lifting is deferred to the Worker. Routes: `POST /webhook`, `GET/POST /webhook/meta` (PRO-89 — Meta Cloud API subscription handshake and inbound; live even under `WHATSAPP_PROVIDER=dryrun`), `GET /health` (public response is only `status` + `uptime_seconds`; the per-dependency `checks` detail requires the `X-Health-Token` header, PRO-136), and `GET /health/leads` (token-only — 403 without `X-Health-Token`; error bodies are a fixed string, the real exception goes to logs/Sentry).
+Entry point for inbound WhatsApp webhooks. Its only job is to validate the incoming payload, enqueue a task to Redis via ARQ, and immediately return `200 OK`. All heavy lifting is deferred to the Worker. Routes: `POST /webhook`, `GET/POST /webhook/meta` (PRO-89 — Meta Cloud API subscription handshake and inbound; live even under `WHATSAPP_PROVIDER=dryrun`), `GET /health` (public response is only `status` + `uptime_seconds`; the per-dependency `checks` detail requires the `X-Health-Token` header, PRO-136), and `GET /health/leads` (token-only — 403 without `X-Health-Token`; error bodies are a fixed string, the real exception goes to logs/Sentry; polled by the `🩺 Lead pipeline monitor` workflow, runbook in `docs/OPERATIONS_GUIDE.md`).
 
 ### Process 2: ARQ Worker (`app/worker.py` + `app/core/arq_worker.py`)
 

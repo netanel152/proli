@@ -129,6 +129,10 @@ railway run python scripts/fire_test_page.py --service worker
 railway run python scripts/fire_test_page.py --service api
 ```
 
+### `check_health_leads.py`
+
+One poll of production's `/health/leads`: applies the alert rules and pages through Sentry. Stdlib only, configured entirely by environment, and run by the `🩺 Lead pipeline monitor` workflow rather than by hand. Runbook: "Lead pipeline monitor" in `docs/OPERATIONS_GUIDE.md`.
+
 ### `simulate_sla_deflection.py`
 
 Simulates a 15-minute silence for a specific `chat_id` by setting its Redis state to `PAUSED_FOR_HUMAN` and backdating its `paused_at` timestamp in MongoDB. This triggers the SLA Monitor on its next run — provided it's business hours (08:00–21:00 IL) and `sla_monitor_active` is enabled (defaults OFF, PRO-73).

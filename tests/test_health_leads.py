@@ -4,8 +4,8 @@ Tests for GET /health/leads — the business-level lead pipeline signal.
 Why this exists: the 2026-04-18 post-mortem exposed two failure modes the
 operational healthcheck was blind to — a growing PENDING_ADMIN_REVIEW
 backlog (Healer looping) and stale CONTACTED leads (Healer silently
-failing). The endpoint surfaces both counts so an external monitor
-(Better Uptime / Cronitor / Sentry Crons) can page on threshold breach.
+failing). The endpoint surfaces both counts so scripts/check_health_leads.py
+can page on threshold breach.
 
 Tests here cover:
   1. Empty DB → both counters zero.

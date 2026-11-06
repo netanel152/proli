@@ -306,10 +306,8 @@ async def leads_health(request: Request, response: Response):
         reassign or escalate these on its 10-minute tick. If this number
         climbs, the Healer is silently failing.
 
-    Intended as the source-of-truth for the Sentry alert
-    `pending_review_count > 5 for > 30 min` (wire a synthetic monitor —
-    Better Uptime / Cronitor / Sentry Crons — to poll this endpoint and
-    alert on threshold breach).
+    Polled by `.github/workflows/health-leads-monitor.yml`, which pages on
+    `pending_review_count > 5 for > 30 min` and on a climbing stuck count.
 
     Always returns 200 on success; surfacing the counts alone is the
     contract. A DB failure returns 503 so monitors can distinguish "DB is

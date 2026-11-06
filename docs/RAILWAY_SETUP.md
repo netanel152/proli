@@ -154,7 +154,7 @@ how the two silently re-merge.
 | `MONGO_URI`, `REDIS_URL` | **always distinct** | separate datastores; see the seed-guard invariant below |
 | `ENVIRONMENT` | **always distinct** | by definition — see PRO-34 above |
 | `WEBHOOK_TOKEN` | **distinct** | a shared token means a staging leak authenticates against the production webhook |
-| `HEALTH_TOKEN` | **distinct** | authenticates the detailed `/health` payload and `/health/leads` KPIs (PRO-136); same leak logic as the webhook token |
+| `HEALTH_TOKEN` | **distinct** | authenticates the detailed `/health` payload and `/health/leads` KPIs (PRO-136); same leak logic as the webhook token. Production's value is also the `PRODUCTION_HEALTH_TOKEN` GitHub secret, so rotate both together or the lead pipeline monitor pages |
 | `ADMIN_PASSWORD_HASH` | **distinct** | one admin credential must not open both panels |
 | `SENTRY_DSN` | **distinct** | separate Sentry project per environment, so staging noise cannot pollute production ingest and a leaked staging DSN is worthless |
 | `GEMINI_API_KEY` | **distinct** | a staging leak or quota burn must not affect production |
