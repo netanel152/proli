@@ -1,4 +1,5 @@
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from app.core.config import settings
@@ -703,9 +704,27 @@ async def send_periodic_admin_report():
 _QUALITY_PAGE_TEXT = {
     "rating": "quality rating left GREEN",
     "phone": "Meta flagged the number",
-    "waba": "WABA cannot send freely",
+    "waba": "account cannot send freely",
     "poll": "the quality watchdog cannot read Meta, so the rating is unknown",
 }
+_QUALITY_PAGE_ACTION = (
+    "Rating prompts and loyalty offers are paused; dispatch continues."
+)
+# Claiming "dispatch continues" here would be false comfort.
+_QUALITY_PAGE_ACTION_BLOCKED = (
+    "Rating prompts and loyalty offers are paused. Proli does not pause dispatch, "
+    "but Meta may reject its sends."
+)
+
+
+def _page_as_new_issue(condition: str, message: str) -> None:
+    """Page with a fingerprint of its own. Sentry groups by message otherwise, so
+    a repeat would land in the existing issue and could send no email."""
+    import sentry_sdk
+
+    with sentry_sdk.isolation_scope() as scope:
+        scope.fingerprint = ["whatsapp-quality", condition, uuid.uuid4().hex]
+        page_critical(message)
 
 
 async def check_whatsapp_quality():
@@ -714,25 +733,29 @@ async def check_whatsapp_quality():
     Staging runs on Meta's Test Number, whose WABA is BLOCKED by design until
     billing and verification land, and it has no reputation worth protecting. So
     staging polls and reports on /health but never pages or tightens; only
-    production acts. Every page is deduped by `quality.claim_page`.
+    production acts. Every page is limited by `quality.claim_page`.
     """
     if not whatsapp.provider.transmits:
         return
 
     reading = await whatsapp.get_quality()
+    previous_readable = True
     try:
         previous = await quality.read_snapshot() or {}
     except Exception as e:
         logger.warning(f"[WA Quality] previous snapshot unreadable: {e}")
         previous = {}
+        previous_readable = False
     snapshot = quality.merge_reading(reading, previous)
     conditions = quality.active_conditions(snapshot)
     snapshot["conditions"] = conditions
     snapshot["tightened"] = settings.is_production and bool(conditions)
-    try:
-        await quality.write_snapshot(snapshot)
-    except Exception as e:
-        logger.warning(f"[WA Quality] snapshot not written: {e}")
+    # Written over a good snapshot, this partial one would reset its history.
+    if previous_readable:
+        try:
+            await quality.write_snapshot(snapshot)
+        except Exception as e:
+            logger.warning(f"[WA Quality] snapshot not written: {e}")
 
     tier = snapshot.get("messaging_tier")
     if conditions != previous.get("conditions", []) or tier != previous.get(
@@ -755,10 +778,15 @@ async def check_whatsapp_quality():
     for condition in conditions:
         if await quality.claim_page(condition):
             kind = condition.split(":", 1)[0]
-            page_critical(
+            action = (
+                _QUALITY_PAGE_ACTION_BLOCKED
+                if condition == "waba:BLOCKED"
+                else _QUALITY_PAGE_ACTION
+            )
+            _page_as_new_issue(
+                condition,
                 f"🚨 WhatsApp {_QUALITY_PAGE_TEXT[kind]} ({condition}): {summary}. "
-                "Review requests and loyalty offers are paused; dispatch continues. "
-                "See docs/RUNBOOK_WHATSAPP_OUTAGE.md §8."
+                f"{action} See docs/RUNBOOK_WHATSAPP_OUTAGE.md §8.",
             )
 
     count = await quality.business_initiated_count()
@@ -769,10 +797,11 @@ async def check_whatsapp_quality():
         and count >= threshold
         and await quality.claim_page(f"cap:{cap}")
     ):
-        page_critical(
+        _page_as_new_issue(
+            f"cap:{cap}",
             f"🚨 WhatsApp business-initiated conversations at {count}/{cap} in the "
-            "last 24h. Meta blocks new ones at the cap. "
-            "See docs/RUNBOOK_WHATSAPP_OUTAGE.md §8."
+            "last 24h, against Meta's messaging limit. "
+            "See docs/RUNBOOK_WHATSAPP_OUTAGE.md §8.",
         )
 
 

@@ -6,21 +6,26 @@ faked: the reading is what Meta would say, the page is what the operator would g
 """
 
 import json
+import logging
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 import pytz
+import sentry_sdk
+from sentry_sdk.integrations.logging import LoggingIntegration
 from fastapi.testclient import TestClient
+from mongomock_motor import AsyncMongoMockClient
 
 import app.api.routes.health as health_route
 import app.scheduler as sched
 import app.services.monitor_service as monitor
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.core.constants import WorkerConstants
-from app.core.startup_checks import warn_if_waba_id_missing
+from app.core.messages import Messages
 from app.main import app
 from app.providers.whatsapp import delivery, quality
 from app.providers.whatsapp.cloud_api import CloudAPIProvider
@@ -50,11 +55,6 @@ def production(monkeypatch):
 @pytest.fixture
 def staging(monkeypatch):
     monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
-
-
-@pytest.fixture(autouse=True)
-def waba_configured(monkeypatch):
-    monkeypatch.setattr(settings, "META_WABA_ID", "waba-1")
 
 
 @pytest.fixture
@@ -105,30 +105,77 @@ def _install_graph(monkeypatch, handler):
     return seen
 
 
+# Entities, statuses and error codes from the test account's phone node, read
+# live on 2026-11-06 at v23.0 and v26.0.
+REAL_HEALTH_STATUS = {
+    "can_send_message": "BLOCKED",
+    "entities": [
+        {
+            "entity_type": "PHONE_NUMBER",
+            "id": "pn-1",
+            "can_send_message": "AVAILABLE",
+            "errors": [{"error_code": 138024}],
+        },
+        {
+            "entity_type": "WABA",
+            "id": "waba-1",
+            "can_send_message": "BLOCKED",
+            "errors": [{"error_code": 141006}],
+        },
+        {
+            "entity_type": "BUSINESS",
+            "id": "business-1",
+            "can_send_message": "BLOCKED",
+            "errors": [{"error_code": 141010}, {"error_code": 131000}],
+        },
+        {
+            "entity_type": "APP",
+            "id": "app-1",
+            "can_send_message": "AVAILABLE",
+            "errors": [{"error_code": 138025}],
+        },
+    ],
+}
+LIMIT_FIELD = "whatsapp_business_manager_messaging_limit"
+
+
 def _graph_answer(request):
-    if "waba-1" in str(request.url):
-        return httpx.Response(
-            200,
-            json={
-                "health_status": {
-                    "can_send_message": "BLOCKED",
-                    "errors": [{"error_code": 141006, "error_description": "pay"}],
-                    "entities": [{"errors": [{"error_code": 141010}]}],
-                }
-            },
-        )
     return httpx.Response(
         200,
         json={
             "status": "CONNECTED",
             "quality_rating": "GREEN",
-            "whatsapp_business_manager_messaging_limit": "TIER_250",
+            LIMIT_FIELD: "TIER_250",
+            "health_status": REAL_HEALTH_STATUS,
         },
     )
 
 
+def _rejecting(*rejected):
+    """Graph's answer when a version does not know a field: 400 for the whole read."""
+
+    def handler(request):
+        fields = request.url.params["fields"]
+        if any(name in fields for name in rejected):
+            return httpx.Response(400, json={"error": {"code": 100}})
+        return httpx.Response(
+            200,
+            json={
+                key: value
+                for key, value in {
+                    "status": "FLAGGED",
+                    "quality_rating": "RED",
+                    "health_status": REAL_HEALTH_STATUS,
+                }.items()
+                if key in fields
+            },
+        )
+
+    return handler
+
+
 @pytest.mark.asyncio
-async def test_get_quality_reads_phone_and_waba_nodes(monkeypatch):
+async def test_get_quality_reads_everything_in_one_phone_node_get(monkeypatch):
     seen = _install_graph(monkeypatch, _graph_answer)
 
     result = await CloudAPIProvider().get_quality()
@@ -138,11 +185,55 @@ async def test_get_quality_reads_phone_and_waba_nodes(monkeypatch):
         "messaging_tier": "TIER_250",
         "phone_status": "CONNECTED",
         "can_send_message": "BLOCKED",
-        "health_errors": ["141006", "141010"],
+        # Calling errors 138024 and 138025 are not the operator's to fix.
+        "health_errors": ["131000", "141006", "141010"],
     }
+    assert len(seen) == 1
+    assert "/pn-1" in str(seen[0].url)
     assert "messaging_limit_tier" not in str(seen[0].url), "deprecated by Meta"
-    assert all(r.method == "GET" for r in seen), "the watchdog must never write"
-    assert all("secret-token" not in str(r.url) for r in seen)
+    assert seen[0].method == "GET", "the watchdog must never write"
+    assert "secret-token" not in str(seen[0].url)
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_limit_field_keeps_rating_status_and_health(monkeypatch):
+    seen = _install_graph(monkeypatch, _rejecting(LIMIT_FIELD))
+
+    result = await CloudAPIProvider().get_quality()
+
+    assert len(seen) == 2
+    assert result["quality_rating"] == "RED"
+    assert result["phone_status"] == "FLAGGED"
+    assert result["can_send_message"] == "BLOCKED"
+    assert result["messaging_tier"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_health_field_still_keeps_rating_and_status(monkeypatch):
+    seen = _install_graph(monkeypatch, _rejecting(LIMIT_FIELD, "health_status"))
+
+    result = await CloudAPIProvider().get_quality()
+
+    assert len(seen) == 3
+    assert result["quality_rating"] == "RED"
+    assert result["phone_status"] == "FLAGGED"
+    assert result["can_send_message"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_400_on_every_read_is_no_reading(monkeypatch):
+    seen = _install_graph(monkeypatch, lambda r: httpx.Response(400, json={}))
+
+    assert await CloudAPIProvider().get_quality() is None
+    assert len(seen) == 3
+
+
+@pytest.mark.asyncio
+async def test_a_non_400_failure_does_not_retry(monkeypatch):
+    seen = _install_graph(monkeypatch, lambda r: httpx.Response(401, json={}))
+
+    assert await CloudAPIProvider().get_quality() is None
+    assert len(seen) == 1
 
 
 @pytest.mark.asyncio
@@ -150,32 +241,6 @@ async def test_get_quality_phone_failure_is_no_reading(monkeypatch):
     _install_graph(monkeypatch, lambda r: httpx.Response(500, json={}))
 
     assert await CloudAPIProvider().get_quality() is None
-
-
-@pytest.mark.asyncio
-async def test_get_quality_waba_failure_keeps_the_rating(monkeypatch):
-    def handler(request):
-        if "waba-1" in str(request.url):
-            return httpx.Response(403, json={})
-        return _graph_answer(request)
-
-    _install_graph(monkeypatch, handler)
-
-    result = await CloudAPIProvider().get_quality()
-
-    assert result["quality_rating"] == "GREEN"
-    assert result["can_send_message"] is None
-
-
-@pytest.mark.asyncio
-async def test_get_quality_without_waba_id_reads_only_the_phone(monkeypatch):
-    monkeypatch.setattr(settings, "META_WABA_ID", None)
-    seen = _install_graph(monkeypatch, _graph_answer)
-
-    result = await CloudAPIProvider().get_quality()
-
-    assert len(seen) == 1
-    assert result["can_send_message"] is None
 
 
 @pytest.mark.parametrize(
@@ -233,7 +298,9 @@ async def test_a_fresh_unrated_number_does_not_page(production, pages, poll, rat
 
 
 @pytest.mark.asyncio
-async def test_a_standing_condition_pages_exactly_once(production, pages, poll):
+async def test_a_standing_condition_pages_once_within_the_cooldown(
+    production, pages, poll
+):
     for _ in range(50):
         await poll(reading(quality_rating="RED"))
 
@@ -241,18 +308,65 @@ async def test_a_standing_condition_pages_exactly_once(production, pages, poll):
 
 
 @pytest.mark.asyncio
-async def test_a_standing_condition_outlives_the_cooldown_without_repaging(
+async def test_a_standing_condition_repages_once_the_cooldown_lapses(
     production, pages, poll, fake_redis
 ):
-    """The tick refreshes the claim, so the cooldown never lapses mid-episode."""
     await poll(reading(quality_rating="RED"))
     ttl = await fake_redis.ttl("wa:quality:paged:rating:RED")
-    await fake_redis.expire("wa:quality:paged:rating:RED", 5)
+    assert 0 < ttl <= WorkerConstants.WA_QUALITY_PAGE_COOLDOWN_HOURS * 3600
 
+    # A tick must not refresh the claim, or the page could never repeat.
+    await fake_redis.expire("wa:quality:paged:rating:RED", 5)
+    await poll(reading(quality_rating="RED"))
+    assert await fake_redis.ttl("wa:quality:paged:rating:RED") <= 5
+    pages.assert_called_once()
+
+    await fake_redis.delete("wa:quality:paged:rating:RED")  # the cooldown lapsing
+    await poll(reading(quality_rating="RED"))
+    assert pages.call_count == 2
+
+
+@pytest.fixture
+def sentry_events():
+    """A real Sentry client that keeps events instead of sending them."""
+    events = []
+
+    def keep(event, hint):
+        events.append(event)
+        return None
+
+    previous = sentry_sdk.get_global_scope().client
+    sentry_sdk.get_global_scope().set_client(
+        # Integrations as app/core/sentry.py sets them: stdlib paging only. An
+        # auto-enabled Loguru one would double every event and stay installed.
+        sentry_sdk.Client(
+            dsn="https://key@o0.ingest.sentry.io/1",
+            before_send=keep,
+            default_integrations=False,
+            auto_enabling_integrations=False,
+            integrations=[LoggingIntegration(level=None, event_level=logging.CRITICAL)],
+        )
+    )
+    yield events
+    sentry_sdk.get_global_scope().set_client(previous)
+
+
+@pytest.mark.asyncio
+async def test_each_page_is_its_own_sentry_issue(
+    production, poll, fake_redis, sentry_events
+):
+    await poll(reading(quality_rating="RED"))
+    await fake_redis.delete("wa:quality:paged:rating:RED")
     await poll(reading(quality_rating="RED"))
 
-    pages.assert_called_once()
-    assert await fake_redis.ttl("wa:quality:paged:rating:RED") >= ttl - 5
+    # Only the paging logger's events: Sentry caches integration installs per
+    # process, so another test's init can leave a Loguru sink adding its own copy.
+    pages = [e for e in sentry_events if e.get("logger") == "proli.paging"]
+    fingerprints = [e["fingerprint"] for e in pages]
+    assert len(fingerprints) == 2
+    assert all(f[:2] == ["whatsapp-quality", "rating:RED"] for f in fingerprints)
+    assert fingerprints[0] != fingerprints[1]
+    assert all(e["level"] == "fatal" for e in pages)
 
 
 @pytest.mark.asyncio
@@ -290,7 +404,7 @@ async def test_recovery_releases_the_tightening_and_can_page_after_cooldown(
 async def test_redis_outage_still_pages_but_only_once(
     production, pages, poll, monkeypatch
 ):
-    monkeypatch.setattr(quality, "_LOCAL_PAGE_CLAIMS", set())
+    monkeypatch.setattr(quality, "_LOCAL_PAGE_CLAIMS", {})
     broken = AsyncMock(side_effect=ConnectionError("redis down"))
     monkeypatch.setattr(quality, "get_redis_client", broken)
 
@@ -298,6 +412,44 @@ async def test_redis_outage_still_pages_but_only_once(
         await poll(reading(quality_rating="RED"))
 
     pages.assert_called_once()
+
+    # The in-process claim has a TTL too, so a long outage can't silence it.
+    expired = time.monotonic() - WorkerConstants.WA_QUALITY_PAGE_COOLDOWN_HOURS * 3600
+    quality._LOCAL_PAGE_CLAIMS["rating:RED"] = expired - 1
+    await poll(reading(quality_rating="RED"))
+    assert pages.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_snapshot_is_not_overwritten(
+    production, pages, poll, monkeypatch
+):
+    monkeypatch.setattr(
+        quality, "read_snapshot", AsyncMock(side_effect=ConnectionError("blip"))
+    )
+    write = AsyncMock()
+    monkeypatch.setattr(quality, "write_snapshot", write)
+
+    await poll(reading(quality_rating="RED"))
+
+    write.assert_not_awaited()
+    pages.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "can_send,dispatch_line",
+    [
+        ("BLOCKED", "Proli does not pause dispatch, but Meta may reject its sends"),
+        ("LIMITED", "dispatch continues"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_the_page_is_honest_about_dispatch(
+    production, pages, poll, can_send, dispatch_line
+):
+    await poll(reading(can_send_message=can_send))
+
+    assert dispatch_line in pages.call_args.args[0]
 
 
 @pytest.mark.parametrize("can_send", ["LIMITED", "BLOCKED"])
@@ -401,20 +553,6 @@ async def test_a_partial_answer_counts_as_a_failed_poll(production, poll, answer
 
 
 @pytest.mark.asyncio
-async def test_no_waba_id_does_not_count_as_a_failed_poll(
-    production, poll, monkeypatch
-):
-    monkeypatch.setattr(settings, "META_WABA_ID", None)
-
-    await poll(reading(can_send_message=None, health_errors=None))
-
-    fields = await quality.health_fields(transmits=True)
-    assert fields["quality_poll"]["status"] == "ok"
-    assert fields["can_send_message"] == "UNCONFIGURED"
-    assert fields["window_state"] == "unknown"
-
-
-@pytest.mark.asyncio
 async def test_a_dead_watchdog_reads_stale_and_tightens(production, poll, fake_redis):
     await poll()
     snapshot = await quality.read_snapshot()
@@ -432,19 +570,6 @@ async def test_a_dead_watchdog_reads_stale_and_tightens(production, poll, fake_r
 
 
 @pytest.mark.asyncio
-async def test_unsetting_the_waba_id_clears_a_retained_blocked(
-    production, poll, monkeypatch
-):
-    await poll(reading(can_send_message="BLOCKED"))
-    assert await quality.non_essential_sends_paused() is True
-
-    monkeypatch.setattr(settings, "META_WABA_ID", None)
-    await poll(reading(can_send_message=None, health_errors=None))
-
-    assert await quality.non_essential_sends_paused() is False
-
-
-@pytest.mark.asyncio
 async def test_no_reading_yet_in_production_pauses_non_essential(production, poll):
     assert await quality.non_essential_sends_paused() is True
 
@@ -453,6 +578,16 @@ async def test_no_reading_yet_in_production_pauses_non_essential(production, pol
 async def test_unreadable_redis_pauses_non_essential(production, poll, monkeypatch):
     broken = AsyncMock(side_effect=ConnectionError("redis down"))
     monkeypatch.setattr(quality, "get_redis_client", broken)
+
+    assert await quality.non_essential_sends_paused() is True
+
+
+@pytest.mark.asyncio
+async def test_a_broken_facade_pauses_rather_than_raises(production, monkeypatch):
+    def broken():
+        raise RuntimeError("no provider")
+
+    monkeypatch.setattr("app.providers.whatsapp.get_whatsapp", broken)
 
     assert await quality.non_essential_sends_paused() is True
 
@@ -598,6 +733,40 @@ def test_cap_for_tier(tier, cap):
     assert quality.business_initiated_cap(tier) == cap
 
 
+@pytest.mark.asyncio
+async def test_an_unrecognized_limit_takes_the_configured_cap_and_does_not_page(
+    production, pages, poll, monkeypatch, fake_redis
+):
+    monkeypatch.setattr(settings, "WA_BUSINESS_INITIATED_CAP", 2000)
+    await _seed_recipients(fake_redis, 200)
+
+    await poll(reading(messaging_tier="TIER_NEW"))
+
+    pages.assert_not_called()
+    fields = await quality.health_fields(transmits=True)
+    assert fields["messaging_tier"] == "TIER_NEW"
+    assert fields["business_initiated_24h"]["cap"] == 2000
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("", 250),
+        ("   ", 250),
+        ("0", 250),
+        ("-5", 250),
+        ("many", 250),
+        ("2000", 2000),
+        (" 2000 ", 2000),
+        (2000, 2000),
+    ],
+)
+def test_an_unusable_configured_cap_means_the_default(raw, expected):
+    built = Settings(_env_file=None, WA_BUSINESS_INITIATED_CAP=raw)
+
+    assert built.WA_BUSINESS_INITIATED_CAP == expected
+
+
 def test_the_fallback_cap_is_configurable_and_the_live_limit_wins(monkeypatch):
     monkeypatch.setattr(settings, "WA_BUSINESS_INITIATED_CAP", 2000)
 
@@ -627,6 +796,8 @@ def business_hours(monkeypatch):
         2026, 11, 8, 12, 0, tzinfo=pytz.utc
     ).astimezone(tz or pytz.utc)
     monkeypatch.setattr(sched, "datetime", fake)
+    # The scheduler binds its collection at import, so give each test a clean one.
+    monkeypatch.setattr(sched, "leads_collection", AsyncMongoMockClient().db.leads)
     return fake.now(pytz.utc)
 
 
@@ -652,14 +823,17 @@ async def test_completion_check_runs_when_green(
 
 
 @pytest.mark.asyncio
-async def test_completion_check_holds_while_tightened(
+async def test_completion_check_still_sends_while_tightened(
     production, poll, monkeypatch, business_hours
 ):
+    """A lead that passes 24h unsent leaves the tier 2 query for good, and this is
+    the customer's done / not yet / no-show menu, so tightening must not hold it."""
     await poll(reading(quality_rating="RED"))
+    assert await quality.non_essential_sends_paused() is True
 
     send = await _run_tier_2(monkeypatch, business_hours)
 
-    send.assert_not_awaited()
+    send.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -719,27 +893,30 @@ async def test_finish_completes_without_a_review_request_while_tightened(
 
     whatsapp, extra_set = await _finish_job(monkeypatch)
 
-    whatsapp.send_message.assert_not_awaited()
+    # The customer still hears the job closed, with no rating ask.
+    whatsapp.send_message.assert_awaited_once()
+    line = whatsapp.send_message.await_args.args[1]
+    assert line == Messages.Customer.RATE_SERVICE.format(pro_name="Pro").split("\n")[0]
+    assert Messages.Customer.RATING_SCALE_LINE not in line
     # The rating window must stay shut, or a later stray digit reads as a rating.
     assert extra_set["waiting_for_rating"] is False
     assert extra_set["completed_at"] is not None
 
 
-def test_the_dispatch_path_never_consults_the_gate():
-    """The AC's other half, pinned at the source: only these callers may pause."""
-    from pathlib import Path
-
+def test_the_gate_has_exactly_one_call_in_each_allowed_file():
+    """The AC's other half, pinned at the source: only these sends may pause."""
     root = Path(__file__).resolve().parent.parent / "app"
-    callers = {
-        str(path.relative_to(root)).replace("\\", "/")
-        for path in root.rglob("*.py")
-        if "non_essential_sends_paused" in path.read_text(encoding="utf-8")
-    }
-    assert callers == {
-        "providers/whatsapp/quality.py",
-        "scheduler.py",
-        "services/pro_flow.py",
-        "services/conversation_pipeline.py",
+    calls = {}
+    for path in root.rglob("*.py"):
+        count = path.read_text(encoding="utf-8").count(
+            "await non_essential_sends_paused()"
+        )
+        if count:
+            calls[path.relative_to(root).as_posix()] = count
+
+    assert calls == {
+        "services/pro_flow.py": 1,
+        "services/conversation_pipeline.py": 1,
     }
 
 
@@ -802,31 +979,8 @@ def test_token_shows_the_fresh_reading(health_client, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Boot check and registration
+# Registration
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "environment,dry_run,provider,waba,reports",
-    [
-        ("production", False, "cloud", None, True),
-        ("production", False, "cloud", "waba-1", False),
-        ("production", True, "cloud", None, False),
-        ("production", False, "dryrun", None, False),
-        ("staging", False, "cloud", None, False),
-    ],
-)
-def test_boot_check_reports_only_production_transmitting_blind(
-    environment, dry_run, provider, waba, reports
-):
-    fake = MagicMock(
-        is_production=environment == "production",
-        WHATSAPP_DRY_RUN=dry_run,
-        WHATSAPP_PROVIDER=provider,
-        META_WABA_ID=waba,
-    )
-
-    assert warn_if_waba_id_missing(fake) is reports
 
 
 @pytest.mark.asyncio
