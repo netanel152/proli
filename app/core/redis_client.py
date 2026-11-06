@@ -1,7 +1,6 @@
 import asyncio
 import functools
 from redis.asyncio import Redis, from_url
-from redis.exceptions import WatchError
 from arq import create_pool
 from arq.connections import RedisSettings
 from app.core.config import settings
@@ -47,20 +46,22 @@ async def acquire_chat_lock(
 
 
 async def _if_chat_lock_owner(chat_id: str, token: str, apply) -> bool:
-    """Run one write on the lock only if `token` still holds it, atomically."""
+    """Run one write on the lock only if `token` still holds it, atomically.
+
+    False means the GET saw another owner. WatchError propagates: redis-py raises it
+    for a dropped connection as well as a changed key, so it proves nothing about
+    ownership. The caller's next GET does.
+    """
     key = f"lock:chat:{chat_id}"
     redis = await get_redis_client()
     async with redis.pipeline(transaction=True) as pipe:
-        try:
-            await pipe.watch(key)
-            if await pipe.get(key) != token:
-                return False
-            pipe.multi()
-            apply(pipe, key)
-            await pipe.execute()
-            return True
-        except WatchError:
+        await pipe.watch(key)
+        if await pipe.get(key) != token:
             return False
+        pipe.multi()
+        apply(pipe, key)
+        await pipe.execute()
+        return True
 
 
 async def release_chat_lock(chat_id: str, token: str = "1") -> None:
@@ -89,7 +90,7 @@ async def keep_chat_lock(
             )
             continue
         if not renewed:
-            logger.warning(
+            logger.error(
                 f"Chat lock for {mask_chat_id(chat_id)} was lost mid-turn; "
                 "another job may be running alongside this one"
             )

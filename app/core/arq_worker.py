@@ -9,7 +9,11 @@ from app.core.startup_checks import (
     warn_if_waba_id_missing,
     warn_if_terms_enabled_on_draft,
 )
-from app.services.workflow_service import process_incoming_message, whatsapp
+from app.services.workflow_service import (
+    page_emergency_turn,
+    process_incoming_message,
+    whatsapp,
+)
 from app.core.logger import logger, mask_pii, new_trace_id, page_critical
 from app.core.phone import mask_chat_id
 from app.core.sentry import sentry_active
@@ -17,6 +21,7 @@ from app.core.database import client
 from app.core.http_client import close_http_client
 from app.core.redis_client import get_redis_client, ChatLockBusyError
 from app.core.messages import Messages
+from app.core.text_matching import is_emergency_text
 from app.scheduler import start_scheduler
 
 # Redis configuration for ARQ
@@ -26,6 +31,14 @@ else:
     redis_settings = RedisSettings(
         host=settings.REDIS_HOST, port=settings.REDIS_PORT, database=settings.REDIS_DB
     )
+
+
+# How many times a job may really start. Tries spent waiting on the chat lock
+# don't count, so this is separate from WorkerSettings.max_tries.
+MAX_REAL_STARTS = 5
+# Longer than a job can live: max_tries of backoff plus the turns ahead of it.
+LOCK_BUSY_COUNT_TTL_SECONDS = 3600
+RETRY_NOTICE_TTL_SECONDS = 60
 
 
 async def startup(ctx):
@@ -132,12 +145,63 @@ async def _process_message(
     started = time.monotonic()
     logger.info(f"Task started: job {job_id} try {job_try} for {mask_chat_id(chat_id)}")
     try:
+        if await _ran_too_many_times(job_id, job_try):
+            await _drop_job(
+                chat_id,
+                user_text,
+                f"re-run too many times: job {job_id}, try {job_try}",
+            )
+            return
         await _run_message(chat_id, user_text, media_url, message_id, job_id, job_try)
     finally:
         logger.info(
             f"Task ended: job {job_id} try {job_try} for {mask_chat_id(chat_id)} "
             f"after {time.monotonic() - started:.2f}s"
         )
+
+
+async def _ran_too_many_times(job_id, job_try: int) -> bool:
+    """`max_tries` is sized for waiting on the lock, which runs nothing. A job that
+    keeps starting and dying repeats its AI call and reply, so real starts keep a
+    lower cap. If Redis cannot say how many tries were waits, the job runs."""
+    if job_try < MAX_REAL_STARTS:
+        return False
+    try:
+        redis = await get_redis_client()
+        busy = int(await redis.get(f"lock_busy:{job_id}") or 0)
+    except Exception as e:
+        logger.warning(f"Could not read the lock-wait count of job {job_id}: {e}")
+        return False
+    return job_try - busy >= MAX_REAL_STARTS
+
+
+async def _count_lock_wait(job_id) -> None:
+    try:
+        redis = await get_redis_client()
+        pipe = redis.pipeline()
+        pipe.incr(f"lock_busy:{job_id}")
+        pipe.expire(f"lock_busy:{job_id}", LOCK_BUSY_COUNT_TTL_SECONDS)
+        await pipe.execute()
+    except Exception as e:
+        logger.warning(f"Could not count a lock wait for job {job_id}: {e}")
+
+
+async def _drop_job(chat_id: str, user_text: str, reason: str) -> None:
+    """arq would delete the job with no trace of whose it was. The message is lost
+    either way; at least the customer and the operator know."""
+    logger.error(f"Message from {mask_chat_id(chat_id)} dropped, it is lost ({reason})")
+    if is_emergency_text((user_text or "").strip().lower()):
+        await page_emergency_turn(chat_id, "was dropped by the worker")
+    try:
+        redis = await get_redis_client()
+        # Followers queued behind the same turn run out together.
+        first = await redis.set(
+            f"retry_notice:{chat_id}", "1", ex=RETRY_NOTICE_TTL_SECONDS, nx=True
+        )
+    except Exception:
+        first = True
+    if first:
+        await _tell_customer_to_retry(chat_id)
 
 
 async def _run_message(chat_id, user_text, media_url, message_id, job_id, job_try):
@@ -158,14 +222,11 @@ async def _run_message(chat_id, user_text, media_url, message_id, job_id, job_tr
         # Another worker is mid-flight for this chat_id — defer so we preserve
         # message order without duplicate-processing.
         if job_try >= WorkerSettings.max_tries:
-            # arq would delete the job with no trace of whose it was. The message
-            # is lost either way; at least the customer and the operator know.
-            logger.error(
-                f"Chat lock busy on the last try: job {job_id} for "
-                f"{mask_chat_id(chat_id)} dropped, its message is lost"
+            await _drop_job(
+                chat_id, user_text, f"chat lock busy on the last try: job {job_id}"
             )
-            await _tell_customer_to_retry(chat_id)
             return
+        await _count_lock_wait(job_id)
         defer = 2 * job_try
         logger.info(
             f"Chat lock busy for {mask_chat_id(chat_id)} — requeuing with {defer}s defer"
@@ -205,7 +266,8 @@ class WorkerSettings:
     # arq re-runs a job only on Retry (a busy chat lock) or CancelledError (a worker
     # shutdown); any other exception fails it for good. With the lock backoff of
     # 2s, 4s, 6s... the last try lands 306s in, past job_timeout, so a follower
-    # outlives even the slowest single turn ahead of it.
+    # outlives even the slowest single turn ahead of it. MAX_REAL_STARTS caps the
+    # re-runs that actually do something.
     max_tries = 18
     retry_jobs = True
     # A result stores the job's args, and the args are the customer's message, so

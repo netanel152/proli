@@ -26,6 +26,7 @@ later call sites; `current_state` is re-read after any guard that clears state).
 closure over function locals.
 """
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional, Tuple
@@ -328,12 +329,18 @@ async def _replay_held_messages(
         await wf.lead_manager.log_message(
             ctx.chat_id, "user", wf._inbound_log_text(ctx.user_text, ctx.media_url)
         )
-    except BaseException:
+    except BaseException as e:
         if held:
             await deps.state_manager.hold_message(
                 ctx.chat_id, held["text"], held["media_url"]
             )
             await deps.state_manager.set_state(ctx.chat_id, UserStates.AWAITING_CONSENT)
+            # A cancelled job is re-run and replays. Otherwise this waits for the
+            # customer to write again, which an emergency must not.
+            if not isinstance(e, asyncio.CancelledError) and wf.is_emergency_text(
+                held["text"].strip().lower()
+            ):
+                await wf.page_emergency_turn(ctx.chat_id, "failed right after consent")
         raise
     ctx.emergency_inbound_logged = True
     ctx.replayed_held_messages = True

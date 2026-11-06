@@ -139,7 +139,9 @@ def test_the_total_backoff_outlasts_the_slowest_turn():
 
 
 @pytest.mark.asyncio
-async def test_the_last_busy_try_says_so_and_tells_the_customer(monkeypatch):
+async def test_the_last_busy_try_says_so_and_tells_the_customer(
+    monkeypatch, fake_redis
+):
     chat_id = "972500000003@c.us"
     monkeypatch.setattr(
         arq_worker,
@@ -149,10 +151,12 @@ async def test_the_last_busy_try_says_so_and_tells_the_customer(monkeypatch):
     fake_whatsapp = AsyncMock()
     monkeypatch.setattr(arq_worker, "whatsapp", fake_whatsapp)
     errors = []
+    last_try = arq_worker.WorkerSettings.max_tries
+    await fake_redis.set("lock_busy:j1", last_try - 1)
     sink = logger.add(lambda m: errors.append(str(m)), level="ERROR")
     try:
         await arq_worker.process_message_task(
-            {"job_try": arq_worker.WorkerSettings.max_tries, "job_id": "j1"},
+            {"job_try": last_try, "job_id": "j1"},
             chat_id,
             "secret words",
             trace_id="t1",
@@ -164,6 +168,112 @@ async def test_the_last_busy_try_says_so_and_tells_the_customer(monkeypatch):
     assert len(errors) == 1
     assert "j1" in errors[0] and mask_chat_id(chat_id) in errors[0]
     assert "secret words" not in errors[0]
+
+
+@pytest.fixture
+def worker_turn(monkeypatch):
+    turn = AsyncMock()
+    fake_whatsapp = AsyncMock()
+    monkeypatch.setattr(arq_worker, "process_incoming_message", turn)
+    monkeypatch.setattr(arq_worker, "whatsapp", fake_whatsapp)
+    return turn, fake_whatsapp
+
+
+@pytest.mark.asyncio
+async def test_a_crash_loop_is_capped_on_real_starts(worker_turn):
+    turn, fake_whatsapp = worker_turn
+    errors = []
+    sink = logger.add(lambda m: errors.append(str(m)), level="ERROR")
+    try:
+        await arq_worker.process_message_task(
+            {"job_try": arq_worker.MAX_REAL_STARTS, "job_id": "j1"},
+            "972500000003@c.us",
+            "secret words",
+        )
+    finally:
+        logger.remove(sink)
+
+    turn.assert_not_awaited()
+    fake_whatsapp.send_message.assert_awaited_once()
+    assert mask_chat_id("972500000003@c.us") in errors[0]
+    assert "secret words" not in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_tries_spent_waiting_on_the_lock_do_not_count(worker_turn, fake_redis):
+    turn, _ = worker_turn
+    await fake_redis.set("lock_busy:j1", 13)
+
+    await arq_worker.process_message_task(
+        {"job_try": 17, "job_id": "j1"}, "972500000003@c.us", "hi"
+    )
+
+    turn.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_busy_try_is_counted_with_a_ttl(monkeypatch, fake_redis):
+    monkeypatch.setattr(
+        arq_worker,
+        "process_incoming_message",
+        AsyncMock(side_effect=ChatLockBusyError("972500000003@c.us")),
+    )
+
+    with pytest.raises(Retry):
+        await arq_worker.process_message_task(
+            {"job_try": 1, "job_id": "j1"}, "972500000003@c.us", "hi"
+        )
+
+    assert await fake_redis.get("lock_busy:j1") == "1"
+    assert 0 < await fake_redis.ttl("lock_busy:j1")
+
+
+@pytest.mark.asyncio
+async def test_redis_down_does_not_drop_a_job(monkeypatch, worker_turn):
+    turn, _ = worker_turn
+    monkeypatch.setattr(
+        arq_worker, "get_redis_client", AsyncMock(side_effect=ConnectionError)
+    )
+
+    await arq_worker.process_message_task(
+        {"job_try": 17, "job_id": "j1"}, "972500000003@c.us", "hi"
+    )
+
+    turn.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_followers_running_out_together_notify_once(monkeypatch, fake_redis):
+    monkeypatch.setattr(
+        arq_worker,
+        "process_incoming_message",
+        AsyncMock(side_effect=ChatLockBusyError("972500000003@c.us")),
+    )
+    fake_whatsapp = AsyncMock()
+    monkeypatch.setattr(arq_worker, "whatsapp", fake_whatsapp)
+    last_try = arq_worker.WorkerSettings.max_tries
+    for job_id in ("j1", "j2"):
+        await fake_redis.set(f"lock_busy:{job_id}", last_try - 1)
+        await arq_worker.process_message_task(
+            {"job_try": last_try, "job_id": job_id}, "972500000003@c.us", "hi"
+        )
+
+    fake_whatsapp.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_emergency_pages_and_an_ordinary_one_does_not(
+    monkeypatch, worker_turn
+):
+    page = AsyncMock()
+    monkeypatch.setattr(arq_worker, "page_emergency_turn", page)
+    ctx = {"job_try": arq_worker.MAX_REAL_STARTS, "job_id": "j1"}
+
+    await arq_worker.process_message_task(ctx, "972500000003@c.us", "שלום")
+    page.assert_not_awaited()
+
+    await arq_worker.process_message_task(ctx, "972500000003@c.us", "יש שריפה")
+    page.assert_awaited_once()
 
 
 @pytest.mark.asyncio

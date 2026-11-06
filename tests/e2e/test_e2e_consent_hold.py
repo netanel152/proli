@@ -377,6 +377,68 @@ async def test_an_emergency_that_dies_past_the_log_pages_the_operator(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure, pages", [(RuntimeError, 1), (asyncio.CancelledError, 0)]
+)
+async def test_an_emergency_that_fails_before_the_log_pages_unless_it_will_rerun(
+    world, monkeypatch, failure, pages
+):
+    await world.send("יש שריפה")
+    monkeypatch.setattr(
+        workflow_service.lead_manager, "log_message", AsyncMock(side_effect=failure)
+    )
+    page = MagicMock()
+    monkeypatch.setattr(workflow_service.notification_service, "page_operator", page)
+
+    with pytest.raises(failure):
+        await world.send("כן")
+
+    assert page.call_count == pages
+    for call in page.call_args_list:
+        assert "שריפה" not in call.args[0]
+        assert world.customer not in call.args[0]
+        assert "consent" in call.args[0], "says where to find the number"
+
+
+@pytest.mark.asyncio
+async def test_the_page_names_the_lead_when_there_is_one(world, monkeypatch):
+    page = MagicMock()
+    monkeypatch.setattr(workflow_service.notification_service, "page_operator", page)
+    lead_id = (
+        await world.db.leads.insert_one(
+            {"chat_id": world.customer, "created_at": world.anchor}
+        )
+    ).inserted_id
+
+    await workflow_service.page_emergency_turn(world.customer, "failed")
+
+    assert str(lead_id) in page.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_a_redelivered_message_after_a_failed_accept_is_not_doubled(
+    world, monkeypatch
+):
+    await world.send(OPENING)
+    real_log = workflow_service.lead_manager.log_message
+    monkeypatch.setattr(
+        workflow_service.lead_manager,
+        "log_message",
+        AsyncMock(side_effect=RuntimeError),
+    )
+    with pytest.raises(RuntimeError):
+        await world.send("כן")
+    with pytest.raises(RuntimeError):
+        await world.send("בתל אביב")
+    monkeypatch.setattr(workflow_service.lead_manager, "log_message", real_log)
+
+    world.ai.script(reply("תודה."))
+    await world.send("בתל אביב")
+
+    assert [call["user_text"] for call in world.ai.calls] == [f"{OPENING}\nבתל אביב"]
+
+
+@pytest.mark.asyncio
 async def test_an_ordinary_opening_that_dies_past_the_log_does_not_page(
     world, monkeypatch
 ):

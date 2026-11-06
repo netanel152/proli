@@ -760,11 +760,28 @@ async def _process_incoming_message_inner(
         # it. The opening is in the history and is not replayed, but the re-run's
         # text is only the customer's "yes", so nothing would flag the emergency.
         if ctx.replayed_held_messages and ctx.is_emergency_detected:
-            notification_service.page_operator(
-                f"Emergency opening from {mask_chat_id(chat_id)} failed right after "
-                "consent, so it may have no lead. Contact the customer."
-            )
+            await page_emergency_turn(chat_id, "failed right after consent")
         raise
+
+
+async def page_emergency_turn(chat_id: str, what: str) -> None:
+    """Page about an emergency turn that did not finish, with something to look up."""
+    try:
+        lead = await leads_collection.find_one(
+            {"chat_id": chat_id}, sort=[("created_at", -1)]
+        )
+    except Exception:
+        lead = None
+    handle = (
+        f"Latest lead: {lead['_id']}."
+        if lead
+        else "No lead found, so nothing to open in the panel: the full number is "
+        "in the `consent` collection, under the chat id ending in those digits."
+    )
+    notification_service.page_operator(
+        f"Emergency message from {mask_chat_id(chat_id)} {what}. {handle} "
+        "Contact the customer."
+    )
 
 
 # --- Private Helpers ---
