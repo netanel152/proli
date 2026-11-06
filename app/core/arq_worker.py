@@ -117,15 +117,30 @@ async def process_message_task(
     # match the api's half of that turn, but it still groups the worker's,
     # which is what makes those lines readable at all.
     with logger.contextualize(trace_id=trace_id or new_trace_id()):
-        await _process_message(chat_id, user_text, media_url, message_id)
+        await _process_message(ctx, chat_id, user_text, media_url, message_id)
 
 
 async def _process_message(
-    chat_id: str, user_text: str, media_url: str = None, message_id: str = None
+    ctx, chat_id: str, user_text: str, media_url: str = None, message_id: str = None
 ):
     """The task body, split out so all of it — the ``except`` arms included —
     runs inside the ``trace_id`` binding."""
-    logger.info(f"Task started: processing message for {mask_chat_id(chat_id)}")
+    # These two lines are the only way to tie arq's own WARNINGs, which name just
+    # the job id, to a chat. Its INFO lines carry the message, so they are off.
+    job_id = ctx.get("job_id")
+    job_try = ctx.get("job_try") or 1
+    started = time.monotonic()
+    logger.info(f"Task started: job {job_id} try {job_try} for {mask_chat_id(chat_id)}")
+    try:
+        await _run_message(chat_id, user_text, media_url, message_id, job_id, job_try)
+    finally:
+        logger.info(
+            f"Task ended: job {job_id} try {job_try} for {mask_chat_id(chat_id)} "
+            f"after {time.monotonic() - started:.2f}s"
+        )
+
+
+async def _run_message(chat_id, user_text, media_url, message_id, job_id, job_try):
     if sentry_active():
         # PRO-134: tags set at task start (not in an except) so they ride
         # every event and breadcrumb this job produces. ArqIntegration
@@ -142,10 +157,20 @@ async def _process_message(
     except ChatLockBusyError:
         # Another worker is mid-flight for this chat_id — defer so we preserve
         # message order without duplicate-processing.
+        if job_try >= WorkerSettings.max_tries:
+            # arq would delete the job with no trace of whose it was. The message
+            # is lost either way; at least the customer and the operator know.
+            logger.error(
+                f"Chat lock busy on the last try: job {job_id} for "
+                f"{mask_chat_id(chat_id)} dropped, its message is lost"
+            )
+            await _tell_customer_to_retry(chat_id)
+            return
+        defer = 2 * job_try
         logger.info(
-            f"Chat lock busy for {mask_chat_id(chat_id)} — requeuing with 2s defer"
+            f"Chat lock busy for {mask_chat_id(chat_id)} — requeuing with {defer}s defer"
         )
-        raise Retry(defer=2)
+        raise Retry(defer=defer)
     except Exception as e:
         # sentry_skip: the re-raise below propagates to ArqIntegration, which
         # captures the full exception — the bridge reporting this log line
@@ -154,12 +179,16 @@ async def _process_message(
             f"Error in process_message_task for {mask_chat_id(chat_id)}: {e}",
             exc_info=True,
         )
-        # Send user-friendly fallback message
-        try:
-            await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
-        except Exception:
-            logger.error(f"Failed to send error message to {mask_chat_id(chat_id)}")
+        await _tell_customer_to_retry(chat_id)
         raise
+
+
+async def _tell_customer_to_retry(chat_id: str) -> None:
+    """Send user-friendly fallback message."""
+    try:
+        await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
+    except Exception:
+        logger.error(f"Failed to send error message to {mask_chat_id(chat_id)}")
 
 
 class WorkerSettings:
@@ -173,10 +202,15 @@ class WorkerSettings:
     on_shutdown = shutdown
     max_jobs = 10
     job_timeout = 300  # 5 minutes per job
-    max_tries = 5  # Retry transient failures up to 5 times
+    # arq re-runs a job only on Retry (a busy chat lock) or CancelledError (a worker
+    # shutdown); any other exception fails it for good. With the lock backoff of
+    # 2s, 4s, 6s... the last try lands 306s in, past job_timeout, so a follower
+    # outlives even the slowest single turn ahead of it.
+    max_tries = 18
     retry_jobs = True
     # A result stores the job's args, and the args are the customer's message, so
     # keeping them would hold text from someone who declined consent. Nothing
-    # reads results: failures reach Sentry and the logs.
+    # reads results. An exception reaches Sentry and the logs; a job arq drops at
+    # max_tries is only a WARNING naming its id, traced through "Task started".
     keep_result = 0
     keep_result_forever = False

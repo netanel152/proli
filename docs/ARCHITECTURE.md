@@ -66,7 +66,7 @@ Customer (WhatsApp)
 
 **Concurrency hardening:**
 - **Distributed locks (APScheduler):** Each scheduled job acquires a Redis `SETNX` lock before running, preventing duplicate execution if multiple worker instances are deployed.
-- **Chat-level lock (FSM):** `process_message_task` acquires a per-`chat_id` Redis lock before entering the workflow. If the lock is busy (machine-gun messages), the task re-queues with a 2-second defer via ARQ retry.
+- **Chat-level lock (FSM):** `process_message_task` acquires a per-`chat_id` Redis lock before entering the workflow. If the lock is busy (machine-gun messages), the task re-queues with a 2-second defer via ARQ retry, backing off 2s, 4s, 6s… for up to `max_tries`; the lock is renewed while the turn runs and only its owner can release it. A job still blocked on its last try is dropped with an ERROR naming the masked chat, and the customer is asked to try again.
 
 **Scaling:** Multiple worker instances are safe for task processing. APScheduler distributed locking via Redis SETNX prevents duplicate job runs.
 

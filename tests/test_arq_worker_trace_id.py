@@ -17,6 +17,7 @@ from arq.worker import Retry
 from loguru import logger
 
 import app.core.arq_worker as arq_worker
+from app.core.phone import mask_chat_id
 from app.core.redis_client import ChatLockBusyError
 
 _HEX12 = re.compile(r"^[0-9a-f]{12}$")
@@ -91,7 +92,7 @@ async def test_process_message_task_binds_a_fresh_trace_id_when_omitted(
 # ---------------------------------------------------------------------------
 # The `with logger.contextualize(...)` block must not change control flow —
 # only add a binding. A context manager that swallowed either escape would
-# silently disable ARQ's max_tries=5 retry path (ChatLockBusyError) or the
+# silently disable ARQ's max_tries retry path (ChatLockBusyError) or the
 # task-failure reporting path (any other exception).
 # ---------------------------------------------------------------------------
 
@@ -111,8 +112,77 @@ async def test_process_message_task_chat_lock_busy_still_escapes_as_retry(
             {}, "972500000003@c.us", "hi", trace_id="t1"
         )
 
-    # Retry(defer=2) is the exact call in the source — same defer_score.
     assert exc_info.value.defer_score == Retry(defer=2).defer_score
+
+
+@pytest.mark.asyncio
+async def test_the_lock_backoff_grows_with_the_try(monkeypatch):
+    monkeypatch.setattr(
+        arq_worker,
+        "process_incoming_message",
+        AsyncMock(side_effect=ChatLockBusyError("972500000003@c.us")),
+    )
+
+    with pytest.raises(Retry) as exc_info:
+        await arq_worker.process_message_task(
+            {"job_try": 3}, "972500000003@c.us", "hi", trace_id="t1"
+        )
+
+    assert exc_info.value.defer_score == Retry(defer=6).defer_score
+
+
+def test_the_total_backoff_outlasts_the_slowest_turn():
+    last_try = arq_worker.WorkerSettings.max_tries
+    assert sum(2 * n for n in range(1, last_try)) > (
+        arq_worker.WorkerSettings.job_timeout
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_last_busy_try_says_so_and_tells_the_customer(monkeypatch):
+    chat_id = "972500000003@c.us"
+    monkeypatch.setattr(
+        arq_worker,
+        "process_incoming_message",
+        AsyncMock(side_effect=ChatLockBusyError(chat_id)),
+    )
+    fake_whatsapp = AsyncMock()
+    monkeypatch.setattr(arq_worker, "whatsapp", fake_whatsapp)
+    errors = []
+    sink = logger.add(lambda m: errors.append(str(m)), level="ERROR")
+    try:
+        await arq_worker.process_message_task(
+            {"job_try": arq_worker.WorkerSettings.max_tries, "job_id": "j1"},
+            chat_id,
+            "secret words",
+            trace_id="t1",
+        )
+    finally:
+        logger.remove(sink)
+
+    fake_whatsapp.send_message.assert_awaited_once()
+    assert len(errors) == 1
+    assert "j1" in errors[0] and mask_chat_id(chat_id) in errors[0]
+    assert "secret words" not in errors[0]
+
+
+@pytest.mark.asyncio
+async def test_start_and_end_lines_name_the_job_and_the_masked_chat(monkeypatch):
+    chat_id = "972500000003@c.us"
+    monkeypatch.setattr(arq_worker, "process_incoming_message", AsyncMock())
+    lines = []
+    sink = logger.add(lambda m: lines.append(str(m)), level="INFO")
+    try:
+        await arq_worker.process_message_task(
+            {"job_try": 2, "job_id": "j1"}, chat_id, "secret words", trace_id="t1"
+        )
+    finally:
+        logger.remove(sink)
+
+    for prefix in ("Task started", "Task ended"):
+        line = next(line for line in lines if prefix in line)
+        assert "j1" in line and "try 2" in line and mask_chat_id(chat_id) in line
+    assert not [line for line in lines if "secret words" in line]
 
 
 @pytest.mark.asyncio

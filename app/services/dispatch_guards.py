@@ -78,9 +78,8 @@ class DispatchContext:
     #: inbound turn ahead of the emergency ack, so the pipeline's step 1 skips
     #: its own log instead of duplicating the turn in the AI's history window.
     emergency_inbound_logged: bool = False
-    #: What the consent gate took out of Redis on an accept, until step 1 logs it.
-    #: The orchestrator puts it back if the turn dies before then.
-    held_messages: Optional[dict] = None
+    #: This turn is the messages held from before consent, replayed by the gate.
+    replayed_held_messages: bool = False
 
     async def refresh_state(self, state_manager) -> Optional[str]:
         """Re-read the FSM state after a guard may have changed it.
@@ -303,6 +302,44 @@ async def _hold_pre_consent_message(ctx: DispatchContext, deps: GuardDeps) -> No
         await deps.state_manager.hold_message(ctx.chat_id, ctx.user_text, ctx.media_url)
 
 
+async def _replay_held_messages(
+    ctx: DispatchContext, deps: GuardDeps, retrying_accept: bool
+) -> bool:
+    """Make what was held this turn's message and log it; False if nothing was held.
+
+    The log is the commit point, and it is here rather than in the pipeline's step 1
+    so nothing below the gate runs first: a failure up to here re-arms the gate and
+    replays, and past here no guard can fire twice or answer without it being logged.
+    """
+    from app.services import workflow_service as wf
+
+    # Before clear_state, which would drop it.
+    held = await deps.state_manager.take_held_messages(ctx.chat_id)
+    try:
+        await deps.state_manager.clear_state(ctx.chat_id)
+        if not (retrying_accept and held):
+            await deps.whatsapp.send_message(ctx.chat_id, Messages.Consent.ACCEPTED)
+        if not held:
+            return False
+        ctx.user_text = held["text"]
+        ctx.media_url = await wf.resolve_inbound_media(held["media_url"])
+        ctx.normalized_text = held["text"].strip().lower()
+        ctx.is_emergency_detected = wf.is_emergency_text(ctx.normalized_text)
+        await wf.lead_manager.log_message(
+            ctx.chat_id, "user", wf._inbound_log_text(ctx.user_text, ctx.media_url)
+        )
+    except BaseException:
+        if held:
+            await deps.state_manager.hold_message(
+                ctx.chat_id, held["text"], held["media_url"]
+            )
+            await deps.state_manager.set_state(ctx.chat_id, UserStates.AWAITING_CONSENT)
+        raise
+    ctx.emergency_inbound_logged = True
+    ctx.replayed_held_messages = True
+    return True
+
+
 async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
     """Consent check (skip for professionals — they're added by admin).
 
@@ -310,8 +347,9 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
     the AI or Cloudinary, so this gate holds it in Redis only: the decline branch
     and a reset drop it through `clear_state`, the TTL drops it otherwise. An
     accept takes it and **falls through** with it as this turn's message, so it
-    runs the rest of the chain and the pipeline like any other; the "yes" itself
-    is not logged. With nothing held, an accept stays handled here.
+    runs the rest of the chain and the pipeline like any other, logged here rather
+    than at step 1; the "yes" itself is not logged. With nothing held, an accept
+    stays handled here.
 
     On fall-through this guard re-reads the FSM state and logs it — the
     original inline block did both unconditionally after the consent section,
@@ -332,23 +370,22 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
             # Handle consent response first (state takes priority over DB status)
             if ctx.current_state == UserStates.AWAITING_CONSENT:
-                if ctx.normalized_text in Messages.Consent.ACCEPT_KEYWORDS:
-                    await wf.record_consent(ctx.chat_id, accepted=True)
-                    # Before clear_state, which would drop it.
-                    held = await deps.state_manager.take_held_messages(ctx.chat_id)
-                    ctx.held_messages = held
-                    await deps.state_manager.clear_state(ctx.chat_id)
-                    await deps.whatsapp.send_message(
-                        ctx.chat_id, Messages.Consent.ACCEPTED
-                    )
-                    if not held:
+                # Consent on record with this state means an accept that failed
+                # before its log re-armed the gate. They already said yes.
+                retrying_accept = (
+                    consent_status is True
+                    and ctx.normalized_text not in Messages.Consent.DECLINE_KEYWORDS
+                )
+                if (
+                    retrying_accept
+                    or ctx.normalized_text in Messages.Consent.ACCEPT_KEYWORDS
+                ):
+                    if retrying_accept:
+                        await _hold_pre_consent_message(ctx, deps)
+                    else:
+                        await wf.record_consent(ctx.chat_id, accepted=True)
+                    if not await _replay_held_messages(ctx, deps, retrying_accept):
                         return HANDLED
-                    ctx.user_text = held["text"]
-                    ctx.media_url = held["media_url"]
-                    ctx.normalized_text = held["text"].strip().lower()
-                    ctx.is_emergency_detected = wf.is_emergency_text(
-                        ctx.normalized_text
-                    )
                     consent_status = True
                 elif ctx.normalized_text in Messages.Consent.DECLINE_KEYWORDS:
                     await wf.record_consent(ctx.chat_id, accepted=False)
@@ -1336,7 +1373,8 @@ async def guard_pending_admin_review_shortcircuit(
     log_text_pending = ctx.user_text or ""
     if ctx.media_url:
         log_text_pending = f"{log_text_pending} [MEDIA: {ctx.media_url}]"
-    await wf.lead_manager.log_message(ctx.chat_id, "user", log_text_pending)
+    if not ctx.emergency_inbound_logged:  # the consent gate may have logged it
+        await wf.lead_manager.log_message(ctx.chat_id, "user", log_text_pending)
 
     # Throttle the ack: at most once per 30 minutes so the customer isn't
     # spammed if they send a burst of messages while waiting for admin.

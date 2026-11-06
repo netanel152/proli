@@ -7,7 +7,7 @@ collection and every Redis key for the customer's words.
 
 import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import fakeredis.aioredis
 import pytest
@@ -21,7 +21,6 @@ from app.core.config import settings
 from app.core.constants import UserStates, WorkerConstants
 from app.core.messages import Messages
 from app.services import media_handler, workflow_service
-from app.services.state_manager_service import StateManager
 from tests.e2e import reserved_numbers as R
 from tests.e2e.ai_replay import reply
 
@@ -221,12 +220,17 @@ async def test_a_double_accept_replays_once(world):
 async def test_concurrent_accepts_have_one_taker(world):
     await world.send(OPENING)
 
-    taken = await asyncio.gather(
-        StateManager.take_held_messages(world.customer),
-        StateManager.take_held_messages(world.customer),
+    world.ai.script(reply("באיזו עיר?"))
+
+    # The inner function, because the chat lock is what would otherwise hide this:
+    # the lock can lapse under a slow turn, and the take is what must still hold.
+    await asyncio.gather(
+        workflow_service._process_incoming_message_inner(world.customer, "כן"),
+        workflow_service._process_incoming_message_inner(world.customer, "כן"),
     )
 
-    assert sorted(bool(t) for t in taken) == [False, True]
+    assert await _user_rows(world, OPENING) == 1
+    assert [call["user_text"] for call in world.ai.calls] == [OPENING]
 
 
 @pytest.mark.asyncio
@@ -240,11 +244,9 @@ async def test_a_redelivered_opening_is_not_doubled(world):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [asyncio.CancelledError, RuntimeError])
-async def test_a_job_that_dies_before_the_log_replays_on_retry(
-    world, monkeypatch, failure
-):
+async def test_a_job_that_dies_before_the_log_replays_on_retry(world, monkeypatch):
     """CancelledError is what a worker shutdown raises, and arq re-runs that job."""
+    failure = asyncio.CancelledError
     await world.send(OPENING)
     real_log = workflow_service.lead_manager.log_message
     monkeypatch.setattr(
@@ -266,6 +268,129 @@ async def test_a_job_that_dies_before_the_log_replays_on_retry(
     assert await _user_rows(world, OPENING) == 1
     assert [call["user_text"] for call in world.ai.calls] == [OPENING]
     assert await world.redis.exists(_key(world)) == 0
+
+
+@pytest.mark.asyncio
+async def test_after_a_failed_accept_the_next_message_is_not_asked_for_consent(
+    world, monkeypatch
+):
+    """arq does not re-run a job that raised anything else, so what comes next is
+    the customer writing again."""
+    await world.send(OPENING)
+    real_log = workflow_service.lead_manager.log_message
+    monkeypatch.setattr(
+        workflow_service.lead_manager,
+        "log_message",
+        AsyncMock(side_effect=RuntimeError),
+    )
+    with pytest.raises(RuntimeError):
+        await world.send("כן")
+    monkeypatch.setattr(workflow_service.lead_manager, "log_message", real_log)
+    world.recorder.clear()
+
+    world.ai.script(reply("תודה."))
+    await world.send("בתל אביב")
+
+    assert not [
+        send
+        for send in world.recorder.to(world.customer)
+        if Messages.Consent.REQUEST in str(send)
+    ]
+    assert [call["user_text"] for call in world.ai.calls] == [f"{OPENING}\nבתל אביב"]
+    assert await _user_rows(world, f"{OPENING}\nבתל אביב") == 1
+    await world.assert_state(UserStates.IDLE)
+
+
+@pytest.mark.asyncio
+async def test_after_a_failed_accept_they_can_still_decline(world, monkeypatch):
+    await world.send(OPENING)
+    monkeypatch.setattr(
+        workflow_service.lead_manager,
+        "log_message",
+        AsyncMock(side_effect=RuntimeError),
+    )
+    with pytest.raises(RuntimeError):
+        await world.send("כן")
+
+    await world.send("לא")
+
+    assert (await world.db.consent.find_one({}))["accepted"] is False
+    assert await _redis_keys_mentioning(world, OPENING) == []
+
+
+@pytest.mark.asyncio
+async def test_a_guard_below_the_gate_answering_does_not_lose_the_opening(world):
+    thanks = Messages.Keywords.THANKS_KEYWORDS[0]
+    await world.send(thanks)
+    await world.send("כן")
+
+    world.recorder.assert_text_to(world.customer, Messages.Customer.YOU_ARE_WELCOME)
+    assert await _user_rows(world, thanks) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_guard_below_the_gate_cannot_fire_twice_on_a_rerun(world, monkeypatch):
+    """Its side effect happened, then the job died: the re-run must not repeat it."""
+    thanks = Messages.Keywords.THANKS_KEYWORDS[0]
+    await world.send(thanks)
+    real_send = workflow_service.whatsapp.send_message
+
+    async def _die_on_the_answer(chat_id, text, *args, **kwargs):
+        await real_send(chat_id, text, *args, **kwargs)
+        if text == Messages.Customer.YOU_ARE_WELCOME:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(workflow_service.whatsapp, "send_message", _die_on_the_answer)
+    with pytest.raises(asyncio.CancelledError):
+        await world.send("כן")
+    monkeypatch.setattr(workflow_service.whatsapp, "send_message", real_send)
+    world.recorder.clear()
+
+    world.ai.script(reply("במה אפשר לעזור?"))
+    await world.send("כן")
+
+    assert not [
+        send
+        for send in world.recorder.to(world.customer)
+        if Messages.Customer.YOU_ARE_WELCOME in str(send)
+    ]
+    assert await _user_rows(world, thanks) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_emergency_that_dies_past_the_log_pages_the_operator(
+    world, monkeypatch
+):
+    await world.send("יש שריפה")
+    monkeypatch.setattr(
+        workflow_service, "_handle_completion", AsyncMock(side_effect=RuntimeError)
+    )
+    page = MagicMock()
+    monkeypatch.setattr(workflow_service.notification_service, "page_operator", page)
+
+    with pytest.raises(RuntimeError):
+        await world.send("כן")
+
+    page.assert_called_once()
+    assert "שריפה" not in page.call_args.args[0]
+    assert world.customer not in page.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_opening_that_dies_past_the_log_does_not_page(
+    world, monkeypatch
+):
+    await world.send(OPENING)
+    monkeypatch.setattr(
+        workflow_service, "_handle_completion", AsyncMock(side_effect=RuntimeError)
+    )
+    page = MagicMock()
+    monkeypatch.setattr(workflow_service.notification_service, "page_operator", page)
+
+    with pytest.raises(RuntimeError):
+        await world.send("כן")
+
+    page.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -431,12 +556,22 @@ async def test_a_consented_customers_media_is_still_rehosted(world, cloudinary):
 # ---------------------------------------------------------------------------
 
 
+async def _keys_holding(redis, words):
+    found = []
+    for key in await redis.keys("*"):
+        kind = await redis.type(key)
+        if kind == b"string" and words in await redis.get(key):
+            found.append(key)
+    return found
+
+
 @pytest.mark.asyncio
+@pytest.mark.parametrize("over_max_tries", [False, True])
 async def test_a_finished_job_leaves_its_args_in_neither_redis_nor_the_logs(
-    monkeypatch,
+    monkeypatch, over_max_tries
 ):
-    """A real arq worker, with this project's settings. It used to do both: an
-    INFO line with the args, and a seven-day `arq:result` copy of them."""
+    """A real arq worker, with this project's settings, on both ways a job ends. It
+    used to do both: an INFO line with the args, and a seven-day `arq:result` copy."""
 
     async def _no_server_info(*_args, **_kwargs):
         return None  # fakeredis has no INFO command
@@ -454,22 +589,28 @@ async def test_a_finished_job_leaves_its_args_in_neither_redis_nor_the_logs(
         ).connection_pool
     )
     try:
-        await redis.enqueue_job("_job", "972500000001@c.us", "secret words")
+        job = await redis.enqueue_job("_job", "972500000001@c.us", "secret words")
+        assert await _keys_holding(redis, b"secret words"), "nothing to search for"
+        if over_max_tries:
+            await redis.set(f"arq:retry:{job.job_id}", WorkerSettings.max_tries)
         worker = Worker(
             functions=[func(_job, name="_job")],
             redis_pool=redis,
             burst=True,
             handle_signals=False,
             poll_delay=0.01,
+            max_tries=WorkerSettings.max_tries,
             keep_result=WorkerSettings.keep_result,
         )
         await worker.main()
     finally:
         logger.remove(sink)
 
-    for key in await redis.keys("*"):
-        assert (await redis.type(key)) != b"string" or b"secret words" not in (
-            await redis.get(key)
-        ), key
+    assert await _keys_holding(redis, b"secret words") == []
     assert not [line for line in lines if "secret words" in line]
-    assert worker.jobs_complete == 1
+    if over_max_tries:
+        assert worker.jobs_failed == 1
+        # Also proves the capture sees arq's records, or the line above is vacuous.
+        assert [line for line in lines if "max retries" in line]
+    else:
+        assert worker.jobs_complete == 1

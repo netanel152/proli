@@ -1,12 +1,15 @@
 import asyncio
 import functools
 from redis.asyncio import Redis, from_url
+from redis.exceptions import WatchError
 from arq import create_pool
 from arq.connections import RedisSettings
 from app.core.config import settings
 from app.core.logger import logger
 from app.core.phone import mask_chat_id
 from typing import Optional
+
+CHAT_LOCK_TTL_SECONDS = 10
 
 _redis_client: Optional[Redis] = None
 _arq_pool = None
@@ -22,16 +25,19 @@ class ChatLockBusyError(Exception):
         super().__init__(f"Chat lock held for {chat_id}")
 
 
-async def acquire_chat_lock(chat_id: str, ttl: int = 10) -> bool:
+async def acquire_chat_lock(
+    chat_id: str, ttl: int = CHAT_LOCK_TTL_SECONDS, token: str = "1"
+) -> bool:
     """
     Per-chat Redis SETNX lock to serialize concurrent ARQ tasks for the same user.
     Returns True if the lock was acquired (caller owns it and must release).
     On Redis connection error, returns True (degraded mode — proceed without lock
-    rather than stall the pipeline).
+    rather than stall the pipeline). `token` names the owner: only that owner can
+    renew or release it.
     """
     try:
         redis = await get_redis_client()
-        result = await redis.set(f"lock:chat:{chat_id}", "1", ex=ttl, nx=True)
+        result = await redis.set(f"lock:chat:{chat_id}", token, ex=ttl, nx=True)
         return bool(result)
     except Exception as e:
         logger.warning(
@@ -40,13 +46,54 @@ async def acquire_chat_lock(chat_id: str, ttl: int = 10) -> bool:
         return True
 
 
-async def release_chat_lock(chat_id: str) -> None:
-    """Best-effort release. If Redis is down the TTL cleans up."""
+async def _if_chat_lock_owner(chat_id: str, token: str, apply) -> bool:
+    """Run one write on the lock only if `token` still holds it, atomically."""
+    key = f"lock:chat:{chat_id}"
+    redis = await get_redis_client()
+    async with redis.pipeline(transaction=True) as pipe:
+        try:
+            await pipe.watch(key)
+            if await pipe.get(key) != token:
+                return False
+            pipe.multi()
+            apply(pipe, key)
+            await pipe.execute()
+            return True
+        except WatchError:
+            return False
+
+
+async def release_chat_lock(chat_id: str, token: str = "1") -> None:
+    """Best-effort release. If Redis is down the TTL cleans up. A turn that outlived
+    its lock must not free the lock of the job that took over."""
     try:
-        redis = await get_redis_client()
-        await redis.delete(f"lock:chat:{chat_id}")
+        await _if_chat_lock_owner(chat_id, token, lambda pipe, key: pipe.delete(key))
     except Exception as e:
         logger.debug(f"release_chat_lock swallow for {mask_chat_id(chat_id)}: {e}")
+
+
+async def keep_chat_lock(
+    chat_id: str, token: str, ttl: int = CHAT_LOCK_TTL_SECONDS
+) -> None:
+    """Renew the lock until cancelled, so its TTL only has to outlast a dead worker,
+    not the longest turn. Stops if the lock has gone to someone else."""
+    while True:
+        await asyncio.sleep(ttl / 3)
+        try:
+            renewed = await _if_chat_lock_owner(
+                chat_id, token, lambda pipe, key: pipe.expire(key, ttl)
+            )
+        except Exception as e:
+            logger.warning(
+                f"keep_chat_lock Redis error for {mask_chat_id(chat_id)}: {e}"
+            )
+            continue
+        if not renewed:
+            logger.warning(
+                f"Chat lock for {mask_chat_id(chat_id)} was lost mid-turn; "
+                "another job may be running alongside this one"
+            )
+            return
 
 
 def with_scheduler_lock(key: str, ttl: int):
