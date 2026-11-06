@@ -879,7 +879,7 @@ class Messages:
         # The greeting and the question belong to the dispatcher; this line
         # only confirms the consent was recorded.
         ACCEPTED = "✅ תודה! אפשר להתחיל."
-        DECLINED = "🙏 הבנתי, לא נשמור מידע עליך. אם תשנה/י את דעתך — פשוט לשלוח הודעה."
+        DECLINED = "🙏 הבנתי, לא נשמור את תוכן ההודעות שלך. אם תשנה/י את דעתך — פשוט לשלוח הודעה."
         ACCEPT_KEYWORDS = [
             "כן",
             "אישור",
@@ -1408,6 +1408,13 @@ class Messages:
             "🙏 לא הצלחתי לפתוח את הקובץ ששלחת.\n"
             "אפשר לשלוח שוב, או פשוט לתאר במילים."
         )
+        # PRO-204: the file reached us but not the model, so this turn's reply
+        # cannot speak to it. Sent alone on a media-only turn, and ahead of the
+        # AI's reply when there was text to answer. Infinitives, as above.
+        MEDIA_UPLOAD_FAILED = (
+            "🙏 לא הצלחתי לעבד את הקובץ ששלחת.\n"
+            "אפשר לתאר את הבעיה בטקסט או בהודעה קולית?"
+        )
         DAILY_AI_CAP_REACHED = (
             "🙏 הגעת למכסת הפניות היומית. אפשר לנסות שוב מחר — "
             "ואם זה דחוף, לכתוב *נציג*."
@@ -1420,6 +1427,11 @@ class Messages:
         )
         ANALYZE_VIDEO = (
             "[System: Watch the video to identify the issue and describe what you see.]"
+        )
+        MEDIA_NOT_SEEN = (
+            "[System: The customer attached a file that could not be processed. "
+            "You have NOT seen or heard it, so do not describe it or guess what it "
+            "shows. They are told separately. Answer only their text.]"
         )
         DEFAULT_SYSTEM = "You are a helpful assistant."
         PROLI_SCHEDULER_ROLE = "You are Proli, an AI scheduler for {pro_name}."
