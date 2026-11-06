@@ -454,6 +454,28 @@ async def test_approve_sends_the_contact_card_and_the_withheld_details(wf, mock_
 
 
 @pytest.mark.asyncio
+async def test_approve_ends_by_asking_the_pro_to_make_contact(wf, mock_db):
+    pro_id = await _pro(mock_db)
+    await _lead(
+        mock_db,
+        pro_id=pro_id,
+        customer_phone="972501234567",
+        floor="3",
+        apartment="7",
+        offer_withheld_details="\n\n*מדיה מצורפת:*\n1. https://example.com/a.jpg",
+    )
+
+    await process_incoming_message(PRO_CHAT, "אשר")
+
+    reply = _replies(wf, PRO_CHAT)[0]
+    assert reply.endswith(Messages.Pro.CONTACT_CARD_CLOSING)
+    # The floor line stays with the card's fields, ahead of the media block.
+    assert reply.index("*פרטים נוספים:*") < reply.index("*מדיה מצורפת:*")
+    # §6: the navigation link still ends its own line.
+    assert "\n*פרטים נוספים:*" in reply
+
+
+@pytest.mark.asyncio
 async def test_approve_clears_the_withheld_details(wf, mock_db):
     pro_id = await _pro(mock_db)
     lead_id = await _lead(mock_db, pro_id=pro_id, offer_withheld_details="\n\nקישור")

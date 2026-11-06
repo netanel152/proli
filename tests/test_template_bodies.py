@@ -101,6 +101,13 @@ def test_every_pause_message_states_the_real_pause_length(text):
     assert WorkerConstants.PAUSE_TTL_SECONDS == 15 * 60
 
 
+def test_both_channels_promise_the_customer_the_same_thing():
+    promise = "ייצור איתך קשר בקרוב לתיאום ההגעה."
+    assert Messages.Customer.PRO_FOUND.endswith("{pro_name} " + promise)
+    assert Messages.Templates.PRO_FOUND.endswith(promise)
+    assert "לתיאום ההגעה" in Messages.Pro.CONTACT_CARD_CLOSING
+
+
 def test_pro_found_ends_on_words_with_the_phone_as_the_last_variable():
     spec = TEMPLATES["pro_found"]
     assert spec.params[-1] == "pro_phone"

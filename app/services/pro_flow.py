@@ -446,12 +446,6 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         full_address=card_address,
         address_encoded=urllib.parse.quote(card_address),
     )
-    # Only set when the offer went out as a template, which cannot carry these.
-    if lead.get("offer_withheld_details"):
-        response_text += lead["offer_withheld_details"]
-        await leads_collection.update_one(
-            {"_id": lead["_id"]}, {"$unset": {"offer_withheld_details": ""}}
-        )
     # Only when there is something to say — format_lead_extra_info renders '-'
     # placeholders for a missing floor and apartment, and a card advertising
     # "פרטים נוספים: קומה -, דירה -" is noise dressed as information.
@@ -459,6 +453,13 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         response_text += Messages.Pro.CONTACT_CARD_EXTRA.format(
             extra_info=notification_service.format_lead_extra_info(lead)
         )
+    # Only set when the offer went out as a template, which cannot carry these.
+    if lead.get("offer_withheld_details"):
+        response_text += lead["offer_withheld_details"]
+        await leads_collection.update_one(
+            {"_id": lead["_id"]}, {"$unset": {"offer_withheld_details": ""}}
+        )
+    response_text += Messages.Pro.CONTACT_CARD_CLOSING
 
     pro_name = pro.get("business_name", Defaults.EXPERT_NAME)
     raw_phone = pro.get("phone_number", "")

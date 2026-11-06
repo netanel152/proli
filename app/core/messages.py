@@ -75,7 +75,7 @@ class Messages:
             "*מועד:* {appointment_time}\n"
             "{price_line}"
             "{rating_line}"
-            "\n{pro_name} ייצור איתך קשר בקרוב."
+            "\n{pro_name} ייצור איתך קשר בקרוב לתיאום ההגעה."
         )
         RATE_SERVICE = (
             "🙌 העבודה עם {pro_name} סומנה כהושלמה.\n"
@@ -439,6 +439,9 @@ class Messages:
         # Appended to CONTACT_CARD only when the lead carries a floor or an
         # apartment; '-' placeholders would otherwise render an empty promise.
         CONTACT_CARD_EXTRA = "\n*פרטים נוספים:* {extra_info}"
+        # Last in the reply, whatever else the card carried: this is what makes
+        # the "ייצור איתך קשר" that PRO_FOUND tells the customer more than a hope.
+        CONTACT_CARD_CLOSING = "\n\nמומלץ ליצור קשר עם הלקוח בהקדם לתיאום ההגעה."
         NO_PENDING_APPROVE = "לא מצאתי עבודה חדשה לאישור."
         ALREADY_RESPONDED = "כבר הגבת לקריאה זו, ולא ניתן לשנות את הבחירה כעת."
         # PRO-117: sent only after the rematch actually happened, so the copy
