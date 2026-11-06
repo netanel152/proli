@@ -647,22 +647,27 @@ def _render_service_area_correction(
         st.rerun()
 
 
-def _flash_pro_result(T, message: str, notified: bool, level: str = "success") -> None:
-    """A pro action's confirmation, saying so when the pro's message did not go."""
+def _flash_pro_result(T, message: str, notified, level: str = "success") -> None:
+    """A pro action's confirmation, saying so when the pro's message did not go.
+
+    ``notified`` is None when no send was attempted, for a pro with no phone.
+    Unmuting would not help that pro, so it gets the plain sentence.
+    """
     if notified:
         set_flash("pro_flash", message, level)
         return
     from app.providers.whatsapp import sync
 
-    note = T["pro_not_told"] if sync.can_transmit() else T["pro_not_told_muted"]
+    muted = notified is False and not sync.can_transmit()
+    note = T["pro_not_told_muted"] if muted else T["pro_not_told"]
     set_flash("pro_flash", f"{message} {note}", "warning")
 
 
-def _notify_pro_approved(phone_number: str) -> bool:
+def _notify_pro_approved(phone_number: str) -> bool | None:
     # PRO-86: was a raw httpx.post straight at the legacy vendor, bypassing the circuit
     # breaker and kill switch entirely. Now goes through the one egress.
     if not phone_number:
-        return False
+        return None
     from app.core.messages import Messages
     from app.core.phone import to_chat_id
     from app.providers.whatsapp.sync import send_text_sync
@@ -672,10 +677,10 @@ def _notify_pro_approved(phone_number: str) -> bool:
     )
 
 
-def _notify_pro_rejected(phone_number: str) -> bool:
+def _notify_pro_rejected(phone_number: str) -> bool | None:
     # PRO-86: see _notify_pro_approved — same bypass, same fix.
     if not phone_number:
-        return False
+        return None
     from app.core.messages import Messages
     from app.core.phone import to_chat_id
     from app.providers.whatsapp.sync import send_text_sync

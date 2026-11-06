@@ -162,8 +162,8 @@ how the two silently re-merge.
 | `ADMIN_PASSWORD_HASH` | **distinct** | one admin credential must not open both panels |
 | `SENTRY_DSN` | **distinct** | separate Sentry project per environment, so staging noise cannot pollute production ingest and a leaked staging DSN is worthless |
 | `GEMINI_API_KEY` | **distinct** | a staging leak or quota burn must not affect production |
-| `META_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_PHONE_NUMBER_ID` | **distinct** | production holds the real pilot number. Staging runs `WHATSAPP_DRY_RUN=true` until it has its **own** test number / test WABA — never point staging at production's phone-number id with dry-run off, because staging sends are then production sends (same number, same Meta quality rating) |
-| `WHATSAPP_DRY_RUN` | **distinct** *(same value today)* | Both `true` today — **production is muted until the PRO-102 cutover**, and goes `false` there, not before. Measured on 2026-09-16; this row previously read "Production `false`" and was wrong in the direction that matters, since it is the row an operator reads while configuring an environment |
+| `META_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_PHONE_NUMBER_ID` | **distinct** | production holds the real pilot number. Staging's `api` and `worker` send live from Meta's Test Number, its **own** test number — never point staging at production's phone-number id with dry-run off, because staging sends are then production sends (same number, same Meta quality rating) |
+| `WHATSAPP_DRY_RUN` | **distinct** | Measured on 2026-11-06: Staging `api` and `worker` are `false` with `WHATSAPP_PROVIDER=cloud`; Production `api`, `worker` and `admin` are `true`. **Production is muted until the PRO-102 cutover**, and goes `false` there, not before. This row once read "Production `false`" and was wrong in the direction that matters, since it is the row an operator reads while configuring an environment |
 | `CLOUDINARY_*` | shared *(pilot decision)* | media is non-sensitive and a second account is friction with little pilot-stage payoff; revisit post-pilot |
 | `GOOGLE_MAPS_API_KEY` | shared *(pilot decision)* | geocoding only; restrict by API + quota in the Google console; revisit post-pilot |
 | `ADMIN_PHONE`, `ONCALL_PHONE` | shared | not secrets — the same operator is paged from both |
@@ -188,14 +188,17 @@ Set these on the `admin` service, with the same values as that environment's `wo
 | `META_PHONE_NUMBER_ID` | same as `worker` | Same rule as `META_ACCESS_TOKEN` |
 | `META_APP_SECRET` | same as `worker` | Required for `cloud` in staging and production, muted or not. `admin` serves no webhook; the boot check does not distinguish services |
 | `META_VERIFY_TOKEN` | same as `worker` | Same rule as `META_APP_SECRET` |
+| `META_GRAPH_API_VERSION` | same as `worker` | Not a boot requirement. Copy it anyway: unset, it takes the config default `v23.0`, which can differ from `worker`'s value |
 
 `REDIS_URL` and `MONGO_URI` must also be the same instances as `worker`'s. The worker's watchdog writes the `wa:instance:state` key the facade's breaker reads, and the absent key blocks every send. The 24h window keys and `wa_delivery` are shared the same way.
 
 Set them together, in the Railway dashboard, as one staged change. `cloud` with any of the four `META_*` values missing refuses to boot, and that includes `cloud` with `WHATSAPP_DRY_RUN=true` missing `META_APP_SECRET` or `META_VERIFY_TOKEN`. Any later trim of `admin`'s secrets has to keep these four for as long as the panel sends from its own process.
 
-**How to tell:** when the panel cannot transmit, `WhatsApp provider 'dryrun' cannot transmit` appears at WARNING in this service's logs, once per server process, when the first page loads. A send on such a panel reports "this environment is muted: the WhatsApp message was not sent", and an offer is recorded in the audit log with outcome `not_sent_muted`.
+**How to tell:** nothing is logged until a page loads, so load one first, then read this service's logs. A panel that can send logs `WhatsApp egress using provider 'cloud'` at INFO. That line only shows at `LOG_LEVEL=INFO`, and staging and production are documented as running `WARNING`, so its absence proves nothing there: use a real send from the panel as the evidence instead. A panel that cannot send logs `WhatsApp provider 'dryrun' cannot transmit` at WARNING, once per server process. A send on such a panel reports "this environment is muted: the WhatsApp message was not sent", and an offer is recorded in the audit log with outcome `not_sent_muted`.
 
 **A staging panel test proves nothing about delivery until `admin` has these.** A muted panel can still assign a lead correctly, and a passing assignment there is not evidence that a pro was told.
+
+**While a panel is muted:** if `sos_healer_active` is on, the healer can move a lead an operator arranged by phone once 60 minutes have passed, because the lead looks like an offer the pro ignored. Follow-up on this is tracked separately.
 
 ### The PRO-102 cutover covers all three services
 
@@ -203,7 +206,7 @@ Set them together, in the Railway dashboard, as one staged change. `cloud` with 
 
 - [ ] `api` and `worker`: `WHATSAPP_PROVIDER=cloud`, `WHATSAPP_DRY_RUN=false`, Production's own `META_*` values.
 - [ ] `admin`: everything in the table above, with Production's values.
-- [ ] `admin`'s logs no longer show `cannot transmit` after the redeploy.
+- [ ] After the redeploy, load a panel page, then check `admin`'s logs for `WhatsApp egress using provider 'cloud'`. It is an INFO line: at `LOG_LEVEL=WARNING` it will not appear, and the real offer below is the evidence.
 - [ ] One offer from the production panel reaches a real phone, and the panel reports it as sent.
 
 ### `ENVIRONMENT` per Railway environment (PRO-34)

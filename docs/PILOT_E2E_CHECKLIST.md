@@ -40,7 +40,7 @@ register `הרשמה` · reset `התחלה` · rating `1`–`5` · admin wizard 
 
 - [ ] `GET /health` with `X-Health-Token: $HEALTH_TOKEN` (PRO-136; the `checks` detail is omitted without it) → `mongodb`/`redis`/`worker` all `up`; **`whatsapp.status: "up"`, `whatsapp.state: "authorized"`**.
 - [ ] Circuit breaker not engaged: `redis-cli exists wa:instance:paused wa:instance:paused:manual` → `0`.
-- [ ] The panel can send: `admin` has the variables in "What `admin` needs in order to send" (`docs/RAILWAY_SETUP.md`), and its logs do not show `cannot transmit`. `/health` reports `api`'s provider, not `admin`'s.
+- [ ] The panel can send: `admin` has the variables in "What `admin` needs in order to send" (`docs/RAILWAY_SETUP.md`), and after loading a page its logs show `WhatsApp egress using provider 'cloud'` (an INFO line, so at `LOG_LEVEL=WARNING` use a real panel send as the evidence). `/health` reports `api`'s provider, not `admin`'s.
 - [ ] Sentry paging live (PRO-18): `SENTRY_DSN` set, `fatal→email` rule exists, a test critical emails you.
 - [ ] Worker running (APScheduler jobs active) — check logs for `worker:heartbeat` and `[WA Monitor]`.
 - [ ] At least one **approved, active** pro covers C's city with free upcoming slots.

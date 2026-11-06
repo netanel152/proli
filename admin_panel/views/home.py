@@ -1289,7 +1289,7 @@ def _render_selected_lead_actions(
                             T.get(
                                 "check_muted",
                                 "This environment is muted: the WhatsApp message "
-                                "was not sent.",
+                                "was not sent. Call the customer.",
                             )
                         )
                     else:

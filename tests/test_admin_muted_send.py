@@ -9,10 +9,12 @@ Nothing here mocks the provider: ``muted`` builds the real one through the real
 ``build_provider`` from those two configurations.
 """
 
+import ast
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import mongomock
 import pytest
@@ -37,6 +39,7 @@ from app.providers.whatsapp import (
     reset_whatsapp,
     sync,
 )
+from app.providers.whatsapp.facade import WhatsAppFacade
 from app.services import admin_flow, notification_service
 from app.services.geocoding_service import ServiceAreaResolution
 
@@ -112,6 +115,36 @@ def test_completion_check_is_not_reported_or_stamped_as_sent(muted, monkeypatch)
     lead = db["leads"].find_one({"_id": lead_id})
     assert "completion_check_sent_count" not in lead
     assert "completion_check_sent_at" not in lead
+
+
+class _Transmitting(DryRunProvider):
+    transmits = True
+
+
+def test_a_completion_check_that_went_is_stamped(monkeypatch):
+    """Without the stamp the monitor nudges a customer right after an operator's
+    check, because the cooldown never restarted."""
+    facade = WhatsAppFacade(_Transmitting())
+    monkeypatch.setattr(
+        facade, "_outbound_blocked_reason", AsyncMock(return_value=None)
+    )
+    monkeypatch.setattr(sync, "get_whatsapp", lambda: facade)
+    db = mongomock.MongoClient()["muted"]
+    pro_id = db["users"].insert_one({"business_name": "Dana"}).inserted_id
+    lead_id = (
+        db["leads"]
+        .insert_one({"chat_id": CUSTOMER_CHAT, "pro_id": pro_id, "status": "booked"})
+        .inserted_id
+    )
+    monkeypatch.setattr(panel_utils, "leads_collection", db["leads"])
+    monkeypatch.setattr(panel_utils, "users_collection", db["users"])
+
+    assert panel_utils.send_completion_check_sync(str(lead_id)) is True
+
+    assert [e["kind"] for e in facade.provider.sent] == ["text"]
+    lead = db["leads"].find_one({"_id": lead_id})
+    assert lead["completion_check_sent_count"] == 1
+    assert lead["completion_check_sent_at"]
 
 
 def test_offer_is_not_reported_as_sent_and_the_assignment_stands(muted, offer_db):
@@ -201,6 +234,9 @@ async def _noop_async(*_args, **_kwargs):
 def test_pro_notifications_report_whether_they_went(muted):
     assert professionals._notify_pro_approved(PRO_PHONE) is False
     assert professionals._notify_pro_rejected(PRO_PHONE) is False
+    # None: never attempted, which is a different problem from a muted send.
+    assert professionals._notify_pro_approved(None) is None
+    assert professionals._notify_pro_rejected(None) is None
 
 
 def test_approval_flash_says_the_pro_was_not_told(muted, monkeypatch):
@@ -224,6 +260,29 @@ def test_approval_flash_says_the_pro_was_not_told(muted, monkeypatch):
     assert level == "warning"
     assert EN["approved_ok"].format(name="Dana") in message
     assert EN["pro_not_told_muted"] in message
+
+
+def test_approving_a_pro_with_no_phone_says_plainly_it_was_not_sent(muted, monkeypatch):
+    """Unmuting would not reach this pro, so the sentence must not blame the mute."""
+    db = mongomock.MongoClient()["muted"]
+    pro_id = db["users"].insert_one({"pending_approval": True}).inserted_id
+    flashes = []
+    monkeypatch.setattr(professionals, "users_collection", db["users"])
+    monkeypatch.setattr(professionals, "create_initial_schedule", lambda _: None)
+    monkeypatch.setattr(professionals, "log_audit", lambda *_: None)
+    monkeypatch.setattr(professionals, "set_flash", lambda *args: flashes.append(args))
+    monkeypatch.setattr(professionals.st, "rerun", lambda: None)
+
+    professionals._approve_pending_pro(
+        {"_id": pro_id, "business_name": "Dana", "phone_number": None},
+        EN,
+        ServiceAreaResolution(),
+    )
+
+    ((_, message, level),) = flashes
+    assert level == "warning"
+    assert EN["pro_not_told"] in message
+    assert EN["pro_not_told_muted"] not in message
 
 
 def test_flash_tells_a_muted_environment_from_a_failed_send(monkeypatch):
@@ -265,8 +324,16 @@ def _reject_app():
     professionals.render_pending_approvals(TRANS["EN"])
 
 
+@pytest.mark.parametrize(
+    "phone, note, other",
+    [
+        (PRO_PHONE, "pro_not_told_muted", "pro_not_told"),
+        (None, "pro_not_told", "pro_not_told_muted"),
+    ],
+    ids=["has_phone", "no_phone"],
+)
 def test_rejecting_from_the_real_view_does_not_claim_the_pro_was_told(
-    muted, monkeypatch
+    muted, monkeypatch, phone, note, other
 ):
     db = mongomock.MongoClient()["muted"]
     pro_id = (
@@ -274,7 +341,7 @@ def test_rejecting_from_the_real_view_does_not_claim_the_pro_was_told(
         .insert_one(
             {
                 "business_name": "Dana",
-                "phone_number": PRO_PHONE,
+                "phone_number": phone,
                 "pending_approval": True,
                 "created_at": datetime.now(timezone.utc),
             }
@@ -295,8 +362,10 @@ def test_rejecting_from_the_real_view_does_not_claim_the_pro_was_told(
 
     level, message = at.session_state["pro_flash"]
     assert level == "warning"
-    assert message != EN["pro_rejected"].replace("{name}", "Dana")
-    assert EN["pro_not_told_muted"] in message
+    assert EN["pro_rejected"].replace("{name}", "Dana") not in message
+    assert EN["pro_rejected_untold"].replace("{name}", "Dana") in message
+    assert EN[note] in message
+    assert EN[other] not in message
 
 
 # ---------------------------------------------------------------------------
@@ -543,6 +612,19 @@ def test_a_transmitting_panel_reports_nothing(monkeypatch):
     )
 
     assert not log.method_calls
+
+
+def test_main_really_makes_the_report_at_module_level():
+    """``main.py`` cannot run under pytest, and an uncalled report is silent."""
+    source = Path(__file__).parents[1] / "admin_panel" / "main.py"
+    called = [
+        node.value.func.id
+        for node in ast.parse(source.read_text(encoding="utf-8")).body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+    ]
+    assert "report_whatsapp_egress" in called
 
 
 def test_the_panel_reports_once_per_process_and_never_breaks_boot(monkeypatch):
