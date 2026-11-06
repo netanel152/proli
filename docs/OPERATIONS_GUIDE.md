@@ -80,6 +80,30 @@ Log patterns to watch:
 | `⛔ Outbound halted` | Circuit breaker suppressing sends — instance not authorized |
 | `Geocoding unavailable — circuit opened` | `page_critical` → Sentry page; Google Geocoding is failing transiently (missing key, quota, network) and the `geo:unavailable` breaker is open (PRO-19) |
 
+### Lead pipeline monitor
+
+The `🩺 Lead pipeline monitor` workflow (`.github/workflows/health-leads-monitor.yml`, logic in `scripts/check_health_leads.py`) polls production's `/health/leads` every 10 minutes and pages through Sentry, the same `fatal` → email route as `page_critical`.
+
+| condition | pages | run colour |
+|---|---|---|
+| `pending_review_count` > 5 for more than 30 min | when the 30 min pass, then hourly while it lasts | red while it lasts |
+| `stuck_contacted_count` above its last known level for more than 30 min | once per climb; a further rise pages again | red on the run that pages |
+| endpoint unreadable (403, 503, timeout, bad JSON, a non-production response) or the token secret missing | from the 2nd run in a row, then hourly | red from the 1st run |
+| `PRODUCTION_SENTRY_DSN` missing, or Sentry refuses a page | cannot page | red, retried next run |
+
+**Activating it needs two repository secrets**, and every run is red until both exist: `PRODUCTION_HEALTH_TOKEN` (the `HEALTH_TOKEN` value on production's api service) and `PRODUCTION_SENTRY_DSN` (production's `SENTRY_DSN`). Sentry's alert rule ([`SENTRY_SETUP.md`](SENTRY_SETUP.md)) must also exist.
+
+**Proving it fires.** Merging proves nothing:
+
+1. *The route, in a minute:* Actions → 🩺 Lead pipeline monitor → Run workflow on `dev` with **drill** ticked. It sends one marked TEST page. Confirm the email arrives.
+2. *The whole path, in about 40 minutes:* set the repository variable `HEALTH_LEADS_PENDING_THRESHOLD` to `-1`, so any backlog counts as a breach. Wait for the page, then **delete the variable**. Each run warns while it is set.
+
+**Limits.**
+- The stuck rule is only meaningful with the Healer on. `sos_healer_active` and `lead_janitor_active` default off, so any lead reaching 24h in `contacted` pages once while they are off.
+- Timers live in the Actions cache. A lost cache restarts them, which delays a page.
+- GitHub's schedule is best effort and can run late. **Nothing watches the watcher:** if GitHub stops running the schedule, no alert fires. GitHub also disables schedules in a public repo after 60 days without activity.
+- Logs in this public repo show verdicts only. A red run does reveal publicly that a condition is active, and the cached state holds the last stuck count.
+
 ### Incident runbooks
 
 - **WhatsApp outbound outage** → [`RUNBOOK_WHATSAPP_OUTAGE.md`](RUNBOOK_WHATSAPP_OUTAGE.md) — detection, the automatic fail-closed circuit breaker, the manual kill switch, and prevention.

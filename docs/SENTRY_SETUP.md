@@ -4,7 +4,7 @@ Sentry serves Proli on two strictly separated tiers:
 
 | Tier | Sentry level | What creates it | Pages the operator? |
 |---|---|---|---|
-| **Paging** | `fatal` | `page_critical(...)` only (stdlib `proli.paging`) | **Yes** — the alert rule filters on `fatal` |
+| **Paging** | `fatal` | `page_critical(...)` (stdlib `proli.paging`), and from outside the app `scripts/check_health_leads.py` (see below) | **Yes** — the alert rule filters on `fatal` |
 | **Visibility** | `error` | Unhandled exceptions (FastApi/Starlette/Arq integrations, APScheduler `EVENT_JOB_ERROR` listener, worker-death capture, admin view capture) and the throttled loguru ERROR bridge | No — dashboard only |
 
 Paging runs on infrastructure independent of WhatsApp so it can report a WhatsApp
@@ -140,6 +140,12 @@ Sentry → email is that path. Configure once:
 
 Reconstruct this rule from scratch if the Sentry project is ever recreated; it is
 the only piece of the paging path that lives outside the repo.
+
+---
+
+## The lead pipeline monitor pages from outside the app
+
+`scripts/check_health_leads.py` runs in GitHub Actions and posts its `fatal` events straight to Sentry's envelope endpoint, with `environment=production` and `logger=proli.health_leads_monitor`. It does not use `page_critical`, which needs the whole app's settings and whose SDK transport hides a refused event; the script has to see the refusal so the run can go red. Because the rule above fires on *an issue is created*, each of its pages carries a unique fingerprint and opens a new issue. Runbook: "Lead pipeline monitor" in `OPERATIONS_GUIDE.md`.
 
 ---
 
