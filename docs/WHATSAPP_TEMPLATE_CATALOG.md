@@ -1,14 +1,16 @@
 # WhatsApp Template Catalog (PRO-88)
 
-**Status:** inventory complete, template designs draft. Nothing here has been submitted to Meta. The machine-readable half of this catalog now exists in code — `app/providers/whatsapp/template_registry.py` (PRO-89) — with every entry `DRAFT`; flipping an entry to `APPROVED` (with the exact name Meta approves) is the single code change that arms it for sending. Each `TemplateSpec` also carries a `source` field (PRO-168) naming the exact `Messages.*` constant its body must be worded from — the same constant this document cites per row — so a copy rewrite and a template submission can be checked against each other without either becoming a second home for the sentence.
+**Status:** inventory complete, template bodies written, send path wired. Nothing here has been submitted to Meta. The machine-readable half of this catalog is `app/providers/whatsapp/template_registry.py` (PRO-89), with every entry `DRAFT`. The bodies live in `Messages.Templates` (`app/core/messages.py`), the one home for copy. Each `TemplateSpec` points at its body, declares its ordered `params` and its category, and carries a `source` (PRO-168) naming the free-form `Messages.*` constant it was worded from.
+
+**Flipping an entry to `APPROVED`**, with the exact name Meta approved, arms it for every call site that passes `template_key` to the facade's `send_message`. Until then those sends behave exactly as they did before the path existed. The admin panel's sends (P13 and C2's operator button) do not pass one yet, so approving those templates changes nothing for them. See [What is wired](#what-is-wired).
 
 ## What this document is
 
 Every outbound WhatsApp message Proli sends, classified by whether Meta Cloud API will let us send it as free-form text or will require a **pre-approved template**. This is the input to PRO-89 (`CloudAPIProvider`), and the reason it exists separately: the number of templates we need is a product decision with a review latency attached, and discovering it *during* the Cloud API implementation would stall that ticket.
 
-Scope boundary: this is an inventory and a design sketch. **Template submission belongs to PRO-87** (it needs the Business Portfolio and the approved display name to exist first), and the `send_template` implementation belongs to PRO-89.
+Scope boundary: this is the inventory and the template design. PRO-87 (the Business Portfolio and the number) is done; **approval is PRO-150's**. `scripts/submit_whatsapp_templates.py` does the submitting: by default it only prints what it would submit, `--status --waba-id <id>` reports Meta's status and any drift from the registry, and `--apply --waba-id <id>` submits and refuses an account whose name contains "Test". The WABA configured today, `1910054379665469`, is Meta's test account, so no real submission can happen against it.
 
-> **Policy details need re-verification.** Meta's template categories, pricing model, and per-variable formatting rules have changed repeatedly. Everything below about *Proli's own sends* was read out of this codebase and is authoritative. Everything about *Meta's rules* is the working assumption and must be checked against current documentation during PRO-87 before any template is submitted. Where a rule drives a design decision here, it is flagged.
+> **Meta's rules, as read on 2026-11-06.** From `developers.facebook.com/documentation/business-messaging/whatsapp/templates/`: `template-review/` (no variable at the start or end, sequential `{{n}}`, no `#`, `$` or `%` in a variable, a sample for every variable, no duplicate wording, not too many variables for the length), `components/` and `utility-templates/` (body maximum 1024 characters), `overview/` (positional format, `example.body_text`, 100 creations an hour), `template-categorization/` (UTILITY must be non-promotional and specific to the user; mixed or unclear content is treated as MARKETING; a recategorised template stays APPROVED and only its category changes, which is why `--status` compares categories). `tests/test_template_bodies.py` holds every body to these. Three things those pages do **not** settle, and the code assumes conservatively: "no adjacent variables" is not on the review page as read and is enforced anyway; the variables-to-length ratio has no published number, so the floor in `template_registry.py` is Proli's own; and nothing says whether a parameter value may hold a newline, so `sanitize_param` flattens newlines, tabs and runs of 4+ spaces. An emoji limit is mentioned with no number, so none is checked.
 
 ## The rule that drives everything
 
@@ -33,7 +35,7 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 | # | Send | Call site | Trigger | Notes |
 |---|---|---|---|---|
 | **P1** | **Lead offer** (`APPROVAL_REQUEST`) | `workflow_service.py:1031` | Customer completes intake | **The product.** Interpolates customer name, address, issue type, appointment time, price line, and a media-links block. **PRO-59** dropped the customer's phone and the floor/apartment line from this send — both now arrive only in the post-approval contact card (`Pro.CONTACT_CARD`, sent from `pro_flow._handle_approve`, not a business-initiated send). |
-| **P2** | ~~Navigation link (`NAVIGATE_TO`)~~ | — | — | **Removed by PRO-59, not folded.** Neither pre-approval path (`workflow_service`'s initial offer or `notification_service.notify_pro_new_lead`) sends a navigation link any more — a map pin resolves the exact address the offer now withholds until approval. The waze line moved into the post-approval `Pro.CONTACT_CARD` instead, which needs no template of its own (it replies inside the 24h window the pro's own *אשר* just opened). One fewer template to submit for PRO-87, one fewer billable send. |
+| **P2** | ~~Navigation link (`NAVIGATE_TO`)~~ | — | — | **Removed by PRO-59, not folded.** Neither pre-approval path (`workflow_service`'s initial offer or `notification_service.notify_pro_new_lead`) sends a navigation link any more — a map pin resolves the exact address the offer now withholds until approval. The waze line moved into the post-approval `Pro.CONTACT_CARD` instead, which needs no template of its own (it replies inside the 24h window the pro's own *אשר* just opened). One fewer template to submit, one fewer billable send. |
 | **P3** | Lead offer, reassignment + admin-assignment path | `notification_service.py:213` (`notify_pro_new_lead`) | `monitor_service.reassign_lead`, `admin_flow` assignment | Shares the builder with P1 but uses the leaner `NEW_LEAD_*` templates. Since PRO-59 both templates omit the phone and floor/apartment, so the variable sets are closer than they used to be, not identical — P1 also carries `price_line` and optional emergency/loyalty headers P3 never had. |
 | **P4** | Early-lead notification (`EARLY_LEAD_*`) | `conversation_pipeline.py:694–699` | Customer mid-intake | **Sends media** via `send_file_by_url` when a photo exists, text otherwise. A media-header template is a different structure from a text template — this needs two templates or a policy change. |
 | **P5** | Approval nudge (`APPROVAL_NUDGE`) | `monitor_service.py:688` | Scheduler, T+10 min of pro silence | Sent precisely because the pro is *not* engaging, so assuming an open window is exactly backwards. |
@@ -42,9 +44,9 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 | **P8** | Finish reminder (`Pro.REMINDER`) | `notification_service.send_pro_reminder` | Stale-job monitor | Capped at `MAX_PRO_REMINDERS`. |
 | **P9** | Lead lost on reassignment (`PRO_LOST_LEAD`) | `monitor_service.py:248` | Reassignment | Skipped when the reassignment came from a pro's own reject (PRO-117 `notify_old_pro=False`) — that pro already got the reject acknowledgement. |
 | **P10** | Bot paused (`PAUSE_NOTIFICATION`) | `workflow_service.py:460` | Customer triggered SOS | |
-| **P11** | SOS alert (`SOS.PRO_ALERT` / `SOS.PRO_ALERT_PENDING`) | `notification_service.send_sos_alert` | Customer distress | Time-critical; a rejected template here is a safety regression. **PRO-59**: the phone-bearing `PRO_ALERT` sends only when the lead is BOOKED; a NEW/CONTACTED lead's pro (offered, not yet approved) gets the phone-free `PRO_ALERT_PENDING` instead — two template bodies, same trigger. |
+| **P11** | SOS alert (`SOS.PRO_ALERT` / `SOS.PRO_ALERT_PENDING`) | `notification_service.send_sos_alert` | Customer distress | Time-critical; a rejected template here is a safety regression. **PRO-59**: the phone-bearing `PRO_ALERT` sends only when the lead is BOOKED; a NEW/CONTACTED lead's pro (offered, not yet approved) gets the phone-free `PRO_ALERT_PENDING` instead — two template bodies, same trigger, so two registry entries (`sos_alert`, `sos_alert_pending`). |
 | **P12** | Customer cancelled (`CUSTOMER_CANCELLED`) | `workflow_service` | Customer cancels | |
-| **P13** | Onboarding approved / rejected | `professionals.py:486, 497` | **Operator clicks a button in the admin panel** | Arbitrary delay after the pro's registration — hours or days. Assume closed. |
+| **P13** | Onboarding approved / rejected | `professionals.py:486, 497` | **Operator clicks a button in the admin panel** | Arbitrary delay after the pro's registration — hours or days. Assume closed. Two bodies, so two registry entries (`onboarding_approved`, `onboarding_rejected`). |
 
 ### Customer-facing
 
@@ -52,7 +54,7 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 |---|---|---|---|---|
 | **C1** | No pro available (`NO_PRO_AVAILABLE`) | `monitor_service.py:378` | Lead janitor, every 6h | Lead can be arbitrarily old. Assume closed. |
 | **C2** | Completion check | `admin_panel/core/utils.py:190` (operator) · `customer_flow.py:send_customer_completion_check` (scheduler) | **Operator clicks a button**, or stale-job monitor Tier 2 | Arbitrary timing by construction. Capped at `MAX_CUSTOMER_COMPLETION_CHECKS` per booking (PRO-45: `reassign_lead` resets the counter for a fresh owner) with a `CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS` gap; an operator send bypasses the cap but still restarts the cooldown. |
-| **C3** | Reassignment notices (`CUSTOMER_REASSIGNING`, `MAX_REASSIGNMENTS_REACHED`, `PENDING_REVIEW`) | `monitor_service.py:180, 129, 284` | `SOS_TIMEOUT_MINUTES=60` path → in-window; `STALE_BOOKED_LEAD_HOURS=24` path → **on the boundary**; PRO-117 pro-reject rematch failure → also in-window | Same code, multiple triggers (including the PRO-117 reject-rematch fallback), different window answers. Must be treated as template-required. |
+| **C3** | Reassignment notices (`CUSTOMER_REASSIGNING`, `MAX_REASSIGNMENTS_REACHED`, `PENDING_REVIEW`) | `monitor_service.py:180, 129, 284` | `SOS_TIMEOUT_MINUTES=60` path → in-window; `STALE_BOOKED_LEAD_HOURS=24` path → **on the boundary**; PRO-117 pro-reject rematch failure → also in-window | Same code, multiple triggers (including the PRO-117 reject-rematch fallback), different window answers. Must be treated as template-required. Three bodies, so three registry entries (`reassigning`, `max_reassignments`, `pending_review`). |
 
 ### Operator-facing — ✅ **resolved, no templates needed**
 
@@ -89,33 +91,58 @@ Both are gated to business hours by PRO-73, which narrows them further.
 
 ---
 
-## Design problems specific to Proli's messages
+## What is wired
 
-These are the parts where our current message shapes and Meta's template format are likely to collide. Each needs verification against current documentation in PRO-87.
+A call site passes its free-form text plus `template_key` and named `params` to `WhatsAppFacade.send_message`. Open window: the text goes out as ever. Closed window and template `APPROVED`: the template goes out, with `params` in the order the spec declares. Closed window and not approved: the operator page plus `ServiceWindowClosedError`, which the facade turns into `None`, exactly as before. It stays behind the breaker and the kill switch, and `DryRunProvider` always records the text.
 
-**1. Multi-line interpolated blocks.** `build_new_lead_message` composes a header, a details block with four substitutions (PRO-59 dropped the floor/apartment line from it), a footer, and a media-links block built at runtime from a list of unknown length. Template variables are generally constrained in ways free-form text is not — notably around newlines and adjacent placeholders. The media-links block (`\n1. url\n2. url…`) is the least template-shaped thing we send.
+| Row | Registry key | Variables | Body | Call site |
+|---|---|---|---|---|
+| P1 | `lead_offer` | `customer_name`, `full_address`, `issue_type`, `appointment_time`, `price_estimate`, `urgency` | `LEAD_OFFER` | `workflow_service._finalize_deal` |
+| P3 | `lead_offer_reassigned` | `customer_name`, `full_address`, `issue_type`, `appointment_time` | `LEAD_OFFER_REASSIGNED` | `notification_service.notify_pro_new_lead` (an emergency takes `lead_offer`) |
+| P5 | `approval_nudge` | `issue_type`, `minutes` | `APPROVAL_NUDGE` | `monitor_service.check_pro_approval_sla` |
+| P6 | `daily_agenda` | `pro_name`, `date`, `job_count` | `DAILY_AGENDA` | `scheduler.send_daily_reminders` |
+| P7 | `stale_lead_reminder` | `pro_name`, `customer_name` | `STALE_LEAD_REMINDER` | `monitor_service.remind_stale_booked_leads` |
+| P8 | `finish_reminder` | none | `FINISH_REMINDER` | `notification_service.send_pro_reminder` |
+| P9 | `pro_lost_lead` | `issue_type` | `PRO_LOST_LEAD` | `monitor_service.reassign_lead` |
+| P10 | `bot_paused` | `issue_type` | `BOT_PAUSED` | `dispatch_guards.guard_sos_human_handoff` |
+| P11 | `sos_alert` | `phone`, `last_message` | `SOS_ALERT` | `notification_service.send_sos_alert`, lead BOOKED |
+| P11 | `sos_alert_pending` | `last_message` | `SOS_ALERT_PENDING` | `notification_service.send_sos_alert`, otherwise |
+| P12 | `customer_cancelled` | `customer_name`, `full_address` | `CUSTOMER_CANCELLED` | `workflow_service` cancel path |
+| P13 | `onboarding_approved` | none | `ONBOARDING_APPROVED` | **Not wired:** `admin_panel/views/professionals.py` |
+| P13 | `onboarding_rejected` | none | `ONBOARDING_REJECTED` | **Not wired:** `admin_panel/views/professionals.py` |
+| C1 | `no_pro_available` | `issue_type` | `NO_PRO_AVAILABLE` | `monitor_service.auto_reject_unassigned_leads` |
+| C2 | `completion_check` | `pro_name` | `COMPLETION_CHECK` | `customer_flow.send_customer_completion_check`. **Not wired:** the operator button in `admin_panel/core/utils.py` |
+| C3 | `reassigning` | `issue_type` | `REASSIGNING` | `monitor_service.reassign_lead` |
+| C3 | `max_reassignments` | `issue_type` | `MAX_REASSIGNMENTS` | `monitor_service.reassign_lead` |
+| C3 | `pending_review` | `issue_type` | `PENDING_REVIEW` | `monitor_service.reassign_lead` (three branches), `pro_flow._escalate_rejected_lead` |
+| P4 | `early_lead` | — | none | **Not submitted, send left free-form**, see below |
 
-**2. The numbered-reply menus survive, but verify how.** CLAUDE.md's text-only rule was inherited from the old vendor's limitation; PRO-88/89 have both now landed (the catalog and the `CloudAPIProvider` transport), and `send_interactive` can send real buttons/lists. Numeric-reply instructions are plain body text, so they should templatize cleanly — but the reason to keep them text-only rather than adopting interactive buttons is a *choice*, not a constraint (no template is even approved yet — that's PRO-87), and this catalog is where that choice should be made explicitly.
+That is **18 templates to submit** and one registry entry left out, against the 15 the registry used to list: P11 and P13 were each two bodies under one key, and C3 was three.
 
-**3. Media.** P4 sends an image with a caption. Templates carry media in a header component with a different structure and different approval path than a text template.
+`tests/test_template_bodies.py` fails if a call site's `params` stop matching its spec, or if a submitted template has no call site. The two P13 entries are named there as the known exception.
 
-**4. Typing indicators.** The facade exposes `send_chat_state_typing`, used from the dispatcher. Cloud API's presence model differs from the old vendor's. `WhatsAppProvider.send_typing` is already a non-abstract no-op default on the ABC, so `CloudAPIProvider` can simply not implement it — but confirm before assuming the UX is preserved.
+## What each template had to give up
 
-**5. Hebrew.** Templates are approved per language. Every template here is `he`. `Messages.Fallbacks` supplies Hebrew defaults for missing fields, which matters because a template variable cannot be empty.
+**Optional lines became values.** A variable cannot be empty, so `{price_estimate}` is the quote or `Fallbacks.PRICE_NOT_QUOTED`, and `{urgency}` is `Templates.URGENCY_EMERGENCY` or `Fallbacks.URGENCY_REGULAR`.
 
----
+**Media links and the transcript arrive with the approval.** A block of unknown length cannot be a variable. When an offer goes out as a template, `notification_service.keep_withheld_details` stores it on the lead as `offer_withheld_details`, and `pro_flow._handle_approve` appends it to the approval reply. So a pro with a closed window decides without seeing the photos, and a pro who rejects never sees them.
 
-## Recommended next actions
+**The loyalty header has no counterpart.** "לקוח חוזר שלך ביקש אותך" is not an urgency and the approved wording has no other place for it, so a template offer does not say it.
 
-1. ~~**Delete the operator-facing WhatsApp leg (O1–O3)**~~ — ✅ **done 2026-08-13.** Four templates removed, no Meta dependency.
-2. ~~**Fold P2 into P1.**~~ — ✅ **done differently, PRO-59.** Rather than merging the navigation link into P1's body, the link was dropped from both pre-approval offers outright — a map pin would resolve the exact address the offer now deliberately withholds until the pro approves. Same net effect on the template count (one fewer), for a product reason rather than a template-economy one; the link now goes out inside the post-approval contact card, which needs no template of its own.
-3. **Decide P4's fate.** If the early-lead notification is not load-bearing, dropping it removes the only media template.
-4. **Then submit**, in priority order: P1/P3 (shared shape) → P6 → P5 → P7/P8 → the rest.
+**The agenda is a count.** A list of unknown length cannot be a variable, so the template says how many jobs and points at *עבודות*.
 
-With 1 done and 2–3 taken, the catalog is roughly **9–11 professional-facing templates and 3 customer-facing**, down from 17 if every current send were templatized one-for-one.
+**An emergency P3 takes `lead_offer`,** because `lead_offer_reassigned` has no urgency line and the free-form version opens with the emergency header.
 
-## Open questions for PRO-87
+**Text-only stays.** Replies are plain keywords in the body (`*אשר*`), so nothing changes in the FSM and no template declares a button.
 
-- Current category definitions and which of P1–P13 fall under UTILITY vs MARKETING (affects both cost and opt-out obligations).
-- Current per-variable formatting rules — specifically newlines inside variables, which decides whether the details block can stay one variable or must become five.
+## Decisions still open
+
+- **P4's fate.** It needs a media template and is not load-bearing, so it is left out of submission and its free-form send stays. Approve a media template or delete the send.
+- **Do the panel sends move?** They wait on the open panel-send PR, because `send_text_sync` is changing there. Until they move, P13 and the operator's C2 are lost on a closed window even after approval.
+
+## Open questions
+
 - Whether the sandbox number's 5-recipient limit applies to template sends as well as free-form (determines whether PRO-64 can exercise the template path at all).
+- Whether Meta accepts each body as UTILITY. Only review can answer that, and `--status` reports the result.
+- Whether a parameter value may contain a newline, `#`, `$` or `%`. Meta's pages list those characters as a problem with a template's variables without saying whether a runtime value counts. `sanitize_param` flattens the whitespace and leaves the characters in place, so a customer's message containing `%` still goes out as written.
+- **Sends with no row here.** The claim above that everything from the inbound dispatcher is in-window holds for the *sender*, not the other party. A customer's or pro's message can trigger a send to someone whose window is closed: `Pro.CUSTOMER_RESCHEDULED_SUCCESS`, `Pro.CUSTOMER_EXISTING_JOB_QUERY`, `Pro.CUSTOMER_REPORTED_COMPLETION`, `Pro.CUSTOMER_REPORTED_NO_SHOW`, `Customer.PRO_FOUND`, `Customer.PRO_CANCELLED_BOOKING`, `Customer.RATE_SERVICE`, `Customer.AWAITING_APPROVAL_TRANSPARENT`. None has a template. On a closed window they page and drop, as they always have.

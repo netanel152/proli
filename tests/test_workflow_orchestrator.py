@@ -6,7 +6,7 @@ Covers: reset, pro auto-detect, address collection, onboarding, deal finalizatio
 import re
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 from bson import ObjectId
 from app.core.constants import UserStates, LeadStatus, WorkerConstants, Actor
 from app.core.messages import Messages
@@ -500,6 +500,8 @@ async def test_customer_cancel_confirmation_yes_executes_cancel_and_releases_slo
         Messages.Pro.CUSTOMER_CANCELLED.format(
             customer_name="דנה", address="הרצל 1, תל אביב"
         ),
+        template_key="customer_cancelled",
+        params=ANY,
     )
 
 

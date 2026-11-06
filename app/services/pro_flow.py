@@ -445,6 +445,8 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         full_address=card_address,
         address_encoded=urllib.parse.quote(card_address),
     )
+    # Only set when the offer went out as a template, which cannot carry these.
+    response_text += lead.get("offer_withheld_details") or ""
     # Only when there is something to say — format_lead_extra_info renders '-'
     # placeholders for a missing floor and apartment, and a card advertising
     # "פרטים נוספים: קומה -, דירה -" is noise dressed as information.
@@ -603,7 +605,12 @@ async def _escalate_rejected_lead(lead, whatsapp):
         chat_id = lead.get("chat_id")
         if chat_id:
             try:
-                await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+                await whatsapp.send_message(
+                    chat_id,
+                    Messages.Customer.PENDING_REVIEW,
+                    template_key="pending_review",
+                    params={"issue_type": notification_service.issue_param(lead)},
+                )
             except Exception as notify_err:
                 logger.error(
                     f"Failed to notify customer of pending review after reject "

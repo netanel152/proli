@@ -21,9 +21,10 @@ guide it points at; nothing here is a value to trust over them.
   — never inline at a call site (`docs/ARCHITECTURE_STANDARD.md` §10).
 - **Keywords and digits** the bot accepts in `Messages.Keywords`; **empty-value fallbacks**
   in `Messages.Fallbacks`; **AI example utterances** in `app/core/prompts.py`.
-- A message the *business* initiates (outside the customer's 24h window) also needs a
-  template entry in `app/providers/whatsapp/template_registry.py` and the same wording in
-  `docs/WHATSAPP_TEMPLATE_CATALOG.md`.
+- A message the *business* initiates (outside the customer's 24h window) also needs a body in
+  `Messages.Templates`, an entry in `app/providers/whatsapp/template_registry.py`, a row in
+  `docs/WHATSAPP_TEMPLATE_CATALOG.md`, and `template_key`/`params` at its send site.
+  `tests/test_template_bodies.py` holds it to Meta's review rules.
 
 ## Procedure
 

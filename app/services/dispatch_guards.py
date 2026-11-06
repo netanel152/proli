@@ -436,7 +436,15 @@ async def guard_sos_human_handoff(ctx: DispatchContext, deps: GuardDeps):
         pro = await deps.users_collection.find_one({"_id": pro_id})
         if pro and pro.get("phone_number"):
             pro_phone = to_chat_id(pro["phone_number"])
-            await deps.whatsapp.send_message(pro_phone, Messages.Pro.PAUSE_NOTIFICATION)
+            await deps.whatsapp.send_message(
+                pro_phone,
+                Messages.Pro.PAUSE_NOTIFICATION,
+                template_key="bot_paused",
+                params={
+                    "issue_type": active_lead.get("issue_type")
+                    or Messages.Fallbacks.ISSUE_UNKNOWN
+                },
+            )
 
     await deps.whatsapp.send_message(
         ctx.chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER

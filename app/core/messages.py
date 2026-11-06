@@ -803,13 +803,12 @@ class Messages:
         # PRO-63: sent when a lead exhausts MAX_REASSIGNMENTS. This is the worst
         # moment a customer can have with Proli — they have been failed three
         # times — so the copy hands them to a human instead of dismissing them.
-        # Deliberately: no apology-spiral, no "try again later" dead end, and a
-        # concrete commitment ("תוך שעה") that the immediate admin alert in
-        # reassign_lead actually backs. Hedged with "בשעות הפעילות" so the promise
-        # stays honest for a lead that escalates at 02:00.
+        # Deliberately: no apology-spiral and no "try again later" dead end. No
+        # number of minutes either: the immediate admin page in reassign_lead is
+        # all that backs this, and nothing measures how fast a human answers it.
         MAX_REASSIGNMENTS_REACHED = (
             "לא הצלחתי למצוא זמינות מיידית, מעביר אותך לנציג — "
-            "נחזור אליך תוך שעה בשעות הפעילות."
+            "נחזור אליך בהקדם בשעות הפעילות."
         )
         # The operator's WhatsApp alerts (ADMIN_MAX_REASSIGNMENTS,
         # ADMIN_REPORT_*, ADMIN_ALERT) were retired by PRO-88 and deleted by
@@ -953,8 +952,12 @@ class Messages:
         APPROVED_NOTIFICATION = (
             "🎉 הפרופיל שלך אושר! מעכשיו יגיעו אליך הצעות עבודה. בהצלחה!"
         )
+        # The rejected pro's profile is deleted, so a WhatsApp reply reaches no pro
+        # flow at all. Hence the mailbox.
         REJECTED_NOTIFICATION = (
-            "לצערנו הפרופיל שלך לא אושר בשלב זה. אפשר לפנות אלינו לפרטים נוספים."
+            "לצערנו הפרופיל שלך בפרולי לא אושר בשלב זה.\n"
+            "לפרטים נוספים אפשר לפנות אלינו במייל: info@proli.me\n"
+            "תודה על ההתעניינות."
         )
         INVALID_TYPE = (
             "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע "
@@ -1230,6 +1233,151 @@ class Messages:
         CITY_UNKNOWN = "עיר לא ידועה"
         ISSUE_UNKNOWN = "בעיה לא ידועה"
         PRO_NAME_MISSING = "ללא שם"
+        # Template variables cannot be empty, so an optional line in a free-form
+        # message becomes a variable with a value that says "nothing here".
+        PRICE_NOT_QUOTED = "לא ניתנה הערכה"
+        URGENCY_REGULAR = "רגילה"
+
+    class Templates:
+        # The fixed bodies submitted to Meta for business-initiated sends: what a
+        # recipient whose 24h service window is closed reads instead of the
+        # free-form message. `template_registry.meta_body` turns each `{name}` into
+        # Meta's `{{n}}`, numbered by `TemplateSpec.params`. Nothing `str.format`s
+        # these. tests/test_template_bodies.py holds them to Meta's review rules
+        # and pins every keyword they advertise against `Keywords`.
+        #
+        # These are worded for review, so they name פרולי and stand alone, and
+        # they are not the free-form wording with holes in it. A send's optional
+        # price and urgency become values. Media links and a voice transcript
+        # cannot be a variable at all: they arrive with the approval
+        # (`pro_flow._handle_approve`). The free-form loyalty header has no
+        # counterpart here.
+        LEAD_OFFER = (
+            "📋 *עבודה חדשה מפרולי מחכה לאישורך*\n\n"
+            "*לקוח:* {customer_name}\n"
+            "*כתובת:* {full_address}\n"
+            "*תקלה:* {issue_type}\n"
+            "*מועד:* {appointment_time}\n"
+            "*מחיר משוער:* {price_estimate}\n"
+            "*דחיפות:* {urgency}\n\n"
+            "פרטי הקשר של הלקוח יישלחו מיד אחרי האישור.\n"
+            "*אשר* — לאישור העבודה\n"
+            "*דחה* — לדחיית העבודה"
+        )
+        LEAD_OFFER_REASSIGNED = (
+            "📢 *הצעת עבודה חדשה מפרולי*\n\n"
+            "*לקוח:* {customer_name}\n"
+            "*כתובת:* {full_address}\n"
+            "*תקלה:* {issue_type}\n"
+            "*מועד מועדף:* {appointment_time}\n\n"
+            "פרטי הקשר של הלקוח יישלחו מיד אחרי האישור.\n"
+            "*אשר* — לאישור העבודה\n"
+            "*דחה* — לדחיית העבודה"
+        )
+        PRICE_ESTIMATE = "{quoted_price}₪"
+        URGENCY_EMERGENCY = "קריאת חירום דחופה"
+        APPROVAL_NUDGE = (
+            "⏰ עבודה בנושא {issue_type} ממתינה לאישורך כבר {minutes} דקות.\n"
+            "*אשר* — לאישור העבודה\n"
+            "*דחה* — לדחיית העבודה"
+        )
+        DAILY_AGENDA = (
+            "☀️ *בוקר טוב {pro_name}*\n"
+            "*תאריך:* {date}\n"
+            "*עבודות להיום:* {job_count}\n\n"
+            "*עבודות* — להצגת העבודות הפעילות"
+        )
+        STALE_LEAD_REMINDER = (
+            "👋 היי {pro_name}, העבודה אצל {customer_name} עדיין מסומנת כפתוחה.\n\n"
+            "*סיימתי* — לסגירת העבודה ולפינוי מקום לעבודות חדשות"
+        )
+        FINISH_REMINDER = (
+            "👋 תזכורת מפרולי לגבי העבודות הפתוחות שלך.\n"
+            "*סיימתי* — לסגירת עבודה\n"
+            "*עדיין עובד* — להפסקת התזכורות על כולן"
+        )
+        PRO_LOST_LEAD = (
+            "עדכון מפרולי: העבודה בנושא {issue_type} הועברה לאיש מקצוע אחר, "
+            "כי לא התקבל מענה בזמן."
+        )
+        # "רבע שעה" is WorkerConstants.PAUSE_TTL_SECONDS. The free-form
+        # Pro.PAUSE_NOTIFICATION still says two hours, which nothing implements.
+        BOT_PAUSED = (
+            "🚨 לקוח ביקש מענה אנושי בעבודה בנושא {issue_type}.\n"
+            "המענה האוטומטי בשיחה הזו מושהה לרבע שעה."
+        )
+        SOS_ALERT = (
+            "⚠️ *הלקוח שלך ביקש עזרה*\n\n"
+            "*טלפון:* {phone}\n"
+            "*הודעה:* {last_message}\n\n"
+            "כדאי ליצור קשר בהקדם האפשרי."
+        )
+        # A body of its own because the pro has not approved yet and must not get
+        # the phone number (PRO-59).
+        SOS_ALERT_PENDING = (
+            "⚠️ *הלקוח שממתין לתשובתך ביקש עזרה*\n\n"
+            "*הודעה:* {last_message}\n\n"
+            "פרטי הקשר יישלחו אחרי האישור.\n"
+            "*אשר* — לאישור העבודה\n"
+            "*דחה* — לדחיית העבודה"
+        )
+        CUSTOMER_CANCELLED = (
+            "⚠️ *העבודה בוטלה על ידי הלקוח*\n\n"
+            "*לקוח:* {customer_name}\n"
+            "*כתובת:* {full_address}\n\n"
+            "אין צורך להגיע לכתובת."
+        )
+        ONBOARDING_APPROVED = (
+            "עדכון מפרולי: הפרופיל שלך אושר והופעל.\n"
+            "מעכשיו יישלחו אליך הצעות עבודה כאן בוואטסאפ."
+        )
+        ONBOARDING_REJECTED = (
+            "לצערנו הפרופיל שלך בפרולי לא אושר בשלב זה.\n"
+            "לפרטים נוספים אפשר לפנות אלינו במייל: info@proli.me\n"
+            "תודה על ההתעניינות."
+        )
+        NO_PRO_AVAILABLE = (
+            "😔 לא הצלחתי למצוא איש מקצוע זמין לפנייה שלך בנושא {issue_type}.\n"
+            "אפשר לנסות שוב מאוחר יותר.\n"
+            "*נציג* — לשיחה עם הצוות"
+        )
+        COMPLETION_CHECK = (
+            "👋 בדיקה קצרה מפרולי על השירות של {pro_name}.\n\n"
+            "העבודה הסתיימה?\n"
+            "*1* — כן, הסתיים\n"
+            "*2* — עדיין לא\n"
+            "*3* — איש המקצוע לא הגיע"
+        )
+        REASSIGNING = (
+            "⏳ סליחה על ההמתנה בפנייה שלך בנושא {issue_type}.\n"
+            "אני מאתר עבורך איש מקצוע זמין יותר ואעדכן כאן."
+        )
+        MAX_REASSIGNMENTS = (
+            "⏳ עדיין לא מצאתי איש מקצוע זמין לפנייה שלך בנושא {issue_type}.\n"
+            "הפנייה הועברה לצוות, ונחזור אליך בהקדם בשעות הפעילות."
+        )
+        PENDING_REVIEW = (
+            "👍 קיבלתי את הפנייה שלך בנושא {issue_type}.\n"
+            "הצוות של פרולי בוחן אותה ידנית ומשבץ איש מקצוע מתאים.\n"
+            "אעדכן אותך כאן ברגע שיש חדש."
+        )
+        # One sample per variable name, sent with the submission and never to a
+        # recipient. Meta requires a sample for every variable. All invented: no
+        # real person, business, address or phone number.
+        PARAM_SAMPLES = {
+            "customer_name": "ישראל ישראלי",
+            "full_address": "רחוב הדוגמה 1, תל אביב",
+            "issue_type": "נזילה בכיור המטבח",
+            "appointment_time": "מחר ב-09:00",
+            "price_estimate": "350₪",
+            "urgency": "רגילה",
+            "minutes": "10",
+            "pro_name": "שירותי אינסטלציה לדוגמה",
+            "date": "15/11",
+            "job_count": "3",
+            "phone": "050-0000000",
+            "last_message": "יש נזילה חזקה ואני צריך עזרה",
+        }
 
     class Errors:
         AI_OVERLOAD = "סליחה, אני חווה עומס כרגע. אפשר לנסות שוב בעוד רגע."

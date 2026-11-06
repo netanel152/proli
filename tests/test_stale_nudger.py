@@ -45,7 +45,9 @@ async def test_remind_stale_booked_lead(mock_db, monkeypatch, mock_whatsapp):
     await remind_stale_booked_leads()
 
     # Verify pro notification
-    mock_whatsapp.send_message.assert_called_once_with("972500000000@c.us", ANY)
+    mock_whatsapp.send_message.assert_called_once_with(
+        "972500000000@c.us", ANY, template_key="stale_lead_reminder", params=ANY
+    )
 
     # Verify lead updated
     updated_lead = await mock_db.leads.find_one({"_id": lead_id.inserted_id})
@@ -140,7 +142,9 @@ async def test_nudger_respects_reminder_cooldown(
     await remind_stale_booked_leads()
 
     if expect_sent:
-        mock_whatsapp.send_message.assert_called_once_with("972500000000@c.us", ANY)
+        mock_whatsapp.send_message.assert_called_once_with(
+            "972500000000@c.us", ANY, template_key="stale_lead_reminder", params=ANY
+        )
     else:
         mock_whatsapp.send_message.assert_not_called()
 

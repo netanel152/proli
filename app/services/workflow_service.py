@@ -505,12 +505,15 @@ async def _execute_customer_cancel(booked_lead, chat_id: str) -> None:
         pro = await users_collection.find_one({"_id": pro_id})
         if pro and pro.get("phone_number"):
             pro_phone = to_chat_id(pro["phone_number"])
+            customer_name = booked_lead.get("customer_name") or "הלקוח"
+            address = booked_lead.get("full_address") or "לא ידועה"
             await whatsapp.send_message(
                 pro_phone,
                 Messages.Pro.CUSTOMER_CANCELLED.format(
-                    customer_name=booked_lead.get("customer_name") or "הלקוח",
-                    address=booked_lead.get("full_address") or "לא ידועה",
+                    customer_name=customer_name, address=address
                 ),
+                template_key="customer_cancelled",
+                params={"customer_name": customer_name, "full_address": address},
             )
 
 
@@ -1020,15 +1023,33 @@ async def _finalize_deal(
                 )
             )
 
-            if transcription:
-                approval_msg += Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(
-                    transcription=transcription
-                )
+            # What a template offer cannot carry: a transcript and media links
+            # as text — the one policy, owned by notification_service.
+            withheld = (
+                Messages.Pro.NEW_LEAD_TRANSCRIPTION.format(transcription=transcription)
+                if transcription
+                else ""
+            ) + notification_service.format_media_links(lead)
 
-            # Media links as text — the one policy, owned by notification_service
-            approval_msg += notification_service.format_media_links(lead)
-
-            await whatsapp.send_message(pro_phone, approval_msg)
+            offer = await whatsapp.send_message(
+                pro_phone,
+                approval_msg + withheld,
+                template_key="lead_offer",
+                params={
+                    "customer_name": lead.get("customer_name")
+                    or Messages.Fallbacks.CUSTOMER_NAME,
+                    "full_address": lead["full_address"],
+                    "issue_type": lead["issue_type"],
+                    "appointment_time": lead["appointment_time"],
+                    "price_estimate": notification_service.price_estimate_param(
+                        quoted_price
+                    ),
+                    "urgency": notification_service.urgency_param(
+                        bool(emergency_header)
+                    ),
+                },
+            )
+            await notification_service.keep_withheld_details(lead, offer, withheld)
 
             # PRO-59: no navigation link here. It resolves the exact address,
             # so sending it with the offer would hand over on a map what the

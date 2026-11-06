@@ -16,7 +16,7 @@ Customer 1/2 reply handling (workflow_service.py, AWAITING_PRO_APPROVAL branch):
 
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import ANY, patch, AsyncMock, MagicMock
 
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
@@ -117,6 +117,8 @@ async def test_nudge_fires_at_t_plus_10_non_emergency(
         Messages.Pro.APPROVAL_NUDGE.format(
             minutes=WorkerConstants.APPROVAL_NUDGE_MINUTES
         ),
+        template_key="approval_nudge",
+        params=ANY,
     )
 
     updated = await mock_db.leads.find_one({"_id": lead_id})
@@ -225,6 +227,8 @@ async def test_nudge_is_idempotent_across_runs(
         Messages.Pro.APPROVAL_NUDGE.format(
             minutes=WorkerConstants.APPROVAL_NUDGE_MINUTES
         ),
+        template_key="approval_nudge",
+        params=ANY,
     )
 
 
@@ -247,6 +251,8 @@ async def test_emergency_lead_uses_halved_thresholds(
     mock_whatsapp.send_message.assert_called_once_with(
         "972500000999@c.us",
         Messages.Pro.APPROVAL_NUDGE.format(minutes=halved_nudge),
+        template_key="approval_nudge",
+        params=ANY,
     )
 
     updated = await mock_db.leads.find_one({"_id": lead_id})

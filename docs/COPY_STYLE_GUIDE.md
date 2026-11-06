@@ -3,7 +3,7 @@
 The contract for **every sentence a customer or professional reads on WhatsApp**: the
 `Messages` catalog (`app/core/messages.py`), the Hebrew example utterances inside the AI
 system prompts (`app/core/prompts.py`, `admin_panel/core/utils.py:generate_system_prompt`),
-and the template texts in `app/providers/whatsapp/template_registry.py`.
+and the template bodies in `Messages.Templates`.
 
 `docs/ARCHITECTURE_STANDARD.md` §10 says **where** copy lives (the catalog, never a call
 site). This guide says **how it reads**. A message that violates a rule here is a review
@@ -141,5 +141,5 @@ For any PR touching user-facing copy:
 - [ ] Latin/numeric placeholders end-of-line or own-line (§6).
 - [ ] Promises match implemented behavior (§7).
 - [ ] Tests reference `Messages.*` constants, not retyped literals (PRO-167).
-- [ ] If the message is business-initiated, `template_registry.py` and
-      `docs/WHATSAPP_TEMPLATE_CATALOG.md` carry the same wording.
+- [ ] If the message is business-initiated, it has a body in `Messages.Templates`, an entry
+      in `template_registry.py` and a row in `docs/WHATSAPP_TEMPLATE_CATALOG.md`.

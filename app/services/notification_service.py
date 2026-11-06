@@ -11,7 +11,7 @@ from bson import ObjectId
 whatsapp = get_whatsapp()
 
 
-async def _send_best_effort(chat_id: str, message: str) -> bool:
+async def _send_best_effort(chat_id: str, message: str, **template) -> bool:
     """Send a WhatsApp message, swallowing failures so one bad send doesn't
     abort a batch (e.g. SOS to pro then admin). Returns True on success.
 
@@ -21,9 +21,11 @@ async def _send_best_effort(chat_id: str, message: str) -> bool:
     it must not be reported as success: before PRO-159 the window case arrived
     here as an exception and returned False, and preserving that answer is what
     stops this refactor from quietly flipping a caller's compensation logic.
+
+    ``template`` is ``send_message``'s ``template_key`` and ``params``.
     """
     try:
-        result = await whatsapp.send_message(chat_id, message)
+        result = await whatsapp.send_message(chat_id, message, **template)
     except Exception as e:
         logger.error(
             f"WhatsApp send failed for {_mask(chat_id)}: {e}; " "message not delivered."
@@ -140,6 +142,44 @@ def format_media_links(lead: dict) -> str:
     return "\n\n" + Messages.Pro.MEDIA_ATTACHED_HEADER + links
 
 
+def issue_param(lead: dict) -> str:
+    """The ``issue_type`` a template names. A variable cannot be empty."""
+    return lead.get("issue_type") or Messages.Fallbacks.ISSUE_UNKNOWN
+
+
+def price_estimate_param(quoted_price) -> str:
+    """The offer template's ``price_estimate``: ``APPROVAL_PRICE_LINE``'s value."""
+    if quoted_price:
+        return Messages.Templates.PRICE_ESTIMATE.format(quoted_price=quoted_price)
+    return Messages.Fallbacks.PRICE_NOT_QUOTED
+
+
+def urgency_param(is_emergency: bool) -> str:
+    """The offer template's ``urgency``: ``EMERGENCY_LEAD_HEADER``'s value."""
+    if is_emergency:
+        return Messages.Templates.URGENCY_EMERGENCY
+    return Messages.Fallbacks.URGENCY_REGULAR
+
+
+async def keep_withheld_details(lead: dict, sent, withheld: str) -> None:
+    """Keep what an offer sent as a template could not carry, for the approval.
+
+    Links of unknown number cannot be a template variable, so they arrive with
+    the approval: ``pro_flow._handle_approve`` adds what is stored here. ``sent``
+    is ``send_message``'s result, and nothing is stored unless the template is
+    what went out.
+    """
+    if not (withheld and isinstance(sent, dict) and sent.get("sent_as_template")):
+        return
+    try:
+        await leads_collection.update_one(
+            {"_id": lead["_id"]}, {"$set": {"offer_withheld_details": withheld}}
+        )
+    except Exception as e:
+        # The offer is out. Raising here would report it as failed and escalate.
+        logger.error(f"Lead {lead['_id']} lost its offer's media links: {e}")
+
+
 def build_new_lead_message(lead: dict) -> str:
     """The lead-offer text a pro receives on reassignment or admin assignment.
 
@@ -173,6 +213,28 @@ def build_new_lead_message(lead: dict) -> str:
         + Messages.Pro.NEW_LEAD_FOOTER
         + format_media_links(lead)
     )
+
+
+def _offer_template(lead: dict) -> tuple[str, dict]:
+    """Which template carries this offer, and its variables.
+
+    An emergency takes ``lead_offer``, the one body with an urgency line, because
+    the free-form version of this offer opens with the emergency header.
+    """
+    params = {
+        "customer_name": lead.get("customer_name") or Messages.Fallbacks.CUSTOMER_NAME,
+        "full_address": lead.get("full_address") or Messages.Fallbacks.UNKNOWN,
+        "issue_type": lead.get("issue_type") or Messages.Fallbacks.UNKNOWN,
+        "appointment_time": lead.get("appointment_time")
+        or Messages.Fallbacks.TIME_ASAP,
+    }
+    if not lead.get("is_emergency"):
+        return "lead_offer_reassigned", params
+    return "lead_offer", {
+        **params,
+        "price_estimate": price_estimate_param(lead.get("quoted_price")),
+        "urgency": urgency_param(True),
+    }
 
 
 async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
@@ -209,8 +271,15 @@ async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
         return False
 
     pro_chat_id = to_chat_id(phone)
+    template_key, params = _offer_template(lead)
     try:
-        offer = await whatsapp.send_message(pro_chat_id, build_new_lead_message(lead))
+        offer = await whatsapp.send_message(
+            pro_chat_id,
+            build_new_lead_message(lead),
+            template_key=template_key,
+            params=params,
+        )
+        await keep_withheld_details(lead, offer, format_media_links(lead))
         if offer is None:
             # WARNING, not ERROR: the facade and provider have already reported
             # this drop, and workflow_service logs ERROR for the one caller
@@ -261,7 +330,7 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
         pro_chat_id = to_chat_id(pro["phone_number"])
         message = Messages.Pro.REMINDER
 
-        await _send_best_effort(pro_chat_id, message)
+        await _send_best_effort(pro_chat_id, message, template_key="finish_reminder")
 
         # Increment counter atomically
         await leads_collection.update_one(
@@ -313,14 +382,26 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                 # absent lead is not BOOKED, so it takes the phone-free branch
                 # rather than assuming the pro has earned the number.
                 if (active_lead or {}).get("status") == LeadStatus.BOOKED:
-                    pro_msg = Messages.SOS.PRO_ALERT.format(
-                        phone=customer_phone_display, last_message=last_message
+                    await _send_best_effort(
+                        pro_chat_id,
+                        Messages.SOS.PRO_ALERT.format(
+                            phone=customer_phone_display, last_message=last_message
+                        ),
+                        template_key="sos_alert",
+                        params={
+                            "phone": customer_phone_display,
+                            "last_message": last_message,
+                        },
                     )
                 else:
-                    pro_msg = Messages.SOS.PRO_ALERT_PENDING.format(
-                        last_message=last_message
+                    await _send_best_effort(
+                        pro_chat_id,
+                        Messages.SOS.PRO_ALERT_PENDING.format(
+                            last_message=last_message
+                        ),
+                        template_key="sos_alert_pending",
+                        params={"last_message": last_message},
                     )
-                await _send_best_effort(pro_chat_id, pro_msg)
                 logger.info(f"SOS alert sent to Pro {pro_id} for user {_mask(chat_id)}")
 
         # 2. Always page the Admin — via Sentry, not WhatsApp (PRO-88).
