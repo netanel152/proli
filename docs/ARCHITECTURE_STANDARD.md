@@ -64,7 +64,7 @@ Requirement levels follow the usual convention:
 
 Some rules here are already enforced harder than review: the CI guard fails
 the build on any reference to the old vendor's domain in code, and the test suite
-fails on a regression against the baseline in [`TESTING.md`](./TESTING.md).
+fails a PR that passes fewer tests than `dev` ([`CI_WORKFLOWS.md`](./CI_WORKFLOWS.md)).
 Where a rule has teeth, the section says so.
 
 ## 2. Where We Are Today
@@ -590,8 +590,8 @@ Corollaries:
   path-scoped rules that load only when a matching file is read.
 - **`docs/ARCHITECTURE.md` describes; this file prescribes.** A change that
   alters the system's shape updates both.
-- **`docs/TESTING.md` is the single source of truth for the test baseline.**
-  A PR that changes the pass/skip count updates that line in the same PR.
+- **No file holds a test count.** CI keeps the floor; see
+  [`CI_WORKFLOWS.md`](./CI_WORKFLOWS.md).
 - **Docstrings carry the why, not the what.** The provider package's
   docstrings are the house style: name the ticket or incident when the code
   is shaped by one, so the constraint reads as load-bearing rather than
@@ -624,9 +624,9 @@ every non-integration test.
 
 ### 14.2 Rules
 
-- **The baseline is a floor.** `docs/TESTING.md` holds the current
-  pass/skip/xfail counts; a PR that lowers passed or raises skipped without
-  updating the line and saying why is a regression.
+- **The passed count is a floor.** CI fails a PR that passes fewer tests
+  than `dev`; removing tests on purpose takes the `allow-test-drop` label and
+  a reason in the PR.
 - **New logic ships with its tests in the same PR.** A new handler, branch
   or bugfix without coverage is not done; the test-writer subagent exists
   for exactly this and writes only under `tests/`.
@@ -662,7 +662,7 @@ part of every conventions change:
   plausibly deserves a grep-level gate, not a review comment; the vendor-
   domain guard already proves the shape works. Candidates are
   [question 3](#17-open-questions).
-- **The subagents encode the workflows** — test-runner for the baseline,
+- **The subagents encode the workflows** — test-runner for the suite,
   test-writer for coverage, docs-syncer for stale docs, code-reviewer for
   the checklist. Using them is not optional ceremony; they are how the
   conventions survive a session that never read this file.

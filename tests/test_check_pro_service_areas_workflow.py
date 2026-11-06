@@ -244,10 +244,9 @@ def test_no_step_named_or_containing_railway():
 def test_no_step_declares_or_reads_a_railway_token():
     # The credential itself is gone, not just the CLI. Checked as *active
     # use* — an env key, or a `$RAILWAY_TOKEN`/`${RAILWAY_TOKEN}` shell
-    # reference — rather than a bare substring search, because the "Verify
-    # the connection settings resolved" step's comment legitimately quotes
-    # the historical "Invalid RAILWAY_TOKEN" refusal message as the reason
-    # Railway was dropped; that prose isn't a dependency.
+    # reference — rather than a bare substring search, so a comment quoting
+    # the historical "Invalid RAILWAY_TOKEN" refusal message isn't read as a
+    # dependency.
     doc = _load_workflow()
     token_pattern = re.compile(r"\$\{?RAILWAY_(API_)?TOKEN\b")
 

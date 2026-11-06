@@ -1,6 +1,6 @@
 ---
 name: test-writer
-description: Writes and extends pytest tests for the Proli project. Use after implementing a new function, branch, or bugfix that lacks coverage. Writes ONLY under tests/ — never touches app/ or admin_panel/. Knows the async/mocking conventions; the test baseline lives in docs/TESTING.md.
+description: Writes and extends pytest tests for the Proli project. Use after implementing a new function, branch, or bugfix that lacks coverage. Writes ONLY under tests/ — never touches app/ or admin_panel/. Knows the async/mocking conventions; CI enforces the test count.
 model: sonnet
 effort: 2
 color: orange
@@ -30,7 +30,7 @@ You write tests **only**. You may create and edit files under `tests/` and nowhe
 
 ## Project test conventions
 
-- **Baseline:** lives in `docs/TESTING.md` ("Current status" line) — the single source of truth. Never hardcode a count. CI treats it as a floor: a regression fails the build, growth only warns.
+- **Test count:** never hardcode or edit one. CI fails a PR that passes fewer tests than `dev` (`docs/CI_WORKFLOWS.md`).
 - **You do not run pytest.** test-runner does, once, on the final branch state. See step 5.
 - Integration tests skip without `MONGO_TEST_URI`.
 - **Async:** `asyncio_mode = strict`. Every async test needs `@pytest.mark.asyncio`. Every awaited dependency is mocked with `AsyncMock`, never `MagicMock` (a `MagicMock` returns a non-awaitable and the test will fail with "coroutine was never awaited" or "object is not awaitable").

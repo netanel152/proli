@@ -1,24 +1,8 @@
 name: 🗺️ Check pro service areas
 
-# PRO-27's backfill, as a button.
-#
-# Matching reaches a pro only through `$geoNear` on the pro's GeoJSON
-# `location`. A pro whose `service_areas` never resolved to coordinates has no
-# `location`, is never offered a lead, and nothing says so — the 2026-04-18
-# failure class. Approval now runs the check per pro; this runs
-# `scripts/check_pro_service_areas.py` across the pros approved *before* that,
-# against the real database. The report it writes into the job summary is the
-# evidence the issue's `launch-readiness` gate asks for: a merged script is not
-# proof the script was ever run.
-#
-# Same shape as 🛑 Stop Railway Proli Services — the branch you run it from is
-# the target. `dev` checks staging, `production` checks production, any other
-# branch refuses, so a feature branch can never write to a real database. The
-# run-list line names the target before anything happens.
-#
-# The one control is a checkbox, and it is a checkbox rather than a text box on
-# purpose: the 2026-09-08 confirm box refused four operator runs in a row over
-# a phone keyboard's trailing space. Unticked is read-only.
+# PRO-27's backfill, as a button. The branch you run this from is the target:
+# `dev` checks staging, `production` checks production, anything else refuses.
+# Unticked is read-only. See docs/CI_WORKFLOWS.md.
 
 run-name: >-
   ${{ github.ref_name == 'production' && '🗺️ Check pro service areas — PRODUCTION' || (github.ref_name == 'dev' && '🗺️ Check pro service areas — staging' || '🗺️ Refused — run from dev (staging) or production') }}
@@ -31,9 +15,17 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
+concurrency:
+  group: check-pro-service-areas-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   check-service-areas:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       # The branch name reaches the script through `env:`, never `${{ }}`
       # inside `run:`, and only the two known names resolve to a target.
@@ -54,31 +46,18 @@ jobs:
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "Branch '$REF_NAME' → checking $TARGET."
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
           cache: pip
 
-      # The script runs on this runner with Railway's environment injected, so
-      # the runner needs the app's own dependencies.
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # No Railway CLI and no Railway token. `railway run` was only ever a
-      # way to hand the script three connection settings, and on 2026-09-10
-      # it stopped being a reliable one: a project token created that morning
-      # was refused as "Invalid RAILWAY_TOKEN" under both credential names,
-      # through four rotations, while a four-month-old token in the same
-      # project kept working. Everything inside this repo was ruled out with
-      # evidence — the value, the secret's scope in GitHub, the `--environment`
-      # flag, the CLI version, the service name — so the fault sits on
-      # Railway's side, and this workflow no longer depends on it.
-      #
-      # The settings come straight from repo secrets instead. Fewer moving
-      # parts, and the database is chosen by the same branch that chooses
-      # everything else.
       - name: Verify the connection settings resolved
         id: creds
         env:
@@ -88,21 +67,14 @@ jobs:
           set +e
           set -uo pipefail
 
-          # The guard that matters most. `Settings.MONGO_URI` defaults to
-          # localhost when unset, so a missing secret would not fail — it
-          # would connect to an empty database on the runner and report
-          # "0 pros, everything fine". That is the exact false green this
-          # check exists to prevent, and it would be indistinguishable from
-          # a real clean result.
+          # `Settings.MONGO_URI` defaults to localhost, so a missing secret would
+          # report a clean empty database. This is the guard against that false green.
           if [ -z "${MONGO_URI:-}" ]; then
             echo "::error::No MONGO_URI resolved for '$TARGET'. Add it as a *repository* secret (Settings → Secrets and variables → Actions) named PRODUCTION_MONGO_URI or STAGING_MONGO_URI — a secret under Settings → Environments is invisible here, since this job declares no environment. Refusing to run: without it the script would silently check an empty local database and call it clean."
             exit 1
           fi
 
-          # The database name, and nothing else from the URI — never the
-          # host and never the credentials. It answers the one question that
-          # went unanswered when production came back empty: which database
-          # did this actually read?
+          # The database name only: never the host, never the credentials.
           DB_NAME="$(python -c 'import os, urllib.parse as up; p = up.urlsplit(os.environ["MONGO_URI"]).path or ""; print(p.lstrip("/").split("?")[0] or "(none named in the URI)")')"
           echo "Connection settings resolved for $TARGET"
           echo "  database:    $DB_NAME"
@@ -113,20 +85,14 @@ jobs:
           MONGO_URI: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_MONGO_URI || secrets.STAGING_MONGO_URI }}
           REDIS_URL: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_REDIS_URL || secrets.STAGING_REDIS_URL }}
           GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
-          # `Settings` refuses to construct without these four. This script
-          # touches neither Gemini nor Cloudinary, so they are placeholders,
-          # not credentials — the same thing the test suite does.
+          # `Settings` refuses to construct without these four. Placeholders:
+          # this script touches neither Gemini nor Cloudinary.
           GEMINI_API_KEY: unused-by-this-script
           CLOUDINARY_CLOUD_NAME: unused-by-this-script
           CLOUDINARY_API_KEY: unused-by-this-script
           CLOUDINARY_API_SECRET: unused-by-this-script
-          # Deliberately `development`, and the trade-off is worth naming:
-          # `staging`/`production` would make Settings demand WEBHOOK_TOKEN
-          # and fail closed on HEALTH_TOKEN, neither of which this script
-          # uses. Nothing it does is gated on ENVIRONMENT. The consequence is
-          # that ENVIRONMENT no longer describes the data being read — the
-          # branch and the secret it selects do, and the step above prints
-          # the database name so that choice is visible rather than assumed.
+          # Deliberately `development`: `staging`/`production` would demand
+          # WEBHOOK_TOKEN and HEALTH_TOKEN. The branch picks the data, not this.
           ENVIRONMENT: development
           TARGET_ENV: ${{ steps.target.outputs.target }}
           APPLY: ${{ inputs.apply }}
@@ -163,8 +129,8 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # The script's exit codes, kept as the job's verdict so a checklist
-          # can be ticked on a green run and only on a green run.
+          # The script's exit code stays the job's verdict, so a checklist can
+          # be ticked on a green run and only on a green run.
           case "$code" in
             0)
               echo "✅ Every checked pro can be placed on the map."

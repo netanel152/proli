@@ -1,18 +1,7 @@
 name: 🛑 Stop Railway Proli Services
 
-# `railway down` removes a service's active deployment — the environment stops
-# serving. There is nothing to choose and nothing to type: the branch you run
-# the workflow from IS the target. `dev` stops staging (dev auto-deploys to
-# staging), `production` stops production. Any other branch refuses, so a
-# feature branch can never take an environment down. The run-list line names
-# the target before anything happens.
-#
-# The confirm box this replaced (2026-09-08) refused four runs in a row — a
-# phone keyboard's trailing space, then the wrong word typed into it — so the
-# operator saw a workflow that did not work at exactly the moment it was
-# needed. The "which environment" decision is now made by which branch the
-# operator picks in the Run-workflow dropdown, a choice that cannot be
-# misspelled.
+# The branch you run this from IS the target: `dev` stops staging, `production`
+# stops production, anything else refuses. See docs/CI_WORKFLOWS.md.
 
 run-name: >-
   ${{ github.ref_name == 'production' && '🛑 Stop PRODUCTION (api, worker, admin)' || (github.ref_name == 'dev' && '🛑 Stop staging (api, worker, admin)' || '🛑 Refused — run from dev (staging) or production') }}
@@ -20,9 +9,17 @@ run-name: >-
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: stop-railway-${{ github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   stop-railway:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       # The branch name reaches the script through `env:`, never `${{ }}`
       # inside `run:`, and only the two known names resolve to a target.
@@ -43,40 +40,27 @@ jobs:
           echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "Branch '$REF_NAME' → stopping $TARGET."
 
-      # Pinned, not `latest`. This is the workflow reached for when something
-      # must stop NOW, and an unpinned install let the CLI change underneath it:
-      # between the 2026-10-06 run (5.63.3: "Invalid RAILWAY_TOKEN") and 2026-10-28
-      # (12 releases later: "error decoding response body") the failure mode
-      # changed with no change in this repo, so nobody could say whether the token,
-      # the CLI or Railway's API was at fault. 5.63.3 is the version the last
-      # readable run used. Bump it on purpose, not by accident — and the version
-      # is printed so every run records which CLI it actually ran.
+      # Pinned, not `latest`, so the failure mode cannot change without a commit.
+      # Bump it on purpose. 5.63.3 is the version the last readable run used.
       - name: Install Railway CLI
         run: |
           npm install -g @railway/cli@5.63.3
           railway --version
 
-      # Keyed on the resolve step's output, not on the branch name again, so
-      # the token and the environment name can never disagree with what was
-      # just resolved.
+      # Keyed on the resolve step's output, not the branch again, so the token and
+      # environment name cannot disagree with what was resolved.
       - name: Stop Services in ${{ steps.target.outputs.target }}
         id: stop
         env:
           RAILWAY_TOKEN: ${{ steps.target.outputs.target == 'production' && secrets.RAILWAY_TOKEN_PRODUCTION || secrets.RAILWAY_TOKEN_STAGING }}
-          # Explicit rather than relying on the token's default environment, so a
-          # mis-scoped token cannot take down the environment you did not pick.
+          # Explicit, so a mis-scoped token cannot take down the other environment.
           RAILWAY_ENV: ${{ steps.target.outputs.target == 'production' && 'Production' || 'Staging' }}
         run: |
           set -uo pipefail
           echo "Stopping services in $RAILWAY_ENV..."
 
-          # "Already stopped" is the only failure that means success — it is what
-          # makes a second run idempotent. Anything else (a rejected token above
-          # all) used to be swallowed by a blanket `|| echo "no active
-          # deployment"`, after which the job printed "All services stopped" and
-          # went green having stopped nothing. This is the workflow an operator
-          # reaches for when something must stop NOW, so a green check that is not
-          # evidence is the worst thing it can emit (PRO-128 / PRO-183's shape).
+          # "Already stopped" is the only failure that means success. Anything
+          # else, a rejected token above all, must turn the job red.
           failed=""
           for svc in api worker admin; do
             rc=0
