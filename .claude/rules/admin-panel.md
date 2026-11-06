@@ -14,6 +14,12 @@ statically checks every call in `admin_panel/` against its target's signature. H
 is the primary language: every string goes through `TRANS` / `labels.py`, never a
 silent `.capitalize()` fallback (`tests/test_admin_translations.py`). Synchronous
 WhatsApp sends use `app.providers.whatsapp.sync.send_text_sync`, never a provider.
+The panel builds its provider from `admin`'s own variables, so a send can be muted while
+the worker transmits. `send_text_sync` returns False on a provider with `transmits=False`,
+`assign_pending_lead_sync` turns the core's "sent" into `ASSIGN_NOT_SENT_MUTED`, and
+`can_transmit()` picks the sentence that tells a muted environment from a failed send.
+The check stays on the panel side: `notify_pro_new_lead` still answers True on a dry run,
+because a dry-run worker's flows depend on it. `report_whatsapp_egress` logs it at boot.
 
 ### Process 3: Streamlit Admin Panel (`admin_panel/`)
 

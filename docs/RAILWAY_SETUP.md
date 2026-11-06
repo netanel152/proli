@@ -36,6 +36,7 @@ All 3 services point to the **same GitHub repo** and are intended to use the **s
 - **Port:** Automatically detected
 - **Public Domain:** Yes (admin dashboard URL)
 - **Required setting:** `runner.fastReruns` must be off, or the operator can lose the outcome of an offer (`.claude/rules/admin-panel.md`). `.streamlit/config.toml` sets it, and Streamlit reads that file from the working directory, so keep the relative `admin_panel/main.py` path above. A `--runner.fastReruns` flag or a `STREAMLIT_RUNNER_FAST_RERUNS` variable outranks the file, so neither may be set to true. To confirm, look for `runner.fastReruns=False` in this service's logs after a deploy, which appears when the first page loads. `runner.fastReruns is ON` at ERROR means it is wrong.
+- **To send WhatsApp messages:** see [What `admin` needs in order to send](#what-admin-needs-in-order-to-send). Without it the panel still works, and every send says it was not sent.
 
 ## Which branch deploys where
 
@@ -172,6 +173,38 @@ how the two silently re-merge.
 Railway's **Shared Variables** feature is scoped *within* one environment. It is
 the right tool for "define once, inherit in `api`/`worker`/`admin`" — it cannot
 and must not be used to share values across Staging and Production.
+
+### What `admin` needs in order to send
+
+Each service builds its WhatsApp provider from its **own** variables, so `api` and `worker` sending says nothing about `admin`. The panel sends lead offers, pro approval and rejection messages, and customer completion checks itself, through the facade in its own process.
+
+Set these on the `admin` service, with the same values as that environment's `worker`:
+
+| variable | value | why |
+|---|---|---|
+| `WHATSAPP_PROVIDER` | `cloud` | Unset means `dryrun`, which transmits nothing |
+| `WHATSAPP_DRY_RUN` | `false` | `true` overrides `WHATSAPP_PROVIDER` unconditionally |
+| `META_ACCESS_TOKEN` | same as `worker` | `require_cloud_provider_config` refuses to boot `cloud` without it unless `WHATSAPP_DRY_RUN=true` |
+| `META_PHONE_NUMBER_ID` | same as `worker` | Same rule as `META_ACCESS_TOKEN` |
+| `META_APP_SECRET` | same as `worker` | Required for `cloud` in staging and production, muted or not. `admin` serves no webhook; the boot check does not distinguish services |
+| `META_VERIFY_TOKEN` | same as `worker` | Same rule as `META_APP_SECRET` |
+
+`REDIS_URL` and `MONGO_URI` must also be the same instances as `worker`'s. The worker's watchdog writes the `wa:instance:state` key the facade's breaker reads, and the absent key blocks every send. The 24h window keys and `wa_delivery` are shared the same way.
+
+Set them together, in the Railway dashboard, as one staged change. `cloud` with any of the four `META_*` values missing refuses to boot, and that includes `cloud` with `WHATSAPP_DRY_RUN=true` missing `META_APP_SECRET` or `META_VERIFY_TOKEN`. Any later trim of `admin`'s secrets has to keep these four for as long as the panel sends from its own process.
+
+**How to tell:** when the panel cannot transmit, `WhatsApp provider 'dryrun' cannot transmit` appears at WARNING in this service's logs, once per server process, when the first page loads. A send on such a panel reports "this environment is muted: the WhatsApp message was not sent", and an offer is recorded in the audit log with outcome `not_sent_muted`.
+
+**A staging panel test proves nothing about delivery until `admin` has these.** A muted panel can still assign a lead correctly, and a passing assignment there is not evidence that a pro was told.
+
+### The PRO-102 cutover covers all three services
+
+`api`, `worker` **and `admin`** all go live at the cutover. Production `admin` has `WHATSAPP_DRY_RUN=true` and no `WHATSAPP_PROVIDER` or `META_*` values today, so flipping only `api` and `worker` leaves the panel silent. Muted, it says so on every send, so the gap is visible but operators would be phoning every pro.
+
+- [ ] `api` and `worker`: `WHATSAPP_PROVIDER=cloud`, `WHATSAPP_DRY_RUN=false`, Production's own `META_*` values.
+- [ ] `admin`: everything in the table above, with Production's values.
+- [ ] `admin`'s logs no longer show `cannot transmit` after the redeploy.
+- [ ] One offer from the production panel reaches a real phone, and the panel reports it as sent.
 
 ### `ENVIRONMENT` per Railway environment (PRO-34)
 

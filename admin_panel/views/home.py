@@ -23,6 +23,7 @@ from admin_panel.core.assignment import (
     ASSIGN_TIMED_OUT,
     ASSIGN_LOOKUP_MISSED,
     ASSIGN_NOT_SENT,
+    ASSIGN_NOT_SENT_MUTED,
     ASSIGN_PRO_GONE,
     ASSIGN_PRO_LOOKUP_FAILED,
     ASSIGN_SENT,
@@ -59,6 +60,7 @@ from admin_panel.core.lead_queries import (
     save_lead_edits,
 )
 from admin_panel.core.rbac import can_edit, has_permission
+from app.providers.whatsapp.sync import can_transmit
 from app.services.matching_service import APPROVED_PRO_FILTER
 import pytz
 import os
@@ -155,6 +157,17 @@ def _assign_feedback(T, outcome, pro_name):
                 T,
                 "assign_offer_failed",
                 "Assigned to {pro}, but the offer did not reach them.",
+                pro=pro_name,
+            ),
+            "warning",
+        )
+    if outcome == ASSIGN_NOT_SENT_MUTED:
+        return (
+            _t(
+                T,
+                "assign_muted",
+                "Assigned to {pro}, but this environment is muted: the WhatsApp "
+                "message was not sent. Call them.",
                 pro=pro_name,
             ),
             "warning",
@@ -1271,6 +1284,14 @@ def _render_selected_lead_actions(
                     log_audit("send_completion_check", {"lead_id": lid, "sent": sent})
                     if sent:
                         st.success(T.get("check_sent", "Check sent!"))
+                    elif not can_transmit():
+                        st.warning(
+                            T.get(
+                                "check_muted",
+                                "This environment is muted: the WhatsApp message "
+                                "was not sent.",
+                            )
+                        )
                     else:
                         st.warning(
                             T.get(

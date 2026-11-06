@@ -177,10 +177,9 @@ def send_completion_check_sync(lead_id: str):
     previously was a raw httpx.post straight at the legacy vendor and therefore skipped
     the circuit breaker and the kill switch.
 
-    Returns True when the facade accepted the message. A suppressed send (breaker
-    engaged) also returns True-ish semantics from the caller's point of view — it
-    was handled, not lost — so callers must not treat the result as delivery
-    confirmation.
+    Returns True when the facade accepted the message, and False when it did not:
+    breaker engaged, closed window, or a provider that cannot transmit. True is
+    still not delivery confirmation.
     """
     from app.core.constants import Defaults
     from app.core.messages import Messages
@@ -205,11 +204,14 @@ def send_completion_check_sync(lead_id: str):
     # Stamp the lead exactly like the async path does. An operator send bypasses
     # the cap (it is a deliberate human action) but must still restart the
     # cooldown, or the 30-min stale-job monitor would nudge again minutes later.
-    leads_collection.update_one(
-        {"_id": ObjectId(lead_id)},
-        {
-            "$inc": {"completion_check_sent_count": 1},
-            "$set": {"completion_check_sent_at": datetime.now(timezone.utc)},
-        },
-    )
+    # Only a send that went: nothing reached the customer otherwise, and the
+    # monitor's own check should still be able to.
+    if sent:
+        leads_collection.update_one(
+            {"_id": ObjectId(lead_id)},
+            {
+                "$inc": {"completion_check_sent_count": 1},
+                "$set": {"completion_check_sent_at": datetime.now(timezone.utc)},
+            },
+        )
     return sent
