@@ -598,13 +598,13 @@ async def test_get_state_connected_maps_to_authorized(install_recorder):
 
 
 @pytest.mark.asyncio
-async def test_get_state_flagged_passes_through_lowercased(install_recorder):
+async def test_get_state_restricted_passes_through_lowercased(install_recorder):
     def handler(request: httpx.Request) -> httpx.Response:
-        return _json_response(200, {"status": "FLAGGED"})
+        return _json_response(200, {"status": "RESTRICTED"})
 
     install_recorder(handler)
 
-    assert await CloudAPIProvider().get_state() == "flagged"
+    assert await CloudAPIProvider().get_state() == "restricted"
 
 
 @pytest.mark.asyncio

@@ -189,6 +189,58 @@ async def test_loyalty_offer_triggered_with_bounded_ttl(loyalty_mocks, mock_db):
     assert updated["loyalty_offered"] is True
 
 
+@pytest.mark.asyncio
+async def test_no_offer_while_whatsapp_quality_is_degraded(
+    loyalty_mocks, mock_db, monkeypatch
+):
+    """PRO-90: tightening skips the offer, and the customer goes on to normal
+    routing instead of parking in AWAITING_LOYALTY_CONFIRMATION."""
+    monkeypatch.setattr(
+        "app.services.conversation_pipeline.non_essential_sends_paused",
+        AsyncMock(return_value=True),
+    )
+    mock_wa, mock_state, mock_ctx, mock_lm, mock_ai, db = loyalty_mocks
+    mock_state.get_state.return_value = UserStates.IDLE
+    chat_id = _chat_id()
+
+    past_pro_id = await _insert_pro(db, business_name="יוסי הצנרת")
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat_id,
+            "status": LeadStatus.COMPLETED,
+            "pro_id": past_pro_id,
+            "created_at": "2026-01-01",
+        }
+    )
+    current_lead_id = await _insert_active_lead(
+        db,
+        chat_id,
+        status=LeadStatus.CONTACTED,
+        issue_type="נזילה",
+        created_at="2026-08-20",
+    )
+    mock_ai.analyze_conversation.return_value = AIResponse(
+        reply_to_user="בסדר, אני בודק",
+        extracted_data=ExtractedData(
+            city="תל אביב", issue="נזילה", full_address=None, appointment_time=None
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+
+    await process_incoming_message(chat_id, "עוד נזילה באותו מקום")
+
+    assert Messages.Customer.LOYALTY_OFFER.split("\n")[0] not in _sent_text(mock_wa)
+    assert all(
+        call.args[1] != UserStates.AWAITING_LOYALTY_CONFIRMATION
+        for call in mock_state.set_state.await_args_list
+    )
+    updated = await db.leads.find_one({"_id": current_lead_id})
+    assert not updated.get("loyalty_offered")
+    assert mock_wa.send_message.await_count >= 1, "the customer still gets a reply"
+
+
 # --- 2 & 3. Natural-language accept / decline --------------------------------
 
 

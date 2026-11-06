@@ -78,6 +78,9 @@ class DispatchContext:
     #: inbound turn ahead of the emergency ack, so the pipeline's step 1 skips
     #: its own log instead of duplicating the turn in the AI's history window.
     emergency_inbound_logged: bool = False
+    #: What the consent gate took out of Redis on an accept, until step 1 logs it.
+    #: The orchestrator puts it back if the turn dies before then.
+    held_messages: Optional[dict] = None
 
     async def refresh_state(self, state_manager) -> Optional[str]:
         """Re-read the FSM state after a guard may have changed it.
@@ -290,13 +293,31 @@ async def guard_zero_touch_intent(ctx: DispatchContext, deps: GuardDeps):
 # ---------------------------------------------------------------------------
 
 
+async def _hold_pre_consent_message(ctx: DispatchContext, deps: GuardDeps) -> None:
+    """Keep what the customer wrote for after they agree. A bare yes/no sent before
+    the question was asked says nothing about their problem, so it is not kept."""
+    answer_words = Messages.Consent.ACCEPT_KEYWORDS + Messages.Consent.DECLINE_KEYWORDS
+    if ctx.media_url or (
+        ctx.normalized_text and ctx.normalized_text not in answer_words
+    ):
+        await deps.state_manager.hold_message(ctx.chat_id, ctx.user_text, ctx.media_url)
+
+
 async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
     """Consent check (skip for professionals — they're added by admin).
+
+    Nothing a customer says before agreeing may reach `messages`, logs, Sentry,
+    the AI or Cloudinary, so this gate holds it in Redis only: the decline branch
+    and a reset drop it through `clear_state`, the TTL drops it otherwise. An
+    accept takes it and **falls through** with it as this turn's message, so it
+    runs the rest of the chain and the pipeline like any other; the "yes" itself
+    is not logged. With nothing held, an accept stays handled here.
 
     On fall-through this guard re-reads the FSM state and logs it — the
     original inline block did both unconditionally after the consent section,
     and every guard below (and the pipeline after them) takes the refreshed
-    value.
+    value. It also re-hosts inbound media, here and not in the worker, because
+    this is the first point a message is known to be past consent.
     """
     from app.services import workflow_service as wf
 
@@ -313,11 +334,22 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
             if ctx.current_state == UserStates.AWAITING_CONSENT:
                 if ctx.normalized_text in Messages.Consent.ACCEPT_KEYWORDS:
                     await wf.record_consent(ctx.chat_id, accepted=True)
+                    # Before clear_state, which would drop it.
+                    held = await deps.state_manager.take_held_messages(ctx.chat_id)
+                    ctx.held_messages = held
                     await deps.state_manager.clear_state(ctx.chat_id)
                     await deps.whatsapp.send_message(
                         ctx.chat_id, Messages.Consent.ACCEPTED
                     )
-                    return HANDLED
+                    if not held:
+                        return HANDLED
+                    ctx.user_text = held["text"]
+                    ctx.media_url = held["media_url"]
+                    ctx.normalized_text = held["text"].strip().lower()
+                    ctx.is_emergency_detected = wf.is_emergency_text(
+                        ctx.normalized_text
+                    )
+                    consent_status = True
                 elif ctx.normalized_text in Messages.Consent.DECLINE_KEYWORDS:
                     await wf.record_consent(ctx.chat_id, accepted=False)
                     await deps.state_manager.clear_state(ctx.chat_id)
@@ -327,6 +359,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
                     return HANDLED
                 else:
                     # Repeat consent request if unclear response
+                    await _hold_pre_consent_message(ctx, deps)
                     await deps.whatsapp.send_message(
                         ctx.chat_id, consent_request_text()
                     )
@@ -334,6 +367,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
             if consent_status is None:
                 # First contact — send consent request
+                await _hold_pre_consent_message(ctx, deps)
                 await deps.whatsapp.send_message(ctx.chat_id, consent_request_text())
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
@@ -342,11 +376,14 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
             if consent_status is False:
                 # User previously declined — re-ask on new contact
+                await _hold_pre_consent_message(ctx, deps)
                 await deps.whatsapp.send_message(ctx.chat_id, consent_request_text())
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
                 )
                 return HANDLED
+
+    ctx.media_url = await wf.resolve_inbound_media(ctx.media_url)
 
     # Refresh state after potential consent state changes
     await ctx.refresh_state(deps.state_manager)

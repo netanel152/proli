@@ -20,7 +20,7 @@ import app.services.workflow_service
 from app.core.config import settings
 from app.core.constants import LeadStatus, UserStates
 from app.core.messages import Messages
-from app.providers.whatsapp import delivery, template_registry
+from app.providers.whatsapp import delivery, quality, template_registry
 from app.providers.whatsapp.cloud_api import CloudAPIProvider
 from app.providers.whatsapp.dry_run import DryRunProvider
 from app.providers.whatsapp.facade import WhatsAppFacade
@@ -192,6 +192,22 @@ async def test_approved_closed_window_sends_params_in_the_declared_order(
         "לא ניתנה הערכה",
         "רגילה",
     ]
+
+
+@pytest.mark.asyncio
+async def test_the_messaging_limit_counter_counts_a_template_and_not_the_text(
+    facade, graph, fake_redis, monkeypatch
+):
+    """The quality watchdog counts in `delivery.record_outbound`, so this path
+    has to reach it with kind "template" while the window is still closed."""
+    _approve(monkeypatch)
+
+    await _send(facade)
+    assert await quality.business_initiated_count() == 1
+
+    await _open_window(fake_redis)
+    await _send(facade)
+    assert await quality.business_initiated_count() == 1
 
 
 @pytest.mark.asyncio

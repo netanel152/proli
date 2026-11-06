@@ -21,6 +21,12 @@
       "reply_to_user": "נעים להכיר דנה. הבנתי, נזילה במטבח שהתחילה הבוקר. רק לוודא — זה בתל אביב, נכון?",
       "transcription": null
     },
+    "dispatcher|text|היי": {
+      "extracted_data": {},
+      "is_deal": false,
+      "reply_to_user": "שלום! 👋 אני פרולי. במה אפשר לעזור?",
+      "transcription": null
+    },
     "dispatcher|text|יש לי נזילה מתחת לכיור בתל אביב": {
       "extracted_data": {
         "apartment": null,

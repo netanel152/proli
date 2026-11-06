@@ -9,6 +9,7 @@ from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants
 from app.core.phone import mask_chat_id, strip_suffix, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.core.redis_client import get_redis_client
+from app.providers.whatsapp.quality import non_essential_sends_paused
 from app.services.matching_service import book_slot_for_lead, is_pro_eligible_for_lead
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
@@ -730,13 +731,16 @@ async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
     """Mark a lead COMPLETED, notify the customer for a rating, then ask the pro
     what they charged (PRO-33). Returns the message to send the pro — completion
     is done *before* the price ask, so recording the price can never block it."""
+    # PRO-90: while WhatsApp quality is degraded the review request is skipped,
+    # and waiting_for_rating with it so no stray digit is later read as a rating.
+    ask_for_rating = not await non_essential_sends_paused()
     await set_lead_status(
         lead["_id"],
         LeadStatus.COMPLETED,
         Actor.PRO,
         extra_set={
             "completed_at": datetime.now(timezone.utc),
-            "waiting_for_rating": True,
+            "waiting_for_rating": ask_for_rating,
             "is_paused": False,
         },
     )
@@ -746,8 +750,9 @@ async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
         await ContextManager.clear_context(lead["chat_id"])
 
     pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME)
-    feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
-    await whatsapp.send_message(lead["chat_id"], feedback_msg)
+    if ask_for_rating:
+        feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
+        await whatsapp.send_message(lead["chat_id"], feedback_msg)
     logger.info(f"Lead {lead['_id']} marked as COMPLETED by pro {pro['_id']}")
 
     # PRO-33: job is COMPLETED; now ask (optionally) what was charged. The lead id

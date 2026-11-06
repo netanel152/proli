@@ -75,7 +75,10 @@ from app.services.pro_onboarding_service import (  # noqa: F401
     handle_onboarding_step,
     ONBOARDING_STATES,
 )
-from app.services.media_handler import detect_and_fetch_media  # noqa: F401
+from app.services.media_handler import (  # noqa: F401
+    detect_and_fetch_media,
+    resolve_inbound_media,
+)
 from app.services.security_service import SecurityService
 from app.core.config import settings
 from bson import ObjectId
@@ -734,20 +737,32 @@ async def _process_incoming_message_inner(
         settings=settings,
     )
 
-    if await run_guard_chain(ctx, deps) is HANDLED:
-        return
+    try:
+        if await run_guard_chain(ctx, deps) is HANDLED:
+            return
 
-    # PRO-182 (PRO-139 slice B): everything the chain falls through to is a
-    # straight line rather than a decision table — one message, top to bottom,
-    # each step consuming what the one above it produced — so it lives in
-    # `conversation_pipeline` as a function instead of as more guards.
-    #
-    # The post-chain values travel on `ctx`, not on this function's locals: the
-    # guards mutate them on the way past (the rate limiter resolves `is_exempt`,
-    # several guards refresh `current_state` before falling through, and the
-    # emergency hoist sets `emergency_inbound_logged` so the pipeline's step 1
-    # does not log the same turn twice), and the pipeline reads them there.
-    await run_customer_pipeline(ctx, deps)
+        # PRO-182 (PRO-139 slice B): everything the chain falls through to is a
+        # straight line rather than a decision table — one message, top to bottom,
+        # each step consuming what the one above it produced — so it lives in
+        # `conversation_pipeline` as a function instead of as more guards.
+        #
+        # The post-chain values travel on `ctx`, not on this function's locals: the
+        # guards mutate them on the way past (the rate limiter resolves `is_exempt`,
+        # several guards refresh `current_state` before falling through, and the
+        # emergency hoist sets `emergency_inbound_logged` so the pipeline's step 1
+        # does not log the same turn twice), and the pipeline reads them there.
+        await run_customer_pipeline(ctx, deps)
+    except BaseException:
+        # BaseException because a worker shutdown cancels the job and arq re-runs
+        # it. The held messages left Redis but never reached the history, so put
+        # them back and re-open the gate: the re-run, or the customer's next
+        # *yes*, replays them. Past step 1 this is empty, so nothing replays twice.
+        if ctx.held_messages:
+            await StateManager.hold_message(
+                chat_id, ctx.held_messages["text"], ctx.held_messages["media_url"]
+            )
+            await StateManager.set_state(chat_id, UserStates.AWAITING_CONSENT)
+        raise
 
 
 # --- Private Helpers ---

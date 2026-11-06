@@ -17,6 +17,7 @@ from app.services.monitor_service import (
     check_pro_approval_sla,
     remind_stale_booked_leads,
     check_whatsapp_instance_state,
+    check_whatsapp_quality,
 )
 from datetime import datetime, timedelta
 import functools
@@ -34,6 +35,7 @@ from app.services.scheduling_service import regenerate_all_templates
 from app.services import agenda_service
 from app.core.logger import logger, page_critical, redact_secrets
 from app.core.redis_client import with_scheduler_lock
+from app.providers.whatsapp.quality import non_essential_sends_paused
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")
 
@@ -265,9 +267,14 @@ async def monitor_unfinished_jobs():
             **completion_check_due_filter(now_utc),
         }
     )
-    async for lead in t2_leads_cursor:
-        logger.info(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")
-        await send_customer_completion_check(str(lead["_id"]))
+    # PRO-90: this check is what leads to the review request. Unsent leads stay
+    # due, so the tier resumes by itself once the number recovers.
+    if await non_essential_sends_paused():
+        logger.warning("[Monitor] T2: paused while WhatsApp quality is degraded.")
+    else:
+        async for lead in t2_leads_cursor:
+            logger.info(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")
+            await send_customer_completion_check(str(lead["_id"]))
 
     # Tier 3: >24 hours old -> Flag for Admin
     t3_end = now_utc - timedelta(hours=24)
@@ -706,7 +713,7 @@ async def run_sla_monitor():
 # No @track_mongo_auth_failures here or on the stale-lead nudger: their
 # monitor_service callees catch Exception internally, so a Mongo auth failure
 # never propagates to the wrapper — the decorator would be dead code implying
-# coverage it doesn't provide. The six decorated jobs (incl. the 2-min
+# coverage it doesn't provide. The seven decorated jobs (incl. the 2-min
 # WhatsApp state monitor) trip the threshold on their own.
 @with_scheduler_lock("run_pro_approval_sla", ttl=270)
 async def run_pro_approval_sla():
@@ -731,6 +738,17 @@ async def run_whatsapp_state_monitor():
     if config and not config.get("whatsapp_monitor_active", True):
         return
     await check_whatsapp_instance_state()
+
+
+@with_scheduler_lock("run_whatsapp_quality_monitor", ttl=840)
+@track_mongo_auth_failures
+async def run_whatsapp_quality_monitor():
+    """PRO-90 — quality rating, tier and WABA health watchdog. Shares the
+    `whatsapp_monitor_active` toggle: one switch for watching the number."""
+    config = await settings_collection.find_one({"_id": "scheduler_config"})
+    if config and not config.get("whatsapp_monitor_active", True):
+        return
+    await check_whatsapp_quality()
 
 
 @with_scheduler_lock("daily_reminders_job", ttl=82000)
@@ -967,6 +985,15 @@ def start_scheduler():
         IntervalTrigger(minutes=WorkerConstants.WA_STATE_CHECK_INTERVAL_MINUTES),
         id="whatsapp_state_monitor",
         replace_existing=True,
+    )
+
+    # Job 11: WhatsApp quality watchdog (PRO-90) — every 15 minutes, plus once
+    # at boot so a deploy has a real reading on /health straight away.
+    scheduler.add_job(
+        run_whatsapp_quality_monitor,
+        IntervalTrigger(minutes=WorkerConstants.WA_QUALITY_CHECK_INTERVAL_MINUTES),
+        id="whatsapp_quality_monitor",
+        **_long_job_kwargs(4),
     )
 
     scheduler.start()

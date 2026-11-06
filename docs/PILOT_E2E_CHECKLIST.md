@@ -72,8 +72,9 @@ For each: run the steps on the real devices, compare to **Expected**, tick Pass 
 "File" = open a Linear ticket with the observed behavior and link it here.
 
 ### 1. Happy path — full customer journey  ·  regresses PRO-44, PRO-55
-**Steps (C):** send a first message → accept consent (`כן`) → describe the issue **with a photo**
-(e.g. "נזילה מתחת לכיור" + image) → provide full address when asked (street, number, city,
+**Steps (C):** send a first message **with a photo** (e.g. "נזילה מתחת לכיור" + image) → accept
+consent (`כן`) → the dispatcher answers that message without it being repeated, and the photo
+reaches the lead as a Cloudinary URL → provide full address when asked (street, number, city,
 floor, apartment) → provide a time → receive the AI estimate → **(P)** approve with `1`/`אשר` →
 **(C)** confirm the booking → after the job, complete + rate `5`.
 **Expected:**

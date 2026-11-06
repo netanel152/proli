@@ -48,23 +48,6 @@ def _mask(value: str | None) -> str:
     return f"set ({value[:4]}…{value[-4:]}, len={len(value)})"
 
 
-def _waba_from_dotenv() -> str | None:
-    """Fallback: pull META_WABA_ID out of the .env file directly, since Settings
-    drops it as an unknown extra."""
-    path = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"
-    )
-    try:
-        with open(path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("META_WABA_ID="):
-                    return line.split("=", 1)[1].strip() or None
-    except OSError:
-        pass
-    return None
-
-
 def _secret(name: str) -> str | None:
     val = getattr(settings, name, None)
     if val is None:
@@ -85,9 +68,7 @@ def main() -> int:
     app_secret = _secret("META_APP_SECRET")
     verify_token = _secret("META_VERIFY_TOKEN")
     pnid = settings.META_PHONE_NUMBER_ID
-    # META_WABA_ID is console/template bookkeeping only — Settings ignores it as
-    # an extra (see CLAUDE.md), so read it straight from the environment.
-    waba = os.environ.get("META_WABA_ID") or _waba_from_dotenv()
+    waba = settings.META_WABA_ID
     version = settings.META_GRAPH_API_VERSION
     failures = 0
 
@@ -159,8 +140,9 @@ def main() -> int:
         r = client.get(
             f"{GRAPH_ROOT}/{version}/{pnid}",
             params={
-                "fields": "status,quality_rating,display_phone_number,"
-                "verified_name,name_status,platform_type",
+                "fields": "status,quality_rating,"
+                "whatsapp_business_manager_messaging_limit,"
+                "display_phone_number,verified_name,name_status,platform_type",
                 "access_token": token,
             },
         )
@@ -169,7 +151,9 @@ def main() -> int:
             print(
                 f"    {OK} {pn.get('display_phone_number')} "
                 f"({pn.get('verified_name')}) | status={pn.get('status')} "
-                f"| quality={pn.get('quality_rating')} | {pn.get('platform_type')}"
+                f"| quality={pn.get('quality_rating')} "
+                f"| limit={pn.get('whatsapp_business_manager_messaging_limit')} "
+                f"| {pn.get('platform_type')}"
             )
         else:
             failures += 1
@@ -199,6 +183,17 @@ def main() -> int:
             else:
                 failures += 1
                 print(f"    {BAD} {body}")
+
+            print("[5b] WABA health_status (informational)")
+            r = client.get(
+                f"{GRAPH_ROOT}/{version}/{waba}",
+                params={"fields": "health_status", "access_token": token},
+            )
+            health = r.json().get("health_status") or {}
+            print(
+                f"    can_send_message={health.get('can_send_message')} "
+                f"errors={health.get('errors') or []}"
+            )
 
             print("[6] WABA subscribed_apps")
             r = client.get(
