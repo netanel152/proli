@@ -35,7 +35,6 @@ from app.services.scheduling_service import regenerate_all_templates
 from app.services import agenda_service
 from app.core.logger import logger, page_critical, redact_secrets
 from app.core.redis_client import with_scheduler_lock
-from app.providers.whatsapp.quality import non_essential_sends_paused
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")
 
@@ -258,14 +257,12 @@ async def monitor_unfinished_jobs():
             **completion_check_due_filter(now_utc),
         }
     )
-    # PRO-90: this check is what leads to the review request. Unsent leads stay
-    # due, so the tier resumes by itself once the number recovers.
-    if await non_essential_sends_paused():
-        logger.warning("[Monitor] T2: paused while WhatsApp quality is degraded.")
-    else:
-        async for lead in t2_leads_cursor:
-            logger.info(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")
-            await send_customer_completion_check(str(lead["_id"]))
+    # Never gated on WhatsApp quality (PRO-209). A lead that passes 24h unsent
+    # leaves this query for good, the reply is how a customer reports a no-show,
+    # and an open job holds one of the pro's MAX_PRO_LOAD slots.
+    async for lead in t2_leads_cursor:
+        logger.info(f"[Monitor] T2: Sending customer check for lead {lead['_id']}")
+        await send_customer_completion_check(str(lead["_id"]))
 
     # Tier 3: >24 hours old -> Flag for Admin
     t3_end = now_utc - timedelta(hours=24)
