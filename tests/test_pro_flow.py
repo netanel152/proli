@@ -23,6 +23,11 @@ PRO_PHONE = "972500000000"
 @pytest_asyncio.fixture
 async def pro_setup(mock_db):
     """Create a pro and return (pro_doc, mock_db)."""
+    # mock_db is module-scoped. Since PRO-212 another test's leftover NEW lead would
+    # turn this test's single offer into a picker. Through the patched collection
+    # because each `mock_db.leads` access stacks another mongomock_motor wrapper,
+    # and one more per test here is enough to overflow the recursion limit.
+    await app.services.pro_flow.leads_collection.delete_many({"pro_id": PRO_ID})
     pro_doc = {
         "_id": PRO_ID,
         "phone_number": PRO_PHONE,
@@ -1249,7 +1254,7 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
         {
             "_id": lead_id,
             "pro_id": pro_doc["_id"],
-            "status": LeadStatus.NEW,
+            "status": LeadStatus.BOOKED,
             "chat_id": "972501111111@c.us",
             "issue_type": "נזילה",
             "full_address": "רחוב הרצל 5",
@@ -1274,6 +1279,41 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     mock_wa.send_message.assert_called_with(
         "972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_PRO
     )
+
+
+@pytest.mark.asyncio
+async def test_pause_on_an_unapproved_lead_changes_nothing(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """PRO-212: a pro with only a NEW lead has no contact details (PRO-59), so
+    'השהה' must not silence that customer's chat or tell them the pro will call."""
+    pro_doc, db = pro_setup
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    mock_state.set_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "השהה", mock_wa, mock_lm
+    )
+
+    assert result == Messages.Pro.PAUSE_NEEDS_APPROVAL
+    assert "972501111111" not in result
+    mock_state.set_state.assert_not_called()
+    mock_wa.send_message.assert_not_called()
+    assert not (await db.leads.find_one({"_id": lead_id})).get("is_paused")
 
 
 @pytest.mark.asyncio

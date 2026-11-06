@@ -174,12 +174,12 @@ When a deal is finalized by the AI:
 
 1. Customer enters `AWAITING_PRO_APPROVAL` state (1h TTL) — bot replies with "still waiting" if they message again
 2. Pro receives a text-based approval request (reply "אשר" or "1"):
-   - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared. System enforces strict scoping (pro must have a pending lead assigned).
-   - **Pause Bot** (reply "השהה") → customer enters `PAUSED_FOR_HUMAN` (15m rolling), direct chat begins
+   - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared. System enforces strict scoping (pro must have a pending lead assigned). With more than one pending lead, the pro picks from a numbered list first; the same goes for **Reject**.
+   - **Pause Bot** (reply "השהה") → on a `BOOKED` lead only: customer enters `PAUSED_FOR_HUMAN` (15m rolling) and the pro calls or writes from their own number. With only a pending lead the pro is told to approve first, because the contact details arrive with the approval.
    - **Reject** (reply "2" or "דחה") → lead becomes `REJECTED` then immediately handed to `reassign_lead`: reassigned → `NEW` under the next pro (customer told, approval SLA re-armed); no replacement, or a found pro whose offer fails to send → `PENDING_ADMIN_REVIEW` (admin paged, customer told)
 3. Pro can manage availability:
    - **Vacation Mode** (reply "חופשה" or "הפסקה") → sets `is_active: False`, pro stops receiving new leads.
-   - **Resume** (reply "זמין") → sets `is_active: True`.
+   - **Resume** (reply "זמין" or "חזרתי") → sets `is_active: True`. Works on break with no `PRO_MODE`, as do the approve, reject, finish and still-working replies. An application awaiting review (`pending_approval: True`) does not get this. A pro the admin deactivated with the same `is_active` toggle does, because the field does not record who set it.
 4. Finishing Jobs:
    - **Finish** (reply "סיימתי" or "3") → if single job, marks as `COMPLETED`. If multiple, pro picks from a numbered list.
 5. **Dynamic Dashboard:** Any unknown command or "תפריט" sends the pro a real-time status summary (rating, active jobs, status).

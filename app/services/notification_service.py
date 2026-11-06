@@ -312,12 +312,18 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                 # has seen nothing but an issue and a city. Fails closed: an
                 # absent lead is not BOOKED, so it takes the phone-free branch
                 # rather than assuming the pro has earned the number.
-                if (active_lead or {}).get("status") == LeadStatus.BOOKED:
+                status = (active_lead or {}).get("status")
+                if status == LeadStatus.BOOKED:
                     pro_msg = Messages.SOS.PRO_ALERT.format(
                         phone=customer_phone_display, last_message=last_message
                     )
-                else:
+                elif status == LeadStatus.NEW:
                     pro_msg = Messages.SOS.PRO_ALERT_PENDING.format(
+                        last_message=last_message
+                    )
+                else:
+                    # PRO-212: only NEW has anything for *אשר* to approve.
+                    pro_msg = Messages.SOS.PRO_ALERT_NOT_OFFERED.format(
                         last_message=last_message
                     )
                 await _send_best_effort(pro_chat_id, pro_msg)

@@ -87,6 +87,9 @@ class UserStates(str, Enum):
     # Pro flow
     PRO_SELECTING_JOB_TO_FINISH = "pro_selecting_job_to_finish"
     PRO_SELECTING_JOB_TO_CANCEL = "pro_selecting_job_to_cancel"
+    # PRO-212: more than one NEW lead, so אשר/דחה asks which one it is about.
+    PRO_SELECTING_JOB_TO_APPROVE = "pro_selecting_job_to_approve"
+    PRO_SELECTING_JOB_TO_REJECT = "pro_selecting_job_to_reject"
     # PRO-33: after a job is marked COMPLETED, the pro is asked what they charged.
     # Skippable and never gates completion — the lead is already COMPLETED when
     # this state is set, so a missed/garbage reply just leaves final_price null.
