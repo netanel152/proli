@@ -133,7 +133,10 @@ class StateManager:
         texts = []
         for entry in held:
             # Consecutive repeats are a retried job or a redelivery, not new words.
-            if entry["text"] and (not texts or texts[-1] != entry["text"]):
+            # A restored hold is already joined, so compare against its last line.
+            if entry["text"] and (
+                not texts or texts[-1].split("\n")[-1] != entry["text"]
+            ):
                 texts.append(entry["text"])
         media_urls = [entry["media_url"] for entry in held if entry["media_url"]]
         return {

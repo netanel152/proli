@@ -103,6 +103,8 @@ def test_init_sentry_disables_auto_enabling_and_sets_scrubber(monkeypatch, sentr
     assert client.options["auto_enabling_integrations"] is False
     assert client.options["before_send"] is sentry_module._scrub_event
     assert client.options["include_local_variables"] is False
+    # A webhook body is the customer's message. Consent or no consent, it stays out.
+    assert client.options["max_request_body_size"] == "never"
     assert client.options["send_default_pii"] is False
     # Breadcrumb side doors stay closed on every service: driver payloads
     # (PyMongo/Redis/Httpx) never ship, allowlist or not.

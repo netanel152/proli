@@ -561,7 +561,8 @@ def setup_logging():
     # so no credential a provider ever puts in a URL reaches the logs.
     #
     # arq.worker logs every job's args at INFO, and those args are the customer's
-    # chat id and message text, consent or no consent.
+    # chat id and message text, consent or no consent. Its WARNINGs name only a job
+    # id, so arq_worker logs the id beside the masked chat at task start.
     for noisy in ["httpx", "httpcore", "arq.worker"]:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
