@@ -36,7 +36,7 @@ against. Recorded here so the absence reads as a decision, not an oversight.
 import pytz
 from bson.objectid import ObjectId
 
-from app.core.constants import Actor
+from app.core.constants import Actor, LeadStatus
 from app.core.lead_history import status_history_entry
 from app.core.logger import logger
 from app.core.phone import strip_suffix
@@ -86,6 +86,7 @@ _SIMPLE_FIELDS = {"status": "status"}
 SKIP_UNRESOLVED = "unresolved_row"
 SKIP_NO_CHANGE = "no_change"
 SKIP_LEAD_GONE = "lead_gone"
+SKIP_SAVE_FAILED = "save_failed"
 
 
 def client_label(lead):
@@ -307,10 +308,187 @@ def _build_update_payload(
             # PRO-60: clearing the pro must null pro_id, or matching, the
             # healer and pro-flow keep treating the lead as assigned.
             payload["pro_id"] = None
+        elif new_pro_name is None:
+            # The cell was emptied: the same "unassigned" as the label above.
+            payload["pro_id"] = None
+        elif new_pro_name in pro_map_name_to_id:
+            payload["pro_id"] = pro_map_name_to_id[new_pro_name]
         else:
-            payload["pro_id"] = pro_map_name_to_id.get(new_pro_name)
+            # A pro un-approved since the page rendered is not "unassigned":
+            # writing None here would silently take the lead off its owner.
+            logger.warning(
+                "[LeadsEditor] Ignoring a professional no longer on the eligible "
+                "list."
+            )
 
     return payload
+
+
+def apply_lead_changes(
+    lead_id,
+    set_ops,
+    unset_ops=None,
+    *,
+    leads_collection,
+    offer_pending=None,
+    audit=None,
+):
+    """Write one lead's edits and decide what setting its pro *means*.
+
+    Shared by the leads table and the Edit form, so the two cannot disagree:
+
+    * A real pro change on a lead that is and stays ``PENDING_ADMIN_REVIEW`` is
+      an assignment. It goes through ``offer_pending`` (the strip's path), which
+      moves the status and sends the offer. The other fields are written first,
+      so the offer carries the corrected details.
+    * Any other pro change is a record correction — a mis-typed pro on a
+      ``COMPLETED`` lead must not message anybody. It is written as is and
+      ``record_only`` comes back true, so the caller says plainly that no offer
+      went out. The same when no ``offer_pending`` was supplied: never a silent
+      bare write.
+    * A pro left standing on a waiting lead is reported too, even by an edit that
+      never touched the pro: escalation keeps ``pro_id``
+      (``monitor_service``), so a waiting lead holding a pro who was never told
+      about it is a normal state, and the operator editing it should hear so.
+
+    Fields that already hold the stored value are dropped rather than rewritten:
+    a stale frame must not put back a status somebody else just moved, and a
+    second run of the same Save (a double click during the send) finds the pro
+    already set and sends nothing.
+
+    Returns ``{"found", "written", "changes", "assignment", "record_only",
+    "pro_id"}``. ``assignment`` is ``(outcome, pro_name)`` or ``None``;
+    ``written`` lists the fields written directly, which excludes the routed
+    ``pro_id``; ``pro_id`` is the pro the lead holds or was offered to.
+    """
+    oid = ObjectId(lead_id)
+    set_ops = dict(set_ops)
+    unset_ops = dict(unset_ops or {})
+    update_op = {}
+    offer_to = None
+    record_only = False
+    new_pro = None
+
+    def _result(found, assignment=None):
+        return {
+            "found": found,
+            "written": sorted([*set_ops, *unset_ops]) if found else [],
+            "changes": set_ops,
+            "assignment": assignment,
+            "record_only": record_only and found,
+            "pro_id": new_pro,
+        }
+
+    # Doubles as the existence check for every kind of edit.
+    current = leads_collection.find_one({"_id": oid}, {"status": 1, "pro_id": 1})
+    if current is None:
+        logger.warning(f"[LeadsEditor] Lead {lead_id} vanished before it was read.")
+        return _result(False)
+
+    new_status = set_ops.get("status", current.get("status"))
+    status_moved = new_status != current.get("status")
+    if status_moved:
+        # PRO-57: every real transition is appended, admin edits included.
+        # But only a *real* one — the grid keeps an edit entry for a cell
+        # toggled A->B->A, and pushing regardless would write duplicate
+        # consecutive entries and skew the funnel.
+        update_op["$push"] = {
+            "status_history": status_history_entry(new_status, Actor.ADMIN)
+        }
+    else:
+        set_ops.pop("status", None)
+
+    new_pro = set_ops.get("pro_id", current.get("pro_id"))
+    pro_moved = new_pro != current.get("pro_id")
+    if not pro_moved:
+        set_ops.pop("pro_id", None)
+
+    waiting = new_status == LeadStatus.PENDING_ADMIN_REVIEW
+    if (
+        pro_moved
+        and new_pro is not None
+        and waiting
+        and not status_moved
+        and offer_pending is not None
+    ):
+        offer_to = set_ops.pop("pro_id")
+    elif new_pro is not None and (pro_moved or waiting):
+        # shortcut: a record-only write trusts the caller's eligibility instead of
+        # re-reading the pro as the offer path does. The table and the form build
+        # `pro_map_name_to_id` from APPROVED_PRO_FILTER on the same script run as
+        # the Save, so the gap is that one run, and a pro un-approved inside it
+        # stays recorded with nothing sent. Re-read here if the map ever gets cached.
+        record_only = True
+
+    if set_ops:
+        update_op["$set"] = set_ops
+    if unset_ops:
+        update_op["$unset"] = unset_ops
+    if update_op:
+        result = leads_collection.update_one({"_id": oid}, update_op)
+        # matched_count, not modified_count: a write of the value already held
+        # is still a successful save. A delete landing between the read and this
+        # write shows up here.
+        if getattr(result, "matched_count", 0) == 0:
+            logger.warning(
+                f"[LeadsEditor] Lead {lead_id} vanished between read and write."
+            )
+            return _result(False)
+
+    if offer_to is None:
+        return _result(True)
+
+    outcome, pro_name = offer_pending(lead_id, offer_to)
+    _audit_quietly(
+        audit,
+        "assign_lead",
+        {"lead_id": lead_id, "pro_id": str(offer_to), "outcome": outcome},
+    )
+    return _result(True, (outcome, pro_name))
+
+
+def _audit_quietly(audit, action, details):
+    """A failed audit write must not cost the operator an offer's outcome."""
+    if audit is None:
+        return
+    try:
+        audit(action, details)
+    except Exception as e:
+        logger.error(f"[LeadsEditor] Audit write for {action} failed: {e}")
+
+
+def _flash_rows(change, client, pro_label):
+    """``(assignments, record_only)`` rows for one lead's flash."""
+    assignments = []
+    if change["assignment"]:
+        outcome, pro_name = change["assignment"]
+        assignments.append({"client": client, "outcome": outcome, "pro_name": pro_name})
+    record_only = (
+        [{"client": client, "pro": str(pro_label or "")}]
+        if change["record_only"]
+        else []
+    )
+    return assignments, record_only
+
+
+def is_noop(change):
+    """Nothing was written, nothing was offered, nothing needs saying."""
+    return not (change["written"] or change["assignment"] or change["record_only"])
+
+
+def edit_form_flash(change, *, client, pro_label):
+    """The ``leads_flash`` for one Edit-form save, shaped like the table's."""
+    assignments, record_only = _flash_rows(change, client, pro_label)
+    skipped_rows = (
+        [{"client": client, "reason": SKIP_NO_CHANGE}] if is_noop(change) else []
+    )
+    return {
+        "updated": 1 if change["written"] else 0,
+        "skipped": len(skipped_rows),
+        "skipped_rows": skipped_rows,
+        "assignments": assignments,
+        "record_only": record_only,
+    }
 
 
 def save_lead_edits(
@@ -322,6 +500,7 @@ def save_lead_edits(
     unknown_pro_label,
     audit=None,
     status_by_label=None,
+    offer_pending=None,
 ):
     """Apply the leads editor's edits, resolving row identity safely.
 
@@ -338,13 +517,21 @@ def save_lead_edits(
             imported — this module stays streamlit-free.
         status_by_label: ``{localized label: status}`` for the ``status_label``
             column (PRO-61); ``labels.status_by_label(T)`` in the view.
+        offer_pending: ``callable(lead_id, pro_id) -> (outcome, pro_name)``,
+            see :func:`apply_lead_changes`.
 
     Returns:
-        ``{"updated": int, "skipped": int, "skipped_rows": list[dict]}``.
+        ``{"updated": int, "skipped": int, "skipped_rows": list[dict],
+        "assignments": list[dict], "record_only": list[dict]}``.
+
+        ``updated`` counts rows that wrote a field. ``assignments`` holds
+        ``{"client", "outcome", "pro_name"}`` per row that went through the offer
+        path. ``record_only`` holds ``{"client", "pro"}`` per row left with a pro
+        and no offer.
 
         Each entry in ``skipped_rows`` is ``{"client": str, "reason": str}``
         with ``reason`` one of ``SKIP_UNRESOLVED`` / ``SKIP_NO_CHANGE`` /
-        ``SKIP_LEAD_GONE``. A bare count would be its own small version of the
+        ``SKIP_LEAD_GONE`` / ``SKIP_SAVE_FAILED``. A bare count would be its own small version of the
         bug this module exists to fix: "the lead was deleted under you" means
         the admin's edit is permanently lost and must be retyped, while "no
         writable field changed" is harmless — collapsing the two into one
@@ -352,6 +539,9 @@ def save_lead_edits(
     """
     updated = 0
     skipped_rows = []
+    assignments = []
+    record_only = []
+    name_by_id = {pro_id: name for name, pro_id in pro_map_name_to_id.items()}
 
     def _skip(idx, reason):
         client = ""
@@ -386,58 +576,45 @@ def save_lead_edits(
             _skip(idx, SKIP_NO_CHANGE)
             continue
 
-        update_op = {"$set": payload}
-
-        if "status" in payload:
-            # Read the stored status before writing, for two reasons at once:
-            # it tells us the lead still exists, and it tells us whether this
-            # is a real transition.
-            current = leads_collection.find_one(
-                {"_id": ObjectId(lead_id)}, {"status": 1}
+        # One row raising must not abandon the rest, or lose the outcomes of
+        # offers already sent for earlier rows.
+        try:
+            change = apply_lead_changes(
+                lead_id,
+                payload,
+                leads_collection=leads_collection,
+                offer_pending=offer_pending,
+                audit=audit,
             )
-            if current is None:
-                logger.warning(
-                    f"[LeadsEditor] Lead {lead_id} vanished before its status "
-                    f"was read."
-                )
-                _skip(idx, SKIP_LEAD_GONE)
-                continue
-
-            # PRO-57: every real transition is appended, admin edits included.
-            # But only a *real* one — the grid keeps an edit entry for a cell
-            # toggled A->B->A, and another actor may have already applied the
-            # same move inside the 30s cache window. Pushing regardless would
-            # write duplicate consecutive entries and skew the funnel. The
-            # sibling edit form already guards this (`home.py`: `if new_status
-            # != selected_lead.get("status")`); this matches it.
-            if current.get("status") != payload["status"]:
-                update_op["$push"] = {
-                    "status_history": status_history_entry(
-                        payload["status"], Actor.ADMIN
-                    )
-                }
-
-        result = leads_collection.update_one({"_id": ObjectId(lead_id)}, update_op)
-
-        # matched_count, not modified_count: re-saving a row to the value it
-        # already holds is a successful save, not a skipped one.
-        # Still reachable, and not a duplicate of the check above: the pre-read
-        # only runs for status edits, so a details-only or pro-only edit has
-        # this as its sole existence guard — and a delete landing *between* the
-        # two calls shows up here too.
-        if getattr(result, "matched_count", 0) == 0:
-            logger.warning(
-                f"[LeadsEditor] Lead {lead_id} vanished between read and write."
-            )
+        except Exception as e:
+            logger.error(f"[LeadsEditor] Saving lead {lead_id} failed: {e}")
+            _skip(idx, SKIP_SAVE_FAILED)
+            continue
+        if not change["found"]:
             _skip(idx, SKIP_LEAD_GONE)
             continue
+        if is_noop(change):
+            _skip(idx, SKIP_NO_CHANGE)
+            continue
 
-        if audit is not None:
-            audit("edit_lead", {"lead_id": lead_id, "changes": payload})
-        updated += 1
+        row = edited_df.iloc[idx]
+        pro_label = name_by_id.get(change["pro_id"]) or row.get("professional", "")
+        row_assignments, row_record_only = _flash_rows(
+            change, str(row.get("client", "") or ""), pro_label
+        )
+        assignments += row_assignments
+        record_only += row_record_only
+
+        if change["written"]:
+            _audit_quietly(
+                audit, "edit_lead", {"lead_id": lead_id, "changes": change["changes"]}
+            )
+            updated += 1
 
     return {
         "updated": updated,
         "skipped": len(skipped_rows),
         "skipped_rows": skipped_rows,
+        "assignments": assignments,
+        "record_only": record_only,
     }
