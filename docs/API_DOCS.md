@@ -71,7 +71,7 @@ Business-level signal for the lead pipeline. Returns counts of stuck leads for m
 }
 ```
 
-Returns 503 if the database is unavailable, with a fixed `{"status": "error", "error": "internal error"}` body — the real exception goes to logs/Sentry only, never the HTTP response. Use this endpoint with a synthetic monitor to alert when `pending_review_count > 5` for more than 30 minutes.
+Returns 503 if the database is unavailable, with a fixed `{"status": "error", "error": "internal error"}` body — the real exception goes to logs/Sentry only, never the HTTP response. Polled every 10 minutes by the `🩺 Lead pipeline monitor` workflow, which alerts on `pending_review_count > 5` for more than 30 minutes and on a climbing `stuck_contacted_count` — see "Lead pipeline monitor" in `OPERATIONS_GUIDE.md`.
 
 ### 2. WhatsApp Webhook
 **POST** `/webhook`
