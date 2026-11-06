@@ -195,13 +195,20 @@ async def test_sos_alert_with_pro_and_lead(notif_mocks, pages):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", [LeadStatus.NEW, LeadStatus.CONTACTED])
-async def test_sos_alert_pre_approval_lead_gets_pending_alert_no_phone(
-    notif_mocks, pages, status
+@pytest.mark.parametrize(
+    "status, expected",
+    [
+        (LeadStatus.NEW, Messages.SOS.PRO_ALERT_PENDING),
+        (LeadStatus.CONTACTED, Messages.SOS.PRO_ALERT_NOT_OFFERED),
+    ],
+)
+async def test_sos_alert_pre_approval_lead_gets_a_phone_free_alert(
+    notif_mocks, pages, status, expected
 ):
     """A pro offered (NEW) or barely-briefed (CONTACTED) on the lead has not
-    approved it — PRO_ALERT_PENDING goes out instead, carrying no phone in
-    either form, and the operator page is unaffected."""
+    approved it, so the alert carries no phone in either form, and the operator
+    page is unaffected. PRO-212: only NEW has anything for *אשר* to approve, so
+    CONTACTED gets the variant that does not offer it."""
     mock_wa, db = notif_mocks
     pro_id = ObjectId()
     await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
@@ -218,7 +225,7 @@ async def test_sos_alert_pre_approval_lead_gets_pending_alert_no_phone(
 
     calls = {c.args[0]: c.args[1] for c in mock_wa.send_message.call_args_list}
     pro_msg = calls["972500000000@c.us"]
-    assert static_prefix(Messages.SOS.PRO_ALERT_PENDING) in pro_msg
+    assert static_prefix(expected) in pro_msg
     assert to_local_phone("972501111111@c.us") not in pro_msg
     assert "972501111111" not in pro_msg
 
@@ -238,7 +245,7 @@ async def test_sos_alert_missing_lead_takes_phone_free_branch(notif_mocks, pages
 
     calls = {c.args[0]: c.args[1] for c in mock_wa.send_message.call_args_list}
     pro_msg = calls["972500000000@c.us"]
-    assert static_prefix(Messages.SOS.PRO_ALERT_PENDING) in pro_msg
+    assert static_prefix(Messages.SOS.PRO_ALERT_NOT_OFFERED) in pro_msg
     assert to_local_phone("972501111111@c.us") not in pro_msg
     assert "972501111111" not in pro_msg
 
