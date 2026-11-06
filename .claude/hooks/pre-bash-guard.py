@@ -267,7 +267,10 @@ AGENT_BASH_ALLOW = {
 }
 
 # A quoted string the shell will not expand: `<`, `|` or `;` inside one is text.
-_INERT_QUOTED = re.compile(r"""'[^']*'|"[^"$`]*\"""")
+# It may not cross a line: a quote opened on a comment line closes nothing, and
+# that is how `git log # '\ntouch p\n# '` ran a second command past the allowlist.
+_INERT_QUOTED = re.compile(r"""'[^'\r\n]*'|"[^"$`\\\r\n]*\"""")
+_ANY_QUOTED = re.compile(r"""'[^']*'|"(?:[^"\\]|\\.)*\"""", re.DOTALL)
 
 _VALUE = r"""("[^"]*"|'[^']*'|[^\s;&|)'"`]+)"""
 _GIT_OPTION = (
@@ -275,52 +278,208 @@ _GIT_OPTION = (
     rf"|--(?:git-dir|work-tree|namespace|exec-path|config-env)[=\s]\s*{_VALUE}\s+"
     r"|-\S+\s+)"
 )
+_GIT_HEAD = rf"""(?<![\w.-])git(?:\.exe)?["']?\s+(?:{_GIT_OPTION})*["']?"""
 # Anywhere in the text, not just in command position: `env git stash`,
 # `FOO=1 git stash`, `sh -c "git stash"`, `{ git stash; }` and backticks all run
 # it. That makes `echo "git stash"` a false positive, which is the cheap side of
 # the trade. `git worktree add` stays out: it is the sanctioned way to isolate.
 _MUTATING_GIT = re.compile(
-    r"""(?<![\w.-])git(?:\.exe)?["']?\s+"""
-    rf"(?:{_GIT_OPTION})*"
-    r"""["']?(?:(?:stash|checkout-index|checkout|switch|reset|restore|clean|rebase"""
-    r"""|merge-file|merge|pull|cherry-pick|revert|am|apply|commit|add|rm|mv"""
-    r"""|read-tree|update-index|filter-branch|bisect|sparse-checkout|submodule)"""
-    r"""(?![\w-])|worktree\s+(?:remove|move|prune)(?![\w-])|[$`])"""
-    r"""|(?<![\w.-])git(?:\.exe)?["']?\s+.*-c\s*["']?alias\."""
+    _GIT_HEAD + r"(?:(?:checkout-index|checkout|switch|reset|restore|clean|rebase"
+    r"|merge-file|merge|pull|cherry-pick|revert|am|apply|commit|add|rm|mv"
+    r"|read-tree|update-index|filter-branch|bisect|sparse-checkout|submodule)"
+    r"(?![\w-])"
+    r"|stash(?![\w-])(?!\s+(?:list|show)(?![\w-]))"
+    r"|worktree\s+(?:-\S+\s+)*(?:remove|move|prune)(?![\w-])"
+    r"|[$`])"
+    r"""|(?<![\w.-])git(?:\.exe)?["']?\s+.*-c\s*["']?alias\.""",
+    re.IGNORECASE,
 )
+# The stash stack and the worktree list belong to the repo, not to a tree, so a
+# subagent's own worktree is no protection: these reach other sessions' work.
+_REPO_WIDE_GIT = re.compile(
+    _GIT_HEAD + r"(?:worktree\s+(?:-\S+\s+)*(?:remove|move|prune)"
+    r"|stash\s+(?:-\S+\s+)*(?:clear|drop|pop))(?![\w-])",
+    re.IGNORECASE,
+)
+# A plain search names git commands without running them. `rg --pre` runs one.
+_PLAIN_SEARCH = re.compile(r"\s*(?:grep|rg)\s(?!.*(?:--pre|[$`]))", re.DOTALL)
 
-# Everything that can point a git command somewhere other than the session's
-# directory. Each match must resolve, or the command is refused.
-_TARGET_PATTERNS = (
-    r"(?<![\w-])(?:cd|chdir|pushd|sl|Set-Location|Push-Location)\s+(?:-\w+\s+)?"
-    + _VALUE,
-    r"(?<=\s)-C\s+" + _VALUE,
-    r"--(?:git-dir|work-tree)[=\s]\s*" + _VALUE,
-    r"GIT_(?:DIR|WORK_TREE)\s*=\s*" + _VALUE,
+_CD_VERB = r"(?:cd|chdir|pushd|sl|Set-Location|Push-Location)"
+_CD_SEGMENT = re.compile(
+    rf"\s*{_CD_VERB}(?:\s+(?:-\w+\s+)?{_VALUE})?\s*$", re.IGNORECASE
 )
+_CD_MENTION = re.compile(rf"(?<![\w-]){_CD_VERB}\s+(?:-\w+\s+)?{_VALUE}", re.IGNORECASE)
 _BARE_CD = re.compile(r"(?<![\w-])cd\s*(?:[;&|)\n]|$)", re.MULTILINE)
+_GIT_C = re.compile(rf"\s-C\s+{_VALUE}")
+_GIT_DIR_FLAG = re.compile(rf"--git-dir[=\s]\s*{_VALUE}")
+_WORK_TREE_FLAG = re.compile(rf"--work-tree[=\s]\s*{_VALUE}")
+_GIT_ENV = re.compile(rf"GIT_(?:DIR|WORK_TREE)\s*=\s*{_VALUE}")
+# Where a `cd` may not carry to the next command, or may not happen at all.
+_CONTROL_FLOW = re.compile(
+    r"[()`|{}]|(?<![&>])&(?!&)"
+    r"|\b(?:if|then|else|elif|do|while|until|for|case|popd|pushd|Pop-Location"
+    r"|Push-Location)\b",
+    re.IGNORECASE,
+)
+_HEREDOC_START = re.compile(r"""<<(-?)\s*(?:'(\w+)'|"(\w+)"|\\?(\w+))""")
+
+
+def _quoted_end(text, start):
+    """The index just past the quoted string opening at ``start``."""
+    quote = text[start]
+    i = start + 1
+    while i < len(text):
+        if quote == '"' and text[i] == "\\":
+            i += 2
+        elif text[i] == quote:
+            return i + 1
+        else:
+            i += 1
+    return len(text)
 
 
 def _agent_text(command):
-    """``command`` without heredoc or PowerShell here-string bodies. Pure."""
-    command = re.sub(r"@(['\"])\r?\n.*?\r?\n\1@", "", command, flags=re.DOTALL)
-    return strip_heredocs(command)
+    """``command`` with line continuations joined and real heredoc bodies gone. Pure.
+
+    A scanner, because a line-based match hid real commands: a `<<X` in a comment
+    (`# <<X`), a quote (`echo '<<X'`), a here-string (`<<<x`) or arithmetic
+    (`$((1<<2))`) opens no heredoc, and the lines after it still run. Anything it
+    is unsure of stays in the text, which can only cost a false refusal. Main-session
+    guards keep ``strip_heredocs``.
+    """
+    text = re.sub(r"\\\r?\n", "", command)
+    out, pending, i = [], [], 0
+    while i < len(text):
+        char = text[i]
+        end = i + 1
+        if char in "'\"":
+            end = _quoted_end(text, i)
+        elif char == "\\":
+            end = i + 2
+        elif char == "#" and (i == 0 or text[i - 1] in " \t\n;&|("):
+            newline = text.find("\n", i)
+            end = len(text) if newline < 0 else newline
+        elif text.startswith(("$((", "(("), i):
+            close = text.find("))", i)
+            end = len(text) if close < 0 else close + 2
+        elif text.startswith("<<<", i):
+            end = i + 3
+        elif text.startswith("<<", i):
+            match = _HEREDOC_START.match(text, i)
+            if match:
+                pending.append((match.group(1), next(filter(None, match.groups()[1:]))))
+                end = match.end()
+            else:
+                end = i + 2
+        elif char == "\n" and pending:
+            out.append("\n")
+            i = _past_heredoc_bodies(text, i + 1, pending)
+            pending = []
+            continue
+        out.append(text[i:end])
+        i = end
+    return "".join(out)
+
+
+def _past_heredoc_bodies(text, start, pending):
+    """The index after the bodies of ``pending`` heredocs that begin at ``start``."""
+    i = start
+    for dash, delimiter in pending:
+        while i < len(text):
+            newline = text.find("\n", i)
+            end = len(text) if newline < 0 else newline
+            line = text[i:end].rstrip("\r")
+            i = end + 1
+            if (line.lstrip("\t") if dash else line) == delimiter:
+                break
+    return min(i, len(text))
+
+
+def _segments(text):
+    """``text`` split into simple commands at unquoted separators. Pure."""
+    parts, start, i = [], 0, 0
+    while i < len(text):
+        char = text[i]
+        if char in "'\"":
+            i = _quoted_end(text, i)
+            continue
+        if char == "\\":
+            i += 2
+            continue
+        if char in ";&|()`\n":
+            parts.append(text[start:i])
+            start = i + 1
+        i += 1
+    parts.append(text[start:])
+    return [part for part in parts if part.strip()]
+
+
+def _mutating_segments(text):
+    return [
+        segment
+        for segment in _segments(text)
+        if _MUTATING_GIT.search(segment) and not _PLAIN_SEARCH.match(segment)
+    ]
+
+
+def _unquote(value):
+    return value.strip("\"'")
+
+
+def _resolve(base, value):
+    """``value`` from ``base``. ``""`` means somewhere this cannot name."""
+    if not value or base == "":
+        return ""
+    path = _native_path(os.path.expanduser(_unquote(value)))
+    return os.path.join(base, path) if base else path
 
 
 def git_targets(text, cwd):
-    """Every directory ``text`` may run git against, unquoted. Pure.
+    """Every directory the mutating git commands in ``text`` may act on. Pure.
 
-    ``""`` stands for a bare ``cd``, which goes somewhere this cannot name. The
-    session's ``cwd`` when nothing redirects it.
+    ``cwd`` stays in unless a command is explicitly redirected: a mention of a path
+    is not a redirect (`git -C ../clone status; git stash`, `echo cd ../clone; ...`).
+    Only `cd X` in command position moves later commands, and only in a plain
+    sequence; a subshell, pipe, branch or `pushd` keeps ``cwd`` and adds X. `--git-dir`
+    alone still acts on the current work tree, so it adds rather than replaces.
     """
-    found = [
-        match.group(1).strip("\"'")
-        for pattern in _TARGET_PATTERNS
-        for match in re.finditer(pattern, text)
-    ]
-    if _BARE_CD.search(text):
-        found.append("")
-    return found or [cwd]
+    masked = _ANY_QUOTED.sub('""', text)
+    uncertain = bool(_CONTROL_FLOW.search(masked))
+    current, targets = cwd, []
+    if uncertain:
+        targets.append(cwd)
+        targets += [_resolve(cwd, m.group(1)) for m in _CD_MENTION.finditer(text)]
+        if _BARE_CD.search(masked):
+            targets.append("")
+    environment = [m.group(1) for m in _GIT_ENV.finditer(text)]
+
+    for segment in _segments(text):
+        change = _CD_SEGMENT.match(segment)
+        if change and not uncertain:
+            current = _resolve(current, change.group(1))
+            continue
+        match = _MUTATING_GIT.search(segment)
+        if not match or _PLAIN_SEARCH.match(segment):
+            continue
+        head, prefix = segment[: match.end()], segment[: match.start()]
+        directory = _GIT_C.search(head)
+        git_dir = _GIT_DIR_FLAG.search(head)
+        work_tree = _WORK_TREE_FLAG.search(head)
+        named = [m.group(1) for m in (directory, git_dir, work_tree) if m]
+        targets += [_resolve(current, value) for value in named]
+        if not directory and not (git_dir and work_tree):
+            targets.append(current)
+        # Wrapped in a quoted `sh -c "cd X; git stash"`: nothing here can follow it.
+        if re.search(r"[\"']", prefix):
+            targets += [
+                _resolve(cwd, m.group(1)) for m in _CD_MENTION.finditer(segment)
+            ]
+            targets += [_resolve(cwd, m.group(1)) for m in _GIT_C.finditer(segment)]
+
+    if environment:
+        targets.append(current)
+        targets += [_resolve(cwd, value) for value in environment]
+    return list(dict.fromkeys(targets)) or [cwd]
 
 
 def agent_block(command, agent_type, in_shared_tree):
@@ -334,19 +493,20 @@ def agent_block(command, agent_type, in_shared_tree):
     """
     if not agent_type:
         return ""
-    text = _agent_text(command)
 
     allowed = AGENT_BASH_ALLOW.get(agent_type)
     if allowed is not None:
-        # No substitution, no redirect: either could hide anything behind an
-        # allowed first word. `git diff --output=` is a write spelled as a flag,
-        # checked before quotes go so quoting it changes nothing. An escaped
-        # quote would make the quote-stripping below misread what the shell sees.
-        plain = _INERT_QUOTED.sub('""', text.replace("2>&1", ""))
+        # Judged on the raw command, shared by code-reviewer and test-runner: only
+        # whole quoted strings on one line are blanked, then anything that could
+        # end, hide or redirect a command is refused. A real heredoc needs `<`, and
+        # a line continuation or an escaped quote needs a backslash. `--output` is a
+        # write spelled as a flag, searched with quotes gone so `--out''put` counts.
+        raw = command.replace("2>&1", "")
+        plain = _INERT_QUOTED.sub("Q", raw)
         segments = [s.strip() for s in re.split(r"&&|\|\||[;|&\n]", plain)]
         if (
-            not re.search(r"[$`<>]", plain)
-            and not re.search(r"--output|\\[\"']", text)
+            not re.search(r"""[$`<>#\\\r'"]""", plain)
+            and "--output" not in re.sub(r"""["'\\]""", "", raw)
             and allowed
             and all(any(re.match(p, s) for p in allowed) for s in segments if s)
         ):
@@ -357,7 +517,14 @@ def agent_block(command, agent_type, in_shared_tree):
             "needs more, report that to the caller instead of working around it."
         )
 
-    if in_shared_tree and _MUTATING_GIT.search(text):
+    mutating = _mutating_segments(_agent_text(command))
+    if any(_REPO_WIDE_GIT.search(segment) for segment in mutating):
+        return (
+            "BLOCKED: a subagent may not remove, move or prune a worktree, or clear, "
+            "drop or pop a stash, from any tree: the worktree list and the stash "
+            "stack are shared across the repo (PRO-95)."
+        )
+    if in_shared_tree and mutating:
         return (
             "BLOCKED: a subagent may not run a mutating git command on the session's "
             "working tree, or on a target this guard cannot resolve (PRO-95). If you "
@@ -441,7 +608,7 @@ def _touches_shared_tree(command, data):
     if not agent_type or agent_type in AGENT_BASH_ALLOW:
         return False
     text = _agent_text(command)
-    if not _MUTATING_GIT.search(text):  # the subprocesses are paid for only here
+    if not _mutating_segments(text):  # the subprocesses are paid for only here
         return False
     session_cwd = data.get("cwd")
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR")

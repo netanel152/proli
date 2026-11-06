@@ -183,10 +183,104 @@ def test_other_subagents_may_not_mutate_the_shared_tree(command):
         "git worktree list",
         "ls .git stash",
         "cat <<'EOF'\ngit stash\nEOF",
-        "git log @'\ngit stash\n'@",
+        "cat <<-EOF\n\tgit stash\n\tEOF\ngit status",
+        "git stash list",
+        "git stash show -p",
+        'grep "git stash" f',
+        'rg "git commit" . | head -5',
+        "grep -C 3 foo f",
     ],
 )
 def test_other_subagents_keep_reads_and_the_isolation_path(command):
+    assert bash_guard.agent_block(command, "general-purpose", True) == ""
+
+
+@pytest.mark.parametrize(
+    "agent, command",
+    [
+        ("code-reviewer", "git log # '\ntouch p\n# '"),
+        ("code-reviewer", "git log '<<X'\ntouch p\nX"),
+        ("code-reviewer", "git log\rtouch p"),
+        ("code-reviewer", "git log \\\n; touch p"),
+        ("code-reviewer", "git log <<X\ntouch p\nX"),
+        ("code-reviewer", "git log 'unterminated\ntouch p"),
+        ("code-reviewer", "git diff --out''put=f"),
+        ("code-reviewer", 'git diff --out""put=f'),
+        ("code-reviewer", "git diff --out\\put=f"),
+        ("test-runner", "pytest # '\ngit stash\n# '"),
+        ("test-runner", "pytest '<<X'\ngit stash\nX"),
+    ],
+)
+def test_the_allowlist_cannot_be_escaped(agent, command):
+    assert "BLOCKED" in bash_guard.agent_block(command, agent, False)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git worktree remove --force ../other",
+        "git worktree remove ../other",
+        "git worktree move ../other ../elsewhere",
+        "git worktree prune",
+        "git stash clear",
+        "git stash drop",
+        "git stash drop stash@{0}",
+        "git stash pop",
+        "git stash -q pop",
+        "git status; git stash clear",
+        "GIT stash drop",
+    ],
+)
+def test_repo_wide_git_is_refused_from_any_tree(command):
+    refusal = bash_guard.agent_block(command, "general-purpose", False)
+    assert "any tree" in refusal
+    assert bash_guard.agent_block(command, None, False) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "# <<X\ngit stash",
+        "echo '<<X'\ngit stash\nX",
+        'echo "<<X"\ngit stash\nX',
+        "cat <<<x\ngit stash",
+        "echo $((1<<2))\ngit stash",
+        "((1<<2))\ngit stash",
+        "GIT stash",
+        "git.EXE stash",
+        "git \\\nstash",
+        "git \\\r\nstash",
+        "grep x f; git stash",
+        "rg --pre sh x; git stash",
+        "rg --pre 'git stash' x",
+        'grep "$(git stash)" f',
+    ],
+)
+def test_nothing_hides_a_real_mutating_command(command):
+    assert "BLOCKED" in bash_guard.agent_block(command, "general-purpose", True)
+
+
+def test_main_session_heredoc_handling_is_unchanged():
+    assert bash_guard.strip_heredocs("cat <<X\nbody\nX\nnext") == "cat <<X\nnext"
+    # A comment still opens one there: only subagents use the stricter scanner.
+    assert bash_guard.strip_heredocs("# <<X\nbody") == "# <<X"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git${IFS}stash",
+        "$(echo git) stash",
+        'eval "$CMD"',
+        "sh <<EOF\ngit stash\nEOF",
+        "python -c 'import os'",
+        "git branch -D feature",
+        "git update-ref -d refs/heads/x",
+        "git config core.hooksPath /tmp/x",
+    ],
+)
+def test_the_limits_docs_agent_pack_admits_are_real(command):
+    """Not a goal. If one starts being caught, shorten the list in the doc."""
     assert bash_guard.agent_block(command, "general-purpose", True) == ""
 
 
@@ -225,20 +319,34 @@ def test_every_spelling_of_a_mutating_git_command_counts(command):
     "command, expected",
     [
         ("git stash", ["/here"]),
-        ("cd X; git stash", ["X"]),
-        ("cd X && git stash", ["X"]),
-        ('cd "a b" && git stash', ["a b"]),
-        ('sh -c "cd /x;git stash"', ["/x"]),
-        ("git -C 'x' reset", ["x"]),
-        ("git --git-dir=.git stash", [".git"]),
-        ("git --work-tree y stash", ["y"]),
-        ("GIT_DIR=z git stash", ["z"]),
-        ("Set-Location w; git stash", ["w"]),
+        ("cd X; git stash", ["/here/X"]),
+        ("cd X && git stash", ["/here/X"]),
+        ('cd "a b" && git stash', ["/here/a b"]),
+        ("cd X; cd Y; git stash", ["/here/X/Y"]),
+        ("Set-Location w; git stash", ["/here/w"]),
         ("cd; git stash", [""]),
+        ("git -C 'x' reset", ["/here/x"]),
+        ('sh -c "cd x;git stash"', ["/here", "/here/x"]),
+        # --git-dir or --work-tree alone still acts on the current tree.
+        ("git --git-dir=.git stash", ["/here/.git", "/here"]),
+        ("git --work-tree y stash", ["/here/y", "/here"]),
+        ("git --git-dir=a --work-tree=b stash", ["/here/a", "/here/b"]),
+        ("GIT_DIR=z git stash", ["/here", "/here/z"]),
+        # A mention is not a redirect.
+        ("git -C ../clone status; git stash", ["/here"]),
+        ("echo cd ../clone; git stash", ["/here"]),
+        ("grep -C ../clone x f; git stash", ["/here"]),
+        # A `cd` that may not carry over keeps the current tree in.
+        ("(cd c); git stash", ["/here", "/here/c"]),
+        ("pushd c; popd; git stash", ["/here", "/here/c"]),
+        ("cd c || git stash", ["/here", "/here/c"]),
+        ("if x; then cd c; fi; git stash", ["/here", "/here/c"]),
+        ("(cd; git stash)", ["/here", ""]),
     ],
 )
 def test_git_targets_finds_where_the_command_points(command, expected):
-    assert bash_guard.git_targets(command, "/here") == expected
+    found = bash_guard.git_targets(command, "/here")
+    assert [path.replace("\\", "/") for path in found] == expected
 
 
 def _git(cwd, *args):
@@ -333,6 +441,25 @@ def test_a_git_bash_path_resolves_under_native_windows_python():
         ("agent-abc", "cd ../main; git stash", "abc", 2),
         ("agent-abc", "git -C ../session-wt stash", "abc", 2),
         ("agent-abc", "git status", "abc", 0),
+        # Must keep working: an isolated subagent commits and pushes its own branch.
+        ("agent-abc", "git add a && git commit -m x", "abc", 0),
+        ("agent-abc", "git push -u origin HEAD", "abc", 0),
+        ("agent-abc", "cd . && git commit -m x", "abc", 0),
+        ("agent-abc", "grep -C 3 foo f && git add f", "abc", 0),
+        ("agent-abc", "if true; then cd ../main; fi; git stash", "abc", 2),
+        ("agent-abc", 'sh -c "cd ../main; git stash"', "abc", 2),
+        ("agent-abc", "git worktree remove --force ../session-wt", "abc", 2),
+        ("agent-abc", "git stash pop", "abc", 2),
+        # A mention of somewhere else does not lift the session's own tree.
+        ("session-wt", "git -C ../clone status; git stash", "xyz", 2),
+        ("session-wt", "(cd ../clone); git stash", "xyz", 2),
+        ("session-wt", "pushd ../clone; popd; git stash", "xyz", 2),
+        ("session-wt", "echo cd ../clone; git stash", "xyz", 2),
+        ("session-wt", "grep -C ../clone x f; git stash", "xyz", 2),
+        ("session-wt", "git --git-dir=../clone/.git reset --hard", "xyz", 2),
+        # A real redirect to its own clone is still allowed.
+        ("session-wt", "cd ../clone && git stash", "xyz", 0),
+        ("session-wt", "git -C ../clone reset --hard", "xyz", 0),
     ],
 )
 def test_the_guard_decides_from_real_hook_input(

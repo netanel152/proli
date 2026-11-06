@@ -57,17 +57,34 @@ and that includes every MCP server.
 
 ## What the guard still cannot see
 
-The git guard reads the command's text, so it stops mistakes and misread context. It does not
-contain an agent trying to get past it.
+**The git guard stops mistakes, not an attacker.** It reads the command's text, and a regex cannot
+beat an agent trying to get past it. The `tools:` lists are the hard limit. `AGENT_BASH_ALLOW` is
+stricter than the rest of the guard, because it refuses what it does not recognise, but it is still
+a text match. All of these get past the non-pack rules today:
 
-- **A shell fed a heredoc** (`sh <<EOF`): heredoc bodies are stripped, because a commit message
-  that mentions `git stash` is not a stash.
-- **`eval`, a variable holding the whole command, and script files** (`python x.py`,
-  `sh x.sh`): what they run is not in the text.
+- **Hiding the command from the text:** `git${IFS}stash`, `$(echo git) stash`, `eval`, a variable
+  holding the whole command, and a shell fed a heredoc (`sh <<EOF`). Heredoc bodies are stripped,
+  because a commit message that mentions `git stash` is not a stash.
+- **Another interpreter:** `python -c`, `python x.py`, `sh x.sh`. `pytest`, which `test-runner` is
+  allowed, can also run anything through `conftest.py`.
+- **Verbs left out:** `branch -D`, `update-ref`, `config core.hooksPath`, `tag -d`, `push --force`.
+  They change refs or config, not the working tree.
 - **A sibling worktree of another session:** `git -C ../other stash` looks the same as a worktree
   the subagent made itself, unless it has an `agent-` name. The hook input does not say which it is.
-- **False positives it accepts:** `echo "git stash"` is refused, and so is `git commit -m "cd foo"`
-  from an isolated subagent, because the text looks like it changes directory.
+  The stash and worktree commands that reach across the whole repo are refused from every tree.
+
+`Monitor` runs a shell command too. In one live check on Claude Code 2.1.318 it fired this hook
+as `PreToolUse:Monitor`, despite the `Bash|PowerShell` matcher, and was refused. That is observed,
+not documented, so do not rely on it.
+
+False refusals it accepts:
+
+- `echo "git stash"` and `git log --grep="git stash"`. A plain `grep` or `rg` is exempt; other
+  commands that only mention a mutating command are not.
+- Multi-line commit messages that mention `git stash pop` or `cd foo`. Use `git commit -F <file>`.
+- `(cd ../clone && git stash)` from the session's tree, because a subshell keeps `cwd` in the
+  check. Use `git -C ../clone stash`.
+- `git worktree remove` on a worktree the subagent made itself. The caller cleans it up.
 
 An isolated subagent is recognised by its directory, `.claude/worktrees/agent-<agent_id>`. That
 was observed from real hook input (Claude Code 2.1.318) and is not documented. If the name changes,
