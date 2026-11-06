@@ -288,8 +288,8 @@ class WorkerConstants:
     WA_QUALITY_POLL_FAILURE_THRESHOLD = 3
     # No poll attempted for this long means the watchdog itself is not running.
     WA_QUALITY_STALE_MINUTES = 45
-    # One page per condition per episode, and a flapping condition stays quiet
-    # for this long after it clears (the PRO-162 unbounded-page lesson).
+    # At most one page per condition per window, standing or flapping, matching
+    # the other standing alerts (the PRO-162 unbounded-page lesson).
     WA_QUALITY_PAGE_COOLDOWN_HOURS = 24
     # Alert when business-initiated conversations reach this share of the cap.
     # The cap itself follows Meta's live limit, see Settings.WA_BUSINESS_INITIATED_CAP.

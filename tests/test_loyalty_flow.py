@@ -199,6 +199,8 @@ async def test_no_offer_while_whatsapp_quality_is_degraded(
         "app.services.conversation_pipeline.non_essential_sends_paused",
         AsyncMock(return_value=True),
     )
+    matching = AsyncMock(return_value=None)
+    monkeypatch.setattr(workflow_service, "determine_best_pro", matching)
     mock_wa, mock_state, mock_ctx, mock_lm, mock_ai, db = loyalty_mocks
     mock_state.get_state.return_value = UserStates.IDLE
     chat_id = _chat_id()
@@ -238,7 +240,7 @@ async def test_no_offer_while_whatsapp_quality_is_degraded(
     )
     updated = await db.leads.find_one({"_id": current_lead_id})
     assert not updated.get("loyalty_offered")
-    assert mock_wa.send_message.await_count >= 1, "the customer still gets a reply"
+    matching.assert_awaited_once()
 
 
 # --- 2 & 3. Natural-language accept / decline --------------------------------

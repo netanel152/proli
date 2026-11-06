@@ -138,7 +138,6 @@ META_ACCESS_TOKEN=...        # secret — required once WHATSAPP_PROVIDER=cloud 
 META_APP_SECRET=...          # secret — signs inbound /webhook/meta; required for cloud in staging/production
 META_VERIFY_TOKEN=...        # secret — echoed back during the Meta subscription handshake; required for cloud in staging/production
 META_PHONE_NUMBER_ID=...     # not secret — Graph node id, required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
-META_WABA_ID=...             # not secret — worker only; quality watchdog reads the WABA's health_status (optional, production logs ERROR at boot without it under cloud)
 WA_BUSINESS_INITIATED_CAP=250  # worker only; fallback cap for the 80% alert when Meta's live limit can't be read
 PUBLIC_BASE_ORIGIN=https://...  # optional — public https origin, no path, serving /privacy and /terms; unset = messages carry no link; a malformed or non-public value (localhost, private IP, http, a path) also means no link, and logs ERROR at boot
 TERMS_ENABLED=false  # true publishes /terms and its links, but only once app/static/terms.html is the approved text (a draft stays 404 and logs ERROR at boot)

@@ -50,7 +50,7 @@ file is audited by the docs-syncer subagent.
 - `WorkerConstants.WA_QUALITY_CHECK_INTERVAL_MINUTES = 15`: how often the worker reads the number's quality rating, messaging limit and WABA health; also runs once after boot via the PRO-176 boot slot (PRO-90)
 - `WorkerConstants.WA_QUALITY_POLL_FAILURE_THRESHOLD = 3`: consecutive failed polls before "can't read Meta" pages and tightens
 - `WorkerConstants.WA_QUALITY_STALE_MINUTES = 45`: no poll attempted for this long reads as a dead watchdog (`quality_poll.status: stale`), which tightens in production
-- `WorkerConstants.WA_QUALITY_PAGE_COOLDOWN_HOURS = 24`: one page per condition per episode, since each tick refreshes the `wa:quality:paged:<condition>` key; a condition that clears and returns stays quiet this long
+- `WorkerConstants.WA_QUALITY_PAGE_COOLDOWN_HOURS = 24`: at most one page per condition per window, standing or flapping, via `wa:quality:paged:<condition>` (SET NX EX); each page gets its own Sentry fingerprint so a repeat opens a new issue
 - `WorkerConstants.WA_BUSINESS_INITIATED_ALERT_RATIO = 0.8`: page at this share of the cap. The cap is the live messaging limit, else `Settings.WA_BUSINESS_INITIATED_CAP` (default 250)
 - `WorkerConstants.PENDING_REVIEW_SHORTCIRCUIT_HOURS = 24`: how long a PENDING_ADMIN_REVIEW lead short-circuits the customer's chat before their next message proceeds to the normal dispatcher (PRO-63)
 - `WorkerConstants.SCHEDULER_MONGO_AUTH_TRIP_THRESHOLD = 3`: Mongo auth failures within the rolling window before a scheduler job pages CRITICAL (PRO-112)

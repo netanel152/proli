@@ -42,6 +42,8 @@ _RATINGS_NOT_ALARMING = {"GREEN", "NA", UNKNOWN}
 # across every number in the business portfolio. Add the other numbers' traffic
 # if a portfolio ever holds more than one live number.
 _BUSINESS_INITIATED_WINDOW_SECONDS = 86400
+# Meta's page shows only TIER_250 as an exact string; the others are inferred
+# from its 2,000/10,000/100,000 tiers. Anything else takes the configured cap.
 _TIER_CAPS = {
     "TIER_250": 250,
     "TIER_2K": 2000,
@@ -49,17 +51,23 @@ _TIER_CAPS = {
     "TIER_100K": 100000,
 }
 
-# Stand-in for the Redis page claim while Redis cannot answer. Per-process and
-# never cleared, which still turns "page every tick" into "page once per run".
-_LOCAL_PAGE_CLAIMS: set[str] = set()
+# Stand-in for the Redis page claim while Redis cannot answer: condition to the
+# monotonic time it last paged. Per-process, so replicas may each page once.
+_LOCAL_PAGE_CLAIMS: dict[str, float] = {}
 
 
 async def read_snapshot() -> dict[str, Any] | None:
-    """The stored snapshot, ``None`` when absent. Raises on a Redis error so
-    each caller picks its own failure direction."""
+    """The stored snapshot, ``None`` when absent. Raises on a Redis error, and
+    ``ValueError`` on stored content that isn't a snapshot, so each caller picks
+    its own failure direction."""
     redis = await get_redis_client()
     raw = await redis.get(_SNAPSHOT_KEY)
-    return json.loads(raw) if raw else None
+    if not raw:
+        return None
+    snapshot = json.loads(raw)
+    if not isinstance(snapshot, dict):
+        raise ValueError("stored snapshot is not an object")
+    return snapshot
 
 
 async def write_snapshot(snapshot: dict[str, Any]) -> None:
@@ -74,26 +82,22 @@ def merge_reading(
 ) -> dict[str, Any]:
     """Fold one poll into the previous snapshot.
 
-    A value Meta did not return keeps its last known value, so a condition
-    cannot clear itself just because the poll failed. A poll counts as good only
-    when every node it was configured to read answered: a 200 with no rating, or
-    an unreadable WABA, is blindness too.
+    On a failed poll, a value Meta did not return keeps its last known value, so
+    a condition cannot clear itself. A poll counts as good only when it carried
+    both the rating and the health status: a 200 without either is blindness too.
+    A missing limit is not, but a good poll without one leaves the tier unknown
+    rather than passing an old tier off as current.
     """
     snapshot = dict(previous)
-    if not settings.META_WABA_ID:
-        # Unset by the operator: a retained BLOCKED could never clear itself.
-        snapshot.pop("can_send_message", None)
-        snapshot.pop("health_errors", None)
     if reading:
         snapshot.update({k: v for k, v in reading.items() if v is not None})
     poll_ok = bool(
-        reading
-        and reading.get("quality_rating")
-        and (not settings.META_WABA_ID or reading.get("can_send_message"))
+        reading and reading.get("quality_rating") and reading.get("can_send_message")
     )
     snapshot["poll_ok"] = poll_ok
     snapshot["last_attempt_at"] = time.time()
     if poll_ok:
+        snapshot["messaging_tier"] = reading.get("messaging_tier")
         snapshot["last_success_at"] = snapshot["last_attempt_at"]
         snapshot["consecutive_failures"] = 0
     else:
@@ -123,27 +127,25 @@ def active_conditions(snapshot: dict[str, Any]) -> list[str]:
 
 
 async def claim_page(condition: str) -> bool:
-    """True when the caller should page for ``condition``.
+    """True at most once per cooldown per ``condition``, standing or flapping.
 
-    Called on every tick the condition holds. Each call refreshes the key, so a
-    standing condition pages exactly once however long it lasts, and the key
-    outlives the episode by the cooldown, so a flapping one pages at most once
-    per cooldown. YELLOW then RED are distinct conditions and each page.
+    YELLOW then RED are distinct conditions and each page.
     """
+    cooldown = WorkerConstants.WA_QUALITY_PAGE_COOLDOWN_HOURS * 3600
     try:
         redis = await get_redis_client()
-        previous = await redis.set(
-            f"{_PAGED_KEY_PREFIX}{condition}",
-            "1",
-            ex=WorkerConstants.WA_QUALITY_PAGE_COOLDOWN_HOURS * 3600,
-            get=True,
+        return bool(
+            await redis.set(
+                f"{_PAGED_KEY_PREFIX}{condition}", "1", ex=cooldown, nx=True
+            )
         )
-        return previous is None
     except Exception as e:
         logger.warning(f"[WA Quality] page claim fell back to in-process: {e}")
-        if condition in _LOCAL_PAGE_CLAIMS:
+        now = time.monotonic()
+        last = _LOCAL_PAGE_CLAIMS.get(condition)
+        if last is not None and now - last < cooldown:
             return False
-        _LOCAL_PAGE_CLAIMS.add(condition)
+        _LOCAL_PAGE_CLAIMS[condition] = now
         return True
 
 
@@ -198,7 +200,7 @@ def window_state(snapshot: dict[str, Any] | None, status: str) -> str:
     """Whether the *number* can send: ``open``, ``limited``, ``blocked`` or
     ``unknown``. The 24h service window is per recipient (``window.py``) and has
     no single value, so this reports the number-level gate. The state table is in
-    docs/RUNBOOK_WHATSAPP_OUTAGE.md §0.
+    docs/RUNBOOK_WHATSAPP_OUTAGE.md §8.
     """
     if status != "ok":
         return "unknown"
@@ -229,7 +231,9 @@ async def health_fields(transmits: bool) -> dict[str, Any]:
         "quality_rating": stored.get("quality_rating", UNKNOWN) if fresh else UNKNOWN,
         "messaging_tier": tier or UNKNOWN if fresh else UNKNOWN,
         "window_state": window_state(stored, status),
-        "can_send_message": _can_send_for_health(stored, fresh),
+        "can_send_message": (
+            stored.get("can_send_message", UNKNOWN) if fresh else UNKNOWN
+        ),
         "quality_poll": {
             "status": status,
             "last_success_at": stored.get("last_success_at"),
@@ -252,14 +256,6 @@ async def health_fields(transmits: bool) -> dict[str, Any]:
     return fields
 
 
-def _can_send_for_health(stored: dict[str, Any], fresh: bool) -> str:
-    if not fresh:
-        return UNKNOWN
-    if not settings.META_WABA_ID:
-        return "UNCONFIGURED"
-    return stored.get("can_send_message", UNKNOWN)
-
-
 def _is_tightened(stored: dict[str, Any], status: str) -> bool:
     """Staging observes and production acts, so only production ever tightens.
     A watchdog that is not running there tightens too: it cannot vouch for the
@@ -271,7 +267,11 @@ def _is_tightened(stored: dict[str, Any], status: str) -> bool:
 
 
 async def non_essential_sends_paused() -> bool:
-    """Whether review requests and loyalty offers should hold back right now.
+    """Whether the pro-finish rating prompt and loyalty offers should hold back.
+
+    Only those two. The scheduled completion check must never ask this: it is the
+    customer's done / not yet / no-show menu, and a lead that misses it passing
+    24h never gets it.
 
     Answers before touching Redis outside production, so no test or staging path
     pays for it. Unreadable Redis pauses: losing one of these sends is harmless,
@@ -282,8 +282,8 @@ async def non_essential_sends_paused() -> bool:
     # Deferred: get_whatsapp is defined in this package's __init__.
     from app.providers.whatsapp import get_whatsapp
 
-    transmits = get_whatsapp().provider.transmits
     try:
+        transmits = get_whatsapp().provider.transmits
         snapshot = await read_snapshot()
     except Exception as e:
         logger.warning(f"[WA Quality] snapshot unreadable, pausing sends: {e}")

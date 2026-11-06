@@ -423,8 +423,7 @@ python scripts/generate_admin_hash.py
 | `META_APP_SECRET` | — | Secret. Signs inbound `/webhook/meta` (`X-Hub-Signature-256`); required for `cloud` in staging/production |
 | `META_VERIFY_TOKEN` | — | Secret. Echoed back during the Meta subscription handshake (`GET /webhook/meta`); required for `cloud` in staging/production |
 | `META_PHONE_NUMBER_ID` | — | Not secret. Graph API phone-number node id; required once `WHATSAPP_PROVIDER=cloud` and `WHATSAPP_DRY_RUN` is not `true` |
-| `META_WABA_ID` | — | Not secret. WABA node id, read by the worker's quality watchdog for `health_status`. Optional, but production reports at ERROR on boot without it under `cloud` (PRO-90; `docs/RUNBOOK_WHATSAPP_OUTAGE.md` §8) |
-| `WA_BUSINESS_INITIATED_CAP` | `250` | Worker. Cap for the 80% business-initiated alert when Meta's live limit cannot be read or is not recognized; a recognized live limit wins |
+| `WA_BUSINESS_INITIATED_CAP` | `250` | Worker. Cap for the 80% business-initiated alert when Meta's live limit cannot be read or is not recognized; a recognized live limit wins. Blank, zero, negative or non-numeric means the default |
 | `META_GRAPH_API_VERSION` | `v23.0` | Graph API version pinned in every outbound request URL |
 | `ENVIRONMENT` | `development` | One of `development` \| `staging` \| `production` — any other value raises at startup. `staging` and `production` are both "prod-like": JSON logs + PII masking on stdout, `diagnose=False`, and `MONGO_URI` required by the admin panel. `production` additionally blocks `scripts/seed_db.py` |
 | `LOG_LEVEL` | `INFO` | Loguru log level. Staging and production run `WARNING`, so a quiet worker's happy path emits nothing — an empty Railway log stream is not evidence of a broken service. The scheduler's boot line (`[Scheduler] First runs: …`, PRO-176) is deliberately emitted at WARNING so the job schedule stays visible at that level |

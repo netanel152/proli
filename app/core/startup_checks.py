@@ -48,27 +48,6 @@ def warn_if_public_origin_malformed(settings: Settings) -> bool:
     return True
 
 
-def warn_if_waba_id_missing(settings: Settings) -> bool:
-    """Report production transmitting with no ``META_WABA_ID``.
-
-    The quality watchdog still reads the rating, but ``/health`` then says
-    ``can_send_message: UNCONFIGURED`` and a BLOCKED or LIMITED WABA pages nobody.
-    Returns whether it reported.
-    """
-    if (
-        not settings.is_production
-        or settings.WHATSAPP_DRY_RUN
-        or settings.WHATSAPP_PROVIDER != "cloud"
-        or settings.META_WABA_ID
-    ):
-        return False
-    logger.error(
-        "META_WABA_ID is not set — the WhatsApp watchdog cannot read the WABA's "
-        "health_status, so a BLOCKED or LIMITED account pages nobody."
-    )
-    return True
-
-
 def warn_if_admin_phone_unconfigured(settings: Settings) -> bool:
     """Report a prod-like deployment that never set ``ADMIN_PHONE`` (PRO-48).
 
