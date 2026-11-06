@@ -5,6 +5,7 @@ Covers: first contact, accept, decline, unclear response, re-ask, pro bypass.
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
+from app.core.config import settings
 from app.core.constants import UserStates
 from app.core.messages import Messages
 from app.services.workflow_service import process_incoming_message
@@ -51,6 +52,21 @@ async def test_first_contact_sends_consent_request(consent_mocks):
     mock_state.set_state.assert_called_with(
         "972501111111@c.us", UserStates.AWAITING_CONSENT
     )
+
+
+@pytest.mark.asyncio
+async def test_first_contact_consent_carries_the_policy_url(consent_mocks, monkeypatch):
+    """The configured origin reaches the text the gate actually sends."""
+    monkeypatch.setattr(settings, "PUBLIC_BASE_ORIGIN", "https://example.test")
+    mock_wa, mock_state, mock_has_consent, _ = consent_mocks
+    mock_has_consent.return_value = None
+    mock_state.get_state.return_value = UserStates.IDLE
+
+    await process_incoming_message("972501111111@c.us", "שלום")
+
+    sent = mock_wa.send_message.call_args.args[1]
+    assert sent.startswith(Messages.Consent.REQUEST)
+    assert "https://example.test/privacy" in sent
 
 
 @pytest.mark.asyncio

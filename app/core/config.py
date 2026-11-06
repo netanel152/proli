@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, SecretStr, field_validator, model_validator
 import os
+from urllib.parse import urlsplit
 
 from app.core.constants import (
     CLOUD_PROVIDER,
@@ -125,6 +126,39 @@ class Settings(BaseSettings):
     # the minimal public /health stays up for Railway/Docker/deploy probes.
     # In development an unset token keeps full detail available locally.
     HEALTH_TOKEN: SecretStr | None = None
+
+    # Where customers can open /privacy and /terms, e.g. https://example.co.il.
+    # Unset means the messages carry no link at all. Named *_ORIGIN because a
+    # *_URL field must be SecretStr (test_settings_secret_masking), and this
+    # value is public by definition.
+    PUBLIC_BASE_ORIGIN: str | None = None
+    # The operator's half of publishing the terms; the other half is terms.html
+    # having no draft marker left (legal_links.terms_published).
+    TERMS_ENABLED: bool = False
+
+    @field_validator("PUBLIC_BASE_ORIGIN", mode="before")
+    @classmethod
+    def validate_public_base_origin(cls, v) -> str | None:
+        """Refuse at boot anything that would reach a customer as a broken link."""
+        raw = str(v or "").strip().rstrip("/")
+        if not raw:
+            return None
+        parts = urlsplit(raw)
+        if (
+            parts.scheme != "https"
+            or not parts.hostname
+            or parts.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
+            or "@" in parts.netloc
+            or parts.path
+            or parts.query
+            or parts.fragment
+        ):
+            raise ValueError(
+                "PUBLIC_BASE_ORIGIN must be a public https origin with no path, "
+                f"like https://example.co.il (got {v!r})"
+            )
+        return raw
+
     # PRO-34: exactly one of "development" | "staging" | "production".
     # Anything else fails fast at startup (see validate_environment) rather than
     # silently falling through to the non-prod branch everywhere.

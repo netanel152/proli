@@ -146,3 +146,8 @@ The PRO-89 inbound entry point for the Meta Cloud API transport. Mounted alongsi
 - Delivery-status events (`sent`/`delivered`/`read`/`failed`) are applied first via `delivery.apply_status_event`; a `failed` with Meta error code `131047` (window closed) drives the template-retry path.
 - Each normalized message is deduped (Redis `SET NX`, 24h TTL, same idempotency namespace as `/webhook`) and enqueued as a `process_message_task`.
 - **Response policy:** `200` for everything decided (processed, duplicate, ignored, malformed body); `503` only for an infrastructure failure that prevented enqueueing, with the idempotency claim released so Meta's retry can land.
+
+### 5. Public Pages
+**GET** `/privacy`, **GET** `/terms`
+
+Static Hebrew-first HTML, no auth, `Cache-Control: public, max-age=3600`. `/terms` answers `404` until `TERMS_ENABLED=true` and `app/static/terms.html` has no draft banner or `[להשלים` placeholder left (`app/core/legal_links.py`).

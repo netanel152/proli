@@ -172,6 +172,11 @@ def patch_dependencies(request, monkeypatch, mock_db):
     # build a facade over a transmitting fake (see tests/test_whatsapp_facade.py).
     monkeypatch.setattr(settings, "WHATSAPP_DRY_RUN", True)
 
+    # Flow tests compare against the plain Messages text; a developer's .env must
+    # not add policy links to it.
+    monkeypatch.setattr(settings, "PUBLIC_BASE_ORIGIN", None)
+    monkeypatch.setattr(settings, "TERMS_ENABLED", False)
+
     # Patch Database Collections
     users = mock_db.users
     messages = mock_db.messages

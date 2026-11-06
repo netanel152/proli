@@ -4,10 +4,13 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from app.core.config import settings
-from app.core.startup_checks import warn_if_admin_phone_unconfigured
+from app.core.startup_checks import (
+    warn_if_admin_phone_unconfigured,
+    warn_if_terms_enabled_on_draft,
+)
 import asyncio
 from contextlib import asynccontextmanager
-from app.api.routes import webhook, meta_webhook, health, privacy
+from app.api.routes import webhook, meta_webhook, health, privacy, terms
 from app.core.redis_client import close_redis_client, get_redis_client
 from app.core.http_client import close_http_client as _close_shared_http_client
 from app.core.database import client as mongo_client
@@ -100,6 +103,7 @@ async def lifespan(app: FastAPI):
     await _connect_with_retry("Redis", _probe_redis)
 
     warn_if_admin_phone_unconfigured(settings)  # PRO-48
+    warn_if_terms_enabled_on_draft(settings)
 
     # Ensure all MongoDB indexes exist (idempotent — safe to run on every startup)
     try:
@@ -132,6 +136,7 @@ app.add_middleware(
 app.include_router(webhook.router)
 app.include_router(meta_webhook.router)  # PRO-89 — Meta Cloud API inbound
 app.include_router(privacy.router)  # PRO-87 — public privacy policy page
+app.include_router(terms.router)  # public terms page, 404 until published
 app.include_router(health.router)
 
 if __name__ == "__main__":

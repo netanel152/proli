@@ -3,7 +3,10 @@ import time
 from arq.connections import RedisSettings
 from arq.worker import Retry
 from app.core.config import settings
-from app.core.startup_checks import warn_if_admin_phone_unconfigured
+from app.core.startup_checks import (
+    warn_if_admin_phone_unconfigured,
+    warn_if_terms_enabled_on_draft,
+)
 from app.services.workflow_service import process_incoming_message, whatsapp
 from app.core.logger import logger, mask_pii, new_trace_id, page_critical
 from app.core.phone import mask_chat_id
@@ -41,6 +44,7 @@ async def startup(ctx):
 
     # 2. Start Scheduler
     warn_if_admin_phone_unconfigured(settings)  # PRO-48
+    warn_if_terms_enabled_on_draft(settings)
 
     logger.info("⏳ Starting Scheduler within Worker...")
     ctx["scheduler"] = start_scheduler()
