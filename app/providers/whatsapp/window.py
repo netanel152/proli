@@ -15,7 +15,7 @@ Redis error, deliberately mirroring the facade's Redis-error posture (PRO-82):
 a monitoring/bookkeeping dependency going down must not take the send path
 with it. The backstop is real — a send Meta rejects for a closed window comes
 back as a ``failed`` delivery status with error 131047, which the status
-handler routes through the template-retry path. Failing *closed* here would
+handler pages as a lost message. Failing *closed* here would
 instead silently convert a Redis blip into dropped customer replies, which is
 the exact failure mode PRO-89 forbids.
 
@@ -148,7 +148,7 @@ async def is_service_window_open(chat_id: str) -> bool:
     """True when a free-form send to ``chat_id`` is deliverable.
 
     Fail-open: an unreadable Redis reports the window as open and lets Meta be
-    the judge (131047 → template-retry path), per the module docstring.
+    the judge (131047 → operator page), per the module docstring.
     """
     try:
         redis = await get_redis_client()

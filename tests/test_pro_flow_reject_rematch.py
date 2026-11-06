@@ -46,7 +46,7 @@ monitor_service.<name>`` no longer resolves.
 
 import pytest
 import pytest_asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 from bson import ObjectId
 from datetime import datetime, timezone
 
@@ -193,7 +193,10 @@ async def test_reject_with_replacement_reassigns_and_notifies_customer(
 
     # customer told a new pro was found
     mock_monitor_wa.send_message.assert_any_call(
-        lead["chat_id"], Messages.SOS.CUSTOMER_REASSIGNING
+        lead["chat_id"],
+        Messages.SOS.CUSTOMER_REASSIGNING,
+        template_key="reassigning",
+        params=ANY,
     )
     mock_monitor_wa.send_message.assert_any_call(
         lead["chat_id"],
@@ -318,7 +321,10 @@ async def test_reject_no_replacement_escalates_with_real_status_history(
     assert [h["by"] for h in history] == [Actor.PRO, Actor.SYSTEM]
 
     mock_monitor_wa.send_message.assert_any_call(
-        lead["chat_id"], Messages.Customer.PENDING_REVIEW
+        lead["chat_id"],
+        Messages.Customer.PENDING_REVIEW,
+        template_key="pending_review",
+        params=ANY,
     )
 
     # Gap 8 — notify_old_pro=False holds on this branch too (trivially true
@@ -361,7 +367,10 @@ async def test_reject_at_max_reassignments_escalates_with_real_writes(
     assert [h["by"] for h in history][-2:] == [Actor.PRO, Actor.SYSTEM]
 
     mock_monitor_wa.send_message.assert_any_call(
-        lead["chat_id"], Messages.SOS.MAX_REASSIGNMENTS_REACHED
+        lead["chat_id"],
+        Messages.SOS.MAX_REASSIGNMENTS_REACHED,
+        template_key="max_reassignments",
+        params=ANY,
     )
 
 
@@ -504,7 +513,10 @@ async def test_reject_rematch_raises_escalates_and_notifies_via_injected_whatsap
     # monitor_service's -- reassign_lead never ran, so it never had the
     # chance to send anything through its own facade.
     mock_wa.send_message.assert_any_call(
-        lead["chat_id"], Messages.Customer.PENDING_REVIEW
+        lead["chat_id"],
+        Messages.Customer.PENDING_REVIEW,
+        template_key="pending_review",
+        params=ANY,
     )
 
     import app.services.pro_flow as pro_flow_mod
@@ -579,7 +591,10 @@ async def test_reassign_returns_false_leaves_rejected_escalates_and_pages_admin(
     assert paged_lead["_id"] == lead["_id"]
 
     mock_wa.send_message.assert_any_call(
-        lead["chat_id"], Messages.Customer.PENDING_REVIEW
+        lead["chat_id"],
+        Messages.Customer.PENDING_REVIEW,
+        template_key="pending_review",
+        params=ANY,
     )
 
     import app.services.pro_flow as pro_flow_mod

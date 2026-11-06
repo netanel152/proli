@@ -23,6 +23,7 @@ from app.providers.whatsapp.facade import _PAUSE_KEY
 from app.services import matching_service
 from app.services.notification_service import (
     send_oncall_alert,
+    issue_param,
     notify_pro_new_lead,
     page_operator,
 )
@@ -184,13 +185,18 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
             return False
 
         try:
-            await whatsapp.send_message(chat_id, Messages.SOS.MAX_REASSIGNMENTS_REACHED)
+            await whatsapp.send_message(
+                chat_id,
+                Messages.SOS.MAX_REASSIGNMENTS_REACHED,
+                template_key="max_reassignments",
+                params={"issue_type": issue_param(lead)},
+            )
         except Exception as e:
             logger.error(
                 f"Failed to notify customer ...{chat_id[-8:]} of escalation: {e}"
             )
-        # The customer message promises a callback within the hour; the batched
-        # Reporter only runs every 4h, so page the admin now. Best-effort — a
+        # The customer message promises a callback soon; the batched Reporter
+        # only runs every 4h, so page the admin now. Best-effort — a
         # failed alert must not abort the escalation (the lead is already in
         # PENDING_ADMIN_REVIEW, and the Reporter remains the safety net).
         await _alert_admin_lead_escalated(lead, reassignment_count)
@@ -224,7 +230,12 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
         # was cleared with no message, the exact "ghosting" the other two
         # escalation branches already avoid. Fail-open like them.
         try:
-            await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+            await whatsapp.send_message(
+                chat_id,
+                Messages.Customer.PENDING_REVIEW,
+                template_key="pending_review",
+                params={"issue_type": issue_param(lead)},
+            )
         except Exception as e:
             logger.error(
                 f"Failed to notify customer ...{chat_id[-8:]} of pending review: {e}"
@@ -235,7 +246,12 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
 
     # 1. Notify customer
     try:
-        await whatsapp.send_message(chat_id, Messages.SOS.CUSTOMER_REASSIGNING)
+        await whatsapp.send_message(
+            chat_id,
+            Messages.SOS.CUSTOMER_REASSIGNING,
+            template_key="reassigning",
+            params={"issue_type": issue_param(lead)},
+        )
     except Exception as e:
         logger.error(f"Failed to notify customer ...{chat_id[-8:]}: {e}")
 
@@ -300,6 +316,7 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
                 "no_show_reported_at": "",
                 "completion_check_sent_at": "",
                 "completion_check_sent_count": "",
+                "offer_withheld_details": "",
             },
             expected_status=lead.get("status"),
         )
@@ -347,7 +364,12 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
                 "PENDING_ADMIN_REVIEW, needs manual contact."
             )
             try:
-                await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+                await whatsapp.send_message(
+                    chat_id,
+                    Messages.Customer.PENDING_REVIEW,
+                    template_key="pending_review",
+                    params={"issue_type": issue_param(lead)},
+                )
             except Exception as e:
                 logger.error(
                     f"Failed to notify customer ...{chat_id[-8:]} of pending "
@@ -377,7 +399,12 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
             old_pro = await users_collection.find_one({"_id": current_pro_id})
             if old_pro and old_pro.get("phone_number"):
                 old_phone = to_chat_id(old_pro["phone_number"])
-                await whatsapp.send_message(old_phone, Messages.SOS.PRO_LOST_LEAD)
+                await whatsapp.send_message(
+                    old_phone,
+                    Messages.SOS.PRO_LOST_LEAD,
+                    template_key="pro_lost_lead",
+                    params={"issue_type": issue_param(lead)},
+                )
 
         # Re-arm the PRO-56 approval SLA for the NEW pro (PRO-117): the SLA
         # monitor and the 1/2 reassign-offer reply both require the customer to
@@ -413,7 +440,12 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
     )
     await set_lead_status(lead_id, LeadStatus.PENDING_ADMIN_REVIEW, Actor.SYSTEM)
     try:
-        await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+        await whatsapp.send_message(
+            chat_id,
+            Messages.Customer.PENDING_REVIEW,
+            template_key="pending_review",
+            params={"issue_type": issue_param(lead)},
+        )
     except Exception as e:
         logger.error(
             f"Failed to notify customer ...{chat_id[-8:]} of pending review: {e}"
@@ -507,7 +539,12 @@ async def auto_reject_unassigned_leads():
 
             if chat_id:
                 try:
-                    await whatsapp.send_message(chat_id, Messages.SOS.NO_PRO_AVAILABLE)
+                    await whatsapp.send_message(
+                        chat_id,
+                        Messages.SOS.NO_PRO_AVAILABLE,
+                        template_key="no_pro_available",
+                        params={"issue_type": issue_param(lead)},
+                    )
                 except Exception as e:
                     logger.error(
                         f"Failed to notify customer {mask_chat_id(chat_id)} of closure: {e}"
@@ -1057,6 +1094,11 @@ async def check_pro_approval_sla():
                         await whatsapp.send_message(
                             pro_phone,
                             Messages.Pro.APPROVAL_NUDGE.format(minutes=nudge_after),
+                            template_key="approval_nudge",
+                            params={
+                                "issue_type": issue_param(lead),
+                                "minutes": nudge_after,
+                            },
                         )
                     logger.info(
                         f"⏰ [Approval SLA] Nudged pro for lead {lead['_id']} "
@@ -1214,7 +1256,12 @@ async def remind_stale_booked_leads():
             )
 
             try:
-                await whatsapp.send_message(pro_phone, message)
+                await whatsapp.send_message(
+                    pro_phone,
+                    message,
+                    template_key="stale_lead_reminder",
+                    params={"pro_name": pro_name, "customer_name": customer_name},
+                )
 
                 # Update lead
                 await leads_collection.update_one(

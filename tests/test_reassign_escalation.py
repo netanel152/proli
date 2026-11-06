@@ -13,7 +13,7 @@ reassignment is unaffected.
 
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 from bson import ObjectId
 
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
@@ -101,7 +101,10 @@ async def test_exhausted_reassignment_escalates_and_stops(
 
     # The customer is told once, and never told a search is under way.
     mock_whatsapp.send_message.assert_any_call(
-        lead["chat_id"], Messages.SOS.MAX_REASSIGNMENTS_REACHED
+        lead["chat_id"],
+        Messages.SOS.MAX_REASSIGNMENTS_REACHED,
+        template_key="max_reassignments",
+        params=ANY,
     )
     for call in mock_whatsapp.send_message.await_args_list:
         assert call.args[1] != Messages.SOS.CUSTOMER_REASSIGNING
@@ -368,7 +371,10 @@ async def test_reassign_lead_default_notifies_old_pro_of_lost_lead(
     from app.core.phone import to_chat_id
 
     mock_whatsapp.send_message.assert_any_call(
-        to_chat_id("972500000003"), Messages.SOS.PRO_LOST_LEAD
+        to_chat_id("972500000003"),
+        Messages.SOS.PRO_LOST_LEAD,
+        template_key="pro_lost_lead",
+        params=ANY,
     )
 
 
@@ -430,7 +436,10 @@ async def test_reassign_lead_no_usable_location_notifies_customer(
     assert updated["escalation_reason"] == "no_usable_location"
 
     mock_whatsapp.send_message.assert_any_call(
-        lead["chat_id"], Messages.Customer.PENDING_REVIEW
+        lead["chat_id"],
+        Messages.Customer.PENDING_REVIEW,
+        template_key="pending_review",
+        params=ANY,
     )
     mock_matching.assert_not_awaited()
 
@@ -483,7 +492,10 @@ async def test_reassign_lead_new_write_guard_skips_on_concurrent_status_change(
     assert "reassignment_count" not in updated or updated["reassignment_count"] == 0
 
     mock_whatsapp.send_message.assert_any_call(
-        lead["chat_id"], Messages.SOS.CUSTOMER_REASSIGNING
+        lead["chat_id"],
+        Messages.SOS.CUSTOMER_REASSIGNING,
+        template_key="reassigning",
+        params=ANY,
     )
     transparent_msg = Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
         pro_name=new_pro["business_name"]
@@ -710,7 +722,10 @@ async def test_reassign_lead_offer_send_failed_escalates_and_tells_nobody_it_wor
 
     # The customer hears PENDING_REVIEW — never "we found you אבי".
     mock_whatsapp.send_message.assert_any_call(
-        lead["chat_id"], Messages.Customer.PENDING_REVIEW
+        lead["chat_id"],
+        Messages.Customer.PENDING_REVIEW,
+        template_key="pending_review",
+        params=ANY,
     )
     transparent_msg = Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
         pro_name=new_pro["business_name"]

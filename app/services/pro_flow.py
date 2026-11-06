@@ -453,6 +453,13 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         response_text += Messages.Pro.CONTACT_CARD_EXTRA.format(
             extra_info=notification_service.format_lead_extra_info(lead)
         )
+    # Only set when the offer went out as a template, which cannot carry these.
+    if lead.get("offer_withheld_details"):
+        response_text += lead["offer_withheld_details"]
+        await leads_collection.update_one(
+            {"_id": lead["_id"]}, {"$unset": {"offer_withheld_details": ""}}
+        )
+    response_text += Messages.Pro.CONTACT_CARD_CLOSING
 
     pro_name = pro.get("business_name", Defaults.EXPERT_NAME)
     raw_phone = pro.get("phone_number", "")
@@ -499,7 +506,19 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         price_line=price_line,
         rating_line=rating_line,
     )
-    await whatsapp.send_message(lead["chat_id"], customer_msg)
+    await whatsapp.send_message(
+        lead["chat_id"],
+        customer_msg,
+        template_key="pro_found",
+        params={
+            "pro_name": pro_name,
+            "issue_type": lead.get("issue_type", ""),
+            "full_address": lead.get("full_address", ""),
+            "appointment_time": lead.get("appointment_time", ""),
+            "price_estimate": notification_service.price_estimate_param(quoted_price),
+            "pro_phone": pro_phone,
+        },
+    )
     # Clear AWAITING_PRO_APPROVAL state so customer can continue normally
     await StateManager.clear_state(lead["chat_id"])
 
@@ -604,7 +623,12 @@ async def _escalate_rejected_lead(lead, whatsapp):
         chat_id = lead.get("chat_id")
         if chat_id:
             try:
-                await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+                await whatsapp.send_message(
+                    chat_id,
+                    Messages.Customer.PENDING_REVIEW,
+                    template_key="pending_review",
+                    params={"issue_type": notification_service.issue_param(lead)},
+                )
             except Exception as notify_err:
                 logger.error(
                     f"Failed to notify customer of pending review after reject "

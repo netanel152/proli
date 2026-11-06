@@ -115,6 +115,8 @@ async def send_customer_completion_check(
         await whatsapp.send_message(
             customer_chat_id,
             Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name),
+            template_key="completion_check",
+            params={"pro_name": pro_name},
         )
         sent_no = lead.get("completion_check_sent_count", 0) + 1
         logger.success(
