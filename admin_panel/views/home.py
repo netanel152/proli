@@ -108,12 +108,15 @@ PENDING_STRIP_FETCH_MAX = 50
 def _leads_outbox():
     """The session's list of save reports waiting to be shown.
 
-    Fetch it, and add a report to it, *before* a send. A rerun queued during the
+    Fetch it, and add a report to it, *before* a send. A rerun requested during the
     send (an auto-refresh tick, another click) raises at the next yield point, and
     on Streamlit 1.31.1 every `st.session_state` access is one, so a store made
     after the send can raise before it writes. Appending to the list already in
-    hand touches no session state. Reports stay here until rendered, whichever run
-    gets to do that.
+    hand touches no session state. Reports stay here until rendered.
+
+    This depends on `runner.fastReruns = false` (`.streamlit/config.toml`). With it
+    on, the rerun starts a second run at once, which renders this list while the
+    first run is still sending, and the outcome is never shown.
     """
     return st.session_state.setdefault("leads_flash", [])
 
@@ -247,11 +250,19 @@ def _t(T, key, fallback, **subs):
     return text
 
 
-def _announce(message, level):
-    """A toast, because the inline alert renders off-screen, and the inline alert."""
-    icons = {"success": "✅", "warning": "⚠️", "error": "🚨"}
-    st.toast(message, icon=icons[level])
+#: Past this many messages from one save, a single toast rather than a pile of them.
+TOAST_MAX = 4
+_TOAST_ICONS = {"success": "✅", "info": "ℹ️", "warning": "⚠️", "error": "🚨"}
+
+
+def _show_alert(message, level):
     getattr(st, level)(message)
+
+
+def _announce(message, level):
+    """A toast, because the inline alert may render off-screen, and the inline alert."""
+    st.toast(message, icon=_TOAST_ICONS[level])
+    _show_alert(message, level)
 
 
 def _render_leads_flash(T):
@@ -262,58 +273,103 @@ def _render_leads_flash(T):
         outbox.pop(0)
 
 
-def _render_report(T, report):
-    if report.get("deleted"):
-        _announce(T.get("success_delete", "Lead deleted."), "success")
-        return
-
+def _report_messages(T, report):
+    """Every sentence one report has for the operator, with its severity."""
+    messages = []
     if report.get("updated"):
-        _announce(
-            _t(T, "leads_msg_saved", "{n} changes saved.", n=report["updated"]),
-            "success",
+        messages.append(
+            (
+                _t(T, "leads_msg_saved", "{n} changes saved.", n=report["updated"]),
+                "success",
+            )
         )
 
     # What setting a pro actually did, per lead: the "saved" line above says
     # nothing about whether anybody was told.
     for row in report.get("assignments") or []:
         message, level = _assign_feedback(T, row["outcome"], row["pro_name"])
-        _announce(f"{row['client']}: {message}", level)
+        messages.append((f"{row['client']}: {message}", level))
     unlisted = T.get("leads_pro_unlisted", "A professional no longer listed")
     for row in report.get("record_only") or []:
-        _announce(
-            _t(
-                T,
-                "leads_msg_record_only",
-                "{client}: {pro} saved on the record only — no offer was sent and "
-                "they were not told.",
-                client=row["client"],
-                pro=row["pro"] or unlisted,
-            ),
-            "warning",
+        messages.append(
+            (
+                _t(
+                    T,
+                    "leads_msg_record_only",
+                    "{client}: {pro} saved on the record only — no offer was sent and "
+                    "they were not told.",
+                    client=row["client"],
+                    pro=row["pro"] or unlisted,
+                ),
+                "warning",
+            )
         )
     for row in report.get("held_pro") or []:
-        _announce(
-            _t(
-                T,
+        if row.get("moved_to_waiting"):
+            text = T.get(
+                "leads_msg_held_pro_moved",
+                "{client}: {pro} is still on the record; this save sent nothing. "
+                "Use the strip to offer it.",
+            )
+        else:
+            text = T.get(
                 "leads_msg_held_pro",
                 "{client}: {pro} is still on the record from before the escalation; "
                 "this save sent nothing. Use the strip to offer it.",
-                client=row["client"],
-                pro=row["pro"] or unlisted,
-            ),
-            "warning",
+            )
+        messages.append(
+            (
+                text.replace("{client}", row["client"]).replace(
+                    "{pro}", row["pro"] or unlisted
+                ),
+                "warning",
+            )
         )
     if report.get("unprocessed"):
-        _announce(
+        messages.append(
+            (
+                _t(
+                    T,
+                    "leads_msg_unprocessed",
+                    "The save was interrupted with {n} rows unconfirmed. Check those "
+                    "leads before saving again.",
+                    n=report["unprocessed"],
+                ),
+                "warning",
+            )
+        )
+    return messages
+
+
+def _render_report(T, report):
+    if report.get("deleted"):
+        _announce(T.get("success_delete", "Lead deleted."), "success")
+        return
+
+    messages = _report_messages(T, report)
+    if len(messages) > TOAST_MAX:
+        worst = next(
+            (
+                level
+                for level in ("error", "warning", "info")
+                if any(m[1] == level for m in messages)
+            ),
+            "success",
+        )
+        st.toast(
             _t(
                 T,
-                "leads_msg_unprocessed",
-                "The save was interrupted with {n} rows unconfirmed. Check those "
-                "leads before saving again.",
-                n=report["unprocessed"],
+                "leads_msg_toast_summary",
+                "{n} results from this save are listed at the top of the page.",
+                n=len(messages),
             ),
-            "warning",
+            icon=_TOAST_ICONS[worst],
         )
+        for message, level in messages:
+            _show_alert(message, level)
+    else:
+        for message, level in messages:
+            _announce(message, level)
 
     skipped_rows = report.get("skipped_rows") or []
     if report_acted(report):
@@ -335,16 +391,17 @@ def _render_skipped(T, skipped_rows):
 
     # Nothing was lost, so "re-enter your edits" would send them hunting.
     if _only_no_change(skipped_rows):
-        st.info(T.get("no_changes", "No changes."))
+        _announce(T.get("no_changes", "No changes."), "info")
         return
 
-    st.warning(
+    _announce(
         _t(
             T,
             "leads_msg_skipped",
             "Rows not saved: {n}. Their edits were discarded — re-enter them.",
             n=len(skipped_rows),
-        )
+        ),
+        "warning",
     )
     # Built with explicit `columns=` rather than from dict keys: the two
     # headers are localized strings, and if a translation ever made them equal
@@ -960,7 +1017,11 @@ def view_leads_dashboard(T):
                                 offer_pending=_offer_pending,
                                 report=result,
                             )
-                            if report_acted(result):
+                            # A stale refusal too: the retry needs a fresh frame.
+                            if report_acted(result) or any(
+                                row.get("reason") == SKIP_STALE_PRO
+                                for row in result["skipped_rows"]
+                            ):
                                 st.cache_data.clear()
 
                         if report_acted(result):
@@ -972,25 +1033,25 @@ def view_leads_dashboard(T):
                             # Nothing was written — a success here would be the
                             # exact lie this ticket exists to kill. No rerun, so
                             # the admin's edits stay on screen for a second try.
-                            if any(
-                                row.get("reason") == SKIP_SAVE_FAILED
-                                for row in skipped_rows
-                            ):
-                                st.error(
+                            reasons = {row.get("reason") for row in skipped_rows}
+                            if SKIP_SAVE_FAILED in reasons:
+                                _announce(
                                     T.get(
                                         "leads_msg_save_failed",
                                         "Nothing was saved because saving failed. "
                                         "Try again in a moment.",
-                                    )
+                                    ),
+                                    "error",
                                 )
-                            elif not _only_no_change(skipped_rows):
-                                st.warning(
+                            elif reasons & {SKIP_LEAD_GONE, SKIP_UNRESOLVED}:
+                                _announce(
                                     T.get(
                                         "leads_msg_nothing_saved",
                                         "Nothing was saved. The leads you edited "
                                         "may no longer exist — refresh the table "
                                         "and try again.",
-                                    )
+                                    ),
+                                    "warning",
                                 )
                             # The skipped rows carry the *reason* nothing
                             # landed; dropping them here would leave the admin

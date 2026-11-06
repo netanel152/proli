@@ -8,6 +8,10 @@ not only page writes, so storing an outcome in session state after the send can
 raise before it writes. ``ScriptControlException`` is a ``BaseException``, so
 ``except Exception`` does not stop it either.
 
+This covers what the view does once a rerun is queued, which is what
+``runner.fastReruns = false`` guarantees in a real session; AppTest does not go
+through ``AppSession``, so ``test_admin_fast_reruns.py`` covers that part.
+
 These run the real view through the real ``ScriptRunner`` and ``SafeSessionState``.
 Only the offer itself is stubbed, and that stub does what a tick does: it queues a
 rerun while the send is in flight. The Mongo collections are mongomock.
@@ -247,3 +251,61 @@ def test_a_held_pro_warning_is_toasted_on_the_next_run(panel):
     assert any(
         "still on the record" in text and "Dana" in text for text in _toasts(at)
     ), _toasts(at)
+
+
+def test_a_no_change_save_is_toasted(panel):
+    _, _, add_lead, _ = panel
+    db = panel[0]
+    lead_id = add_lead("Yossi")
+    db["leads"].update_one({"_id": lead_id}, {"$set": {"status": "new"}})
+    at = AppTest.from_function(_app, default_timeout=60)
+    _run(at)
+
+    _normalise_selectboxes(at, status="new")
+    [b for b in at.button if b.label == EN["save_changes_btn"]][0].click()
+    _run(at)
+    _normalise_selectboxes(at, status="new")
+    _run(at)
+
+    assert EN["no_changes"] in _toasts(at), _toasts(at)
+
+
+def test_a_large_report_gets_one_summary_toast_and_every_inline_alert():
+    def app():
+        import streamlit as st
+
+        import admin_panel.views.home as home
+        from admin_panel.core.config import TRANS
+        from admin_panel.core.lead_queries import new_save_report
+
+        st.session_state["leads_flash"] = [
+            {
+                **new_save_report(),
+                "assignments": [
+                    {"client": f"C{i}", "outcome": "sent", "pro_name": "Dana"}
+                    for i in range(6)
+                ],
+            }
+        ]
+        home._render_leads_flash(TRANS["EN"])
+
+    at = AppTest.from_function(app, default_timeout=30)
+    _run(at)
+
+    assert len(_toasts(at)) == 1
+    assert "6" in _toasts(at)[0]
+    assert len(at.success) == 6
+
+
+def test_held_pro_wording_does_not_claim_an_escalation_after_a_manual_move():
+    report = {
+        "held_pro": [
+            {"client": "A", "pro": "Dana"},
+            {"client": "B", "pro": "Dana", "moved_to_waiting": True},
+        ]
+    }
+
+    first, second = home._report_messages(EN, report)
+
+    assert "escalation" in first[0]
+    assert "escalation" not in second[0]

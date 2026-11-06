@@ -396,6 +396,7 @@ def apply_lead_changes(
     record_only = False
     held_pro = False
     new_pro = None
+    status_moved = False
 
     def _result(found, assignment=None, stale=False):
         return {
@@ -405,6 +406,7 @@ def apply_lead_changes(
             "assignment": assignment,
             "record_only": record_only and found,
             "held_pro": held_pro and found,
+            "moved_to_waiting": held_pro and found and status_moved,
             "stale": stale,
             "pro_id": new_pro,
         }
@@ -574,7 +576,11 @@ def record_change(report, change, *, client, pro_label, unknown_pro_label=None):
     if change["record_only"]:
         report["record_only"].append({"client": client, "pro": pro})
     if change["held_pro"]:
-        report["held_pro"].append({"client": client, "pro": pro})
+        row = {"client": client, "pro": pro}
+        if change["moved_to_waiting"]:
+            # The operator just put it there, so it did not come from an escalation.
+            row["moved_to_waiting"] = True
+        report["held_pro"].append(row)
     if change["written"]:
         report["updated"] += 1
 
@@ -599,16 +605,23 @@ def save_lead_edits(
 ):
     """Apply the leads editor's edits, resolving row identity safely.
 
-    **A rerun queued during a send.** An auto-refresh tick or another click can
-    queue a rerun while an offer is going out. On Streamlit 1.31.1 every
-    ``st.session_state`` access is a yield point, as well as every page write:
-    ``SafeSessionState`` calls its yield callback first, which raises
-    ``RerunException``, a ``BaseException`` that ``except Exception`` does not
-    stop. So nothing in this loop may touch session state, and that includes
+    **A rerun during a send.** An auto-refresh tick or another click can arrive
+    while an offer is going out. This depends on ``runner.fastReruns = false``
+    (``.streamlit/config.toml``): the rerun is then queued for this script run's
+    next yield point rather than starting a second run alongside it.
+
+    On Streamlit 1.31.1 every ``st.session_state`` access is a yield point, as well
+    as every page write: ``SafeSessionState`` calls its yield callback first, which
+    raises ``RerunException``, a ``BaseException`` that ``except Exception`` does
+    not stop. So nothing in this loop may touch session state, and that includes
     ``audit``: pass one that does not read it (``auth.audit_as``). With no yield
-    point in the loop a queued rerun waits, and the whole batch finishes. The
-    operator pressed Save once, the rows are independent, and an offer already
-    sent cannot be taken back, so stopping half way would help nobody.
+    point in the loop the whole batch finishes. The operator pressed Save once, the
+    rows are independent, and an offer already sent cannot be taken back, so
+    stopping half way would help nobody.
+
+    With fast reruns *on*, the batch and its audit entries still finish, but the
+    second run has already rendered and dropped the report, so the operator never
+    sees the outcomes (``tests/test_admin_fast_reruns.py``).
 
     ``report`` is filled in place as each row returns, and ``unprocessed`` counts
     down, so if something ever does interrupt the loop, the view still has every

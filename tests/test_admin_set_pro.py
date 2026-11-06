@@ -184,7 +184,9 @@ def test_lead_moved_into_waiting_while_holding_a_pro_is_reported(leads):
     assert offer.calls == []
     assert leads.find_one({"_id": lead_id})["status"] == PENDING
     # Named from the stored id, not the frame's possibly stale "Held By".
-    assert result["held_pro"] == [{"client": "Yossi", "pro": "Dana"}]
+    assert result["held_pro"] == [
+        {"client": "Yossi", "pro": "Dana", "moved_to_waiting": True}
+    ]
     assert result["record_only"] == []
 
 
