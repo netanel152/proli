@@ -101,6 +101,6 @@ When asked to trace a transition or debug a flow bug:
 
 ## Memory
 
-This agent declares `memory: project` in its frontmatter, so Claude Code keeps and reloads its notes itself — there is no file in the repo to maintain, and the instruction to write one by hand into `.claude/agent-memory/` is gone (nothing ever created it).
+This agent declares `memory: project` in its frontmatter, so Claude Code keeps and reloads its notes itself, in `.claude/agent-memory/flow-tracer/`. That directory is tracked in git and shared with every clone, so write only what is worth a reviewer's time.
 
 What is worth remembering, when a trace turns one up: a reusable **pattern** (`## Pattern: <name>`, two to four lines), a **confirmed invariant** and what pins it, or an **edge case** with the state and message that reach it. A constant belongs in `app/core/constants.py` and a rule in `.claude/rules/`, never here — memory that restates a value the code owns is the PRO-67 drift the rules contract exists to prevent.
