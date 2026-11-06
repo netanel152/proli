@@ -52,6 +52,7 @@ from app.core.constants import (
     WorkerConstants,
 )
 from app.core.logger import logger
+from app.providers.whatsapp.quality import non_essential_sends_paused
 from app.core.messages import Messages
 from app.core.phone import mask_chat_id, to_chat_id
 from app.core.prompts import Prompts
@@ -574,6 +575,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         and extracted_issue != Defaults.UNKNOWN_ISSUE
         and current_lead_id
         and not lead_is_emergency
+        # PRO-90: no offer while WhatsApp quality is degraded. The lead carries
+        # on into normal matching below, so dispatch is untouched.
+        and not await non_essential_sends_paused()
     ):
         current_lead_doc = await leads_collection.find_one({"_id": current_lead_id})
         if current_lead_doc and not current_lead_doc.get("loyalty_offered"):
