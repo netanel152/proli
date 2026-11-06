@@ -39,7 +39,7 @@ and that includes every MCP server.
 | `test-writer` | Read, Write, Edit, Grep, Glob | none | `tests/` only |
 | `flow-tracer` | Read, Grep, Glob (`memory: project` adds Write, Edit) | none | its own memory only |
 | `ux-reviewer` | Read, Grep, Glob | none | none |
-| `code-reviewer` | Read, Grep, Glob, Bash | read-only `git` | none |
+| `code-reviewer` | Read, Grep, Glob, Bash | read-only `git`, read-only `gh pr` | none |
 | `test-runner` | Bash, Read, Grep, Glob | pytest | none |
 
 ## Three layers, weakest last
@@ -50,10 +50,28 @@ and that includes every MCP server.
 2. **`permissions.deny` in `.claude/settings.json`.** Applies to subagents too. Every documented
    Railway spelling of a variable write or delete is denied, for every session.
 3. **Hooks, keyed on the `agent_type` field of the hook input.** `pre-bash-guard.py` holds the two
-   Bash agents to `AGENT_BASH_ALLOW` and refuses any other subagent a mutating git command on the
-   session's checkout, so isolation means a worktree or a clone. `pre-edit-protect.py` holds the
+   Bash agents to `AGENT_BASH_ALLOW` and refuses any other subagent a mutating git command outside
+   its own isolation, including any target it cannot resolve. `pre-edit-protect.py` holds the
    write scopes in the table. Hooks exit 0 on a machine without Python, so they back up layer 1
    and never replace it.
+
+## What the guard still cannot see
+
+The git guard reads the command's text, so it stops mistakes and misread context. It does not
+contain an agent trying to get past it.
+
+- **A shell fed a heredoc** (`sh <<EOF`): heredoc bodies are stripped, because a commit message
+  that mentions `git stash` is not a stash.
+- **`eval`, a variable holding the whole command, and script files** (`python x.py`,
+  `sh x.sh`): what they run is not in the text.
+- **A sibling worktree of another session:** `git -C ../other stash` looks the same as a worktree
+  the subagent made itself, unless it has an `agent-` name. The hook input does not say which it is.
+- **False positives it accepts:** `echo "git stash"` is refused, and so is `git commit -m "cd foo"`
+  from an isolated subagent, because the text looks like it changes directory.
+
+An isolated subagent is recognised by its directory, `.claude/worktrees/agent-<agent_id>`. That
+was observed from real hook input (Claude Code 2.1.318) and is not documented. If the name changes,
+isolated subagents get refused rather than anyone's work being lost.
 
 ## The trade-off docs-syncer pays
 

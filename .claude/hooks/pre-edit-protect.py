@@ -30,7 +30,7 @@ def _docs_syncer_may_write(path):
     )
 
 
-def agent_write_block(agent_type, file_path, cwd):
+def agent_write_block(agent_type, file_path, cwd, project_dir=None):
     """Why ``agent_type`` may not write ``file_path``, or ``""`` if it may. Pure."""
     path = _repo_relative(file_path, cwd)
     if agent_type == "docs-syncer" and not _docs_syncer_may_write(path):
@@ -38,13 +38,16 @@ def agent_write_block(agent_type, file_path, cwd):
     if agent_type == "test-writer" and not (path or "").startswith("tests/"):
         return "BLOCKED: test-writer writes under tests/ only (PRO-95): " + file_path
     # `memory: project` hands flow-tracer Write/Edit whatever `tools:` says, for
-    # its notes. Those live outside the tree or in agent-memory; the code doesn't.
-    if (
-        agent_type == "flow-tracer"
-        and path is not None
-        and not path.startswith(".claude/agent-memory/")
-    ):
-        return "BLOCKED: flow-tracer writes only its own memory (PRO-95): " + file_path
+    # its notes, which land in this one tracked directory of the session's checkout.
+    if agent_type == "flow-tracer":
+        roots = (path, _repo_relative(file_path, project_dir) if project_dir else None)
+        if not any(
+            root and root.startswith(".claude/agent-memory/flow-tracer/")
+            for root in roots
+        ):
+            return (
+                "BLOCKED: flow-tracer writes only its own memory (PRO-95): " + file_path
+            )
     return ""
 
 
@@ -84,7 +87,12 @@ def main():
         )
         sys.exit(2)
 
-    refusal = agent_write_block(data.get("agent_type"), file_path, data.get("cwd"))
+    refusal = agent_write_block(
+        data.get("agent_type"),
+        file_path,
+        data.get("cwd"),
+        os.environ.get("CLAUDE_PROJECT_DIR"),
+    )
     if refusal:
         print(refusal, file=sys.stderr)
         sys.exit(2)

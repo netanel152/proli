@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for Bash — blocks dangerous shell commands."""
+"""PreToolUse hook for Bash and PowerShell — blocks dangerous shell commands
+and holds each subagent to its grant (PRO-95)."""
 import json
 import os
 import re
@@ -245,30 +246,81 @@ def evaluate(command, branch, behind_base=None):
 # tuple means the agent has no business with a shell at all: its `tools:` list
 # already omits Bash, and this is the belt for when somebody adds it back.
 _READ_ONLY_GIT = (
-    r"git\s+(diff|log|show|status|blame|rev-parse|rev-list|merge-base|ls-files)\b"
+    r"git\s+(-C\s+\S+\s+)?"
+    r"(diff|log|show|status|blame|rev-parse|rev-list|merge-base|ls-files"
+    r"|branch\s+--show-current\s*$)(\s|$)"
 )
+_READ_ONLY_GH = r"gh\s+pr\s+(diff|view|list|checks)(\s|$)"
 _PYTEST = (
     r"((\S*/)?venv/(Scripts/python\.exe|bin/python)\s+-m\s+pytest"
-    r"|python3?\s+-m\s+pytest|pytest)\b"
+    r"|python3?\s+-m\s+pytest|pytest)(\s|$)"
 )
-_PIPE_FILTER = r"(tail|head|grep)\b"
+_PIPE_FILTER = r"(tail|head|grep)(\s|$)"
+_CD = r"cd(\s|$)"
 AGENT_BASH_ALLOW = {
-    "code-reviewer": (_READ_ONLY_GIT, _PIPE_FILTER, r"cd\b"),
-    "test-runner": (_PYTEST, _PIPE_FILTER, r"cd\b"),
+    "code-reviewer": (_READ_ONLY_GIT, _READ_ONLY_GH, _PIPE_FILTER, _CD),
+    "test-runner": (_PYTEST, _PIPE_FILTER, _CD),
     "docs-syncer": (),
     "flow-tracer": (),
     "test-writer": (),
     "ux-reviewer": (),
 }
 
-# In command position, so `git diff`-ing a file that mentions them is not one.
-# `git worktree add` stays out of this list: it is the sanctioned way to isolate.
-_MUTATING_GIT = re.compile(
-    r"(?:^|[;&|(])\s*git\s+(?:-c\s+\S+\s+|-C\s+\S+\s+|-\S+\s+)*"
-    r"(stash|checkout|switch|reset|restore|clean|rebase|merge|pull|cherry-pick"
-    r"|revert|am|apply|commit|add|rm|mv)\b",
-    re.MULTILINE,
+# A quoted string the shell will not expand: `<`, `|` or `;` inside one is text.
+_INERT_QUOTED = re.compile(r"""'[^']*'|"[^"$`]*\"""")
+
+_VALUE = r"""("[^"]*"|'[^']*'|[^\s;&|)'"`]+)"""
+_GIT_OPTION = (
+    rf"(?:-c\s*{_VALUE}\s+|-C\s+{_VALUE}\s+"
+    rf"|--(?:git-dir|work-tree|namespace|exec-path|config-env)[=\s]\s*{_VALUE}\s+"
+    r"|-\S+\s+)"
 )
+# Anywhere in the text, not just in command position: `env git stash`,
+# `FOO=1 git stash`, `sh -c "git stash"`, `{ git stash; }` and backticks all run
+# it. That makes `echo "git stash"` a false positive, which is the cheap side of
+# the trade. `git worktree add` stays out: it is the sanctioned way to isolate.
+_MUTATING_GIT = re.compile(
+    r"""(?<![\w.-])git(?:\.exe)?["']?\s+"""
+    rf"(?:{_GIT_OPTION})*"
+    r"""["']?(?:(?:stash|checkout-index|checkout|switch|reset|restore|clean|rebase"""
+    r"""|merge-file|merge|pull|cherry-pick|revert|am|apply|commit|add|rm|mv"""
+    r"""|read-tree|update-index|filter-branch|bisect|sparse-checkout|submodule)"""
+    r"""(?![\w-])|worktree\s+(?:remove|move|prune)(?![\w-])|[$`])"""
+    r"""|(?<![\w.-])git(?:\.exe)?["']?\s+.*-c\s*["']?alias\."""
+)
+
+# Everything that can point a git command somewhere other than the session's
+# directory. Each match must resolve, or the command is refused.
+_TARGET_PATTERNS = (
+    r"(?<![\w-])(?:cd|chdir|pushd|sl|Set-Location|Push-Location)\s+(?:-\w+\s+)?"
+    + _VALUE,
+    r"(?<=\s)-C\s+" + _VALUE,
+    r"--(?:git-dir|work-tree)[=\s]\s*" + _VALUE,
+    r"GIT_(?:DIR|WORK_TREE)\s*=\s*" + _VALUE,
+)
+_BARE_CD = re.compile(r"(?<![\w-])cd\s*(?:[;&|)\n]|$)", re.MULTILINE)
+
+
+def _agent_text(command):
+    """``command`` without heredoc or PowerShell here-string bodies. Pure."""
+    command = re.sub(r"@(['\"])\r?\n.*?\r?\n\1@", "", command, flags=re.DOTALL)
+    return strip_heredocs(command)
+
+
+def git_targets(text, cwd):
+    """Every directory ``text`` may run git against, unquoted. Pure.
+
+    ``""`` stands for a bare ``cd``, which goes somewhere this cannot name. The
+    session's ``cwd`` when nothing redirects it.
+    """
+    found = [
+        match.group(1).strip("\"'")
+        for pattern in _TARGET_PATTERNS
+        for match in re.finditer(pattern, text)
+    ]
+    if _BARE_CD.search(text):
+        found.append("")
+    return found or [cwd]
 
 
 def agent_block(command, agent_type, in_shared_tree):
@@ -277,21 +329,24 @@ def agent_block(command, agent_type, in_shared_tree):
     The 2026-08-09 incident (PRO-95, ``docs/AGENT_PACK.md``): docs-syncer tried
     ``railway variable delete`` on a request nobody made, and ran ``git stash``
     over a session's uncommitted work. ``agent_type`` is the hook input's field
-    for that, absent outside a subagent. ``in_shared_tree`` is False when the
-    command targets the subagent's own worktree or clone.
+    for that, absent outside a subagent. ``in_shared_tree`` is False only when
+    the command targets the subagent's own worktree or a clone.
     """
     if not agent_type:
         return ""
-    command = strip_heredocs(command)
+    text = _agent_text(command)
 
     allowed = AGENT_BASH_ALLOW.get(agent_type)
     if allowed is not None:
         # No substitution, no redirect: either could hide anything behind an
-        # allowed first word. `git diff --output=` is a write spelled as a flag.
-        plain = command.replace("2>&1", "")
+        # allowed first word. `git diff --output=` is a write spelled as a flag,
+        # checked before quotes go so quoting it changes nothing. An escaped
+        # quote would make the quote-stripping below misread what the shell sees.
+        plain = _INERT_QUOTED.sub('""', text.replace("2>&1", ""))
         segments = [s.strip() for s in re.split(r"&&|\|\||[;|&\n]", plain)]
         if (
-            not re.search(r"[$`<>]|--output", plain)
+            not re.search(r"[$`<>]", plain)
+            and not re.search(r"--output|\\[\"']", text)
             and allowed
             and all(any(re.match(p, s) for p in allowed) for s in segments if s)
         ):
@@ -302,40 +357,98 @@ def agent_block(command, agent_type, in_shared_tree):
             "needs more, report that to the caller instead of working around it."
         )
 
-    if in_shared_tree and _MUTATING_GIT.search(command):
+    if in_shared_tree and _MUTATING_GIT.search(text):
         return (
-            "BLOCKED: a subagent may not run a mutating git command on the shared "
-            "working tree (PRO-95). If you need isolation, use a worktree or clone."
+            "BLOCKED: a subagent may not run a mutating git command on the session's "
+            "working tree, or on a target this guard cannot resolve (PRO-95). If you "
+            "need isolation, use a worktree or clone, named by a literal path."
         )
     return ""
 
 
-def _git_dir(cwd):
+def _native_path(path):
+    """Git Bash's ``/d/x`` as ``D:/x``: native Windows Python cannot open the former."""
+    match = re.match(r"^/([a-zA-Z])(/.*)?$", path) if os.name == "nt" else None
+    return f"{match.group(1).upper()}:{match.group(2) or '/'}" if match else path
+
+
+def _git_dir(directory):
+    """Absolute, forward-slash git dir of ``directory``; ``None`` if unresolvable."""
+    return _rev_parse_path(directory, "--absolute-git-dir")
+
+
+def _git_common_dir(directory):
+    """The git dir of the main checkout ``directory`` belongs to; ``None`` likewise."""
+    return _rev_parse_path(directory, "--path-format=absolute", "--git-common-dir")
+
+
+def _rev_parse_path(directory, *args):
     try:
         result = subprocess.run(
-            ["git", "rev-parse", "--absolute-git-dir"],
+            ["git", "rev-parse", *args],
             capture_output=True,
             text=True,
             timeout=5,
-            cwd=cwd or None,
+            cwd=directory or None,
         )
     except Exception:
         return None
-    return result.stdout.strip() if result.returncode == 0 else None
+    if result.returncode != 0:
+        return None
+    return os.path.normcase(result.stdout.strip()).replace("\\", "/")
 
 
-def _in_shared_tree(cwd):
-    """Whether ``cwd`` is the session's own checkout, not a subagent's isolation.
+def _in_shared_tree(target, session_cwd, agent_id, project_dir):
+    """Whether ``target`` is anything but this subagent's own isolation.
 
-    shortcut: a subagent sharing a parent's *linked* worktree reads as isolated,
-    because that is indistinguishable from `isolation: worktree` here. Upgrade if
-    Claude Code ever exposes the subagent's isolation in the hook input.
+    Observed from real hook input (`claude -p`, 2.1.318), not assumed:
+    ``CLAUDE_PROJECT_DIR`` is where the session started, even if that is a linked
+    worktree, and stays put inside an `isolation: worktree` subagent. That
+    subagent's ``cwd`` is ``.claude/worktrees/agent-<agent_id>``; a plain subagent's
+    ``cwd`` is its parent's. So its own tree is recognised by name, which is the
+    only thing telling it apart from a parent that entered a worktree mid-session.
+    The name is undocumented: if it ever changes, isolated subagents get refused,
+    loudly, rather than anyone's work being stashed quietly.
+
+    An unresolvable ``target`` counts as shared. Fail-open is right for the other
+    guards here; for this one it is how ``cd "$PWD" && git stash`` got through.
     """
-    git_dir = _git_dir(cwd)
-    if git_dir is None or "/worktrees/" in git_dir.replace("\\", "/"):
+    if not target:
+        return True
+    resolved = os.path.join(session_cwd or "", _native_path(os.path.expanduser(target)))
+    git_dir = _git_dir(resolved)
+    if git_dir is None:
+        return True
+    name = git_dir.rsplit("/", 1)[-1]
+    if agent_id and name == os.path.normcase(f"agent-{agent_id}"):
         return False
+    if name.startswith("agent-"):
+        return True  # another subagent's isolation
+    # A session started in a linked worktree has the main checkout as neither of
+    # those, so it is named too. A clone has its own common dir and stays allowed.
+    # shortcut: a sibling worktree of another session reads the same as one this
+    # subagent made with `git worktree add`, unless it has an `agent-` name.
+    return git_dir in (
+        _git_dir(session_cwd),
+        _git_dir(project_dir),
+        _git_common_dir(session_cwd),
+    )
+
+
+def _touches_shared_tree(command, data):
+    """Whether a non-pack subagent's mutating ``command`` reaches a shared tree."""
+    agent_type = data.get("agent_type")
+    if not agent_type or agent_type in AGENT_BASH_ALLOW:
+        return False
+    text = _agent_text(command)
+    if not _MUTATING_GIT.search(text):  # the subprocesses are paid for only here
+        return False
+    session_cwd = data.get("cwd")
     project_dir = os.environ.get("CLAUDE_PROJECT_DIR")
-    return not project_dir or _git_dir(project_dir) in (None, git_dir)
+    return any(
+        _in_shared_tree(target, session_cwd, data.get("agent_id"), project_dir)
+        for target in git_targets(text, session_cwd)
+    )
 
 
 def main():
@@ -348,21 +461,14 @@ def main():
     if not command:
         sys.exit(0)
 
-    cwd = target_dir(command, data.get("cwd"))
-
-    # Measured only for the commands it gates: it is a subprocess or two.
-    agent_type = data.get("agent_type")
-    shared = bool(
-        agent_type
-        and agent_type not in AGENT_BASH_ALLOW
-        and _MUTATING_GIT.search(strip_heredocs(command))
-        and _in_shared_tree(cwd)
+    refusal = agent_block(
+        command, data.get("agent_type"), _touches_shared_tree(command, data)
     )
-    refusal = agent_block(command, agent_type, shared)
     if refusal:
         print(refusal, file=sys.stderr)
         sys.exit(2)
 
+    cwd = target_dir(command, data.get("cwd"))
     branch = _current_branch(cwd)
 
     # Measured only for the command it gates. `_behind_count` fetches, and
