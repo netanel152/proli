@@ -34,6 +34,7 @@ from bson import ObjectId
 from bson.errors import InvalidId
 
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
+from app.core.legal_links import consent_request_text
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.phone import to_chat_id, strip_suffix, mask_chat_id
@@ -327,13 +328,13 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
                 else:
                     # Repeat consent request if unclear response
                     await deps.whatsapp.send_message(
-                        ctx.chat_id, Messages.Consent.REQUEST
+                        ctx.chat_id, consent_request_text()
                     )
                     return HANDLED
 
             if consent_status is None:
                 # First contact — send consent request
-                await deps.whatsapp.send_message(ctx.chat_id, Messages.Consent.REQUEST)
+                await deps.whatsapp.send_message(ctx.chat_id, consent_request_text())
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
                 )
@@ -341,7 +342,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
             if consent_status is False:
                 # User previously declined — re-ask on new contact
-                await deps.whatsapp.send_message(ctx.chat_id, Messages.Consent.REQUEST)
+                await deps.whatsapp.send_message(ctx.chat_id, consent_request_text())
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
                 )

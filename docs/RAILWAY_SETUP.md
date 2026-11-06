@@ -137,6 +137,8 @@ META_ACCESS_TOKEN=...        # secret — required once WHATSAPP_PROVIDER=cloud 
 META_APP_SECRET=...          # secret — signs inbound /webhook/meta; required for cloud in staging/production
 META_VERIFY_TOKEN=...        # secret — echoed back during the Meta subscription handshake; required for cloud in staging/production
 META_PHONE_NUMBER_ID=...     # not secret — Graph node id, required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
+PUBLIC_BASE_ORIGIN=https://...  # optional — public https origin, no path, serving /privacy and /terms; unset = messages carry no link; localhost, http or a path fails boot
+TERMS_ENABLED=false  # true publishes /terms and its links, but only once app/static/terms.html is the approved text (a draft stays 404 and logs ERROR at boot)
 ENVIRONMENT=production   # per-environment — see below
 ```
 
@@ -154,7 +156,7 @@ how the two silently re-merge.
 | `MONGO_URI`, `REDIS_URL` | **always distinct** | separate datastores; see the seed-guard invariant below |
 | `ENVIRONMENT` | **always distinct** | by definition — see PRO-34 above |
 | `WEBHOOK_TOKEN` | **distinct** | a shared token means a staging leak authenticates against the production webhook |
-| `HEALTH_TOKEN` | **distinct** | authenticates the detailed `/health` payload and `/health/leads` KPIs (PRO-136); same leak logic as the webhook token |
+| `HEALTH_TOKEN` | **distinct** | authenticates the detailed `/health` payload and `/health/leads` KPIs (PRO-136); same leak logic as the webhook token. Production's value is also the `PRODUCTION_HEALTH_TOKEN` GitHub secret, so rotate both together or the lead pipeline monitor pages |
 | `ADMIN_PASSWORD_HASH` | **distinct** | one admin credential must not open both panels |
 | `SENTRY_DSN` | **distinct** | separate Sentry project per environment, so staging noise cannot pollute production ingest and a leaked staging DSN is worthless |
 | `GEMINI_API_KEY` | **distinct** | a staging leak or quota burn must not affect production |
@@ -163,6 +165,8 @@ how the two silently re-merge.
 | `CLOUDINARY_*` | shared *(pilot decision)* | media is non-sensitive and a second account is friction with little pilot-stage payoff; revisit post-pilot |
 | `GOOGLE_MAPS_API_KEY` | shared *(pilot decision)* | geocoding only; restrict by API + quota in the Google console; revisit post-pilot |
 | `ADMIN_PHONE`, `ONCALL_PHONE` | shared | not secrets — the same operator is paged from both |
+| `PUBLIC_BASE_ORIGIN` | **distinct** | staging messages link to staging's host, production's to the public domain. Needed on the **worker** (it sends the messages) as well as the api |
+| `TERMS_ENABLED` | **distinct** | the operator's per-environment switch for publishing the terms. Needed on the **worker** and the api, or the page and the links disagree |
 
 Railway's **Shared Variables** feature is scoped *within* one environment. It is
 the right tool for "define once, inherit in `api`/`worker`/`admin`" — it cannot
