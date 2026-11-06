@@ -24,10 +24,16 @@ from admin_panel.core.assignment import (
     ASSIGN_LOOKUP_MISSED,
     ASSIGN_NOT_SENT,
     ASSIGN_PRO_GONE,
+    ASSIGN_PRO_LOOKUP_FAILED,
     ASSIGN_SENT,
     offer_pending_lead,
 )
-from admin_panel.core.auth import log_audit, get_current_role
+from admin_panel.core.auth import (
+    audit_as,
+    get_current_role,
+    get_current_username,
+    log_audit,
+)
 from admin_panel.core.labels import (
     LEAD_STATUSES,
     lead_status_label,
@@ -41,11 +47,15 @@ from admin_panel.core.lead_queries import (
     SKIP_LEAD_GONE,
     SKIP_NO_CHANGE,
     SKIP_SAVE_FAILED,
+    SKIP_STALE_PRO,
     SKIP_UNRESOLVED,
     apply_lead_changes,
+    audit_change,
     build_edit_form_payload,
     build_lead_row,
-    edit_form_flash,
+    new_save_report,
+    record_change,
+    report_acted,
     save_lead_edits,
 )
 from admin_panel.core.rbac import can_edit, has_permission
@@ -93,6 +103,19 @@ PENDING_STRIP_MAX = 5
 # work while leaving enough headroom that an emergency does not get cut before
 # it can sort to the top.
 PENDING_STRIP_FETCH_MAX = 50
+
+
+def _leads_outbox():
+    """The session's list of save reports waiting to be shown.
+
+    Fetch it, and add a report to it, *before* a send. A rerun queued during the
+    send (an auto-refresh tick, another click) raises at the next yield point, and
+    on Streamlit 1.31.1 every `st.session_state` access is one, so a store made
+    after the send can raise before it writes. Appending to the list already in
+    hand touches no session state. Reports stay here until rendered, whichever run
+    gets to do that.
+    """
+    return st.session_state.setdefault("leads_flash", [])
 
 
 def _eligible_pro(pro_id):
@@ -147,6 +170,15 @@ def _assign_feedback(T, outcome, pro_name):
             T.get("assign_pro_gone", "That professional is no longer available."),
             "warning",
         )
+    if outcome == ASSIGN_PRO_LOOKUP_FAILED:
+        return (
+            T.get(
+                "assign_pro_lookup_failed",
+                "Could not check that professional because of a database problem. "
+                "Nothing was assigned or sent. Try again.",
+            ),
+            "error",
+        )
     if outcome == ASSIGN_FAILED:
         # Explicit rather than relying on the fallback, so an outcome nobody
         # recognises does not quietly render as a plain failure.
@@ -197,6 +229,7 @@ _SKIP_REASON_KEYS = {
     SKIP_UNRESOLVED: "leads_skip_unresolved",
     SKIP_NO_CHANGE: "leads_skip_no_change",
     SKIP_SAVE_FAILED: "leads_skip_save_failed",
+    SKIP_STALE_PRO: "leads_skip_stale_pro",
 }
 
 
@@ -214,40 +247,79 @@ def _t(T, key, fallback, **subs):
     return text
 
 
+def _announce(message, level):
+    """A toast, because the inline alert renders off-screen, and the inline alert."""
+    icons = {"success": "✅", "warning": "⚠️", "error": "🚨"}
+    st.toast(message, icon=icons[level])
+    getattr(st, level)(message)
+
+
 def _render_leads_flash(T):
-    """Render the confirmation stashed by the previous run's mutation."""
-    flash = st.session_state.pop("leads_flash", None)
-    if not flash:
+    """Render the save reports left by earlier runs, and only then drop them."""
+    outbox = st.session_state.get("leads_flash")
+    while outbox:
+        _render_report(T, outbox[0])
+        outbox.pop(0)
+
+
+def _render_report(T, report):
+    if report.get("deleted"):
+        _announce(T.get("success_delete", "Lead deleted."), "success")
         return
 
-    msg = None
-    if flash.get("deleted"):
-        msg = T.get("success_delete", "Lead deleted.")
-    elif flash.get("updated"):
-        msg = _t(T, "leads_msg_saved", "{n} changes saved.", n=flash["updated"])
-    if msg:
-        st.toast(msg, icon="✅")
-        st.success(msg)
+    if report.get("updated"):
+        _announce(
+            _t(T, "leads_msg_saved", "{n} changes saved.", n=report["updated"]),
+            "success",
+        )
 
     # What setting a pro actually did, per lead: the "saved" line above says
     # nothing about whether anybody was told.
-    for row in flash.get("assignments") or []:
+    for row in report.get("assignments") or []:
         message, level = _assign_feedback(T, row["outcome"], row["pro_name"])
-        getattr(st, level)(f"{row['client']}: {message}")
-    for row in flash.get("record_only") or []:
-        st.warning(
+        _announce(f"{row['client']}: {message}", level)
+    unlisted = T.get("leads_pro_unlisted", "A professional no longer listed")
+    for row in report.get("record_only") or []:
+        _announce(
             _t(
                 T,
                 "leads_msg_record_only",
-                "{client}: {pro} is on the record only — no offer was sent and "
-                "they were not told. For a lead waiting for review, send it from "
-                "the assignment strip.",
+                "{client}: {pro} saved on the record only — no offer was sent and "
+                "they were not told.",
                 client=row["client"],
-                pro=row["pro"],
-            )
+                pro=row["pro"] or unlisted,
+            ),
+            "warning",
+        )
+    for row in report.get("held_pro") or []:
+        _announce(
+            _t(
+                T,
+                "leads_msg_held_pro",
+                "{client}: {pro} is still on the record from before the escalation; "
+                "this save sent nothing. Use the strip to offer it.",
+                client=row["client"],
+                pro=row["pro"] or unlisted,
+            ),
+            "warning",
+        )
+    if report.get("unprocessed"):
+        _announce(
+            _t(
+                T,
+                "leads_msg_unprocessed",
+                "The save was interrupted with {n} rows unconfirmed. Check those "
+                "leads before saving again.",
+                n=report["unprocessed"],
+            ),
+            "warning",
         )
 
-    _render_skipped(T, flash.get("skipped_rows") or [])
+    skipped_rows = report.get("skipped_rows") or []
+    if report_acted(report):
+        # "1 saved" and "No changes" together read as a contradiction.
+        skipped_rows = [r for r in skipped_rows if r.get("reason") != SKIP_NO_CHANGE]
+    _render_skipped(T, skipped_rows)
 
 
 def _only_no_change(skipped_rows):
@@ -457,22 +529,26 @@ def _render_pending_review_strip(T):
                 disabled=choice is None,
             ):
                 pro_id = choice["_id"]
+                # Before the send; see `_leads_outbox`.
+                report = new_save_report()
+                _leads_outbox().append(report)
+                audit = audit_as(get_current_username())
                 # The call writes and sends, and may sit for up to
                 # ASSIGN_TIMEOUT_SECONDS. Without a spinner the operator sees
                 # nothing move, clicks again, and the second script run sends
                 # the pro a duplicate offer and the customer a duplicate promise.
-                #
-                # Everything that reports the outcome stays inside the block: the
-                # spinner's exit writes to the page, which is a point where a
-                # rerun queued during the send (an auto-refresh tick, another
-                # click) ends this run. Anything after it could be lost.
                 with st.spinner(
                     T.get("assign_in_progress", "Assigning and notifying…")
                 ):
                     outcome, pro_name = _offer_pending(lead_id, pro_id)
-                    message, level = _assign_feedback(T, outcome, pro_name)
-                    set_flash("assign_flash", message, level)
-                    log_audit(
+                    report["assignments"].append(
+                        {
+                            "client": client_label(lead),
+                            "outcome": outcome,
+                            "pro_name": pro_name,
+                        }
+                    )
+                    audit(
                         "assign_lead",
                         {"lead_id": lead_id, "pro_id": str(pro_id), "outcome": outcome},
                     )
@@ -515,11 +591,6 @@ def view_leads_dashboard(T):
     # actually sees: the Save button sits under a ~400px scroll region, so an
     # inline alert at the top of the page renders off-screen.
     _render_leads_flash(T)
-    # PRO-188: its own key, NOT `leads_flash`. That one is popped by
-    # `_render_leads_flash`, which reads it as a dict (`.get("deleted")`), while
-    # `set_flash` writes a `(level, message)` tuple — one key holding two shapes
-    # turns the next confirmation into an AttributeError painted over the page.
-    render_flash("assign_flash")
     render_flash("create_lead_flash")
 
     # Tabs: Kanban | Table | Create
@@ -778,6 +849,7 @@ def view_leads_dashboard(T):
                     "id": None,
                     "_chat_id": None,
                     "_display_name": None,
+                    "_pro_id": None,
                     "status": None,
                     "date": st.column_config.DatetimeColumn(
                         T["col_date"],
@@ -868,36 +940,50 @@ def view_leads_dashboard(T):
                         # same frame — so the id read out of it is always the row
                         # the admin actually edited. The old code resolved it
                         # against a session snapshot taken once, hours earlier.
-                        # May send: one offer per waiting lead given a pro. The
-                        # flash is stored inside the block; see the strip's note.
+                        # Before the send; see `_leads_outbox`.
+                        outbox = _leads_outbox()
+                        result = new_save_report()
+                        outbox.append(result)
+                        audit = audit_as(get_current_username())
+                        # May send: one offer per waiting lead given a pro. Nothing
+                        # in here reads session state, so a rerun queued during a
+                        # send waits for the batch to finish.
                         with st.spinner(T.get("leads_saving", "Saving…")):
-                            result = save_lead_edits(
+                            save_lead_edits(
                                 edited_df,
                                 changes,
                                 leads_collection=leads_collection,
                                 pro_map_name_to_id=pro_map_name_to_id,
                                 unknown_pro_label=T["unknown_pro"],
-                                audit=log_audit,
+                                audit=audit,
                                 status_by_label=status_by_label(T),
                                 offer_pending=_offer_pending,
+                                report=result,
                             )
-                            acted = (
-                                result["updated"]
-                                or result["assignments"]
-                                or result["record_only"]
-                            )
-                            if acted:
-                                st.session_state["leads_flash"] = result
+                            if report_acted(result):
                                 st.cache_data.clear()
 
-                        if acted:
+                        if report_acted(result):
                             st.rerun()
                         else:
+                            # Shown here instead, and the edits stay on screen.
+                            outbox.remove(result)
                             skipped_rows = result.get("skipped_rows") or []
                             # Nothing was written — a success here would be the
                             # exact lie this ticket exists to kill. No rerun, so
                             # the admin's edits stay on screen for a second try.
-                            if not _only_no_change(skipped_rows):
+                            if any(
+                                row.get("reason") == SKIP_SAVE_FAILED
+                                for row in skipped_rows
+                            ):
+                                st.error(
+                                    T.get(
+                                        "leads_msg_save_failed",
+                                        "Nothing was saved because saving failed. "
+                                        "Try again in a moment.",
+                                    )
+                                )
+                            elif not _only_no_change(skipped_rows):
                                 st.warning(
                                     T.get(
                                         "leads_msg_nothing_saved",
@@ -1254,29 +1340,30 @@ def _render_selected_lead_actions(
                             pro_name=new_pro,
                             pro_map_name_to_id=pro_map_name_to_id,
                             unknown_pro_label=unassigned_label,
+                            current_status=selected_lead.get("status"),
+                            current_pro_name=current_pro_name,
+                            current_name=current_name,
                         )
 
-                        # Untouched boxes are not edits: the frame is cached for
-                        # 30s, so writing them back could undo a status move made
-                        # since, overwrite a newer owner, send an offer nobody
-                        # asked for, or silently unassign the lead.
-                        if new_status == selected_lead.get("status"):
-                            update_data.pop("status", None)
-                        if new_pro == current_pro_name:
-                            update_data.pop("pro_id", None)
-                        # Nothing to clear, so not a write worth reporting.
-                        if not current_name:
-                            unset_data.pop("display_name", None)
+                        # Before the send; see `_leads_outbox`.
+                        outbox = _leads_outbox()
+                        report = new_save_report()
+                        outbox.append(report)
+                        audit = audit_as(get_current_username())
 
-                        # The flash is stored inside the block; see the strip's note.
                         with st.spinner(T.get("leads_saving", "Saving…")):
+                            frame_pro_id = selected_lead.get("_pro_id")
                             change = apply_lead_changes(
                                 lid,
                                 update_data,
                                 unset_data,
                                 leads_collection=leads_collection,
                                 offer_pending=_offer_pending,
-                                audit=log_audit,
+                                expected_pro=(
+                                    frame_pro_id
+                                    if isinstance(frame_pro_id, str)
+                                    else None
+                                ),
                             )
                             if change["found"]:
                                 # PRO-161: the st.success here was discarded by the
@@ -1295,21 +1382,25 @@ def _render_selected_lead_actions(
                                     ),
                                     new_pro,
                                 )
-                                st.session_state["leads_flash"] = edit_form_flash(
+                                record_change(
+                                    report,
                                     change,
                                     client=str(selected_lead.get("client") or ""),
                                     pro_label=pro_label,
+                                    unknown_pro_label=unassigned_label,
                                 )
+                                audit_change(audit, lid, change)
                                 # Which fields, not just that an edit happened — a
                                 # display_name is operator-authored content about a
                                 # customer. Names only; values stay out of the log.
                                 if change["written"]:
-                                    log_audit(
+                                    audit(
                                         "edit_lead",
                                         {"lead_id": lid, "fields": change["written"]},
                                     )
                                 st.cache_data.clear()
                         if not change["found"]:
+                            outbox.remove(report)
                             # The lead was deleted inside the 30s cache
                             # window: nothing was written, so neither the
                             # audit entry nor the success toast may claim
@@ -1339,7 +1430,7 @@ def _render_selected_lead_actions(
                 # thrown away by the rerun — the admin's sole evidence was a
                 # row vanishing from a 100-row table. Same flash as everything
                 # else that mutates here.
-                st.session_state["leads_flash"] = {"deleted": lid}
+                _leads_outbox().append({"deleted": lid})
                 del st.session_state[f"confirm_delete_{k}"]
                 st.cache_data.clear()
                 st.rerun()
