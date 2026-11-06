@@ -851,3 +851,112 @@ async def test_intake_persists_address_parts_extracted_this_turn(
     assert updated["street_number"] == "10"
     assert updated["floor"] == "2"
     assert updated["apartment"] == "5"
+
+
+# --- 13. The offer must fit the trade the new issue needs -------------------
+
+
+async def _insert_completed_lead(db, chat_id, pro_id, created_at):
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "chat_id": chat_id,
+            "status": LeadStatus.COMPLETED,
+            "pro_id": pro_id,
+            "created_at": created_at,
+        }
+    )
+
+
+async def _insert_trade_pro(db, business_name, trade):
+    """A pro shaped the way onboarding and the seeds really write one: the
+    trade lives in `type`/`categories`, never in `profession_type`."""
+    pro_id = ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": pro_id,
+            "is_active": True,
+            "role": "professional",
+            "business_name": business_name,
+            "phone_number": "972500007777",
+            "type": trade,
+            "categories": [trade],
+        }
+    )
+    return pro_id
+
+
+def _electrical_turn(mock_ai):
+    """Deliberately NOT one of `EMERGENCY_KEYWORDS` ("קצר בחשמל" is one): an
+    emergency skips the loyalty gate wholesale under PRO-121, which would let
+    these tests pass without the trade check they exist to pin."""
+    mock_ai.analyze_conversation.return_value = AIResponse(
+        reply_to_user="בסדר, אני בודק",
+        extracted_data=ExtractedData(
+            city="תל אביב",
+            issue="השקע בסלון לא עובד",
+            full_address=None,
+            appointment_time=None,
+        ),
+        transcription=None,
+        is_deal=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_loyalty_offer_skipped_when_only_past_pro_is_another_trade(
+    loyalty_mocks,
+):
+    """A returning customer whose only history is a plumber must NOT be offered
+    that plumber for an electrical short. Reported 2026-11-06: the gate took
+    the most recent COMPLETED lead regardless of trade, so "קצר בחשמל" came
+    back with "בעבר אבי אינסטלציה טיפל בך — לבדוק אם הוא פנוי?". With no
+    fitting pro in the history the right answer is no offer at all, leaving
+    normal matching to find someone suitable.
+    """
+    mock_wa, mock_state, _, _, mock_ai, db = loyalty_mocks
+    mock_state.get_state.return_value = UserStates.IDLE
+    chat_id = _chat_id()
+
+    plumber_id = await _insert_trade_pro(db, "אבי אינסטלציה", "plumber")
+    await _insert_completed_lead(db, chat_id, plumber_id, "2026-05-01")
+    current_lead_id = await _insert_active_lead(
+        db, chat_id, issue_type="השקע בסלון לא עובד", created_at="2026-11-06"
+    )
+
+    _electrical_turn(mock_ai)
+    await process_incoming_message(chat_id, "השקע בסלון הפסיק לעבוד")
+
+    assert "אבי אינסטלציה" not in _sent_text(mock_wa)
+    assert Messages.Customer.LOYALTY_OFFER.split("\n")[0] not in _sent_text(mock_wa)
+    states = [c.args[1] for c in mock_state.set_state.await_args_list]
+    assert UserStates.AWAITING_LOYALTY_CONFIRMATION not in states
+    lead = await db.leads.find_one({"_id": current_lead_id})
+    assert not lead.get("loyalty_offered")
+    # Not via the PRO-121 emergency bypass — the trade gate is what skipped it.
+    assert not lead.get("is_emergency")
+
+
+@pytest.mark.asyncio
+async def test_loyalty_offer_picks_the_past_pro_whose_trade_fits(loyalty_mocks):
+    """With both trades in the history, the electrical issue must surface the
+    electrician — not whoever simply finished most recently (the plumber)."""
+    mock_wa, mock_state, _, _, mock_ai, db = loyalty_mocks
+    mock_state.get_state.return_value = UserStates.IDLE
+    chat_id = _chat_id()
+
+    electrician_id = await _insert_trade_pro(db, "דני החשמלאי", "electrician")
+    plumber_id = await _insert_trade_pro(db, "אבי אינסטלציה", "plumber")
+    await _insert_completed_lead(db, chat_id, electrician_id, "2026-01-01")
+    await _insert_completed_lead(db, chat_id, plumber_id, "2026-05-01")
+    await _insert_active_lead(db, chat_id, issue_type="השקע בסלון לא עובד")
+
+    _electrical_turn(mock_ai)
+    await process_incoming_message(chat_id, "השקע בסלון הפסיק לעבוד")
+
+    mock_wa.send_message.assert_any_call(
+        chat_id, Messages.Customer.LOYALTY_OFFER.format(pro_name="דני החשמלאי")
+    )
+    mock_state.set_metadata.assert_awaited_with(
+        chat_id, {"past_pro_id": str(electrician_id)}
+    )

@@ -197,6 +197,12 @@ class WorkerConstants:
     # previous pro?"). Without it the state inherited the 4h default TTL and a
     # customer whose reply we failed to parse was trapped for hours.
     LOYALTY_CONFIRM_TTL_SECONDS = 300
+    # How many of a returning customer's past COMPLETED jobs the loyalty gate
+    # looks back through for a pro whose trade fits the new issue. A customer
+    # with a long history should still be offered their electrician for a
+    # short, not whoever happened to finish last — but the scan is one pro
+    # lookup per lead, so it stays bounded.
+    LOYALTY_HISTORY_SCAN_LIMIT = 10
     # PRO-193: window for the customer to answer the PRO-116 Q3 gate ("is this
     # about the booked job, or something new?"). Same 300s as its two siblings
     # above, and for the same reason: `guard_new_or_existing` re-prompts and

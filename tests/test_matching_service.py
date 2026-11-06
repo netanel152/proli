@@ -9,6 +9,8 @@ from app.services.matching_service import (
     WorkerConstants,
     is_pro_eligible_for_lead,
     required_profession,
+    probable_trade,
+    pro_trades,
 )
 
 
@@ -539,3 +541,34 @@ def test_required_profession_ignores_type_map_digit_keys():
     # Not "בעיה כללית" -- "כללית" contains "כללי" (TYPE_MAP's "general" key)
     # as a substring, which would defeat the point of this "no match" case.
     assert required_profession({"issue_type": "יש לי תקלה בבית"}) is None
+
+
+@pytest.mark.parametrize(
+    "issue,expected",
+    [
+        ("השקע בסלון לא עובד", "electrician"),
+        ("קצר בלוח החשמל", "electrician"),
+        ("יש נזילה מתחת לכיור", "plumber"),
+        ("סתימה באסלה", "plumber"),
+        ("צריך אינסטלטור", "plumber"),  # the profession noun still wins
+        ("נשבר לי המנעול בדלת", "locksmith"),
+        ("יש לי תקלה בבית", None),  # no trade named and no hint -> no constraint
+        ("", None),
+    ],
+)
+def test_probable_trade_reads_customer_phrasing(issue, expected):
+    """The loyalty gate has to classify what customers actually write.
+    `required_profession` only matches a profession noun, so "השקע לא עובד"
+    resolved to None and the gate fell back to whoever finished last."""
+    assert probable_trade(issue) == expected
+
+
+def test_pro_trades_reads_the_field_onboarding_actually_writes():
+    """`pro_onboarding_service` and the seed scripts store the trade in
+    `type` + `categories`; `profession_type` is a name only this suite ever
+    wrote, which is why the profession gate never fired on a real pro."""
+    assert pro_trades({"type": "electrician", "categories": ["electrician"]}) == {
+        "electrician"
+    }
+    assert pro_trades({"profession_type": "plumber"}) == {"plumber"}
+    assert pro_trades({}) == set()
