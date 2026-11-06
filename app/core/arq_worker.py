@@ -6,6 +6,7 @@ from app.core.config import settings
 from app.core.startup_checks import (
     warn_if_admin_phone_unconfigured,
     warn_if_public_origin_malformed,
+    warn_if_waba_id_missing,
     warn_if_terms_enabled_on_draft,
 )
 from app.services.workflow_service import process_incoming_message, whatsapp
@@ -47,6 +48,7 @@ async def startup(ctx):
     warn_if_admin_phone_unconfigured(settings)  # PRO-48
     warn_if_terms_enabled_on_draft(settings)
     warn_if_public_origin_malformed(settings)
+    warn_if_waba_id_missing(settings)
 
     logger.info("⏳ Starting Scheduler within Worker...")
     ctx["scheduler"] = start_scheduler()

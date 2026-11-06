@@ -23,11 +23,12 @@ from app.core.database import wa_delivery_collection
 from app.core.logger import logger, page_critical
 from app.core.phone import mask_chat_id as _mask
 from app.providers.whatsapp import template_registry
+from app.providers.whatsapp.quality import record_business_initiated
 
 # Safe at top level: window.py imports nothing from this package. The
 # get_whatsapp import further down is deferred for a different reason —
 # that name is defined in __init__ itself, so it has no submodule fallback.
-from app.providers.whatsapp.window import claim_window_page
+from app.providers.whatsapp.window import claim_window_page, is_service_window_open
 
 
 async def record_outbound(wa_message_id: str, chat_id: str, kind: str) -> None:
@@ -35,7 +36,13 @@ async def record_outbound(wa_message_id: str, chat_id: str, kind: str) -> None:
 
     No message content is stored — the record exists to answer "what kind of
     send was wamid X, to whom", which is all the retry path needs.
+
+    Also the one place every accepted send passes, so it is where PRO-90 counts
+    business-initiated conversations: a template to a recipient whose window is
+    closed. A template inside an open window does not count against Meta's limit.
     """
+    if kind == "template" and not await is_service_window_open(chat_id):
+        await record_business_initiated(chat_id)
     now = datetime.now(timezone.utc)
     await wa_delivery_collection.update_one(
         {"wa_message_id": wa_message_id},

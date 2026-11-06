@@ -28,6 +28,8 @@ LONG_JOB_IDS_BY_POSITION = [
     ("sos_admin_reporter", 0),
     ("stale_lead_nudger", 1),
     ("lead_janitor", 2),
+    # Position 3 is the production-only backup watchdog (see tests/test_scheduler.py).
+    ("whatsapp_quality_monitor", 4),
 ]
 
 

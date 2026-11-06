@@ -39,6 +39,9 @@ provider-agnostic rather than describing one vendor's console.
 name) and `transmits` (whether it can reach a real handset) — added in PRO-86 so a dry-run
 deployment and a live one are distinguishable from the outside.
 
+The object also carries the quality watchdog's fields (`quality_rating`, `messaging_tier`,
+`window_state`, ...), token-only like the rest of `checks`. Their state table is in §8.
+
 ---
 
 ## 1. Detection
@@ -202,3 +205,113 @@ and is not affected by the auto breaker. Remember to clear it, or outbound stays
 - **On-call:** `ONCALL_PHONE` (or `ADMIN_PHONE` if unset).
 - If rotating numbers repeatedly, revisit §4 — a recurring ban means a behavior problem, not
   an account problem.
+
+---
+
+## 8. Quality rating, messaging limit and number state (early warning)
+
+This is the visibility the legacy vendor never gave us: its `suspended` state was undocumented
+and we learned about `yellowCard` after the fact. §1 is about the account being down. This
+section is about catching the decline first.
+
+**Where it comes from.** `monitor_service.check_whatsapp_quality` polls every **15 min**
+(`WA_QUALITY_CHECK_INTERVAL_MINUTES`, plus once after boot) and writes `wa:quality:snapshot` in
+Redis. It reads `quality_rating`, `status` and `whatsapp_business_manager_messaging_limit` off
+the phone node, and `health_status` off the WABA node when `META_WABA_ID` is set. It polls rather
+than consuming the `phone_number_quality_update` webhook because a subscription that was never
+delivered looks exactly like a healthy GREEN, and because `/webhook/meta` ignores every field
+except `messages` today.
+
+**Reading it:**
+```bash
+curl -s -H "X-Health-Token: $HEALTH_TOKEN" https://<your-api-host>/health | jq '.checks.whatsapp'
+python scripts/meta_healthcheck.py   # what Meta says right now, read-only (railway run for a deployed env)
+```
+
+### `window_state`
+
+It describes whether the **number** can send. The 24h customer-service window is per recipient
+(`window.py`), so it has no single value to report.
+
+| `window_state` | Phone `status` | WABA `can_send_message` | What it means |
+|---|---|---|---|
+| `open` | `CONNECTED` | `AVAILABLE` | Sending normally. The rating can still be YELLOW/RED, see below |
+| `limited` | `FLAGGED`, or | `LIMITED` | Meta is warning or partly restricting. Dispatch continues, non-essential sends pause |
+| `blocked` | anything else (`RESTRICTED`, `RATE_LIMITED`, `BANNED`, `DISCONNECTED`, ...), or | `BLOCKED` | The **`suspended` equivalents**. Any status except `CONNECTED`/`FLAGGED` also trips the §2 breaker, which halts all outbound and pages through §1 |
+| `unknown` | | | The poll failed or is stale, or `META_WABA_ID` is unset, or there is no number to read (dry-run) |
+
+### `quality_rating` and the rest of the object
+
+| Field | Values | Meaning |
+|---|---|---|
+| `quality_rating` | `GREEN`, `YELLOW`, `RED`, `NA`, `UNKNOWN` | `NA`/`UNKNOWN` is "not rated yet", normal on a fresh number, and does not page. **`UNKNOWN` also means the last poll did not succeed**, so check `quality_poll.status`; the last good values are then in `last_known` |
+| `messaging_tier` | `TIER_250`, `TIER_2K`, `TIER_10K`, `TIER_100K`, ... | The portfolio's limit. Meta sets it per business portfolio and shares it across all of its numbers |
+| `can_send_message` | `AVAILABLE`, `LIMITED`, `BLOCKED`, `UNCONFIGURED`, `UNKNOWN` | WABA health. `UNCONFIGURED` means `META_WABA_ID` is unset |
+| `quality_poll.status` | `ok`, `failed`, `stale`, `never`, `unreadable`, `not_applicable` | `failed`: last poll did not read everything. `stale`: no attempt in `WA_QUALITY_STALE_MINUTES`, so the watchdog or worker is not running. `not_applicable`: dry-run |
+| `conditions` | e.g. `rating:RED`, `waba:BLOCKED`, `phone:FLAGGED`, `poll:failed` | Everything currently wrong |
+| `tightened` | `true`/`false` | Non-essential sends are paused. Always `false` outside production |
+| `alerts_enabled` | `true`/`false` | Whether this environment pages and tightens |
+| `business_initiated_24h` | `{count, cap}` | Unique recipients sent a template outside their window in the moving 24h |
+
+None of these change the top-level `status`: a degraded number is a page, not a reason to restart
+the API.
+
+### What happens automatically (production only)
+
+| Condition | Page | Tightened |
+|---|---|---|
+| Rating is `YELLOW`, `RED` or an unrecognized value | yes | yes |
+| Phone `status` is `FLAGGED` | yes | yes |
+| WABA `can_send_message` is `LIMITED` or `BLOCKED` | yes | yes |
+| 3 polls in a row failed (`WA_QUALITY_POLL_FAILURE_THRESHOLD`, about 45 min) | yes | yes |
+| Business-initiated count reaches 80% of the cap | yes | no |
+| Watchdog not running, or no reading yet | no (see the gap below) | yes |
+
+**Paging is once per condition per episode.** A standing condition does not repeat, however long
+it lasts, so read `/health` rather than waiting for a reminder. A condition that clears and returns
+stays quiet for `WA_QUALITY_PAGE_COOLDOWN_HOURS` (24h). A different condition pages on its own, so
+`YELLOW` then `RED` is two pages. Delete `wa:quality:paged:<condition>` to re-arm one by hand.
+
+**Tightened pauses only** the scheduled completion check that leads to the review request
+(`monitor_unfinished_jobs` tier 2), the review request sent when a pro finishes a job (the job still
+completes, it just gets no rating prompt), and loyalty offers (the customer goes on to normal
+matching). **Dispatch, pro offers, pro reminders, the approval SLA, the daily agenda and every
+reply stay live.** Tightening releases by itself on the first poll with no conditions.
+
+**The `FLAGGED` decision.** `get_state` maps it to `authorized`, so the §2 breaker stays open and
+dispatch survives. Meta's limits docs describe it as lowering the limit after 7 days, but its phone
+numbers page also says a number must be `connected` to send, and neither states it outright. If
+Meta rejects those sends they fail loudly, per send. `RESTRICTED` still halts everything, including
+replies inside an open window; revisit that if a real incident shows Meta still delivers those.
+
+**Staging observes and never acts.** It runs on Meta's Test Number, whose WABA reads `BLOCKED` by
+design until billing and verification land. The fields are real on `/health`, changes are logged at
+WARNING, and nothing pages or pauses.
+
+**The gap.** A dead worker cannot page about itself. It shows only as `quality_poll.status: stale`
+on `/health`, next to `checks.worker`.
+
+### What to do
+
+1. **`rating:YELLOW` or `rating:RED`, or `phone:FLAGGED`:** cut volume now and stop anything cold
+   you started by hand. Check for recent customer blocks and reports, and see §4. A rating that
+   stays low can lower the limit after 7 days. Non-essential sends resume alone on recovery.
+2. **`waba:LIMITED` or `waba:BLOCKED`:** the error codes are in the page. Fix them in WhatsApp
+   Manager / Business Settings (payment method, verification, profile). Run
+   `scripts/meta_healthcheck.py` to see Meta's full text.
+3. **`poll:failed`:** check the token (expired or missing a scope for the WABA node), and that
+   Graph is reachable. `scripts/meta_healthcheck.py` shows which read fails. If the WABA read cannot
+   be fixed quickly, unsetting `META_WABA_ID` keeps the rating watch going without it.
+4. **`cap:*`:** new business-initiated conversations will start failing at the cap. Hold back any
+   manual outreach. The count covers **this environment's number only**, and Meta shares the limit
+   across the portfolio, so another number in the portfolio makes the real figure higher.
+
+### Configuration
+
+- `META_WABA_ID` (worker): enables the WABA health read. Production reports at ERROR on boot when it
+  is unset with `WHATSAPP_PROVIDER=cloud`.
+- `WA_BUSINESS_INITIATED_CAP` (worker, default 250): the cap used when the live limit cannot be read
+  or is not one we recognize. A recognized live limit always wins, so raising the portfolio to 2,000
+  needs no change unless Meta reports a value we do not know.
+- `whatsapp_monitor_active` in `settings.scheduler_config`: shared with the §1 watchdog. Turning it
+  off in production goes `stale` after 45 min, which pauses non-essential sends.

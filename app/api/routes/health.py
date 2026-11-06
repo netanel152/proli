@@ -12,6 +12,7 @@ from app.core.database import check_db_connection, leads_collection
 from app.core.logger import logger
 from app.core.redis_client import get_redis_client
 from app.providers.whatsapp import get_whatsapp
+from app.providers.whatsapp.quality import health_fields as whatsapp_quality_fields
 import time
 
 router = APIRouter(prefix="/health", tags=["Health"])
@@ -277,6 +278,11 @@ async def health_check(request: Request, response: Response):
         "uptime_seconds": uptime_seconds,
     }
     if detail_ok:
+        # PRO-90. Like backup freshness, not folded into the top-level `status`:
+        # a degraded number is an operator page, not a reason to restart the API.
+        checks["whatsapp"].update(
+            await whatsapp_quality_fields(whatsapp.provider.transmits)
+        )
         body["checks"] = checks
         # PRO-155: the commit this container was built from (injected by
         # Railway; None elsewhere). The verify-staging-deploy workflow compares

@@ -339,6 +339,13 @@ class Settings(BaseSettings):
     META_APP_SECRET: SecretStr | None = None
     META_VERIFY_TOKEN: SecretStr | None = None
     META_PHONE_NUMBER_ID: str | None = None
+    # The WABA node, read only for its health_status (PRO-90). Optional: without
+    # it the quality watchdog still reads the phone node. Not secret, like the id.
+    META_WABA_ID: str | None = None
+    # The cap to alert against when Meta's live limit cannot be read or is not
+    # recognized. A new business portfolio starts at 250 unique recipients per
+    # moving 24h and can rise to 2,000, so this is a setting and not a constant.
+    WA_BUSINESS_INITIATED_CAP: int = 250
     # Pinned rather than "latest": Graph versions live ~2 years and a silent
     # major-version jump is how a working payload starts 400ing. Bump on purpose.
     META_GRAPH_API_VERSION: str = "v23.0"

@@ -151,6 +151,15 @@ class WhatsAppProvider(ABC):
         does exactly that.
         """
 
+    async def get_quality(self) -> dict[str, Any] | None:
+        """What the vendor says about the number's reputation and limits.
+
+        Not abstract: only a transmitting provider has a number to report on.
+        ``None`` means there is no reading, which the watchdog treats as a failed
+        poll. Keys are in ``CloudAPIProvider.get_quality``.
+        """
+        return None
+
     @abstractmethod
     def parse_webhook(self, payload: Any) -> NormalizedMessage | None:
         """Convert a provider webhook payload into a :class:`NormalizedMessage`.
