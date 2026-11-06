@@ -95,8 +95,12 @@ META_ACCESS_TOKEN=...                # secret — required once WHATSAPP_PROVIDE
 META_APP_SECRET=...                  # secret — signs inbound /webhook/meta; required for cloud in staging/production
 META_VERIFY_TOKEN=...                # secret — Meta subscription handshake; required for cloud in staging/production
 META_PHONE_NUMBER_ID=...             # not secret — Graph API phone-number node id
+PUBLIC_BASE_ORIGIN=https://...       # public https origin, no path, on a host that serves /privacy and /terms; unset = messages carry no link
+TERMS_ENABLED=false                  # true publishes /terms and its links, only once app/static/terms.html is the approved text
 ENVIRONMENT=development              # development | staging | production (anything else fails at startup)
 ```
+
+`PUBLIC_BASE_ORIGIN` must be a host where `/privacy` and `/terms` reach the API. Behind the nginx setup (`nginx/nginx.conf`, `nginx/nginx.prod.conf`) those paths currently fall through `location /` to Streamlit, so do not point it at an nginx host until they are routed to the API. A malformed value logs an ERROR at boot and the messages go out with no link.
 
 ### 3. Seed the database
 
@@ -152,7 +156,7 @@ pytest tests/test_matching_service.py
 pytest -m integration
 ```
 
-Expected result: the full unit suite passes. The authoritative pass/skip baseline lives in `docs/TESTING.md` ("Current status" line) — integration tests are skipped without `MONGO_TEST_URI`.
+Expected result: the full unit suite passes, with integration tests skipped without `MONGO_TEST_URI`. CI fails a PR that passes fewer tests than `dev` (see `docs/CI_WORKFLOWS.md`).
 
 ---
 
@@ -167,6 +171,7 @@ Expected result: the full unit suite passes. The authoritative pass/skip baselin
 | [Operations Guide](docs/OPERATIONS_GUIDE.md) | Running, monitoring, troubleshooting |
 | [Scripts](docs/SCRIPTS.md) | Database and simulation scripts |
 | [Railway Setup](docs/RAILWAY_SETUP.md) | Cloud deployment guide |
+| [CI Workflows](docs/CI_WORKFLOWS.md) | What each workflow does, the test floor, why they look like this |
 | [Production Readiness](docs/PRODUCTION_READINESS.md) | Pre-launch checklist |
 | [Scaling Guide](docs/SCALING_GUIDE.md) | Horizontal scaling strategies |
 | [Parallel Tracks](docs/PARALLEL_TRACKS.md) | One worktree per issue, the Windows shell traps, teardown |
