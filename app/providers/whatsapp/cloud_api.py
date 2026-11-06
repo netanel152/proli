@@ -363,8 +363,8 @@ class CloudAPIProvider(WhatsAppProvider):
         Reply IDs are ``"1"``, ``"2"``, … — exactly the strings a user types in
         the numeric text menus — so to the FSM a button tap and a typed digit
         are the same inbound and no transition changes (the PRO-89 AC).
-        Remember CLAUDE.md: no *flow* may call this until PRO-88/89 templates
-        land; this is the transport half only.
+        Remember CLAUDE.md: no *flow* may call this. Buttons come after the pilot
+        (PRO-103); this is the transport half only.
         """
         options = list(options)
         title_limit = (

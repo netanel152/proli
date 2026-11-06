@@ -110,7 +110,7 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | P12 | `customer_cancelled` | `customer_name`, `full_address` | `CUSTOMER_CANCELLED` | `workflow_service` cancel path |
 | P13 | `onboarding_approved` | none | `ONBOARDING_APPROVED` | **Not wired:** `admin_panel/views/professionals.py` |
 | P13 | `onboarding_rejected` | none | `ONBOARDING_REJECTED` | **Not wired:** `admin_panel/views/professionals.py` |
-| — | `pro_found` | `pro_name`, `issue_type`, `full_address`, `appointment_time`, `pro_phone` | `PRO_FOUND` | `pro_flow._handle_approve`. The update `REASSIGNING` and `PENDING_REVIEW` promise, and the only way a closed-window customer gets the pro's phone |
+| — | `pro_found` | `pro_name`, `issue_type`, `full_address`, `appointment_time`, `price_estimate`, `pro_phone` | `PRO_FOUND` | `pro_flow._handle_approve`. The update `REASSIGNING` and `PENDING_REVIEW` promise, and the only way a closed-window customer gets the pro's phone |
 | C1 | `no_pro_available` | `issue_type` | `NO_PRO_AVAILABLE` | `monitor_service.auto_reject_unassigned_leads` |
 | C2 | `completion_check` | `pro_name` | `COMPLETION_CHECK` | `customer_flow.send_customer_completion_check`. **Not wired:** the operator button in `admin_panel/core/utils.py` |
 | C3 | `reassigning` | `issue_type` | `REASSIGNING` | `monitor_service.reassign_lead` |
@@ -134,16 +134,17 @@ That is **19 templates to submit** and one registry entry left out, against the 
 
 **An emergency P3 takes `lead_offer`,** because `lead_offer_reassigned` has no urgency line and the free-form version opens with the emergency header.
 
-**`pro_found` drops the optional lines.** `PRO_FOUND`'s profession, quoted price and rating are not in the template, since a variable cannot be empty and the name would otherwise have to appear twice.
+**`pro_found` drops two optional lines.** `PRO_FOUND`'s profession and rating are not in the template. Its price stays, as `price_estimate` with the same fallback the offer uses.
 
 **Runtime values are cut.** `sanitize_param` limits `last_message` to 700 characters and every other variable to 120, so that the whole message stays inside the 1024 Meta states for a body. Those two figures are ours.
 
-**Text-only stays.** Replies are plain keywords in the body (`*אשר*`), so nothing changes in the FSM and no template declares a button.
+**Text-only stays.** The owner decided on 2026-11-06 that the pilot runs on text menus and buttons come after it (PRO-103). Replies are plain keywords in the body (`*אשר*`), so nothing changes in the FSM and no template declares a button.
 
-## Decisions still open
+## Settled, and still to do
 
-- **P4's fate.** It needs a media template and is not load-bearing, so it is left out of submission and its free-form send stays. Approve a media template or delete the send.
-- **Do the panel sends move?** They wait on the open panel-send PR, because `send_text_sync` is changing there. Until they move, P13 and the operator's C2 are lost on a closed window even after approval.
+The owner settled these on 2026-11-06: the loyalty header is lost on template offers, a closed-window pro decides without media, an emergency reassignment goes through `lead_offer`, and `early_lead` is not submitted (it would need a media template and is not load-bearing), so its free-form send stays.
+
+Still to do: **the panel sends.** They wait on the open panel-send PR, because `send_text_sync` is changing there. Until they move, P13 and the operator's C2 are lost on a closed window even after approval.
 
 ## Open questions
 

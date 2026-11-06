@@ -477,6 +477,10 @@ async def test_approve_names_the_pro_found_template_for_the_customer(wf, mock_db
     assert call.kwargs["template_key"] == "pro_found"
     assert call.kwargs["params"]["pro_phone"] == "0500000001"
     assert call.kwargs["params"]["issue_type"] == "נזילה"
+    assert (
+        call.kwargs["params"]["price_estimate"] == Messages.Fallbacks.PRICE_NOT_QUOTED
+    )
+    assert Messages.Fallbacks.PRICE_NOT_QUOTED == "לא ניתנה הערכה"
 
 
 @pytest.mark.asyncio

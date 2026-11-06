@@ -37,7 +37,7 @@ _VARIABLE = re.compile(r"\{\{(\d+)\}\}")
 _BODY_MAX_CHARS = 1024
 # shortcut: Meta rejects "too many variables relative to the message length" but
 # publishes no ratio, so this floor is ours. Change it if a review says otherwise.
-_MIN_FIXED_CHARS_PER_VARIABLE = 20
+_MIN_FIXED_CHARS_PER_VARIABLE = 15
 _LINE_BREAKS_AND_TABS = re.compile(r"[\r\n\t\v\f\x85\u2028\u2029]+")
 _LONG_SPACE_RUN = re.compile(r" {4,}")
 # A long customer message must not overflow the body and lose the alert. Meta
@@ -110,7 +110,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
             ),
         ),  # P3
         # P4 sends an image when it has one, which needs a media template, and it
-        # is not load-bearing. Not submitted until the owner decides; its free-form
+        # is not load-bearing. The owner decided not to submit it; its free-form
         # send stays as it is.
         TemplateSpec(
             "early_lead",
@@ -203,6 +203,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
                 "issue_type",
                 "full_address",
                 "appointment_time",
+                "price_estimate",
                 "pro_phone",
             ),
         ),  # the update REASSIGNING and PENDING_REVIEW promise; no catalog row before

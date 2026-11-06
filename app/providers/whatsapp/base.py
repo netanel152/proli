@@ -151,9 +151,8 @@ class WhatsAppProvider(ABC):
 
         The legacy vendor could not do this at all, which is why the project convention
         was numeric text menus. The PRO-89 transport exists now, but no *flow*
-        calls this yet: adopting buttons over numeric menus is an explicit
-        product decision still to be made (see CLAUDE.md and the PRO-88
-        catalog §"numbered-reply menus"), not a door PRO-89 opened by default.
+        calls this: the owner decided on 2026-11-06 that the pilot runs on text
+        menus and buttons come after it (PRO-103, and see CLAUDE.md).
 
         Same window contract as :meth:`send_text` — report, then raise.
         """

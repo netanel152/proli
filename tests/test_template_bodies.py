@@ -97,6 +97,7 @@ def test_sos_alert_pending_has_no_phone():
 def test_every_pause_message_states_the_real_pause_length(text):
     assert "רבע שעה" in text
     assert "שעתיים" not in text
+    assert "בוואטסאפ" not in text  # the pro is not in that chat
     assert WorkerConstants.PAUSE_TTL_SECONDS == 15 * 60
 
 
@@ -105,6 +106,7 @@ def test_pro_found_ends_on_words_with_the_phone_as_the_last_variable():
     assert spec.params[-1] == "pro_phone"
     assert meta_body(spec).rstrip().endswith("בקרוב.")
     assert "*טלפון:* {pro_phone}\n" in spec.body
+    assert spec.params.index("price_estimate") == len(spec.params) - 2
 
 
 def test_the_two_max_reassignment_messages_promise_the_same_thing():

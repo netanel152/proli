@@ -45,7 +45,7 @@ guide it points at; nothing here is a value to trust over them.
 4. **Placeholders**: `str.format` names that describe the value, formatted at the send site;
    any value that can be empty goes through `Messages.Fallbacks` first.
 5. **Menus are text-only.** Nothing may call `send_interactive` (CLAUDE.md, CRITICAL). Buttons
-   are a product decision not yet made.
+   come after the pilot (PRO-103).
 
 ## Tests that pin this
 

@@ -540,8 +540,7 @@ class Messages:
             "הבוט יחזור לפעולה אוטומטית בעוד רבע שעה, או מיד עם *המשך*."
         )
         PAUSE_NOTIFICATION = (
-            "🚨 הלקוח מבקש מענה אנושי.\n"
-            "אפשר להיכנס לשיחה בוואטסאפ. הבוט יחזור לפעולה אוטומטית בעוד רבע שעה."
+            "🚨 הלקוח מבקש מענה אנושי.\n" "הבוט יחזור לפעולה אוטומטית בעוד רבע שעה."
         )
         CUSTOMER_CANCELLED = (
             "⚠️ *עדכון חשוב:* הלקוח/ה {customer_name} ביטל/ה את העבודה "
@@ -1336,15 +1335,16 @@ class Messages:
             "לפרטים נוספים אפשר לפנות אלינו במייל: info@proli.me\n"
             "תודה על ההתעניינות."
         )
-        # Customer.PRO_FOUND without its optional profession, price and rating
-        # lines. The phone is the last field and a fixed sentence follows it,
-        # because a body may not end on a variable.
+        # Customer.PRO_FOUND without its optional profession and rating lines. The
+        # phone is the last field and a fixed sentence follows it, because a body
+        # may not end on a variable.
         PRO_FOUND = (
-            "🎉 *נמצא לך איש מקצוע!*\n\n"
+            "✅ *נמצא לך איש מקצוע!*\n\n"
             "*שם:* {pro_name}\n"
             "*תקלה:* {issue_type}\n"
             "*כתובת:* {full_address}\n"
             "*מועד:* {appointment_time}\n"
+            "*הערכת מחיר:* {price_estimate}\n"
             "*טלפון:* {pro_phone}\n\n"
             "איש המקצוע ייצור איתך קשר בקרוב."
         )

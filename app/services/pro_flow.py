@@ -514,6 +514,7 @@ async def _handle_approve(pro, lead_manager, whatsapp):
             "issue_type": lead.get("issue_type", ""),
             "full_address": lead.get("full_address", ""),
             "appointment_time": lead.get("appointment_time", ""),
+            "price_estimate": notification_service.price_estimate_param(quoted_price),
             "pro_phone": pro_phone,
         },
     )
