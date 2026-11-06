@@ -17,6 +17,7 @@ The repo is public, so Actions logs are too: the counts the endpoint keeps behin
 its token go to Sentry only. Print verdicts here, never numbers or bodies.
 """
 
+import http.client
 import json
 import os
 import sys
@@ -64,7 +65,8 @@ def fetch_counts(url: str, token: str) -> tuple[int, int]:
             body = json.load(response)
     except urllib.error.HTTPError as e:
         raise PollFailed(f"HTTP {e.code}") from None
-    except (OSError, ValueError):  # URLError and timeouts are OSError
+    # URLError and timeouts are OSError; a truncated body is HTTPException.
+    except (OSError, ValueError, http.client.HTTPException):
         raise PollFailed("no readable response") from None
 
     if not isinstance(body, dict) or body.get("status") != "ok":
@@ -88,7 +90,9 @@ def _page_is_due(state: dict, kind: str, now: datetime) -> bool:
 
 
 def _clear_episode(state: dict, kind: str) -> None:
-    state.get("last_paged", {}).pop(kind, None)  # the next breach pages at once
+    state.get("last_paged", {}).pop(
+        kind, None
+    )  # the next episode pages as soon as it is due
 
 
 def evaluate(
@@ -215,7 +219,7 @@ def _try_page(dsn: str, kind: str, message: str, now: datetime) -> bool:
         send_page(dsn, kind, message, now)
     except urllib.error.HTTPError as e:
         print(f"::error::Sentry refused the {kind} page (HTTP {e.code}).")
-    except (OSError, ValueError):
+    except (OSError, ValueError, http.client.HTTPException):
         # Fixed text: these exceptions can quote the DSN.
         print(f"::error::The {kind} page could not be delivered to Sentry.")
     else:
@@ -224,7 +228,8 @@ def _try_page(dsn: str, kind: str, message: str, now: datetime) -> bool:
     return False
 
 
-def _load_state(path: Path) -> dict:
+def _load_state(path: Path) -> dict | None:
+    """None means no memory of earlier runs, so no sustained rule could have fired."""
     try:
         state = json.loads(path.read_text(encoding="utf-8"))
         for key in ("pending_since", "stuck_rise_since"):
@@ -234,14 +239,10 @@ def _load_state(path: Path) -> dict:
             datetime.fromisoformat(stamp)
         return state
     except FileNotFoundError:
-        print(
-            "::notice::No earlier reading: this run only starts the 30-minute timers."
-        )
+        print("::error::No earlier reading: the 30-minute timers start only now.")
     except (OSError, ValueError, TypeError, AttributeError):
-        print(
-            "::warning::Monitor state was unreadable, so the 30-minute timers restart."
-        )
-    return {}
+        print("::error::Monitor state was unreadable: the 30-minute timers restart.")
+    return None
 
 
 def main() -> int:
@@ -291,9 +292,13 @@ def main() -> int:
         healthy = False
         print(f"::error::Nothing was checked: {reason}.")
 
-    state, pages, active = evaluate(
-        _load_state(state_file), counts, reason, now, threshold
-    )
+    # Red, not green: if the cache keeps failing, the timers never reach 30 minutes
+    # and every run would otherwise report a healthy pipeline it cannot judge.
+    earlier = _load_state(state_file)
+    if earlier is None:
+        healthy = False
+
+    state, pages, active = evaluate(earlier or {}, counts, reason, now, threshold)
     for kind, message in pages:
         if dsn and _try_page(dsn, kind, message, now):
             record_page(state, kind, now, counts)

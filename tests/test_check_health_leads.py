@@ -5,6 +5,7 @@ local HTTP server standing in for /health/leads and Sentry's ingest. Nothing her
 touches a live environment.
 """
 
+import http.client
 import json
 import sys
 import threading
@@ -194,11 +195,17 @@ def run_main(fake, tmp_path, monkeypatch, capsys):
         code = monitor.main()
         return code, capsys.readouterr().out
 
+    def _seed():
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        state_file.write_text("{}", encoding="utf-8")
+
     _main.state_file = state_file
+    _main.seed = _seed
     return _main
 
 
 def test_a_clean_read_is_green_and_sends_the_token_to_the_leads_path(fake, run_main):
+    run_main.seed()
     code, out = run_main()
     assert code == 0, out
     assert fake.tokens == [("/health/leads", TOKEN)]
@@ -322,6 +329,7 @@ def test_the_threshold_variable_can_force_a_breach_for_the_end_to_end_proof(
     fake, run_main
 ):
     fake.health_body["pending_review_count"] = 0
+    run_main.seed()
     code, out = run_main(PENDING_THRESHOLD="-1")
     assert "::warning::" in out
     state = json.loads(run_main.state_file.read_text(encoding="utf-8"))
@@ -336,6 +344,7 @@ def test_a_mistyped_threshold_variable_is_red(run_main):
 
 
 def test_a_drill_sends_one_marked_test_page_and_stays_green(fake, run_main):
+    run_main.seed()
     code, _ = run_main(DRILL="true")
     assert code == 0
     assert [e[2]["tags"]["monitor_kind"] for e in fake.envelopes] == ["drill"]
@@ -348,12 +357,33 @@ def test_a_drill_sentry_refuses_is_red(fake, run_main):
     assert code == 1
 
 
-def test_corrupt_state_restarts_the_timers_with_a_warning(fake, run_main):
+def test_corrupt_state_is_red_because_no_sustained_rule_could_have_fired(
+    fake, run_main
+):
     run_main.state_file.parent.mkdir(parents=True)
     run_main.state_file.write_text("[not state", encoding="utf-8")
     code, out = run_main()
-    assert code == 0
-    assert "::warning::" in out
+    assert code == 1
+    assert "::error::" in out
+
+
+def test_a_cache_that_never_restores_can_not_stay_green(fake, run_main):
+    # Each run starts from nothing, so the 30-minute timers would never elapse.
+    for _ in range(3):
+        run_main.state_file.unlink(missing_ok=True)
+        code, out = run_main()
+        assert code == 1
+        assert "no alert condition" not in out
+
+
+def test_a_truncated_response_counts_as_a_failed_poll(monkeypatch):
+    class _Opener:
+        def open(self, *args, **kwargs):
+            raise http.client.IncompleteRead(b"")
+
+    monkeypatch.setattr(monitor, "_opener", _Opener())
+    with pytest.raises(monitor.PollFailed):
+        monitor.fetch_counts("http://example.invalid/health/leads", "t")
 
 
 def test_public_logs_never_carry_counts_or_secrets(fake, run_main):

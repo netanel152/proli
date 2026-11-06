@@ -45,8 +45,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # "For more than 30 minutes" needs memory between runs. A lost cache only
-      # restarts the timers, which delays a page.
+      # "For more than 30 minutes" needs memory between runs. A lost cache turns
+      # the run red and loses the timers and the stuck baseline.
       - name: Restore the last reading
         uses: actions/cache/restore@v4
         with:

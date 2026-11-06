@@ -99,8 +99,8 @@ The `🩺 Lead pipeline monitor` workflow (`.github/workflows/health-leads-monit
 2. *The whole path, in about 40 minutes:* set the repository variable `HEALTH_LEADS_PENDING_THRESHOLD` to `-1`, so any backlog counts as a breach. Wait for the page, then **delete the variable**. Each run warns while it is set.
 
 **Limits.**
-- The stuck rule is only meaningful with the Healer on. `sos_healer_active` and `lead_janitor_active` default off, so any lead reaching 24h in `contacted` pages once while they are off.
-- Timers live in the Actions cache. A lost cache restarts them, which delays a page.
+- The stuck rule is only meaningful with the Healer on. `sos_healer_active` and `lead_janitor_active` default off, so while they are off each new rise in leads reaching 24h in `contacted` pages again, on top of the SOS Reporter's own page.
+- Timers and the stuck baseline live in the Actions cache. A missing or corrupt cache turns the run red (the very first run is red too), restarts the timers, and loses the baseline, so a climb that already happened is not paged.
 - GitHub's schedule is best effort and can run late. **Nothing watches the watcher:** if GitHub stops running the schedule, no alert fires. GitHub also disables schedules in a public repo after 60 days without activity.
 - Logs in this public repo show verdicts only. A red run does reveal publicly that a condition is active, and the cached state holds the last stuck count.
 

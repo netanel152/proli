@@ -54,7 +54,7 @@ shared init all services call), `app/worker.py`, `app/main.py`, and
   in the alert rule below.
   > **PRO-113:** `LoggingIntegration` only hooks *stdlib* `logging`, so a loguru
   > `logger.critical(...)` call does not by itself create a Sentry event.
-  > `page_critical` is the only paging primitive — it logs through
+  > `page_critical` is the only paging primitive inside the app (the external lead-health monitor posts to Sentry itself) — it logs through
   > `logging.getLogger("proli.paging")`, the stdlib channel `LoggingIntegration`
   > actually watches, with secrets/PII scrubbed inline before the record is
   > built. Loguru `logger.critical` is stdout-only and is banned under `app/`
