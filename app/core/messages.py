@@ -175,8 +175,8 @@ class Messages:
             "🙏 אין בעיה, ממשיכים להמתין לאישור. אעדכן אותך ברגע שיש תשובה."
         )
         BOT_PAUSED_BY_PRO = (
-            "📞 איש המקצוע ביקש לדבר איתך ישירות.\n"
-            "אני מושהה כרגע — ההודעות הבאות יגיעו ממנו."
+            "📞 איש המקצוע ביקש לדבר איתך ישירות, ויפנה אליך מהמספר שלו.\n"
+            "אני מושהה בינתיים."
         )
         BOT_PAUSED_BY_CUSTOMER = "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת."
         # PRO-121: this fires on a keyword, before any pro is matched — and
@@ -539,6 +539,13 @@ class Messages:
             "⏸️ הבוט הושהה ואפשר לדבר עם הלקוח ישירות.\n"
             "הבוט יחזור לפעולה אוטומטית בעוד שעתיים, או מיד עם *המשך*."
         )
+        # PRO-212: the pause needs a customer the pro can actually reach.
+        PAUSE_NEEDS_APPROVAL = (
+            "אפשר להשהות את הבוט רק בעבודה מאושרת, כי פרטי הלקוח נשלחים אחרי האישור.\n"
+            + CMD_APPROVE
+            + "\n"
+            + CMD_REJECT
+        )
         PAUSE_NOTIFICATION = (
             "🚨 הלקוח מבקש מענה אנושי.\n"
             "אפשר להיכנס לשיחה בוואטסאפ. הבוט יחזור לפעולה אוטומטית בעוד שעתיים."
@@ -643,6 +650,18 @@ class Messages:
             "{jobs_list}\n"
             "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
         )
+        # PRO-212: אשר/דחה with more than one NEW lead. Rows are JOB_SELECT_ROW,
+        # which carries nothing the offer itself did not (PRO-59).
+        SELECT_JOB_TO_APPROVE = (
+            "📋 איזו עבודה לאשר?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
+        )
+        SELECT_JOB_TO_REJECT = (
+            "🚫 איזו עבודה לדחות?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
+        )
         CANCEL_SUCCESS = "✅ העבודה בוטלה. הלקוח עודכן."
         SUMMARY_BODY = (
             "📊 *סיכום ביצועים*\n\n"
@@ -737,6 +756,12 @@ class Messages:
             "הרשימה השתנתה מאז שהוצגה, אז ביטלתי את הבחירה.\n"
             "*סיימתי* — רשימה מעודכנת לסיום עבודה\n"
             "*ביטול* — רשימה מעודכנת לביטול עבודה"
+        )
+        # The same, in an אשר/דחה prompt, where other offers are still waiting.
+        SELECTION_OFFER_LIST_CHANGED = (
+            "הרשימה השתנתה מאז שהוצגה, אז ביטלתי את הבחירה.\n"
+            "*אשר* — אישור עבודה שממתינה לך\n"
+            "*דחה* — דחיית עבודה שממתינה לך"
         )
         HISTORY_HEADER = "📋 *10 העבודות האחרונות שהושלמו*\n"
         RATING_NONE = "אין עדיין"
@@ -842,6 +867,14 @@ class Messages:
             "כדי לקבל את פרטי הקשר שלו:\n"
             "*אשר* — לאישור העבודה\n"
             "*דחה* — לדחייה"
+        )
+        # PRO-212: a CONTACTED lead was never offered, so אשר finds nothing to
+        # approve. No keyword here, and no promise of contact details.
+        PRO_ALERT_NOT_OFFERED = (
+            "⚠️ *לקוח בשיחה בתהליך ביקש עזרה*\n\n"
+            "*הודעה:* {last_message}\n\n"
+            "הפנייה עדיין לא מוכנה לאישור, ואין צורך לעשות כרגע דבר.\n"
+            "אם היא תגיע לאישור שלך, ההצעה תישלח לכאן."
         )
         PRO_ALERT = (
             "⚠️ *הלקוח שלך צריך עזרה*\n\n"

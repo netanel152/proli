@@ -53,6 +53,30 @@ _PRO_COMMAND_LISTS = (
 # key in the pro's state metadata. `kind` names the handler that renders it.
 _PAGE_META_KEY = "job_list_page"
 
+# The numbered pick-one prompts: state -> (metadata key of its mapping, prompt).
+_SELECTION_PROMPTS = {
+    UserStates.PRO_SELECTING_JOB_TO_FINISH: (
+        "finishing_jobs_context",
+        Messages.Pro.SELECT_JOB_TO_FINISH,
+    ),
+    UserStates.PRO_SELECTING_JOB_TO_CANCEL: (
+        "cancelling_jobs_context",
+        Messages.Pro.SELECT_JOB_TO_CANCEL,
+    ),
+    UserStates.PRO_SELECTING_JOB_TO_APPROVE: (
+        "approving_jobs_context",
+        Messages.Pro.SELECT_JOB_TO_APPROVE,
+    ),
+    UserStates.PRO_SELECTING_JOB_TO_REJECT: (
+        "rejecting_jobs_context",
+        Messages.Pro.SELECT_JOB_TO_REJECT,
+    ),
+}
+_OFFER_SELECTION_STATES = (
+    UserStates.PRO_SELECTING_JOB_TO_APPROVE,
+    UserStates.PRO_SELECTING_JOB_TO_REJECT,
+)
+
 
 def _is_pro_command(text: str) -> bool:
     """True if `text` (already `_normalize`d) is a keyword the pro dispatcher handles."""
@@ -95,13 +119,10 @@ async def handle_pro_text_command(
     current_state = await StateManager.get_state(chat_id)
     text = _normalize(text)
 
-    # State: selecting job to finish or cancel
-    if current_state in (
-        UserStates.PRO_SELECTING_JOB_TO_FINISH,
-        UserStates.PRO_SELECTING_JOB_TO_CANCEL,
-    ):
+    # State: selecting which job a finish, cancel, approve or reject is about
+    if current_state in _SELECTION_PROMPTS:
         selection = await _handle_job_selection(
-            chat_id, text, pro, whatsapp, current_state
+            chat_id, text, pro, whatsapp, current_state, lead_manager
         )
         if selection is not _ABANDON_PROMPT:
             return selection
@@ -152,10 +173,10 @@ async def handle_pro_text_command(
         return await _show_pro_dashboard(pro)
 
     if text in Messages.Keywords.APPROVE_COMMANDS:
-        return await _handle_approve(pro, lead_manager, whatsapp)
+        return await _handle_approve(pro, lead_manager, whatsapp, chat_id)
 
     if text in Messages.Keywords.REJECT_COMMANDS:
-        return await _handle_reject(pro, whatsapp)
+        return await _handle_reject(pro, whatsapp, chat_id)
 
     if text in Messages.Keywords.FINISH_COMMANDS:
         return await _handle_finish(pro, whatsapp, chat_id)
@@ -288,25 +309,22 @@ async def _show_pro_dashboard(pro):
     return "\n".join(lines)
 
 
-async def _handle_job_selection(chat_id, text, pro, whatsapp, current_state):
+async def _handle_job_selection(
+    chat_id, text, pro, whatsapp, current_state, lead_manager
+):
     if text in Messages.Keywords.CANCEL_KEYWORDS or text == "ביטול":
         await StateManager.clear_state(chat_id)
         return Messages.Pro.ACTION_CANCELLED
 
     meta = await StateManager.get_metadata(chat_id)
-    is_cancel_flow = current_state == UserStates.PRO_SELECTING_JOB_TO_CANCEL
-    context_key = (
-        "cancelling_jobs_context" if is_cancel_flow else "finishing_jobs_context"
-    )
+    context_key = _SELECTION_PROMPTS[current_state][0]
     mapping = meta.get(context_key, {})
 
     # PRO-147: the next page of the prompt's own list. Checked before the
     # PRO-186 abandon rule below — *עוד* is a pro command, and letting it
     # fall through would drop the very prompt the pro is paging through.
     if text in Messages.Keywords.MORE_COMMANDS:
-        return await _selection_next_page(
-            chat_id, pro, meta, mapping, context_key, current_state
-        )
+        return await _selection_next_page(chat_id, pro, meta, mapping, current_state)
 
     if text not in mapping:
         # PRO-186: before PRO-186 this state was unreachable, so a pro who typed
@@ -320,7 +338,11 @@ async def _handle_job_selection(chat_id, text, pro, whatsapp, current_state):
         # answers here ("1", "2", "3") are themselves pro commands. Testing
         # `_is_pro_command` first would make every selection abandon the prompt
         # and re-open the defect this ticket closes.
-        if _is_pro_command(text):
+        #
+        # PRO-212: a digit past the end of the list is a mistyped answer, not a
+        # command. *3* is also סיימתי, and in a two-row אשר prompt it would
+        # complete the pro's only booked job.
+        if _is_pro_command(text) and not text.isdigit():
             await StateManager.clear_state(chat_id)
             logger.info(
                 f"Pro {pro['_id']} sent command {text!r} while choosing a job — "
@@ -335,14 +357,20 @@ async def _handle_job_selection(chat_id, text, pro, whatsapp, current_state):
     )
     if not lead:
         await StateManager.clear_state(chat_id)
+        # An offer leaving this pro mid-prompt is routine, not an error.
+        if current_state in _OFFER_SELECTION_STATES:
+            return await _no_offer_reply(pro["_id"], ObjectId(lead_id))
         return Messages.Errors.GENERIC_ERROR
 
     await StateManager.clear_state(chat_id)
-    if is_cancel_flow:
+    if current_state == UserStates.PRO_SELECTING_JOB_TO_APPROVE:
+        return await _approve_lead(lead, pro, lead_manager, whatsapp)
+    if current_state == UserStates.PRO_SELECTING_JOB_TO_REJECT:
+        return await _reject_lead(lead, pro, whatsapp)
+    if current_state == UserStates.PRO_SELECTING_JOB_TO_CANCEL:
         await _execute_cancel(lead, pro, whatsapp)
         return Messages.Pro.CANCEL_SUCCESS
-    else:
-        return await _execute_finish(lead, pro, whatsapp, chat_id)
+    return await _execute_finish(lead, pro, whatsapp, chat_id)
 
 
 _RESPONSE_WINDOW_SECONDS = 60 * 5  # "just responded" = within 5 minutes
@@ -374,16 +402,47 @@ async def _recently_responded_lead(pro_id) -> bool:
     return bool(recent)
 
 
-async def _handle_approve(pro, lead_manager, whatsapp):
-    lead = await leads_collection.find_one(
-        {"pro_id": pro["_id"], "status": LeadStatus.NEW}, sort=[("created_at", -1)]
+async def _no_offer_reply(pro_id, gone_lead_id=None) -> str:
+    """The answer to אשר/דחה when the offer it was about is not there to act on.
+
+    ``gone_lead_id`` is the lead a picker answer or a claim lost. With another offer
+    still waiting, "nothing is pending" would be false.
+    """
+    if gone_lead_id and await leads_collection.count_documents(
+        {"pro_id": pro_id, "status": LeadStatus.NEW, "_id": {"$ne": gone_lead_id}}
+    ):
+        return Messages.Pro.SELECTION_OFFER_LIST_CHANGED
+    # Fat-finger guard
+    if await _recently_responded_lead(pro_id):
+        return Messages.Pro.ALREADY_RESPONDED
+    return Messages.Pro.NO_PENDING_APPROVALS
+
+
+async def _resolve_offer(pro, chat_id, state):
+    """The one NEW lead an אשר/דחה can only mean, or the reply to send instead.
+
+    PRO-212: neither the keyword nor the alert or nudge it answers names a lead,
+    and taking the newest booked the wrong customer and sent this pro their phone
+    number. Returns ``(lead, None)`` or ``(None, reply)``.
+    """
+    leads, total = await _fetch_jobs_chronological(pro, [LeadStatus.NEW])
+    if not leads:
+        return None, await _no_offer_reply(pro["_id"])
+    if total > 1:
+        return None, await _prompt_job_selection(chat_id, leads, total, state=state)
+    return leads[0], None
+
+
+async def _handle_approve(pro, lead_manager, whatsapp, chat_id):
+    lead, reply = await _resolve_offer(
+        pro, chat_id, UserStates.PRO_SELECTING_JOB_TO_APPROVE
     )
     if not lead:
-        # Fat-finger guard
-        if await _recently_responded_lead(pro["_id"]):
-            return Messages.Pro.ALREADY_RESPONDED
-        return Messages.Pro.NO_PENDING_APPROVALS
+        return reply
+    return await _approve_lead(lead, pro, lead_manager, whatsapp)
 
+
+async def _approve_lead(lead, pro, lead_manager, whatsapp):
     # PRO-123: guard the write on both the status we read *and* the ownership
     # we read. Status alone is not enough — `monitor_service.reassign_lead`
     # leaves the lead at NEW under the *new* pro, so a stale "אשר" arriving
@@ -404,9 +463,7 @@ async def _handle_approve(pro, lead_manager, whatsapp):
             f"Pro {pro['_id']} approved lead {lead['_id']} but it had already "
             "moved on (reassigned or answered elsewhere) — no booking made."
         )
-        if await _recently_responded_lead(pro["_id"]):
-            return Messages.Pro.ALREADY_RESPONDED
-        return Messages.Pro.NO_PENDING_APPROVALS
+        return await _no_offer_reply(pro["_id"], lead["_id"])
 
     # PRO-120: center the slot search on the customer's requested time; the
     # created_at fallback (inside book_slot_for_lead) only applies to ASAP
@@ -507,15 +564,16 @@ async def _handle_approve(pro, lead_manager, whatsapp):
     return response_text
 
 
-async def _handle_reject(pro, whatsapp):
-    lead = await leads_collection.find_one(
-        {"pro_id": pro["_id"], "status": LeadStatus.NEW}, sort=[("created_at", -1)]
+async def _handle_reject(pro, whatsapp, chat_id):
+    lead, reply = await _resolve_offer(
+        pro, chat_id, UserStates.PRO_SELECTING_JOB_TO_REJECT
     )
     if not lead:
-        if await _recently_responded_lead(pro["_id"]):
-            return Messages.Pro.ALREADY_RESPONDED
-        return Messages.Pro.NO_PENDING_APPROVALS
+        return reply
+    return await _reject_lead(lead, pro, whatsapp)
 
+
+async def _reject_lead(lead, pro, whatsapp):
     # PRO-117: claim the rejection atomically. expected_status=NEW makes a
     # concurrent writer (the Healer's own reassignment tick, or a double-tapped
     # דחה) lose cleanly instead of double-assigning the lead. rejected_by
@@ -616,12 +674,20 @@ async def _escalate_rejected_lead(lead, whatsapp):
 
 
 async def _handle_pause_bot(pro, whatsapp):
-    """Pro clicked 'Pause Bot' — pause AI for the customer's chat."""
+    """Pro clicked 'Pause Bot' — pause AI for the customer's chat.
+
+    PRO-212: BOOKED only. A pro holding a NEW lead has no contact details (PRO-59),
+    so pausing there silenced the customer's chat with nobody able to reach them.
+    """
     lead = await leads_collection.find_one(
-        {"pro_id": pro["_id"], "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]}},
+        {"pro_id": pro["_id"], "status": LeadStatus.BOOKED},
         sort=[("created_at", -1)],
     )
     if not lead:
+        if await leads_collection.count_documents(
+            {"pro_id": pro["_id"], "status": LeadStatus.NEW}
+        ):
+            return Messages.Pro.PAUSE_NEEDS_APPROVAL
         return Messages.Pro.NO_PENDING_APPROVALS
 
     customer_chat_id = lead["chat_id"]
@@ -684,8 +750,6 @@ async def _handle_finish(pro, whatsapp, chat_id):
         leads,
         total,
         state=UserStates.PRO_SELECTING_JOB_TO_FINISH,
-        context_key="finishing_jobs_context",
-        template=Messages.Pro.SELECT_JOB_TO_FINISH,
     )
 
 
@@ -971,7 +1035,7 @@ async def _handle_more(pro, chat_id):
 
 
 async def _prompt_job_selection(
-    chat_id, leads, total, *, state, context_key, template, offset=0, mapping=None
+    chat_id, leads, total, *, state, offset=0, mapping=None
 ):
     """Open (or page through) a numbered pick-one prompt over *every* lead in
     ``leads``. The number→lead mapping covers the whole list, so a pro who
@@ -980,6 +1044,7 @@ async def _prompt_job_selection(
     ``mapping`` is built here only when the prompt opens; a continuation page
     passes the stored one back in, so numbers are never reassigned while the
     prompt is open."""
+    context_key, template = _SELECTION_PROMPTS[state]
     if mapping is None:
         mapping = {str(i): str(lead["_id"]) for i, lead in enumerate(leads, 1)}
     page, next_offset = agenda_service.render_page(
@@ -999,7 +1064,7 @@ async def _prompt_job_selection(
     return template.format(jobs_list="\n".join(page))
 
 
-async def _selection_next_page(chat_id, pro, meta, mapping, context_key, state):
+async def _selection_next_page(chat_id, pro, meta, mapping, state):
     """*עוד* inside a selection prompt: render the next page of the same list
     without leaving the state. The list is rebuilt from the stored mapping in
     its stored order and the mapping is passed back unchanged, so the numbers
@@ -1026,6 +1091,8 @@ async def _selection_next_page(chat_id, pro, meta, mapping, context_key, state):
             f"Pro {pro['_id']} paged a selection prompt after a listed job "
             "moved away — dropping the prompt instead of renumbering it."
         )
+        if state in _OFFER_SELECTION_STATES:
+            return Messages.Pro.SELECTION_OFFER_LIST_CHANGED
         return Messages.Pro.SELECTION_LIST_CHANGED
     leads = [by_id[i] for i in ordered_ids]
     if offset >= len(leads):
@@ -1035,18 +1102,11 @@ async def _selection_next_page(chat_id, pro, meta, mapping, context_key, state):
         await StateManager.set_metadata(chat_id, meta)
         return Messages.Pro.SELECTION_NO_MORE_ROWS
 
-    template = (
-        Messages.Pro.SELECT_JOB_TO_CANCEL
-        if context_key == "cancelling_jobs_context"
-        else Messages.Pro.SELECT_JOB_TO_FINISH
-    )
     return await _prompt_job_selection(
         chat_id,
         leads,
         len(leads),
         state=state,
-        context_key=context_key,
-        template=template,
         offset=offset,
         mapping=mapping,
     )
@@ -1067,8 +1127,6 @@ async def _handle_cancel(pro, whatsapp, chat_id):
         leads,
         total,
         state=UserStates.PRO_SELECTING_JOB_TO_CANCEL,
-        context_key="cancelling_jobs_context",
-        template=Messages.Pro.SELECT_JOB_TO_CANCEL,
     )
 
 
