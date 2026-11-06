@@ -157,6 +157,8 @@ def test_reordered_frame_edits_the_lead_actually_at_that_row_not_the_stale_one(
         "skipped_rows": [],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
 
     doc_b = leads.find_one({"_id": lead_b})
@@ -210,6 +212,8 @@ def test_status_change_appends_status_history_entry_with_admin_actor(db):
         "skipped_rows": [],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "completed"
@@ -261,6 +265,8 @@ def test_status_change_via_status_label_writes_raw_status_and_pushes_history(db)
         "skipped_rows": [],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "completed"
@@ -304,6 +310,8 @@ def test_status_label_not_in_map_is_ignored_no_write(db):
         "skipped_rows": [{"client": "A", "reason": SKIP_NO_CHANGE}],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "new"
@@ -344,6 +352,8 @@ def test_details_summary_edit_writes_details_and_issue_type_no_status_history(db
         "skipped_rows": [],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["details"] == "burst pipe under sink"
@@ -386,6 +396,8 @@ def test_professional_set_to_unknown_label_nulls_pro_id(db):
         "skipped_rows": [],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["pro_id"] is None
@@ -423,6 +435,8 @@ def test_professional_set_to_real_name_maps_to_pro_id(db):
         "skipped_rows": [],
         "assignments": [],
         "record_only": [{"client": "A", "pro": "Dana the Plumber"}],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["pro_id"] == new_pro_id
@@ -464,6 +478,8 @@ def test_row_index_out_of_range_is_skipped_not_crashed(db):
         "skipped_rows": [{"client": "", "reason": SKIP_UNRESOLVED}],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "new"
@@ -502,6 +518,8 @@ def test_non_integer_row_key_is_skipped_unresolved_with_empty_client(db):
         "skipped_rows": [{"client": "", "reason": SKIP_UNRESOLVED}],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "new"
@@ -544,6 +562,8 @@ def test_unparseable_id_cell_is_skipped_not_crashed(db, bad_id):
         "skipped_rows": [{"client": "A", "reason": SKIP_UNRESOLVED}],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     assert leads.count_documents({}) == 0
 
@@ -583,6 +603,8 @@ def test_row_with_no_writable_field_is_skipped(db):
         "skipped_rows": [{"client": "A", "reason": SKIP_NO_CHANGE}],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "new"
@@ -628,6 +650,8 @@ def test_lead_deleted_before_save_lands_is_skipped_and_not_audited(db):
         "skipped_rows": [{"client": "A", "reason": SKIP_LEAD_GONE}],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     assert audit_calls == []
     assert leads.count_documents({}) == 0
@@ -670,6 +694,8 @@ def test_audit_called_once_per_successful_row_with_action_and_details(db):
         "skipped_rows": [],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     assert len(audit_calls) == 1
     action, details = audit_calls[0]
@@ -709,6 +735,8 @@ def test_audit_none_does_not_crash(db):
         "skipped_rows": [],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
 
 
@@ -749,6 +777,8 @@ def test_resaving_unchanged_status_is_no_change_and_no_duplicate_history(db):
         "skipped_rows": [{"client": "A", "reason": SKIP_NO_CHANGE}],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "completed"
@@ -786,6 +816,8 @@ def test_status_change_to_different_value_appends_exactly_one_entry(db):
         "skipped_rows": [],
         "assignments": [],
         "record_only": [],
+        "held_pro": [],
+        "unprocessed": 0,
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "booked"

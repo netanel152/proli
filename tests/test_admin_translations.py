@@ -46,6 +46,7 @@ _INDIRECTLY_READ_KEYS = {
     "leads_skip_unresolved",
     "leads_skip_no_change",
     "leads_skip_save_failed",
+    "leads_skip_stale_pro",
 }
 
 

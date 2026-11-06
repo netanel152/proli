@@ -1,3 +1,4 @@
+from functools import partial
 import streamlit as st
 import os
 import time
@@ -113,6 +114,15 @@ def log_audit(action: str, details: dict | None = None):
     """Log an audit event for the current session user."""
     username = st.session_state.get("admin_username", "unknown")
     _log_audit_sync(username, action, details)
+
+
+def audit_as(username: str):
+    """An audit writer bound to ``username``, for use during a send.
+
+    ``log_audit`` reads ``st.session_state``, which is a yield point: with a rerun
+    queued it raises before writing. Read the username first, outside the send.
+    """
+    return partial(_log_audit_sync, username)
 
 
 def get_current_role() -> str:
