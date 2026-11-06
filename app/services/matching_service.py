@@ -286,6 +286,81 @@ def required_profession(lead: dict) -> Optional[str]:
     return None
 
 
+#: Customer phrasing → trade, for picking *which* past pro to ask about.
+#: `required_profession` above deliberately only matches a profession noun
+#: because it gates real work; this one gates a question about preference,
+#: where a wrong guess costs one message and falls back to normal matching,
+#: so it can afford to read the words customers actually use ("קצר בחשמל"
+#: never contains "חשמלאי"). First match wins, so the order is the tie-break.
+ISSUE_TRADE_HINTS = {
+    "plumber": (
+        "נזילה",
+        "אינסטלצ",
+        "צנרת",
+        "סתימה",
+        "ביוב",
+        "דוד",
+        "בוילר",
+        "ברז",
+        "כיור",
+        "מקלחת",
+        "אסלה",
+        "ניאגרה",
+    ),
+    "electrician": (
+        "חשמל",
+        "קצר",
+        "שקע",
+        "מפסק",
+        "תאורה",
+        "נורה",
+        "ארקה",
+        "תקע",
+    ),
+    "locksmith": ("מנעול", "מפתח", "צילינדר", "פריצה"),
+    "painter": ("צבע", "סיוד", "טיח"),
+    "cleaner": ("ניקיון", "נקיון", "לנקות"),
+}
+
+
+def probable_trade(issue: str) -> Optional[str]:
+    """The trade an issue description probably needs, or None when unclear."""
+    issue = (issue or "").lower()
+    if not issue:
+        return None
+    named = required_profession({"issue_type": issue})
+    if named:
+        return named
+    for trade, hints in ISSUE_TRADE_HINTS.items():
+        if any(hint in issue for hint in hints):
+            return trade
+    return None
+
+
+def pro_trades(pro: dict) -> set:
+    """Every trade a pro document claims.
+
+    Onboarding (`pro_onboarding_service`) and the seed scripts write `type`
+    plus a one-element `categories` list. `profession_type` is a name only the
+    unit tests ever wrote, which is why the profession gate below read it for
+    months without ever firing on a real pro — it fails open, so nothing broke
+    loudly. All three are accepted here so neither shape is the odd one out.
+    """
+    claimed = {pro.get("type"), pro.get("profession_type")}
+    claimed.update(pro.get("categories") or [])
+    return {t for t in claimed if t}
+
+
+def trade_fits(pro: dict, wanted: Optional[str]) -> bool:
+    """Can this pro take work in `wanted`? Unknown on either side → yes."""
+    if not wanted:
+        return True
+    own = pro_trades(pro)
+    if not own:
+        return True
+    return bool(own & {wanted, "general", "handyman"})
+
+
 async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:
     """Would routing have offered this lead to this pro? (PRO-123)
 
@@ -313,11 +388,8 @@ async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:
     if lead.get("no_show_reported_at") and lead.get("pro_id") == pro["_id"]:
         return False
 
-    wanted = required_profession(lead)
-    if wanted:
-        own = pro.get("profession_type")
-        if own and own not in (wanted, "general", "handyman"):
-            return False
+    if not trade_fits(pro, required_profession(lead)):
+        return False
 
     location = lead.get("city") or lead.get("full_address")
     pro_coords = _pro_coordinates(pro)
