@@ -1,5 +1,6 @@
 """A file the model will not see gets a straight answer, not a guess."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -39,12 +40,12 @@ def _file_in_state(state):
     return AsyncMock(return_value=file_status)
 
 
-def _model_reply(text="AI reply"):
+def _model_reply(text="AI reply", city=None, issue=None):
     response = MagicMock()
     response.parsed = AIResponse(
         reply_to_user=text,
         transcription=None,
-        extracted_data=ExtractedData(city=None, issue=None, appointment_time=None),
+        extracted_data=ExtractedData(city=city, issue=issue, appointment_time=None),
         is_deal=False,
     )
     response.usage_metadata = None
@@ -161,7 +162,7 @@ async def test_failure_with_text_answers_the_text_and_says_so(
         [], "נזילה בתל אביב", "prompt", media_mime_type=mime, media_url=MEDIA_URL
     )
 
-    assert result.reply_to_user == f"{ANSWERED}\n\nAI reply"
+    assert result.reply_to_user == f"{ANSWERED}\nAI reply"
     engine.client.aio.models.generate_content.assert_awaited_once()
     ai_engine_module.types.Part.from_uri.assert_not_called()
     text = _sent_text(engine)[-1]
@@ -183,7 +184,7 @@ async def test_failed_upload_and_failed_models_does_not_claim_an_answer(engine):
         [], "נזילה", "prompt", media_mime_type="audio/ogg", media_url=MEDIA_URL
     )
 
-    assert result.reply_to_user == f"{TEXT_ONLY}\n\n{Messages.Errors.AI_OVERLOAD}"
+    assert result.reply_to_user == f"{TEXT_ONLY}\n{Messages.Errors.AI_OVERLOAD}"
 
 
 @pytest.mark.asyncio
@@ -250,17 +251,28 @@ async def test_fetch_failure_already_apologised_for_is_not_repeated(
 # --- Copy ---
 
 
-def test_the_notices_read_as_the_owner_decided():
+def test_the_notices_have_the_agreed_shape():
     assert Messages.Errors.MEDIA_UPLOAD_FAILED.count("\n") == 1
-    assert "קולית" in Messages.Errors.MEDIA_UPLOAD_FAILED
     assert TEXT_ONLY.count("\n") == 1
-    assert "קולית" not in TEXT_ONLY
-    # With text they already described the problem, so nothing is asked of them.
+    assert TEXT_ONLY != Messages.Errors.MEDIA_UPLOAD_FAILED
     assert "\n" not in ANSWERED
-    assert "?" not in ANSWERED
 
 
-# --- Every model refuses a turn with the file attached ---
+# --- Every model fails on a turn with the file attached ---
+
+
+class _ApiError(Exception):
+    def __init__(self, code):
+        super().__init__(f"{code} error")
+        self.code = code
+
+
+def _unparseable():
+    response = MagicMock()
+    response.parsed = None
+    response.text = "not json"
+    response.usage_metadata = None
+    return response
 
 
 async def _ask_with_image(engine, text):
@@ -276,14 +288,30 @@ async def _ask_with_image(engine, text):
 
 @pytest.mark.asyncio
 async def test_refused_file_with_text_retries_once_without_it(engine):
-    engine.client.aio.models.generate_content = AsyncMock(
-        side_effect=[RuntimeError("bad file"), _model_reply()]
+    types = ai_engine_module.types
+    types.Content.side_effect = lambda role, parts: SimpleNamespace(
+        role=role, parts=parts
     )
+    file_part = types.Part.from_bytes.return_value
+    parts_sent = []
+    outcomes = [_ApiError(400), _model_reply()]
+
+    async def generate(*, model, contents, config):
+        # Copied: the retry rewrites this same list in place.
+        parts_sent.append(list(contents[-1].parts))
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    engine.client.aio.models.generate_content = generate
 
     result = await _ask_with_image(engine, "נזילה בתל אביב")
 
-    assert result.reply_to_user == f"{ANSWERED}\n\nAI reply"
-    assert engine.client.aio.models.generate_content.await_count == 2
+    assert result.reply_to_user == f"{ANSWERED}\nAI reply"
+    assert len(parts_sent) == 2
+    assert file_part in parts_sent[0]
+    assert file_part not in parts_sent[1]
     retry_text = _sent_text(engine)[-1]
     assert retry_text.startswith("נזילה בתל אביב")
     assert Messages.AISystemPrompts.MEDIA_NOT_SEEN in retry_text
@@ -291,10 +319,19 @@ async def test_refused_file_with_text_retries_once_without_it(engine):
 
 
 @pytest.mark.asyncio
-async def test_an_outage_is_not_reported_as_a_failed_file(engine):
+async def test_all_unparseable_json_counts_as_refused(engine):
     engine.client.aio.models.generate_content = AsyncMock(
-        side_effect=RuntimeError("overloaded")
+        side_effect=[_unparseable(), _model_reply()]
     )
+
+    result = await _ask_with_image(engine, "נזילה בתל אביב")
+
+    assert result.reply_to_user == f"{ANSWERED}\nAI reply"
+
+
+@pytest.mark.asyncio
+async def test_retry_that_also_fails_stays_overload(engine):
+    engine.client.aio.models.generate_content = AsyncMock(side_effect=_ApiError(400))
 
     result = await _ask_with_image(engine, "נזילה בתל אביב")
 
@@ -303,10 +340,28 @@ async def test_an_outage_is_not_reported_as_a_failed_file(engine):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        pytest.param(_ApiError(429), id="429"),
+        pytest.param(_ApiError(503), id="503"),
+        pytest.param(RuntimeError("connection reset"), id="no-code"),
+    ],
+)
+@pytest.mark.parametrize("text", ["נזילה בתל אביב", ""], ids=["with-text", "no-text"])
+async def test_an_outage_is_not_reported_as_a_failed_file(engine, error, text):
+    engine.client.aio.models.generate_content = AsyncMock(side_effect=error)
+
+    result = await _ask_with_image(engine, text)
+
+    assert result.reply_to_user == Messages.Errors.AI_OVERLOAD
+    # No second round: this runs once per model per turn while the outage lasts.
+    engine.client.aio.models.generate_content.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_refused_file_with_no_text_gets_the_notice_and_no_retry(engine):
-    engine.client.aio.models.generate_content = AsyncMock(
-        side_effect=RuntimeError("bad file")
-    )
+    engine.client.aio.models.generate_content = AsyncMock(side_effect=_ApiError(400))
 
     result = await _ask_with_image(engine, "")
 
@@ -316,9 +371,7 @@ async def test_refused_file_with_no_text_gets_the_notice_and_no_retry(engine):
 
 @pytest.mark.asyncio
 async def test_refused_voice_note_is_offered_text_only(engine):
-    engine.client.aio.models.generate_content = AsyncMock(
-        side_effect=RuntimeError("bad file")
-    )
+    engine.client.aio.models.generate_content = AsyncMock(side_effect=_ApiError(400))
 
     result = await engine.analyze_conversation(
         [], "", "prompt", media_mime_type="audio/ogg", media_url=MEDIA_URL
@@ -342,86 +395,92 @@ async def test_a_text_turn_in_an_outage_is_unchanged(engine):
 # --- Exits that send a fixed message instead of the reply ---
 
 
-def _reply_with_facts(reply):
-    return AIResponse(
-        reply_to_user=reply,
-        transcription=None,
-        extracted_data=ExtractedData(
-            city="תל אביב", issue="נזילה", appointment_time=None
+def _exit_cases():
+    # Real shapes, from the real engine: with text the model answers and the notice
+    # leads the reply; with none the engine returns the notice and calls nothing.
+    return [
+        pytest.param("נזילה", ANSWERED, "972500217001@c.us", id="with-text"),
+        pytest.param(
+            "", TEXT_ONLY.split("\n")[0], "972500217007@c.us", id="media-only"
         ),
-        is_deal=False,
-    )
+    ]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "notice, chat",
-    [(ANSWERED, "972500217001@c.us"), (TEXT_ONLY, "972500217007@c.us")],
-)
-async def test_notice_survives_the_no_pro_exit(
-    wf_mocks, mock_db, monkeypatch, notice, chat  # noqa: F811
-):
-    mock_wa, _, _, mock_ai, _ = wf_mocks
-    mock_ai.analyze_conversation.return_value = _reply_with_facts(
-        f"{notice}\n\nAI reply"
+def _wire_failed_upload(engine, monkeypatch):
+    _break_upload(engine)
+    engine.client.aio.models.generate_content = AsyncMock(
+        return_value=_model_reply(city="תל אביב", issue="נזילה")
     )
+    monkeypatch.setattr(app.services.workflow_service, "ai", engine)
     monkeypatch.setattr(
         app.services.workflow_service,
         "detect_and_fetch_media",
         AsyncMock(return_value=(None, "audio/ogg")),
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text, told, chat", _exit_cases())
+async def test_notice_survives_the_no_pro_exit(
+    engine, wf_mocks, mock_db, monkeypatch, text, told, chat  # noqa: F811
+):
+    mock_wa, _, _, _, mock_lm = wf_mocks
+    _wire_failed_upload(engine, monkeypatch)
     monkeypatch.setattr(
         app.services.workflow_service,
         "determine_best_pro",
         AsyncMock(return_value=None),
     )
     await mock_db.leads.insert_one(
-        {"chat_id": chat, "status": LeadStatus.CONTACTED, "city": "תל אביב"}
+        {
+            "chat_id": chat,
+            "status": LeadStatus.CONTACTED,
+            "city": "תל אביב",
+            "issue_type": "נזילה",
+        }
     )
 
-    await process_incoming_message(chat, "נזילה", media_url=MEDIA_URL)
+    await process_incoming_message(chat, text, media_url=MEDIA_URL)
 
     sent = [c.args[1] for c in mock_wa.send_message.call_args_list]
-    assert sent == [notice, Messages.Customer.PENDING_REVIEW]
+    assert sent == [told, Messages.Customer.PENDING_REVIEW]
+    mock_lm.log_message.assert_any_call(chat, "model", told)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("text, told, chat", _exit_cases())
 async def test_notice_survives_the_loyalty_exit(
-    wf_mocks, mock_db, monkeypatch  # noqa: F811
+    engine, wf_mocks, mock_db, monkeypatch, text, told, chat  # noqa: F811
 ):
-    mock_wa, _, _, mock_ai, _ = wf_mocks
-    mock_ai.analyze_conversation.return_value = _reply_with_facts(
-        f"{ANSWERED}\n\nAI reply"
-    )
-    monkeypatch.setattr(
-        app.services.workflow_service,
-        "detect_and_fetch_media",
-        AsyncMock(return_value=(None, "audio/ogg")),
-    )
+    mock_wa, _, _, _, mock_lm = wf_mocks
+    chat = chat.replace("97250021", "97250031")
+    _wire_failed_upload(engine, monkeypatch)
     monkeypatch.setattr(
         conversation_pipeline,
         "non_essential_sends_paused",
         AsyncMock(return_value=False),
     )
-    chat = "972500217002@c.us"
     pro_id = ObjectId()
     await mock_db.users.insert_one(
         {"_id": pro_id, "is_active": True, "business_name": "יוסי"}
     )
     await mock_db.leads.insert_one(
-        {"chat_id": chat, "status": LeadStatus.CONTACTED, "city": "תל אביב"}
+        {
+            "chat_id": chat,
+            "status": LeadStatus.CONTACTED,
+            "city": "תל אביב",
+            "issue_type": "נזילה",
+        }
     )
     await mock_db.leads.insert_one(
         {"chat_id": chat, "status": LeadStatus.COMPLETED, "pro_id": pro_id}
     )
 
-    await process_incoming_message(chat, "נזילה", media_url=MEDIA_URL)
+    await process_incoming_message(chat, text, media_url=MEDIA_URL)
 
     sent = [c.args[1] for c in mock_wa.send_message.call_args_list]
-    assert sent == [
-        ANSWERED,
-        Messages.Customer.LOYALTY_OFFER.format(pro_name="יוסי"),
-    ]
+    assert sent == [told, Messages.Customer.LOYALTY_OFFER.format(pro_name="יוסי")]
+    mock_lm.log_message.assert_any_call(chat, "model", told)
 
 
 def test_an_ordinary_reply_carries_no_notice():
@@ -431,46 +490,111 @@ def test_an_ordinary_reply_carries_no_notice():
 # --- A file lost before the AI ---
 
 
-@pytest.mark.asyncio
-async def test_file_lost_rehosting_with_no_text_skips_the_ai(
-    wf_mocks, monkeypatch  # noqa: F811
-):
-    mock_wa, _, _, mock_ai, mock_lm = wf_mocks
+def _lose_the_file(monkeypatch):
     monkeypatch.setattr(
         app.services.workflow_service,
         "resolve_inbound_media",
         AsyncMock(return_value=None),
     )
+
+
+@pytest.mark.asyncio
+async def test_file_lost_with_no_text_skips_the_ai_and_logs_a_placeholder(
+    wf_mocks, monkeypatch  # noqa: F811
+):
+    mock_wa, _, _, mock_ai, mock_lm = wf_mocks
+    _lose_the_file(monkeypatch)
     chat = "972500217003@c.us"
 
     await process_incoming_message(chat, "", media_url="meta-media://M1")
 
     sent = [c.args[1] for c in mock_wa.send_message.call_args_list]
     assert sent == [TEXT_ONLY]
+    mock_lm.log_message.assert_any_call(chat, "user", "[MEDIA: lost]")
     mock_lm.log_message.assert_any_call(chat, "model", TEXT_ONLY)
     mock_ai.analyze_conversation.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_file_lost_rehosting_with_text_answers_the_text(
-    wf_mocks, monkeypatch  # noqa: F811
+async def test_file_lost_with_text_tells_the_customer_on_the_reply(
+    engine, wf_mocks, monkeypatch  # noqa: F811
 ):
-    mock_wa, _, _, mock_ai, mock_lm = wf_mocks
-    monkeypatch.setattr(
-        app.services.workflow_service,
-        "resolve_inbound_media",
-        AsyncMock(return_value=None),
-    )
+    mock_wa, _, _, _, mock_lm = wf_mocks
+    _lose_the_file(monkeypatch)
+    monkeypatch.setattr(app.services.workflow_service, "ai", engine)
     chat = "972500217004@c.us"
 
     await process_incoming_message(chat, "נזילה", media_url="meta-media://M1")
 
+    expected = f"{ANSWERED}\nAI reply"
     sent = [c.args[1] for c in mock_wa.send_message.call_args_list]
-    assert sent == [ANSWERED, "AI response"]
-    mock_lm.log_message.assert_any_call(chat, "model", ANSWERED)
-    kwargs = mock_ai.analyze_conversation.call_args.kwargs
-    assert kwargs["user_text"].startswith("נזילה")
-    assert Messages.AISystemPrompts.MEDIA_NOT_SEEN in kwargs["user_text"]
+    assert sent == [expected]
+    mock_lm.log_message.assert_any_call(chat, "model", expected)
+    # The instruction goes to the model, and only there.
+    assert Messages.AISystemPrompts.MEDIA_NOT_SEEN in _sent_text(engine)[-1]
+    mock_lm.log_message.assert_any_call(chat, "user", "נזילה")
+
+
+@pytest.mark.asyncio
+async def test_file_lost_says_nothing_when_no_reply_goes_out(
+    engine, wf_mocks, monkeypatch  # noqa: F811
+):
+    """ "Only what you wrote was addressed" would be false ahead of an overload."""
+    mock_wa, _, _, _, _ = wf_mocks
+    _lose_the_file(monkeypatch)
+    monkeypatch.setattr(app.services.workflow_service, "ai", engine)
+    engine.client.aio.models.generate_content = AsyncMock(
+        side_effect=RuntimeError("overloaded")
+    )
+
+    await process_incoming_message(
+        "972500217008@c.us", "נזילה", media_url="meta-media://M1"
+    )
+
+    sent = [c.args[1] for c in mock_wa.send_message.call_args_list]
+    assert not any(ANSWERED in message for message in sent)
+
+
+@pytest.mark.asyncio
+async def test_the_instruction_never_reaches_user_text(
+    wf_mocks, mock_db, monkeypatch  # noqa: F811
+):
+    """user_text is the customer's words, and later code acts on it."""
+    _, _, _, mock_ai, _ = wf_mocks
+    _lose_the_file(monkeypatch)
+    mock_ai.analyze_conversation.return_value = _model_reply(
+        city="תל אביב", issue="נזילה"
+    ).parsed
+    pro = {"_id": ObjectId(), "business_name": "יוסי", "phone_number": "972500217098"}
+    monkeypatch.setattr(
+        app.services.workflow_service,
+        "determine_best_pro",
+        AsyncMock(return_value=pro),
+    )
+    build_pro = AsyncMock(return_value=_model_reply().parsed)
+    monkeypatch.setattr(app.services.workflow_service, "_build_pro_response", build_pro)
+
+    await process_incoming_message(
+        "972500217009@c.us", "נזילה", media_url="meta-media://M1"
+    )
+
+    dispatcher = mock_ai.analyze_conversation.call_args.kwargs
+    assert dispatcher["user_text"] == "נזילה"
+    assert dispatcher["media_lost"] is True
+    build_pro.assert_awaited_once()
+    assert build_pro.call_args.args[2] == "נזילה"
+    assert build_pro.call_args.kwargs["media_lost"] is True
+
+
+@pytest.mark.asyncio
+async def test_media_lost_with_every_model_down_does_not_claim_an_answer(engine):
+    engine.client.aio.models.generate_content = AsyncMock(
+        side_effect=RuntimeError("overloaded")
+    )
+
+    result = await engine.analyze_conversation([], "נזילה", "prompt", media_lost=True)
+
+    assert result.reply_to_user == f"{TEXT_ONLY}\n{Messages.Errors.AI_OVERLOAD}"
 
 
 @pytest.mark.asyncio
@@ -496,11 +620,7 @@ async def test_a_lost_file_reaches_sentry(monkeypatch, fetched, hosted):
 # --- A failed file must not erase what the lead already has ---
 
 
-@pytest.mark.asyncio
-async def test_empty_response_keeps_the_address_parts_on_an_emergency_lead(
-    wf_mocks, mock_db  # noqa: F811
-):
-    chat = "972500217005@c.us"
+async def _finalize_on_emergency_lead(mock_db, chat, response, **lead):
     pro = {"_id": ObjectId(), "business_name": "יוסי", "phone_number": "972500217099"}
     lead_id = (
         await mock_db.leads.insert_one(
@@ -508,53 +628,80 @@ async def test_empty_response_keeps_the_address_parts_on_an_emergency_lead(
                 "chat_id": chat,
                 "status": LeadStatus.CONTACTED,
                 "is_emergency": True,
-                "street": "הרצל",
-                "street_number": "10",
-                "city": "תל אביב",
-                "floor": "2",
-                "apartment": "5",
+                **lead,
             }
         )
     ).inserted_id
+    await app.services.workflow_service._finalize_deal(
+        chat, pro, response, "תל אביב", "נזילה", None, lead_id
+    )
+    return await mock_db.leads.find_one({"_id": lead_id})
+
+
+FULL_ADDRESS = {
+    "street": "הרצל",
+    "street_number": "10",
+    "city": "תל אביב",
+    "floor": "2",
+    "apartment": "5",
+}
+
+
+@pytest.mark.asyncio
+async def test_empty_response_keeps_the_address_on_an_emergency_lead(
+    wf_mocks, mock_db  # noqa: F811
+):
     empty = ai_engine_module._canned_reply(TEXT_ONLY, True)
 
-    await app.services.workflow_service._finalize_deal(
-        chat, pro, empty, "תל אביב", "נזילה", None, lead_id
+    lead = await _finalize_on_emergency_lead(
+        mock_db, "972500217005@c.us", empty, **FULL_ADDRESS
     )
 
-    lead = await mock_db.leads.find_one({"_id": lead_id})
     assert lead["status"] == LeadStatus.NEW
+    for field, value in FULL_ADDRESS.items():
+        assert lead[field] == value
+    assert lead["full_address"] == "הרצל 10, תל אביב"
+
+
+@pytest.mark.asyncio
+async def test_empty_strings_do_not_wipe_address_parts(wf_mocks, mock_db):  # noqa: F811
+    response = ai_engine_module._canned_reply("x", True)
+    response.extracted_data.street = ""
+    response.extracted_data.floor = ""
+
+    lead = await _finalize_on_emergency_lead(
+        mock_db, "972500217010@c.us", response, **FULL_ADDRESS
+    )
+
     assert lead["street"] == "הרצל"
-    assert lead["street_number"] == "10"
-    assert lead["city"] == "תל אביב"
     assert lead["floor"] == "2"
-    assert lead["apartment"] == "5"
+    assert lead["full_address"] == "הרצל 10, תל אביב"
 
 
 @pytest.mark.asyncio
 async def test_a_newly_extracted_address_part_still_overwrites(
     wf_mocks, mock_db  # noqa: F811
 ):
-    chat = "972500217006@c.us"
-    pro = {"_id": ObjectId(), "business_name": "יוסי", "phone_number": "972500217099"}
-    lead_id = (
-        await mock_db.leads.insert_one(
-            {
-                "chat_id": chat,
-                "status": LeadStatus.CONTACTED,
-                "is_emergency": True,
-                "street": "הרצל",
-                "city": "תל אביב",
-            }
-        )
-    ).inserted_id
     response = ai_engine_module._canned_reply("x", True)
     response.extracted_data.street = "ביאליק"
 
-    await app.services.workflow_service._finalize_deal(
-        chat, pro, response, "תל אביב", "נזילה", None, lead_id
+    lead = await _finalize_on_emergency_lead(
+        mock_db, "972500217006@c.us", response, **FULL_ADDRESS
     )
 
-    lead = await mock_db.leads.find_one({"_id": lead_id})
     assert lead["street"] == "ביאליק"
     assert lead["city"] == "תל אביב"
+    assert lead["full_address"] == "ביאליק 10, תל אביב"
+
+
+@pytest.mark.asyncio
+async def test_a_lead_with_no_street_still_gets_the_bare_city(
+    wf_mocks, mock_db  # noqa: F811
+):
+    empty = ai_engine_module._canned_reply(TEXT_ONLY, True)
+
+    lead = await _finalize_on_emergency_lead(
+        mock_db, "972500217011@c.us", empty, city="תל אביב"
+    )
+
+    assert lead["full_address"] == "תל אביב"

@@ -615,6 +615,8 @@ async def test_held_media_lost_on_accept_with_no_text_gets_the_notice(
         Messages.Errors.MEDIA_UPLOAD_FAILED_TEXT_ONLY
     )
     assert world.ai.calls == []
+    assert await _user_rows(world, "[MEDIA: lost]") == 1
+    assert await _user_rows(world, "") == 0
 
 
 @pytest.mark.asyncio
@@ -627,11 +629,8 @@ async def test_held_media_lost_on_accept_with_text_answers_the_text(world, cloud
     world.ai.script(reply("באיזו עיר?"))
     await world.send("כן")
 
-    assert world.recorder.bodies_to(world.customer)[-2:] == [
-        Messages.Errors.MEDIA_FAILED_TEXT_ANSWERED,
-        "באיזו עיר?",
-    ]
-    assert Messages.AISystemPrompts.MEDIA_NOT_SEEN in world.ai.calls[-1]["user_text"]
+    assert world.ai.calls[-1]["media_lost"] is True
+    assert world.ai.calls[-1]["user_text"] == OPENING
 
 
 @pytest.mark.asyncio

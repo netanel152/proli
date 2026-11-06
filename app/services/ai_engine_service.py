@@ -93,6 +93,14 @@ def file_notice_in(reply: str) -> str | None:
     return None
 
 
+def _file_was_refused(error: Exception | None) -> bool:
+    """Did the models turn this request down, as opposed to being unavailable?"""
+    if error is None:  # every model answered, none of it parseable
+        return True
+    code = getattr(error, "code", None)
+    return isinstance(code, int) and 400 <= code < 500 and code != 429
+
+
 def _canned_reply(text: str, require_json: bool) -> AIResponse | str:
     """A reply the model did not write, in the shape the caller asked for."""
     if not require_json:
@@ -137,6 +145,7 @@ class AIEngine:
         require_json: bool = True,
         media_url: str = None,
         pro_id: str = None,
+        media_lost: bool = False,
     ) -> AIResponse | str:
         contents = []
         for msg in history:
@@ -220,11 +229,10 @@ class AIEngine:
 
         # A file we could not attach here: a failed download or upload, or a video
         # that never went ACTIVE. Answering as usual is a confident reply about
-        # something nobody read. One the models refuse is handled after the call
-        # below, and one lost before here arrives with no media_url at all
-        # (DispatchContext.file_lost, handled by the pipeline).
+        # something nobody read. One lost before here arrives as media_lost, with
+        # no media_url. One the models refuse is handled after the call below.
         media_attached = bool(current_parts)
-        media_failed = bool(media_url) and not media_attached
+        media_failed = (bool(media_url) or media_lost) and not media_attached
         typed_text = user_text
         has_text = bool((user_text or "").strip())
         if media_failed:
@@ -233,7 +241,8 @@ class AIEngine:
             if not has_text:
                 return _canned_reply(_no_text_notice(media_mime_type), require_json)
             user_text += f"\n{Messages.AISystemPrompts.MEDIA_NOT_SEEN}"
-        answered_notice = f"{Messages.Errors.MEDIA_FAILED_TEXT_ANSWERED}\n\n"
+        # One newline: _strip_deal_marker turns a blank line into a space.
+        answered_notice = f"{Messages.Errors.MEDIA_FAILED_TEXT_ANSWERED}\n"
 
         if media_mime_type and not media_failed:
             if "image" in media_mime_type:
@@ -264,7 +273,7 @@ class AIEngine:
             config_args["response_mime_type"] = "application/json"
             config_args["response_schema"] = AIResponse
 
-        reply = await self._generate_reply(
+        reply, error = await self._generate_reply(
             contents,
             config_args,
             require_json,
@@ -278,16 +287,16 @@ class AIEngine:
             # The file failed and so did the models, so nothing was answered.
             notice = _no_text_notice(media_mime_type)
             return _canned_reply(
-                f"{notice}\n\n{Messages.Errors.AI_OVERLOAD}", require_json
+                f"{notice}\n{Messages.Errors.AI_OVERLOAD}", require_json
             )
-        if not media_attached:
+        # An outage is not the file's fault, and a second round would only add
+        # calls while it lasts.
+        if not media_attached or not _file_was_refused(error):
             return overload
 
         # Every model refused a turn with a file attached, and "try again" would
         # send the same file back. It may be the file, so ask again without it. If
-        # that fails too it was an outage, and the customer is not told otherwise.
-        # With no text there is nothing to ask, so a real outage reads as a failed
-        # file here; the next thing they write gets the overload message.
+        # that fails too it wasn't the file, and the customer is not told it was.
         if not has_text:
             return _canned_reply(_no_text_notice(media_mime_type), require_json)
         contents[-1] = types.Content(
@@ -298,7 +307,7 @@ class AIEngine:
                 )
             ],
         )
-        reply = await self._generate_reply(
+        reply, _ = await self._generate_reply(
             contents, config_args, require_json, pro_id, answered_notice
         )
         return overload if reply is None else reply
@@ -310,8 +319,9 @@ class AIEngine:
         require_json: bool,
         pro_id: str | None,
         notice: str,
-    ) -> AIResponse | str | None:
-        """Walk the model hierarchy; None when every model failed."""
+    ) -> tuple[AIResponse | str | None, Exception | None]:
+        """Walk the model hierarchy. (reply, None), or (None, the last error) when
+        every model failed; that error is None if they all returned bad JSON."""
         last_error = None
 
         # Iterate through models in hierarchy
@@ -347,7 +357,7 @@ class AIEngine:
                             parsed = AIResponse(**json.loads(response.text))
                         if notice:
                             parsed.reply_to_user = notice + parsed.reply_to_user
-                        return parsed
+                        return parsed, None
                     except Exception as parse_error:
                         preview = response.text[:500] if response.text else "EMPTY"
                         logger.warning(
@@ -357,7 +367,7 @@ class AIEngine:
                         # Treat JSON parse error as a hard failure for this model → fall back.
                         continue
 
-                return notice + response.text.strip()
+                return notice + response.text.strip(), None
 
             except Exception as e:
                 logger.warning(
@@ -378,7 +388,7 @@ class AIEngine:
             logger.error(
                 "All AI models failed (every model returned unparseable JSON)."
             )
-        return None
+        return None, last_error
 
     async def detect_service_intent(self, text: str) -> bool:
         """Lightweight classifier: does this text describe a home-service need?

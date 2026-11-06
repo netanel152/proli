@@ -82,7 +82,7 @@ class DispatchContext:
     #: This turn is the messages held from before consent, replayed by the gate.
     replayed_held_messages: bool = False
     #: The customer sent a file and re-hosting lost it, so `media_url` is None
-    #: and nothing below can tell. The pipeline tells the customer.
+    #: and nothing below can tell. The pipeline passes it to the AI engine.
     file_lost: bool = False
 
     async def refresh_state(self, state_manager) -> Optional[str]:
@@ -340,7 +340,9 @@ async def _replay_held_messages(
         ctx.normalized_text = held["text"].strip().lower()
         ctx.is_emergency_detected = wf.is_emergency_text(ctx.normalized_text)
         await wf.lead_manager.log_message(
-            ctx.chat_id, "user", wf._inbound_log_text(ctx.user_text, ctx.media_url)
+            ctx.chat_id,
+            "user",
+            wf._inbound_log_text(ctx.user_text, ctx.media_url, ctx.file_lost),
         )
     except BaseException as e:
         if held:
