@@ -1,0 +1,72 @@
+# Polls production's /health/leads and pages the operator through Sentry. The
+# rules live in scripts/check_health_leads.py; the runbook is the "Lead pipeline
+# monitor" section of docs/OPERATIONS_GUIDE.md.
+#
+# It goes red rather than green when it checked nothing: a missing secret fails
+# every run (PRO-128, a quiet system looks the same as a dead one).
+#
+# Secrets:
+#   PRODUCTION_HEALTH_TOKEN — the X-Health-Token value for production.
+#   PRODUCTION_SENTRY_DSN   — production's DSN; pages are fatal events.
+# Vars (optional):
+#   PRODUCTION_HEALTH_URL          — base /health URL, shared with the promote workflow.
+#   HEALTH_LEADS_PENDING_THRESHOLD — set to -1 to prove an alert end to end, then delete.
+#
+# This repo is public, so these logs are too. The script prints verdicts only;
+# the counts behind the endpoint's token go to Sentry.
+
+name: 🩺 Lead pipeline monitor
+
+on:
+  schedule:
+    - cron: "3,13,23,33,43,53 * * * *"
+  workflow_dispatch:
+    inputs:
+      drill:
+        description: "Also send one clearly marked TEST page, to prove the alert route"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: health-leads-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      STATE_FILE: health-leads-monitor-state/state.json
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # "For more than 30 minutes" needs memory between runs. A lost cache turns
+      # the run red and loses the timers and the stuck baseline.
+      - name: Restore the last reading
+        uses: actions/cache/restore@v4
+        with:
+          path: health-leads-monitor-state
+          key: health-leads-monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: health-leads-monitor-state-
+
+      - name: Check the lead pipeline
+        env:
+          HEALTH_URL: ${{ vars.PRODUCTION_HEALTH_URL || 'https://api-production-d95db.up.railway.app/health' }}
+          PENDING_THRESHOLD: ${{ vars.HEALTH_LEADS_PENDING_THRESHOLD }}
+          DRILL: ${{ inputs.drill }}
+          PRODUCTION_HEALTH_TOKEN: ${{ secrets.PRODUCTION_HEALTH_TOKEN }}
+          PRODUCTION_SENTRY_DSN: ${{ secrets.PRODUCTION_SENTRY_DSN }}
+        run: python3 scripts/check_health_leads.py
+
+      # Saved on failure too: a red run's timers are exactly what the next run needs.
+      - name: Save this reading
+        if: ${{ always() && hashFiles('health-leads-monitor-state/state.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: health-leads-monitor-state
+          key: health-leads-monitor-state-${{ github.run_id }}-${{ github.run_attempt }}

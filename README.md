@@ -182,7 +182,7 @@ normal `pytest` run (`tests/test_claude_config.py`):
 | Path-scoped reference — loads when a matching file is read | `.claude/rules/*.md` |
 | Skills Claude picks up by context (`whatsapp-copy`, `dispatch-guard`, `scheduler-job`) | `.claude/skills/<name>/SKILL.md` |
 | Operator commands (`/take-issue`, `/triage`, `/test`, `/health`, …) | `.claude/commands/*.md` |
-| Subagents (`code-reviewer`, `test-runner`, `test-writer`, `docs-syncer`, `flow-tracer`, `ux-reviewer`) | `.claude/agents/*.md` |
+| Subagents (`code-reviewer`, `test-runner`, `test-writer`, `docs-syncer`, `flow-tracer`, `ux-reviewer`), least privilege per `docs/AGENT_PACK.md` | `.claude/agents/*.md` |
 | Hooks — branch/tree context, dangerous-command guard, `.env` protection, `black`/`flake8`, docs-sync reminder, web-session setup | `.claude/settings.json` → `.claude/hooks/` |
 | MCP servers (Linear, Sentry, Context7, Railway, Redis; MongoDB via plugin) | `.mcp.json` |
 
