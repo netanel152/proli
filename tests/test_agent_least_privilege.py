@@ -260,6 +260,168 @@ def test_nothing_hides_a_real_mutating_command(command):
     assert "BLOCKED" in bash_guard.agent_block(command, "general-purpose", True)
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep x f # it's there\ngit stash",
+        'grep x f # 5" wide\ngit stash',
+        "rg x # don't\ngit reset --hard",
+        "ls; grep x f # it's\ngit stash",
+        "cat <<-EOF\n\tbody\n\tEOF\ngit stash",
+    ],
+)
+def test_comments_and_heredocs_do_not_merge_the_next_line(command):
+    assert "BLOCKED" in bash_guard.agent_block(command, "general-purpose", True)
+
+
+def test_a_comment_after_the_exempt_search_hides_no_repo_wide_command():
+    command = "grep 'x' f # it's\ngit worktree remove ../y"
+    assert "any tree" in bash_guard.agent_block(command, "general-purpose", False)
+
+
+def test_a_comment_is_not_a_command():
+    for command in ("ls # git stash", "# git stash"):
+        assert bash_guard.agent_block(command, "general-purpose", True) == ""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git stash branch x",
+        "git stash branch x stash@{0}",
+        "git stash 'pop'",
+        'git "stash" "drop"',
+        "git worktree 'remove' x",
+    ],
+)
+def test_repo_wide_git_survives_a_spelling_change(command):
+    refusal = bash_guard.agent_block(command, "general-purpose", False)
+    assert "any tree" in refusal
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git diff --outp{u,u}t=f",
+        "git diff --{output=f,output=f}",
+        "git log --outpu{t,t}=f",
+        "git log {a..c}",
+        "git log \\' ; touch p ; \\'",
+    ],
+)
+def test_code_reviewer_cannot_write_through_expansion(command):
+    assert "BLOCKED" in bash_guard.agent_block(command, "code-reviewer", False)
+
+
+def test_code_reviewer_keeps_reflog_syntax():
+    assert bash_guard.agent_block("git log HEAD@{1}", "code-reviewer", False) == ""
+
+
+@pytest.mark.parametrize(
+    "agent, command, expected",
+    [
+        ("code-reviewer", "git -C ../clone diff", 2),
+        ("code-reviewer", "cd ../clone && git diff", 2),
+        ("code-reviewer", "cd ../session-wt; cd ../clone; git log", 2),
+        ("code-reviewer", "cd && git log", 2),
+        ("code-reviewer", "cd nope && git log", 2),
+        ("test-runner", "cd ../clone && pytest", 2),
+        ("code-reviewer", "git -C ../session-wt diff", 0),
+        ("code-reviewer", "cd ../session-wt && git diff", 0),
+        ("code-reviewer", "git -C . diff", 0),
+        ("code-reviewer", "git diff", 0),
+        ("test-runner", "cd . && pytest -q", 0),
+    ],
+)
+def test_a_pack_agent_stays_in_the_sessions_repository(repos, agent, command, expected):
+    """Another repo's config can set diff.external, so `git diff` there runs a helper."""
+    result = subprocess.run(
+        [sys.executable, str(_HOOKS / "pre-bash-guard.py")],
+        input=json.dumps(
+            {
+                "tool_input": {"command": command},
+                "cwd": str(repos / "main"),
+                "agent_type": agent,
+            }
+        ),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(repos / "main")},
+    )
+    assert result.returncode == expected, result.stderr
+
+
+@pytest.mark.parametrize(
+    "command, cwd",
+    [
+        ("cd..; git stash", "agent-abc"),
+        ("cd..\ngit stash", "agent-abc"),
+        ("cd../; git stash", "agent-abc"),
+        ("CD..; git stash", "agent-abc"),
+        ("if x; then cd..; fi; git stash", "agent-abc"),
+    ],
+)
+def test_cd_without_a_space_cannot_escape_isolation(repos, command, cwd):
+    result = subprocess.run(
+        [sys.executable, str(_HOOKS / "pre-bash-guard.py")],
+        input=json.dumps(
+            {
+                "tool_input": {"command": command},
+                "cwd": str(repos / cwd),
+                "agent_id": "abc",
+                "agent_type": "general-purpose",
+            }
+        ),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(repos / "main")},
+    )
+    assert result.returncode == 2, result.stderr
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        "-c ",
+        "-c a=b ",
+        "-c=x ",
+        "-a ",
+        "--git-dir=x ",
+        "--git-dir x ",
+        "--work-tree=x ",
+        "-C x ",
+        "--namespace=x ",
+    ],
+)
+def test_a_long_option_run_cannot_outlast_the_hook(option):
+    """The hook has 10s. Overlapping alternatives took over 40s on 26 `-c` options."""
+    command = "git " + option * 200 + "z"
+    subprocess.run(
+        [sys.executable, str(_HOOKS / "pre-bash-guard.py")],
+        input=json.dumps(
+            {
+                "tool_input": {"command": command},
+                "cwd": str(_ROOT),
+                "agent_id": "abc",
+                "agent_type": "general-purpose",
+            }
+        ),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=9,
+    )
+
+
+def test_the_refusal_names_the_commit_message_workaround():
+    for shared in (True, False):
+        command = "git stash pop" if not shared else "git stash"
+        refusal = bash_guard.agent_block(command, "general-purpose", shared)
+        assert "git commit -F" in refusal
+
+
 def test_main_session_heredoc_handling_is_unchanged():
     assert bash_guard.strip_heredocs("cat <<X\nbody\nX\nnext") == "cat <<X\nnext"
     # A comment still opens one there: only subagents use the stricter scanner.

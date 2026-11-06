@@ -63,15 +63,25 @@ stricter than the rest of the guard, because it refuses what it does not recogni
 a text match. All of these get past the non-pack rules today:
 
 - **Hiding the command from the text:** `git${IFS}stash`, `$(echo git) stash`, `eval`, a variable
-  holding the whole command, and a shell fed a heredoc (`sh <<EOF`). Heredoc bodies are stripped,
-  because a commit message that mentions `git stash` is not a stash.
-- **Another interpreter:** `python -c`, `python x.py`, `sh x.sh`. `pytest`, which `test-runner` is
-  allowed, can also run anything through `conftest.py`.
-- **Verbs left out:** `branch -D`, `update-ref`, `config core.hooksPath`, `tag -d`, `push --force`.
-  They change refs or config, not the working tree.
+  holding the whole command, and a shell fed a heredoc (`sh <<EOF`). The body of a real top-level
+  heredoc such as `cat <<EOF` is stripped, because text that mentions `git stash` is not a stash.
+- **Where the scanner and the shell disagree about a heredoc or comment:** `${x:-<<X}`, `$[1<<2]`,
+  a comment inside backticks, and `<<X'Y'`. The lines after these can run unseen.
+- **Another interpreter:** `python -c`, `python x.py`, `sh x.sh`, `find -execdir`. `pytest`, which
+  `test-runner` is allowed, can also run anything through `conftest.py` and can write through
+  `--basetemp`.
+- **Moving without `cd`:** `env --chdir`.
+- **Aliases set outside the command's `-c` flags:** `--config-env`, `GIT_CONFIG_*`, `git config alias`.
+- **Verbs left out:** `branch -D`, `update-ref`, `config core.hooksPath`, `tag -d`, `push --force`,
+  `git worktree add --force -B`. They change refs or config rather than matching the mutating list.
+- **Deleting instead of using git:** `rm -rf` on a sibling worktree.
 - **A sibling worktree of another session:** `git -C ../other stash` looks the same as a worktree
   the subagent made itself, unless it has an `agent-` name. The hook input does not say which it is.
   The stash and worktree commands that reach across the whole repo are refused from every tree.
+
+A pack agent's `cd` and `git -C` must stay in the session's repository, because another repo's
+config can set `diff.external` and run a helper on a plain `git diff`. The session's own repo config
+is trusted.
 
 `Monitor` runs a shell command too. In one live check on Claude Code 2.1.318 it fired this hook
 as `PreToolUse:Monitor`, despite the `Bash|PowerShell` matcher, and was refused. That is observed,
@@ -81,9 +91,11 @@ False refusals it accepts:
 
 - `echo "git stash"` and `git log --grep="git stash"`. A plain `grep` or `rg` is exempt; other
   commands that only mention a mutating command are not.
-- Multi-line commit messages that mention `git stash pop` or `cd foo`. Use `git commit -F <file>`.
+- A commit message that mentions a repo-wide command such as `git stash pop`, on one line or many.
+  That includes `git commit -m "$(cat <<'EOF' ...)"`, because a heredoc inside quotes is not
+  stripped. Use `git commit -F <file>`.
 - `(cd ../clone && git stash)` from the session's tree, because a subshell keeps `cwd` in the
-  check. Use `git -C ../clone stash`.
+  check. A pipe does the same: `cd ../clone && git add f | tail` refuses. Use `git -C ../clone`.
 - `git worktree remove` on a worktree the subagent made itself. The caller cleans it up.
 
 An isolated subagent is recognised by its directory, `.claude/worktrees/agent-<agent_id>`. That
