@@ -120,11 +120,11 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     # Only three of the seven are actually mutated, though. `chat_id`,
     # `user_text` and `media_url` were `_process_incoming_message_inner`'s
     # *parameters* in the pre-image and were never re-read from `ctx`; taking
-    # them off `ctx` here is equivalent only because no guard assigns them. That
-    # is a property the chain now has to preserve rather than one it happens to
-    # have: a guard that rewrote `ctx.user_text` used to be ignored below this
-    # line and would now be honoured. Said out loud because the widening is
-    # invisible in a diff that is otherwise byte-identical.
+    # them off `ctx` here means a guard that rewrites them is honoured below this
+    # line. Exactly one guard does, deliberately: the consent gate, which swaps in
+    # the messages held from before consent on an accept and resolves
+    # `media_url` once a message is past it. Any other guard assigning them would
+    # be changing what the customer said.
     chat_id = ctx.chat_id
     user_text = ctx.user_text
     media_url = ctx.media_url
@@ -138,6 +138,8 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         await lead_manager.log_message(
             chat_id, "user", _inbound_log_text(user_text, media_url)
         )
+    # In the history now, so a failure below must not replay it (see the caller).
+    ctx.held_messages = None
 
     # 2. Check for Customer Completion, Rating, or Review
     if user_text:
