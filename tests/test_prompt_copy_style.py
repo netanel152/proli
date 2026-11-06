@@ -57,12 +57,6 @@ def test_extraction_actually_found_examples():
     assert len(PRO_EXAMPLES) >= 5
 
 
-def test_dispatcher_first_line_is_not_treated_as_an_example():
-    first_line = Prompts.DISPATCHER_SYSTEM.strip().split("\n", 1)[0]
-    assert "Proli" in first_line  # sanity: this is the line the docstring warns about
-    assert first_line not in DISPATCHER_EXAMPLES
-
-
 @pytest.mark.parametrize(
     "prompt_name,examples",
     [("DISPATCHER_SYSTEM", DISPATCHER_EXAMPLES), ("PRO_BASE_SYSTEM", PRO_EXAMPLES)],

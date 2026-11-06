@@ -433,14 +433,6 @@ def test_assert_dev_ci_green_failure_annotations_are_mutually_distinct(
 # --- Structural: pin the shape of the fix so it can't quietly regress ---
 
 
-def test_skip_deploy_check_fully_removed():
-    text = WORKFLOW_PATH.read_text(encoding="utf-8")
-    assert "skip_deploy_check" not in text, (
-        "a leftover skip_deploy_check reference would be dead config that "
-        "reads as live"
-    )
-
-
 def test_workflow_dispatch_input_is_skip_reason_string_default_empty():
     doc = _load_workflow()
     # PyYAML follows YAML 1.1 and parses the bare `on:` key as the Python

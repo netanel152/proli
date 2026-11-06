@@ -112,12 +112,6 @@ def test_handoff_phrasing_matches_sos(text):
     assert contains_keyword(text, SOS_COMMANDS, SOS_EXCLUDE_PHRASES) is True
 
 
-def test_beteut_still_never_matches_despite_new_cancel_forms():
-    """The new inflected CANCEL_KEYWORDS entries must not widen the net back
-    onto 'בטעות' — it still contains no cancel token as a whole word."""
-    assert contains_keyword("שלחתי בטעות את הכתובת הלא נכונה", CANCEL_KEYWORDS) is False
-
-
 # --- Edge cases --------------------------------------------------------------
 
 

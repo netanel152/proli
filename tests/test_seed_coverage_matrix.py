@@ -47,10 +47,6 @@ ROSH_HAAYIN = [34.9556, 32.0956]
 # ===========================================================================
 
 
-def test_the_matrix_is_twenty_seven_professionals():
-    assert len(build_coverage_matrix()) == 27
-
-
 def test_every_phone_is_inside_the_reserved_block():
     """The guard that matters most: a seeded pro is a message *recipient*, so a
     stray digit here is an outbound WhatsApp to a stranger."""

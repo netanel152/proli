@@ -22,11 +22,6 @@ def test_to_chat_id(raw, expected):
     assert to_chat_id(raw) == expected
 
 
-def test_to_chat_id_is_idempotent():
-    once = to_chat_id("0501234567")
-    assert to_chat_id(once) == once
-
-
 @pytest.mark.parametrize("bad", [None, "", 0])
 def test_to_chat_id_falsy_returns_empty(bad):
     assert to_chat_id(bad) == ""

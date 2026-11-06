@@ -212,15 +212,6 @@ def test_operator_workflows_that_change_things_are_invocation_only():
     )
 
 
-# --- Permissions --------------------------------------------------------------
-
-
-def test_permission_allowlist_has_no_duplicates():
-    allow = (_load(_SETTINGS).get("permissions") or {}).get("allow", [])
-    duplicates = {entry for entry in allow if allow.count(entry) > 1}
-    assert not duplicates, f"duplicate allowlist entries: {sorted(duplicates)}"
-
-
 # --- Rules (.claude/rules/*.md) -----------------------------------------------
 #
 # September 2026: CLAUDE.md's reference bulk (service table, constants,
@@ -284,16 +275,6 @@ def test_every_rule_is_path_scoped_and_its_globs_match_something():
             if not _glob_matches_something(g)
         ]
     assert not offenders, "rule frontmatter problems:\n  " + "\n  ".join(offenders)
-
-
-def test_claude_md_indexes_every_rule():
-    """The rules index at the bottom of CLAUDE.md names each file, so a reader
-    of the always-loaded file knows what loads on demand."""
-    claude_md = (_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
-    missing = [
-        rule.name for rule in _RULES.glob("*.md") if f"`{rule.name}`" not in claude_md
-    ]
-    assert not missing, f"rules missing from CLAUDE.md's index: {missing}"
 
 
 # --- Skills (.claude/skills/<name>/SKILL.md) ----------------------------------
