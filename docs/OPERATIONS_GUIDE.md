@@ -357,7 +357,8 @@ The routing engine found no matching pro.
 ### Bot doesn't respond to images / audio / video
 
 - Check: is the media URL publicly accessible?
-- Check logs for: `Error downloading media` or `Gemini File Processing Failed`
+- The customer is told the file could not be read (`Messages.Errors.MEDIA_UPLOAD_FAILED`) whenever a media link was passed and nothing was attached for the model.
+- Check logs for: `Error downloading media`, `Gemini File Processing Failed`, `Error handling media URL for Gemini`, `Media for this turn was not fetched` or `Failed to download media for Gemini`
 - For video: Gemini waits up to 120 s for processing — timeouts are logged as errors.
 
 ### Leads not appearing in the dashboard

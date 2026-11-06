@@ -74,6 +74,18 @@ class AIResponse(BaseModel):
 MAX_CONVERSATION_TURNS = 5  # 5 turns = 10 messages (user + model)
 
 
+def _canned_reply(text: str, require_json: bool) -> AIResponse | str:
+    """A reply the model did not write, in the shape the caller asked for."""
+    if not require_json:
+        return text
+    return AIResponse(
+        reply_to_user=text,
+        transcription=None,
+        extracted_data=ExtractedData(city=None, issue=None, appointment_time=None),
+        is_deal=False,
+    )
+
+
 async def _track_token_usage(pro_id: str, token_count: int) -> None:
     """Fire-and-forget: increment total_tokens_used for a pro in MongoDB."""
     try:
@@ -182,8 +194,24 @@ class AIEngine:
             current_parts.append(
                 types.Part.from_bytes(data=media_data, mime_type=media_mime_type)
             )
+        elif media_url:
+            # detect_and_fetch_media swallows its own failures and returns
+            # (None, None), so a photo we could not download arrives here.
+            logger.error("Media for this turn was not fetched; nothing to send Gemini")
 
-        if media_mime_type:
+        # PRO-204: the customer sent a file and the model will not see it, by any
+        # route: download, upload, or a video that never went ACTIVE. Answering
+        # as usual is a confident reply about something nobody read.
+        media_failed = bool(media_url) and not current_parts
+        if media_failed:
+            # Nothing left to answer, so no model call. The caller still runs its
+            # sticky gate on this reply, which keeps the file's link on the lead.
+            if not (user_text or "").strip():
+                return _canned_reply(Messages.Errors.MEDIA_UPLOAD_FAILED, require_json)
+            user_text += f"\n{Messages.AISystemPrompts.MEDIA_NOT_SEEN}"
+        notice = f"{Messages.Errors.MEDIA_UPLOAD_FAILED}\n\n" if media_failed else ""
+
+        if media_mime_type and not media_failed:
             if "image" in media_mime_type:
                 user_text = (
                     user_text or ""
@@ -242,10 +270,12 @@ class AIEngine:
                 if require_json:
                     try:
                         if hasattr(response, "parsed") and response.parsed:
-                            return response.parsed
+                            parsed = response.parsed
                         else:
-                            data = json.loads(response.text)
-                            return AIResponse(**data)
+                            parsed = AIResponse(**json.loads(response.text))
+                        if notice:
+                            parsed.reply_to_user = notice + parsed.reply_to_user
+                        return parsed
                     except Exception as parse_error:
                         preview = response.text[:500] if response.text else "EMPTY"
                         logger.warning(
@@ -255,7 +285,7 @@ class AIEngine:
                         # Treat JSON parse error as a hard failure for this model → fall back.
                         continue
 
-                return response.text.strip()
+                return notice + response.text.strip()
 
             except Exception as e:
                 logger.warning(
@@ -276,16 +306,7 @@ class AIEngine:
             logger.error(
                 "All AI models failed (every model returned unparseable JSON)."
             )
-        if require_json:
-            return AIResponse(
-                reply_to_user=Messages.Errors.AI_OVERLOAD,
-                transcription=None,
-                extracted_data=ExtractedData(
-                    city=None, issue=None, appointment_time=None
-                ),
-                is_deal=False,
-            )
-        return Messages.Errors.AI_OVERLOAD
+        return _canned_reply(notice + Messages.Errors.AI_OVERLOAD, require_json)
 
     async def detect_service_intent(self, text: str) -> bool:
         """Lightweight classifier: does this text describe a home-service need?
