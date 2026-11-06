@@ -56,9 +56,17 @@ from app.providers.whatsapp.quality import non_essential_sends_paused
 from app.core.messages import Messages
 from app.core.phone import mask_chat_id, to_chat_id
 from app.core.prompts import Prompts
-from app.services.ai_engine_service import AIResponse
+from app.services.ai_engine_service import AIResponse, file_notice_in
 from app.services.dispatch_guards import DispatchContext, GuardDeps
 from app.services.matching_service import probable_trade, trade_fits
+
+
+async def _send_file_notice(response: AIResponse, chat_id, whatsapp, lead_manager):
+    """For an exit that sends a fixed message instead of the reply carrying this."""
+    notice = file_notice_in(response.reply_to_user)
+    if notice:
+        await whatsapp.send_message(chat_id, notice)
+        await lead_manager.log_message(chat_id, "model", notice)
 
 
 async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
@@ -189,6 +197,19 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     # Already apologised for above; the engine would otherwise report it again.
     ai_media_url = None if media_fetch_failed else media_url
 
+    file_lost_notice = None
+    if ctx.file_lost:
+        # Its type went with it, so TEXT_ONLY.
+        if not (user_text or "").strip():
+            # Nothing to answer and no link to keep, so no AI call.
+            notice = Messages.Errors.MEDIA_UPLOAD_FAILED_TEXT_ONLY
+            await whatsapp.send_message(chat_id, notice)
+            await lead_manager.log_message(chat_id, "model", notice)
+            return
+        file_lost_notice = Messages.Errors.MEDIA_FAILED_TEXT_ANSWERED
+        await whatsapp.send_message(chat_id, file_lost_notice)
+        user_text = f"{user_text}\n{Messages.AISystemPrompts.MEDIA_NOT_SEEN}"
+
     # 4. Check for existing active lead with assigned pro (skip dispatcher if so)
     active_lead = await leads_collection.find_one(
         {"chat_id": chat_id, "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]}},
@@ -272,6 +293,8 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         await lead_manager.log_message(
             chat_id, "model", Messages.Errors.MEDIA_FETCH_FAILED
         )
+    if file_lost_notice:
+        await lead_manager.log_message(chat_id, "model", file_lost_notice)
 
     # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
     if existing_pro and active_lead:
@@ -626,6 +649,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 loyalty_msg = Messages.Customer.LOYALTY_OFFER.format(
                     pro_name=past_pro.get("business_name", "איש המקצוע")
                 )
+                await _send_file_notice(
+                    dispatcher_response, chat_id, whatsapp, lead_manager
+                )
                 await whatsapp.send_message(chat_id, loyalty_msg)
                 await lead_manager.log_message(chat_id, "model", loyalty_msg)
                 return
@@ -670,6 +696,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                         f"(city={extracted_city!r}, issue={extracted_issue!r}) — "
                         "PENDING_ADMIN_REVIEW, needs manual routing now"
                     )
+                await _send_file_notice(
+                    dispatcher_response, chat_id, whatsapp, lead_manager
+                )
                 await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
                 await lead_manager.log_message(
                     chat_id, "model", Messages.Customer.PENDING_REVIEW

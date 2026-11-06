@@ -971,6 +971,11 @@ async def _finalize_deal(
         lead_update["quoted_price"] = quoted_price
 
     if current_lead_id:
+        # A turn that extracted nothing (a failed file on an emergency lead reaches
+        # here with an empty response) must not erase what the lead already has.
+        for field in ("street", "street_number", "city", "floor", "apartment"):
+            if lead_update[field] is None:
+                del lead_update[field]
         # CONTACTED -> NEW once the routing engine has matched a pro. Goes
         # through set_lead_status so the transition lands in status_history.
         lead = await set_lead_status(

@@ -357,8 +357,8 @@ The routing engine found no matching pro.
 ### Bot doesn't respond to images / audio / video
 
 - Check: is the media URL publicly accessible?
-- The customer is told the file could not be read (`Messages.Errors.MEDIA_UPLOAD_FAILED`) whenever a media link was passed and nothing was attached for the model.
-- Check logs for: `Error downloading media`, `Gemini File Processing Failed`, `Error handling media URL for Gemini`, `Media for this turn was not fetched` or `Failed to download media for Gemini`
+- The customer is told (`MEDIA_UPLOAD_FAILED`, `MEDIA_UPLOAD_FAILED_TEXT_ONLY` or `MEDIA_FAILED_TEXT_ANSWERED`) when a file doesn't reach the model on a turn the customer pipeline handles: lost re-hosting it, failed download or upload, or refused by every model. They are not told when an emergency dispatches on that turn (the reply is withheld), when a guard or the completion/rating/review step answers the turn first, or when a model outage hits a turn with text and an attached file (`AI_OVERLOAD` only). A media-only turn during an outage is told the file failed, because nothing can tell the two apart.
+- Check logs for: `Error downloading media`, `Gemini File Processing Failed`, `Error handling media URL for Gemini`, `Media for this turn was not fetched`, `Failed to download media for Gemini`, `Could not fetch Meta media` or `Could not re-host Meta media`
 - For video: Gemini waits up to 120 s for processing — timeouts are logged as errors.
 
 ### Leads not appearing in the dashboard
