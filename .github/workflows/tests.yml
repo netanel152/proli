@@ -1,58 +1,45 @@
 name: tests
 
-# PRO-83: the offline E2E harness has to run on every PR to be worth anything.
-# Until this workflow existed the repo had no automated pytest run at all — only
-# the Railway start/stop workflows.
 on:
   pull_request:
+    # Adding the floor label must start a run: a re-run replays the original
+    # event, so it would not see the label.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
   push:
-    # `dev` is the integration branch (renamed from `master` on 2026-08-22).
-    # `production` is listed too: a promotion is a fast-forward of already-tested
-    # commits, so this should always be green — which is the point. A red run on
-    # `production` means something reached the release branch that did not come
-    # through `dev`, and that is worth finding out about loudly.
+    # `production` too: a red run there means something skipped `dev`.
     branches: [dev, production]
 
+permissions:
+  contents: read
+
+# Superseded PR runs are cancelled. A push keeps a group of its own per SHA, not
+# per branch: GitHub drops a waiting run from a busy group even with cancelling
+# off, and promote needs the `pytest` result on every dev SHA.
+concurrency:
+  group: tests-${{ github.ref }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # The job name is the required check in branch protection, and promote reads it.
   pytest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GEMINI_API_KEY: "ci-not-a-real-key"
       CLOUDINARY_CLOUD_NAME: "ci"
       CLOUDINARY_API_KEY: "ci"
       CLOUDINARY_API_SECRET: "ci"
-      # Set for anything that reads settings at import time. Note it is NOT what
-      # keeps the unit suite from sending: tests/conftest.py deliberately forces
-      # WHATSAPP_DRY_RUN back to False so the client tests exercise the real gate.
-      # Those tests never reach a socket because they stub `_send_request`.
+      # Not what keeps the suite from sending: tests/conftest.py forces this back
+      # to False, and those tests stub `_send_request`.
       WHATSAPP_DRY_RUN: "true"
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      # PRO-86: the legacy WhatsApp vendor is gone (PRO-85 — instance deleted,
-      # tariff cancelled). The provider facade is only a single egress if nothing
-      # can reach a vendor endpoint directly, so any reintroduction of that
-      # vendor's URL — in app code, a script or a test fixture — fails the build
-      # rather than quietly recreating the bypass class that caused the
-      # yellowCard incident.
-      #
-      # This is a ratchet, not a detector: it has found nothing since it landed,
-      # which is the point. It costs under a second and it exists so that code
-      # pasted back out of git history, or copied from a nine-month-old branch,
-      # cannot re-open that path in silence.
-      #
-      # `*.md` is excluded on purpose (2026-09-14). A document that *names* the
-      # retired vendor is history, not a bypass — the account is deleted, so a
-      # doc cannot lead anyone to a live endpoint — while scanning prose made
-      # writing about this rule trip it, and CLAUDE.md had to carry a warning
-      # telling people to spell the domain in two pieces. A guard whose main
-      # observable effect is a papercut on the docs that explain it is aimed
-      # slightly wrong. Code, scripts and fixtures are still scanned, which is
-      # where an egress bypass can actually live.
-      #
-      # `.github` is excluded from its own scan: the pattern below is the one
-      # place in the repo the retired host may still be named.
+      # `*.md` is excluded on purpose: prose naming the retired vendor is not a
+      # bypass. `.github` is excluded because the pattern below names its host.
       - name: Guard — no legacy WhatsApp vendor references
         id: vendor-guard
         run: |
@@ -72,12 +59,8 @@ jobs:
           fi
           echo "OK — no legacy WhatsApp vendor references in code."
 
-      # ARCHITECTURE_STANDARD.md §6.2 — the single-egress rule, mechanised.
-      # Two ways to bypass the facade's circuit breaker / kill switch / dry-run:
-      # an HTTP client called directly from a service, or a provider constructed
-      # outside app/providers/whatsapp/. Both fail the build. geocoding_service
-      # is the one allowlisted HTTP consumer (Nominatim, not a messaging vendor);
-      # tests may construct providers freely — they test them.
+      # ARCHITECTURE_STANDARD.md §6.2. geocoding_service is the one allowlisted
+      # HTTP consumer (Nominatim, not a messaging vendor); tests may build providers.
       - name: Guard — all outbound traffic through the provider facade
         run: |
           if grep -rInE '^\s*(import|from)\s+(httpx|requests)\b' app/services/ \
@@ -101,10 +84,30 @@ jobs:
           fi
           echo "OK — single egress holds."
 
-      - uses: actions/setup-python@v7
+      - name: Lint — actionlint
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl -fsSL -o "$archive" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "$ACTIONLINT_SHA256  $archive" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint" -color
+
+      # Before the suite, so a dev merge landing mid-run cannot raise this PR's floor.
+      - name: Restore dev's passed count
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          # Matches the Dockerfile's base image, so CI resolves the same wheels
-          # production does (the pins in requirements.txt are version-sensitive).
+          path: pytest-floor
+          key: pytest-passed-${{ github.sha }}
+          restore-keys: pytest-passed-
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          # Matches the Dockerfile's base image, so CI resolves the same wheels as production.
           python-version: "3.12"
           cache: pip
 
@@ -113,13 +116,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # Formatting and linting are both enforced. `black .` was applied to the
-      # whole tree once (27 files, AST-identical before and after); flake8's
-      # pre-existing debt (unused imports and locals, f-strings without
-      # placeholders, mid-file imports) was paid down once, with E501 left to
-      # black and the sys.path shims in scripts/ allowed in .flake8. These two
-      # steps keep both at zero — without them the counts creep back one edit
-      # at a time.
       - name: Lint — black --check
         run: black --check --diff .
 
@@ -131,30 +127,53 @@ jobs:
           set -o pipefail
           pytest -q | tee pytest-output.txt
 
-      # docs/TESTING.md's "Current status" line is the single source of truth
-      # for the test baseline. The guard is a *floor*, not an equality: fewer
-      # passed than the baseline = a regression slipped in, and that fails the
-      # build. More passed = tests were added, which is normal and must not
-      # block the PR — it used to, and with several feature branches in flight
-      # at once that turned the doc into a merge bottleneck (whoever merged
-      # second failed as a stale baseline through no fault of their own).
-      # Growth posts a ::warning instead, and `refresh-test-baseline.yml`
-      # opens a PR to move the line once the change is on dev.
-      - name: Guard — test baseline floor (docs/TESTING.md)
+      - name: Read the passed count from pytest's summary
+        id: count
         run: |
-          baseline=$(grep -oP 'Current status: \K[0-9]+(?= passed)' docs/TESTING.md)
-          actual=$(grep -oP '\b\K[0-9]+(?= passed)' pytest-output.txt | tail -1)
-          if [ -z "$baseline" ] || [ -z "$actual" ]; then
-            echo "::error::Could not parse the baseline ('Current status: N passed' in docs/TESTING.md) or the pytest summary."
+          passed=$(grep -oP '\b\K[0-9]+(?= passed)' pytest-output.txt | tail -1)
+          if [ -z "$passed" ]; then
+            echo "::error::Could not parse the passed count from pytest's summary."
             exit 1
           fi
-          echo "baseline=$baseline actual=$actual"
-          if [ "$actual" -lt "$baseline" ]; then
-            echo "::error::Regression: $actual tests passed but docs/TESTING.md says $baseline."
-            exit 1
-          elif [ "$actual" -gt "$baseline" ]; then
-            echo "::warning::Baseline stale: $actual passed, docs/TESTING.md says $baseline."
-            echo "::warning::Not a failure — bump the 'Current status' line here if convenient, otherwise the refresh workflow opens a PR for it after this lands on dev."
+          echo "passed=$passed" >> "$GITHUB_OUTPUT"
+          echo "$passed passed."
+
+      # The floor is dev's newest count, kept in the Actions cache rather than a
+      # file every PR would have to edit. See docs/CI_WORKFLOWS.md.
+      - name: Guard — test floor (dev's passed count)
+        id: floor
+        if: github.event_name == 'pull_request'
+        env:
+          PASSED: ${{ steps.count.outputs.passed }}
+          ALLOW_TEST_DROP: ${{ contains(github.event.pull_request.labels.*.name, 'allow-test-drop') }}
+        run: |
+          set -euo pipefail
+          if ! floor=$(grep -xE '[0-9]+' pytest-floor/passed 2>/dev/null); then
+            echo "::warning::No test floor was checked: dev has no recorded count (first run, or the cache was evicted). The next push to dev records one."
             exit 0
           fi
-          echo "OK — baseline holds at $baseline passed."
+          if [ "$PASSED" -ge "$floor" ]; then
+            echo "OK — $PASSED passed, dev's floor is $floor."
+            exit 0
+          fi
+          if [ "$ALLOW_TEST_DROP" = "true" ]; then
+            echo "::warning::$PASSED tests passed, below dev's floor of $floor. Allowed by the allow-test-drop label."
+            exit 0
+          fi
+          echo "::error::Regression: $PASSED tests passed, below dev's floor of $floor. If this PR is behind dev, merge dev and push: a re-run tests the same stale merge commit. If tests were removed on purpose, add the allow-test-drop label."
+          exit 1
+
+      - name: Record the passed count for dev's floor
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        env:
+          PASSED: ${{ steps.count.outputs.passed }}
+        run: |
+          mkdir -p pytest-floor
+          printf '%s\n' "$PASSED" > pytest-floor/passed
+
+      - name: Save dev's passed count
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: pytest-floor
+          key: pytest-passed-${{ github.sha }}

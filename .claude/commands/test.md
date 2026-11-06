@@ -1,5 +1,5 @@
 ---
-description: Run the full test suite via the test-runner subagent and compare against the docs/TESTING.md baseline
+description: Run the full test suite via the test-runner subagent and report any failures
 ---
 
-Delegate to the **test-runner** subagent. It runs the full suite in isolated context and reports failures against the baseline in `docs/TESTING.md` ("Current status" line) — do not run pytest in the main thread.
+Delegate to the **test-runner** subagent. It runs the full suite in isolated context and reports failures — do not run pytest in the main thread.
