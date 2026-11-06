@@ -89,9 +89,30 @@
     "deny": [
       "Bash(railway variables set:*)",
       "PowerShell(railway variables set:*)",
+      "Bash(railway variable set:*)",
+      "Bash(railway variable delete:*)",
+      "Bash(railway variables delete:*)",
+      "Bash(railway var* set *)",
+      "Bash(railway var* delete *)",
+      "Bash(railway var* rm *)",
+      "Bash(railway var* remove *)",
+      "Bash(railway var* --set *)",
+      "Bash(railway var* --set-from-stdin *)",
+      "PowerShell(railway variable set:*)",
+      "PowerShell(railway variable delete:*)",
+      "PowerShell(railway variables delete:*)",
+      "PowerShell(railway var* set *)",
+      "PowerShell(railway var* delete *)",
+      "PowerShell(railway var* rm *)",
+      "PowerShell(railway var* remove *)",
+      "PowerShell(railway var* --set *)",
+      "PowerShell(railway var* --set-from-stdin *)",
       "mcp__railway__set-variables",
       "mcp__railway__delete-service",
       "mcp__railway__delete-volume",
+      "mcp__claude_ai_Railway__set-variables",
+      "mcp__claude_ai_Railway__delete-service",
+      "mcp__claude_ai_Railway__delete-volume",
       "Bash(gh pr merge:*)",
       "mcp__redis__delete",
       "mcp__sentry__update_issue"
@@ -125,7 +146,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
