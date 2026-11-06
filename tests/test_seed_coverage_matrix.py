@@ -295,7 +295,8 @@ async def seeded(mock_db, monkeypatch):
 async def _route(location: str):
     from app.services.matching_service import determine_best_pro
 
-    return await determine_best_pro(issue_type="נזילה", location=location)
+    # Names no trade: this matrix pins geography, and its winners span every trade.
+    return await determine_best_pro(issue_type="תקלה בבית", location=location)
 
 
 async def _overload(seeded, scenario: str):
