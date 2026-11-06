@@ -11,9 +11,9 @@ to be there under the old snapshot-based code.
 Also covers the structured ``skipped_rows`` result (``{"client", "reason"}``
 per skip, ``reason`` one of ``SKIP_UNRESOLVED`` / ``SKIP_NO_CHANGE`` /
 ``SKIP_LEAD_GONE``) and the no-duplicate-status_history-entry guard: a
-status "change" to the value the document already holds still counts as
-``updated`` (matched_count, not modified_count) but must not push a
-duplicate consecutive status_history entry.
+status "change" to the value the document already holds is reported as
+``SKIP_NO_CHANGE`` and must not push a duplicate consecutive status_history
+entry.
 
 Extracted into a streamlit-free module (collection injected, mongomock in
 tests, PRO-140/PRO-158 precedent).
@@ -151,7 +151,13 @@ def test_reordered_frame_edits_the_lead_actually_at_that_row_not_the_stale_one(
         unknown_pro_label=UNKNOWN_PRO_LABEL,
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 1,
+        "skipped": 0,
+        "skipped_rows": [],
+        "assignments": [],
+        "record_only": [],
+    }
 
     doc_b = leads.find_one({"_id": lead_b})
     assert doc_b["status"] == "booked"
@@ -198,7 +204,13 @@ def test_status_change_appends_status_history_entry_with_admin_actor(db):
         unknown_pro_label=UNKNOWN_PRO_LABEL,
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 1,
+        "skipped": 0,
+        "skipped_rows": [],
+        "assignments": [],
+        "record_only": [],
+    }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "completed"
     assert len(doc["status_history"]) == 1
@@ -243,7 +255,13 @@ def test_status_change_via_status_label_writes_raw_status_and_pushes_history(db)
         status_by_label=labels,
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 1,
+        "skipped": 0,
+        "skipped_rows": [],
+        "assignments": [],
+        "record_only": [],
+    }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "completed"
     assert len(doc["status_history"]) == 1
@@ -284,6 +302,8 @@ def test_status_label_not_in_map_is_ignored_no_write(db):
         "updated": 0,
         "skipped": 1,
         "skipped_rows": [{"client": "A", "reason": SKIP_NO_CHANGE}],
+        "assignments": [],
+        "record_only": [],
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "new"
@@ -318,7 +338,13 @@ def test_details_summary_edit_writes_details_and_issue_type_no_status_history(db
         unknown_pro_label=UNKNOWN_PRO_LABEL,
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 1,
+        "skipped": 0,
+        "skipped_rows": [],
+        "assignments": [],
+        "record_only": [],
+    }
     doc = leads.find_one({"_id": lead_id})
     assert doc["details"] == "burst pipe under sink"
     assert doc["issue_type"] == "burst pipe under sink"
@@ -354,7 +380,13 @@ def test_professional_set_to_unknown_label_nulls_pro_id(db):
         unknown_pro_label=UNKNOWN_PRO_LABEL,
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 1,
+        "skipped": 0,
+        "skipped_rows": [],
+        "assignments": [],
+        "record_only": [],
+    }
     doc = leads.find_one({"_id": lead_id})
     assert doc["pro_id"] is None
 
@@ -385,7 +417,13 @@ def test_professional_set_to_real_name_maps_to_pro_id(db):
         unknown_pro_label=UNKNOWN_PRO_LABEL,
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 1,
+        "skipped": 0,
+        "skipped_rows": [],
+        "assignments": [],
+        "record_only": [{"client": "A", "pro": "Dana the Plumber"}],
+    }
     doc = leads.find_one({"_id": lead_id})
     assert doc["pro_id"] == new_pro_id
 
@@ -424,6 +462,8 @@ def test_row_index_out_of_range_is_skipped_not_crashed(db):
         "updated": 0,
         "skipped": 1,
         "skipped_rows": [{"client": "", "reason": SKIP_UNRESOLVED}],
+        "assignments": [],
+        "record_only": [],
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "new"
@@ -460,6 +500,8 @@ def test_non_integer_row_key_is_skipped_unresolved_with_empty_client(db):
         "updated": 0,
         "skipped": 1,
         "skipped_rows": [{"client": "", "reason": SKIP_UNRESOLVED}],
+        "assignments": [],
+        "record_only": [],
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "new"
@@ -500,6 +542,8 @@ def test_unparseable_id_cell_is_skipped_not_crashed(db, bad_id):
         "updated": 0,
         "skipped": 1,
         "skipped_rows": [{"client": "A", "reason": SKIP_UNRESOLVED}],
+        "assignments": [],
+        "record_only": [],
     }
     assert leads.count_documents({}) == 0
 
@@ -537,6 +581,8 @@ def test_row_with_no_writable_field_is_skipped(db):
         "updated": 0,
         "skipped": 1,
         "skipped_rows": [{"client": "A", "reason": SKIP_NO_CHANGE}],
+        "assignments": [],
+        "record_only": [],
     }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "new"
@@ -580,6 +626,8 @@ def test_lead_deleted_before_save_lands_is_skipped_and_not_audited(db):
         "updated": 0,
         "skipped": 1,
         "skipped_rows": [{"client": "A", "reason": SKIP_LEAD_GONE}],
+        "assignments": [],
+        "record_only": [],
     }
     assert audit_calls == []
     assert leads.count_documents({}) == 0
@@ -616,7 +664,13 @@ def test_audit_called_once_per_successful_row_with_action_and_details(db):
         audit=lambda action, details: audit_calls.append((action, details)),
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 1,
+        "skipped": 0,
+        "skipped_rows": [],
+        "assignments": [],
+        "record_only": [],
+    }
     assert len(audit_calls) == 1
     action, details = audit_calls[0]
     assert action == "edit_lead"
@@ -649,17 +703,22 @@ def test_audit_none_does_not_crash(db):
         audit=None,
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 1,
+        "skipped": 0,
+        "skipped_rows": [],
+        "assignments": [],
+        "record_only": [],
+    }
 
 
 # --- matched_count, not modified_count / no duplicate status_history push ---
 
 
-def test_resaving_unchanged_status_still_counts_as_updated_no_duplicate_history(db):
-    """Pin: the code deliberately checks matched_count, not modified_count --
-    re-saving a row to the value it already holds is a successful save, not a
-    skip. But it must NOT push a duplicate consecutive status_history entry:
-    the two behaviors have to agree, not contradict."""
+def test_resaving_unchanged_status_is_no_change_and_no_duplicate_history(db):
+    """Re-saving a row to the value it already holds wrote nothing, so it must
+    say "no change" rather than "1 saved", and must NOT push a duplicate
+    consecutive status_history entry."""
     leads = db.leads
     lead_id = leads.insert_one(_lead_doc(status="completed")).inserted_id
     df = _frame(
@@ -684,7 +743,13 @@ def test_resaving_unchanged_status_still_counts_as_updated_no_duplicate_history(
         unknown_pro_label=UNKNOWN_PRO_LABEL,
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 0,
+        "skipped": 1,
+        "skipped_rows": [{"client": "A", "reason": SKIP_NO_CHANGE}],
+        "assignments": [],
+        "record_only": [],
+    }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "completed"
     assert doc["status_history"] == []  # no duplicate entry pushed
@@ -715,7 +780,13 @@ def test_status_change_to_different_value_appends_exactly_one_entry(db):
         unknown_pro_label=UNKNOWN_PRO_LABEL,
     )
 
-    assert result == {"updated": 1, "skipped": 0, "skipped_rows": []}
+    assert result == {
+        "updated": 1,
+        "skipped": 0,
+        "skipped_rows": [],
+        "assignments": [],
+        "record_only": [],
+    }
     doc = leads.find_one({"_id": lead_id})
     assert doc["status"] == "booked"
     assert len(doc["status_history"]) == 1

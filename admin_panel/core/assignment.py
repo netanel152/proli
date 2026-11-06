@@ -53,6 +53,9 @@ ASSIGN_STALE = "stale"
 #: The call raised. Nothing is *promised* about the lead — see the note in
 #: :func:`assign_pending_lead_sync`.
 ASSIGN_FAILED = "failed"
+#: The chosen pro is no longer eligible (deleted or un-approved since the page
+#: rendered), or could not be re-read. Nothing was written and nothing was sent.
+ASSIGN_PRO_GONE = "pro_gone"
 
 
 def assign_pending_lead_sync(
@@ -66,9 +69,9 @@ def assign_pending_lead_sync(
 ):
     """Assign ``lead_id`` to ``pro`` from synchronous panel code.
 
-    Returns ``(outcome, pro_name)`` where ``outcome`` is one of the six
-    ``ASSIGN_*`` constants above, so the caller renders the operator one of six
-    different sentences rather than a green tick over all of them.
+    Returns ``(outcome, pro_name)`` where ``outcome`` is one of the
+    ``ASSIGN_*`` constants above, so the caller renders the operator a different
+    sentence for each rather than a green tick over all of them.
 
     The write is guarded on the lead still being PENDING_ADMIN_REVIEW. The
     button acts on an id captured when the page rendered, the page
@@ -127,3 +130,28 @@ def assign_pending_lead_sync(
     if offer_sent is None:
         return ASSIGN_LOOKUP_MISSED, pro_name
     return ASSIGN_NOT_SENT, pro_name
+
+
+def offer_pending_lead(
+    lead_id, pro_id, *, find_pro, assign_sync=assign_pending_lead_sync
+):
+    """Re-check ``pro_id`` is still eligible, then assign and offer ``lead_id``.
+
+    The one entry point for every panel surface that offers a waiting lead —
+    the strip, the leads table and the Edit form. Re-read at save time because
+    the option list was built when the page rendered, and a pro deleted or
+    un-approved since must not become a dangling owner.
+
+    ``find_pro(pro_id)`` returns the pro only if still eligible. Returns
+    ``(outcome, pro_name)`` and never raises, like ``assign_pending_lead_sync``.
+    """
+    try:
+        pro = find_pro(pro_id)
+    except Exception as e:
+        # Nothing was written, so ASSIGN_FAILED's "may be assigned anyway" would
+        # be false.
+        logger.error(f"[admin_panel] Re-reading pro {pro_id} failed: {e}")
+        return ASSIGN_PRO_GONE, ""
+    if not pro:
+        return ASSIGN_PRO_GONE, ""
+    return assign_sync(lead_id, pro)
