@@ -34,13 +34,6 @@ List every `@router.get` / `@router.post` decorator with method, path, and one-l
 ### 1.5 `app/core/messages.py` — Keyword Lists
 Extract every `Keywords.*` list (HELP_COMMANDS, MENU_COMMANDS, APPROVE_COMMANDS, FINISH_COMMANDS, CANCEL_BOOKED_COMMANDS, DETAILS_COMMANDS, SUMMARY_COMMANDS, SOS_COMMANDS, RESET_COMMANDS, etc.). These are the ground truth for what commands exist.
 
-### 1.6 Test Count
-Count test functions across all `tests/test_*.py` source files:
-```
-grep -rc "^async def test_\|^def test_" tests/
-```
-Sum only `.py` source files (exclude `__pycache__`). This is the authoritative total for "N passed" claims in docs.
-
 ### 1.7 `app/core/database.py` — MongoDB Collections
 List every `db.<name>` collection assignment. This is the authoritative collection list.
 
@@ -73,7 +66,6 @@ Read each file below in full. Check every listed claim against Phase 1 ground tr
 |---------|---------------|
 | Core Features list (English) | Reflects current commands and flows |
 | Feature list (Hebrew section) | Mirrors English section |
-| Test count | Matches Phase 1.6 |
 | Command examples | Reflect actual keyword lists from Phase 1.5 |
 
 ### `docs/ARCHITECTURE.md`
@@ -90,7 +82,7 @@ Read each file below in full. Check every listed claim against Phase 1 ground tr
 ### `docs/TESTING.md`
 | Section | What to check |
 |---------|---------------|
-| Expected test count | Matches Phase 1.6 |
+| Status line | Carries no test count; the floor lives in CI (`docs/CI_WORKFLOWS.md`) |
 | Test file descriptions | No references to removed features (e.g., `send_interactive_buttons`) |
 | Test conventions | Match current `conftest.py` and `pytest.ini` |
 
@@ -134,7 +126,6 @@ Read each file below in full. Check every listed claim against Phase 1 ground tr
 ### `docs/PRODUCTION_READINESS.md`
 | Section | What to check |
 |---------|---------------|
-| Test count | Update to Phase 1.6 count (this doc's count is a historical snapshot that keeps getting stale) |
 | ARQ `max_tries` value | Check `app/core/arq_worker.py` for the actual `max_tries` value |
 
 ### `docs/FINOPS.md`
@@ -214,5 +205,5 @@ Print a structured summary:
 - **No invention.** Do not add documentation for features not present in the code.
 - **No new files.** Do not create `.md` files that don't already exist.
 - **No commits.** Leave all changes unstaged for the user to review with `git diff`.
-- **Historical docs (`PRODUCTION_READINESS.md`):** Only update factual claims that are wrong (test count, config values). Do not alter the audit narrative or resolved-issues list.
+- **Historical docs (`PRODUCTION_READINESS.md`):** Only update factual claims that are wrong (config values). Do not alter the audit narrative or resolved-issues list.
 - **Costs docs (`FINOPS.md`):** Skip entirely — no code-verifiable facts.

@@ -152,7 +152,7 @@ pytest tests/test_matching_service.py
 pytest -m integration
 ```
 
-Expected result: the full unit suite passes. The authoritative pass/skip baseline lives in `docs/TESTING.md` ("Current status" line) — integration tests are skipped without `MONGO_TEST_URI`.
+Expected result: the full unit suite passes, with integration tests skipped without `MONGO_TEST_URI`. CI fails a PR that passes fewer tests than `dev` (see `docs/CI_WORKFLOWS.md`).
 
 ---
 
@@ -167,6 +167,7 @@ Expected result: the full unit suite passes. The authoritative pass/skip baselin
 | [Operations Guide](docs/OPERATIONS_GUIDE.md) | Running, monitoring, troubleshooting |
 | [Scripts](docs/SCRIPTS.md) | Database and simulation scripts |
 | [Railway Setup](docs/RAILWAY_SETUP.md) | Cloud deployment guide |
+| [CI Workflows](docs/CI_WORKFLOWS.md) | What each workflow does, the test floor, why they look like this |
 | [Production Readiness](docs/PRODUCTION_READINESS.md) | Pre-launch checklist |
 | [Scaling Guide](docs/SCALING_GUIDE.md) | Horizontal scaling strategies |
 | [Parallel Tracks](docs/PARALLEL_TRACKS.md) | One worktree per issue, the Windows shell traps, teardown |
