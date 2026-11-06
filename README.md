@@ -95,8 +95,12 @@ META_ACCESS_TOKEN=...                # secret — required once WHATSAPP_PROVIDE
 META_APP_SECRET=...                  # secret — signs inbound /webhook/meta; required for cloud in staging/production
 META_VERIFY_TOKEN=...                # secret — Meta subscription handshake; required for cloud in staging/production
 META_PHONE_NUMBER_ID=...             # not secret — Graph API phone-number node id
+PUBLIC_BASE_ORIGIN=https://...       # public https origin, no path, on a host that serves /privacy and /terms; unset = messages carry no link
+TERMS_ENABLED=false                  # true publishes /terms and its links, only once app/static/terms.html is the approved text
 ENVIRONMENT=development              # development | staging | production (anything else fails at startup)
 ```
+
+`PUBLIC_BASE_ORIGIN` must be a host where `/privacy` and `/terms` reach the API. Behind the nginx setup (`nginx/nginx.conf`, `nginx/nginx.prod.conf`) those paths currently fall through `location /` to Streamlit, so do not point it at an nginx host until they are routed to the API. A malformed value logs an ERROR at boot and the messages go out with no link.
 
 ### 3. Seed the database
 

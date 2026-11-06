@@ -597,8 +597,9 @@ Corollaries:
   is shaped by one, so the constraint reads as load-bearing rather than
   arbitrary. A comment that restates the next line is noise; a comment that
   explains why the obvious alternative is wrong is the whole point.
-- After a code-change task, the **docs-syncer** subagent (incremental mode)
-  brings stale `.md` files up to date — this is already the session rule in
+- After a code-change task, the **docs-syncer** subagent (incremental mode,
+  given the changed-file list in its prompt, since it has no shell) brings
+  stale `.md` files up to date — this is already the session rule in
   `CLAUDE.md`.
 
 ## 14. Testing

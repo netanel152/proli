@@ -23,8 +23,9 @@ from admin_panel.core.assignment import (
     ASSIGN_TIMED_OUT,
     ASSIGN_LOOKUP_MISSED,
     ASSIGN_NOT_SENT,
+    ASSIGN_PRO_GONE,
     ASSIGN_SENT,
-    assign_pending_lead_sync,
+    offer_pending_lead,
 )
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import (
@@ -39,9 +40,12 @@ from admin_panel.core.lead_queries import (
     client_label,
     SKIP_LEAD_GONE,
     SKIP_NO_CHANGE,
+    SKIP_SAVE_FAILED,
     SKIP_UNRESOLVED,
+    apply_lead_changes,
     build_edit_form_payload,
     build_lead_row,
+    edit_form_flash,
     save_lead_edits,
 )
 from admin_panel.core.rbac import can_edit, has_permission
@@ -91,6 +95,15 @@ PENDING_STRIP_MAX = 5
 PENDING_STRIP_FETCH_MAX = 50
 
 
+def _eligible_pro(pro_id):
+    return users_collection.find_one({"_id": pro_id, **APPROVED_PRO_FILTER})
+
+
+def _offer_pending(lead_id, pro_id):
+    """The strip's assignment path, for the table and the Edit form too."""
+    return offer_pending_lead(lead_id, pro_id, find_pro=_eligible_pro)
+
+
 def _assign_feedback(T, outcome, pro_name):
     """The sentence and severity for one assignment outcome.
 
@@ -127,6 +140,11 @@ def _assign_feedback(T, outcome, pro_name):
                 "assign_stale",
                 "This lead is no longer waiting — somebody else took it.",
             ),
+            "warning",
+        )
+    if outcome == ASSIGN_PRO_GONE:
+        return (
+            T.get("assign_pro_gone", "That professional is no longer available."),
             "warning",
         )
     if outcome == ASSIGN_FAILED:
@@ -178,6 +196,7 @@ _SKIP_REASON_KEYS = {
     SKIP_LEAD_GONE: "leads_skip_lead_gone",
     SKIP_UNRESOLVED: "leads_skip_unresolved",
     SKIP_NO_CHANGE: "leads_skip_no_change",
+    SKIP_SAVE_FAILED: "leads_skip_save_failed",
 }
 
 
@@ -201,20 +220,50 @@ def _render_leads_flash(T):
     if not flash:
         return
 
+    msg = None
     if flash.get("deleted"):
         msg = T.get("success_delete", "Lead deleted.")
-    else:
-        msg = _t(T, "leads_msg_saved", "{n} changes saved.", n=flash.get("updated", 0))
+    elif flash.get("updated"):
+        msg = _t(T, "leads_msg_saved", "{n} changes saved.", n=flash["updated"])
+    if msg:
+        st.toast(msg, icon="✅")
+        st.success(msg)
 
-    st.toast(msg, icon="✅")
-    st.success(msg)
+    # What setting a pro actually did, per lead: the "saved" line above says
+    # nothing about whether anybody was told.
+    for row in flash.get("assignments") or []:
+        message, level = _assign_feedback(T, row["outcome"], row["pro_name"])
+        getattr(st, level)(f"{row['client']}: {message}")
+    for row in flash.get("record_only") or []:
+        st.warning(
+            _t(
+                T,
+                "leads_msg_record_only",
+                "{client}: {pro} is on the record only — no offer was sent and "
+                "they were not told. For a lead waiting for review, send it from "
+                "the assignment strip.",
+                client=row["client"],
+                pro=row["pro"],
+            )
+        )
 
     _render_skipped(T, flash.get("skipped_rows") or [])
+
+
+def _only_no_change(skipped_rows):
+    return bool(skipped_rows) and all(
+        row.get("reason") == SKIP_NO_CHANGE for row in skipped_rows
+    )
 
 
 def _render_skipped(T, skipped_rows):
     """Name the rows that were not written, and why."""
     if not skipped_rows:
+        return
+
+    # Nothing was lost, so "re-enter your edits" would send them hunting.
+    if _only_no_change(skipped_rows):
+        st.info(T.get("no_changes", "No changes."))
         return
 
     st.warning(
@@ -300,7 +349,7 @@ def _render_pending_review_strip(T):
     form, the same form used to correct a phone number. Here it is three:
     open the selectbox, pick a pro, press the button.
 
-    Assignment goes through `assign_pending_lead_sync`, which calls the very
+    Assignment goes through `offer_pending_lead`, which calls the very
     function the WhatsApp routing wizard calls — so the pro is notified on both
     paths, and the customer is told a pro was found only once the offer
     actually reached them.
@@ -408,52 +457,32 @@ def _render_pending_review_strip(T):
                 disabled=choice is None,
             ):
                 pro_id = choice["_id"]
-                # Re-read at click time, against the same eligibility filter: the
-                # option list was built when the page rendered, and a pro deleted
-                # or un-approved since must not become a dangling owner.
-                pro = users_collection.find_one({"_id": pro_id, **APPROVED_PRO_FILTER})
-                if not pro:
-                    log_audit(
-                        "assign_lead",
-                        {
-                            "lead_id": lead_id,
-                            "pro_id": str(pro_id),
-                            "outcome": "pro_gone",
-                        },
-                    )
-                    set_flash(
-                        "assign_flash",
-                        T.get(
-                            "assign_pro_gone",
-                            "That professional is no longer available.",
-                        ),
-                        "warning",
-                    )
-                    st.cache_data.clear()
-                    st.rerun()
-                    continue  # st.rerun() raises today; do not depend on that
-
                 # The call writes and sends, and may sit for up to
                 # ASSIGN_TIMEOUT_SECONDS. Without a spinner the operator sees
                 # nothing move, clicks again, and the second script run sends
                 # the pro a duplicate offer and the customer a duplicate promise.
+                #
+                # Everything that reports the outcome stays inside the block: the
+                # spinner's exit writes to the page, which is a point where a
+                # rerun queued during the send (an auto-refresh tick, another
+                # click) ends this run. Anything after it could be lost.
                 with st.spinner(
                     T.get("assign_in_progress", "Assigning and notifying…")
                 ):
-                    outcome, pro_name = assign_pending_lead_sync(lead_id, pro)
-                message, level = _assign_feedback(T, outcome, pro_name)
-                log_audit(
-                    "assign_lead",
-                    {"lead_id": lead_id, "pro_id": str(pro_id), "outcome": outcome},
-                )
-                set_flash("assign_flash", message, level)
-                # Every other mutation in this view clears the cache before
-                # rerunning. `leads_df` is cached for 30s, so without this the
-                # Kanban column right below the flash keeps showing the lead as
-                # waiting while the uncached metric tile above has already
-                # dropped — the operator is told two different things at once,
-                # having just acted.
-                st.cache_data.clear()
+                    outcome, pro_name = _offer_pending(lead_id, pro_id)
+                    message, level = _assign_feedback(T, outcome, pro_name)
+                    set_flash("assign_flash", message, level)
+                    log_audit(
+                        "assign_lead",
+                        {"lead_id": lead_id, "pro_id": str(pro_id), "outcome": outcome},
+                    )
+                    # Every other mutation in this view clears the cache before
+                    # rerunning. `leads_df` is cached for 30s, so without this the
+                    # Kanban column right below the flash keeps showing the lead as
+                    # waiting while the uncached metric tile above has already
+                    # dropped — the operator is told two different things at once,
+                    # having just acted.
+                    st.cache_data.clear()
                 st.rerun()
 
     hidden = pending_total - PENDING_STRIP_MAX
@@ -768,7 +797,15 @@ def view_leads_dashboard(T):
                         disabled=True,
                     ),
                     "professional": st.column_config.SelectboxColumn(
-                        T["col_pro"], width="medium", options=pro_names, required=False
+                        T["col_pro"],
+                        width="medium",
+                        options=pro_names,
+                        required=False,
+                        help=T.get(
+                            "leads_pro_help",
+                            "On a lead waiting for review, saving sends the offer. "
+                            "On any other lead it only updates the record.",
+                        ),
                     ),
                     "details_summary": st.column_config.TextColumn(
                         T["col_details"], width="large"
@@ -831,36 +868,48 @@ def view_leads_dashboard(T):
                         # same frame — so the id read out of it is always the row
                         # the admin actually edited. The old code resolved it
                         # against a session snapshot taken once, hours earlier.
-                        result = save_lead_edits(
-                            edited_df,
-                            changes,
-                            leads_collection=leads_collection,
-                            pro_map_name_to_id=pro_map_name_to_id,
-                            unknown_pro_label=T["unknown_pro"],
-                            audit=log_audit,
-                            status_by_label=status_by_label(T),
-                        )
+                        # May send: one offer per waiting lead given a pro. The
+                        # flash is stored inside the block; see the strip's note.
+                        with st.spinner(T.get("leads_saving", "Saving…")):
+                            result = save_lead_edits(
+                                edited_df,
+                                changes,
+                                leads_collection=leads_collection,
+                                pro_map_name_to_id=pro_map_name_to_id,
+                                unknown_pro_label=T["unknown_pro"],
+                                audit=log_audit,
+                                status_by_label=status_by_label(T),
+                                offer_pending=_offer_pending,
+                            )
+                            acted = (
+                                result["updated"]
+                                or result["assignments"]
+                                or result["record_only"]
+                            )
+                            if acted:
+                                st.session_state["leads_flash"] = result
+                                st.cache_data.clear()
 
-                        if result["updated"]:
-                            st.session_state["leads_flash"] = result
-                            st.cache_data.clear()
+                        if acted:
                             st.rerun()
                         else:
+                            skipped_rows = result.get("skipped_rows") or []
                             # Nothing was written — a success here would be the
                             # exact lie this ticket exists to kill. No rerun, so
                             # the admin's edits stay on screen for a second try.
-                            st.warning(
-                                T.get(
-                                    "leads_msg_nothing_saved",
-                                    "Nothing was saved. The leads you edited "
-                                    "may no longer exist — refresh the table "
-                                    "and try again.",
+                            if not _only_no_change(skipped_rows):
+                                st.warning(
+                                    T.get(
+                                        "leads_msg_nothing_saved",
+                                        "Nothing was saved. The leads you edited "
+                                        "may no longer exist — refresh the table "
+                                        "and try again.",
+                                    )
                                 )
-                            )
                             # The skipped rows carry the *reason* nothing
                             # landed; dropping them here would leave the admin
                             # with a warning and no diagnosis.
-                            _render_skipped(T, result.get("skipped_rows") or [])
+                            _render_skipped(T, skipped_rows)
 
             st.markdown("")
 
@@ -899,7 +948,12 @@ def view_leads_dashboard(T):
             with c2:
                 pro_names_create = list(pro_names)
                 selected_pro_name = st.selectbox(
-                    T.get("input_pro", "Assign Professional"), options=pro_names_create
+                    T.get("input_pro", "Assign Professional"),
+                    options=pro_names_create,
+                    help=T.get(
+                        "input_pro_help",
+                        "Recorded on the new lead only — no offer is sent.",
+                    ),
                 )
 
             new_details = st.text_area(
@@ -950,10 +1004,25 @@ def view_leads_dashboard(T):
                         # this form in the same run, so without a rerun the new
                         # lead is nowhere on screen and the form still holds
                         # what was typed — which reads as "it did not work".
-                        set_flash(
-                            "create_lead_flash",
-                            T.get("create_lead_success", "Lead created successfully!"),
-                        )
+                        if assigned_pro_id:
+                            set_flash(
+                                "create_lead_flash",
+                                _t(
+                                    T,
+                                    "create_lead_no_offer",
+                                    "Lead created with {pro} on the record — no "
+                                    "offer was sent and they were not told.",
+                                    pro=selected_pro_name,
+                                ),
+                                "warning",
+                            )
+                        else:
+                            set_flash(
+                                "create_lead_flash",
+                                T.get(
+                                    "create_lead_success", "Lead created successfully!"
+                                ),
+                            )
                         st.cache_data.clear()
                         st.rerun()
                     except Exception as e:
@@ -1148,6 +1217,11 @@ def _render_selected_lead_actions(
                         T.get("professional_label", "Professional"),
                         pro_names,
                         index=pro_names.index(current_pro_name),
+                        help=T.get(
+                            "leads_pro_help",
+                            "On a lead waiting for review, saving sends the offer. "
+                            "On any other lead it only updates the record.",
+                        ),
                     )
 
                     if st.form_submit_button(T.get("save_changes_btn", "Save Changes")):
@@ -1182,19 +1256,60 @@ def _render_selected_lead_actions(
                             unknown_pro_label=unassigned_label,
                         )
 
-                        update_op = {"$set": update_data}
-                        if unset_data:
-                            update_op["$unset"] = unset_data
-                        if new_status != selected_lead.get("status"):
-                            update_op["$push"] = {
-                                "status_history": status_history_entry(
-                                    new_status, Actor.ADMIN
+                        # Untouched boxes are not edits: the frame is cached for
+                        # 30s, so writing them back could undo a status move made
+                        # since, overwrite a newer owner, send an offer nobody
+                        # asked for, or silently unassign the lead.
+                        if new_status == selected_lead.get("status"):
+                            update_data.pop("status", None)
+                        if new_pro == current_pro_name:
+                            update_data.pop("pro_id", None)
+                        # Nothing to clear, so not a write worth reporting.
+                        if not current_name:
+                            unset_data.pop("display_name", None)
+
+                        # The flash is stored inside the block; see the strip's note.
+                        with st.spinner(T.get("leads_saving", "Saving…")):
+                            change = apply_lead_changes(
+                                lid,
+                                update_data,
+                                unset_data,
+                                leads_collection=leads_collection,
+                                offer_pending=_offer_pending,
+                                audit=log_audit,
+                            )
+                            if change["found"]:
+                                # PRO-161: the st.success here was discarded by the
+                                # rerun below — the admin saw a flicker and nothing
+                                # else. Route it through the same flash the table
+                                # Save uses so one lead-editing path isn't silently
+                                # worse than the other.
+                                #
+                                # By id, not `new_pro`: an untouched box may name
+                                # somebody the stale frame still shows.
+                                pro_label = next(
+                                    (
+                                        label
+                                        for label, pro_id in pro_map_name_to_id.items()
+                                        if pro_id == change["pro_id"]
+                                    ),
+                                    new_pro,
                                 )
-                            }
-                        res = leads_collection.update_one(
-                            {"_id": ObjectId(lid)}, update_op
-                        )
-                        if getattr(res, "matched_count", 0) == 0:
+                                st.session_state["leads_flash"] = edit_form_flash(
+                                    change,
+                                    client=str(selected_lead.get("client") or ""),
+                                    pro_label=pro_label,
+                                )
+                                # Which fields, not just that an edit happened — a
+                                # display_name is operator-authored content about a
+                                # customer. Names only; values stay out of the log.
+                                if change["written"]:
+                                    log_audit(
+                                        "edit_lead",
+                                        {"lead_id": lid, "fields": change["written"]},
+                                    )
+                                st.cache_data.clear()
+                        if not change["found"]:
                             # The lead was deleted inside the 30s cache
                             # window: nothing was written, so neither the
                             # audit entry nor the success toast may claim
@@ -1209,27 +1324,6 @@ def _render_selected_lead_actions(
                                 )
                             )
                             st.stop()
-                        # Which fields, not just that an edit happened — a
-                        # display_name is operator-authored content about a
-                        # customer. Names only; values stay out of the log.
-                        log_audit(
-                            "edit_lead",
-                            {
-                                "lead_id": lid,
-                                "fields": sorted(list(update_data) + list(unset_data)),
-                            },
-                        )
-                        # PRO-161: the st.success here was discarded by the
-                        # rerun below — the admin saw a flicker and nothing
-                        # else. Route it through the same flash the table Save
-                        # uses so one lead-editing path isn't silently worse
-                        # than the other.
-                        st.session_state["leads_flash"] = {
-                            "updated": 1,
-                            "skipped": 0,
-                            "skipped_rows": [],
-                        }
-                        st.cache_data.clear()
                         st.rerun()
 
         # Delete confirmation
