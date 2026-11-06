@@ -32,6 +32,22 @@ def warn_if_terms_enabled_on_draft(settings: Settings) -> bool:
     return True
 
 
+def warn_if_public_origin_malformed(settings: Settings) -> bool:
+    """Report a ``PUBLIC_BASE_ORIGIN`` that was set but cannot be linked to.
+
+    The messages simply go out without a link, so without this the only sign is
+    a link that never appears. Never names the value: it can hold credentials.
+    Returns whether it reported.
+    """
+    if not settings.public_base_origin_malformed:
+        return False
+    logger.error(
+        "PUBLIC_BASE_ORIGIN is set but is not a public https origin with no path, "
+        "like https://example.co.il — messages carry no policy link until it is fixed."
+    )
+    return True
+
+
 def warn_if_admin_phone_unconfigured(settings: Settings) -> bool:
     """Report a prod-like deployment that never set ``ADMIN_PHONE`` (PRO-48).
 

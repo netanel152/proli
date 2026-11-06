@@ -1,7 +1,8 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, SecretStr, field_validator, model_validator
+import ipaddress
 import os
-from urllib.parse import urlsplit
+import re
 
 from app.core.constants import (
     CLOUD_PROVIDER,
@@ -15,6 +16,30 @@ from app.core.constants import (
 )
 
 DEFAULT_MONGO_URI = "mongodb://localhost:27017/proli_db"
+
+_DNS_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_PUBLIC_ORIGIN = re.compile(
+    rf"https://(?P<host>(?:{_DNS_LABEL}\.)+{_DNS_LABEL})(?::(?P<port>\d{{1,5}}))?",
+    re.ASCII | re.IGNORECASE,
+)
+_NON_PUBLIC_SUFFIXES = (".localhost", ".local", ".internal")
+
+
+def _is_public_origin(raw: str) -> bool:
+    """True for ``https://host[:port]`` that a customer's phone could actually open."""
+    match = _PUBLIC_ORIGIN.fullmatch(raw)
+    if not match or len(match["host"]) > 253:
+        return False
+    if match["port"] and not 1 <= int(match["port"]) <= 65535:
+        return False
+    host = match["host"].lower()
+    try:
+        return ipaddress.ip_address(host).is_global
+    except ValueError:
+        # Browsers read a host ending in a number as an IPv4 address (127.1, 0x7f.1).
+        return host.rsplit(".", 1)[-1][0].isalpha() and not host.endswith(
+            _NON_PUBLIC_SUFFIXES
+        )
 
 
 def _unwrap(v):
@@ -139,25 +164,25 @@ class Settings(BaseSettings):
     @field_validator("PUBLIC_BASE_ORIGIN", mode="before")
     @classmethod
     def validate_public_base_origin(cls, v) -> str | None:
-        """Refuse at boot anything that would reach a customer as a broken link."""
+        """Blank is None. A malformed value becomes "": no link, and reported at
+        boot by startup_checks, since a link is not worth refusing to boot over.
+
+        The raw value is dropped because it can hold credentials, and this field
+        is not a SecretStr, so keeping it would print it in every Settings repr.
+        """
         raw = str(v or "").strip().rstrip("/")
         if not raw:
             return None
-        parts = urlsplit(raw)
-        if (
-            parts.scheme != "https"
-            or not parts.hostname
-            or parts.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "::1")
-            or "@" in parts.netloc
-            or parts.path
-            or parts.query
-            or parts.fragment
-        ):
-            raise ValueError(
-                "PUBLIC_BASE_ORIGIN must be a public https origin with no path, "
-                f"like https://example.co.il (got {v!r})"
-            )
-        return raw
+        return raw if _is_public_origin(raw) else ""
+
+    @property
+    def public_base_origin_malformed(self) -> bool:
+        return self.PUBLIC_BASE_ORIGIN == ""
+
+    @field_validator("TERMS_ENABLED", mode="before")
+    @classmethod
+    def blank_terms_enabled_is_off(cls, v):
+        return False if isinstance(v, str) and not v.strip() else v
 
     # PRO-34: exactly one of "development" | "staging" | "production".
     # Anything else fails fast at startup (see validate_environment) rather than
