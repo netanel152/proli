@@ -27,7 +27,7 @@ Input classes
 | state | keyword | free | offtopic | wrong | emoji | silence | interrupt | race |
 |---|---|---|---|---|---|---|---|---|
 | `idle` | "🛠️ אני העוזר החכם של פרולי." | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | silent | N/A[race] |
-| `awaiting_consent` | → idle, "אפשר להתחיל" | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "לא נשמור מידע עליך" | N/A[race] |
+| `awaiting_consent` | → idle, "אפשר להתחיל" | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "🙏 הבנתי, לא נשמור את תוכן ההודעות שלך. אם תשנה/י את דעתך — פשוט לשלוח הודעה." | N/A[race] |
 | `customer_mode` | "מה הכתובת" | "מאיפה בדיוק" | "במה אפשר לעזור" | "ראיתי את התמונה" | "לעזור" | N/A[ttl-class] | → pro_mode | N/A[race] |
 | `awaiting_address` | → idle, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "כדי שאיש המקצוע יגיע למקום המדויק נשאר רק להשלים לכתובת:" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
 | `awaiting_pro_approval` | → awaiting_pro_approval, "⏳ מתנצל על ההמתנה — אני מאתר עבורך איש מקצוע זמין יותר כעת." | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | TTL ≤ 3600s | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
@@ -426,7 +426,7 @@ MATRIX: dict[str, dict] = {
         "emoji": Cell(send="👍", expect=(_CONSENT_REQUEST_LINE,)),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
-            send="לא", expect_state=UserStates.IDLE, expect=("לא נשמור מידע עליך",)
+            send="לא", expect_state=UserStates.IDLE, expect=(Messages.Consent.DECLINED,)
         ),
         "race": Cell(na=RACE_NA),
     },

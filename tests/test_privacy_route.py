@@ -10,6 +10,7 @@ import re
 import httpx
 import pytest
 
+from app.core.constants import WorkerConstants
 from app.main import app
 
 
@@ -57,6 +58,16 @@ async def test_get_privacy_body_states_90_day_retention():
 
     assert "90 יום" in resp.text
     assert "90 days" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_get_privacy_body_states_the_pre_consent_hold():
+    """The policy says one hour because the hold's TTL is one hour. Changing the
+    constant must change this text with it, in both languages."""
+    assert WorkerConstants.CONSENT_HOLD_TTL_SECONDS == 3600
+    resp = await _get_privacy()
+    assert "<strong>שעה</strong> מההודעה האחרונה" in resp.text
+    assert "<strong>one hour</strong> after your last message" in resp.text
 
 
 @pytest.mark.asyncio
