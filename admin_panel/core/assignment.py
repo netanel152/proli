@@ -54,8 +54,11 @@ ASSIGN_STALE = "stale"
 #: :func:`assign_pending_lead_sync`.
 ASSIGN_FAILED = "failed"
 #: The chosen pro is no longer eligible (deleted or un-approved since the page
-#: rendered), or could not be re-read. Nothing was written and nothing was sent.
+#: rendered). Nothing was written and nothing was sent.
 ASSIGN_PRO_GONE = "pro_gone"
+#: The eligibility re-read itself failed, so this says nothing about the pro: a
+#: database problem. Nothing was written and nothing was sent.
+ASSIGN_PRO_LOOKUP_FAILED = "pro_lookup_failed"
 
 
 def assign_pending_lead_sync(
@@ -149,9 +152,9 @@ def offer_pending_lead(
         pro = find_pro(pro_id)
     except Exception as e:
         # Nothing was written, so ASSIGN_FAILED's "may be assigned anyway" would
-        # be false.
+        # be false, and the pro may be fine, so ASSIGN_PRO_GONE would be too.
         logger.error(f"[admin_panel] Re-reading pro {pro_id} failed: {e}")
-        return ASSIGN_PRO_GONE, ""
+        return ASSIGN_PRO_LOOKUP_FAILED, ""
     if not pro:
         return ASSIGN_PRO_GONE, ""
     return assign_sync(lead_id, pro)

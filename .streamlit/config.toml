@@ -1,0 +1,10 @@
+# Read from the working directory, which is the repo root in every start command
+# (they all run `streamlit run admin_panel/main.py` by relative path).
+[runner]
+# Off because the panel's save paths depend on it. With fast reruns on, a click or
+# auto-refresh tick during a WhatsApp send starts a second script run at once on
+# the same session state. That run renders the save report before the send has
+# filled it, and the operator never sees the outcome. Off, a rerun waits for the
+# running script's next yield point, so a click during a send waits for the send.
+# tests/test_admin_fast_reruns.py proves both directions.
+fastReruns = false
