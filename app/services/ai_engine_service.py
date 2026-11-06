@@ -137,7 +137,7 @@ class AIEngine:
                                 tmp.write(chunk)
 
                         uploaded_file = await self.client.aio.files.upload(
-                            path=tmp_path,
+                            file=tmp_path,
                             config=types.UploadFileConfig(mime_type=media_mime_type),
                         )
 
