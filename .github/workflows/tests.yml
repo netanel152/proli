@@ -99,7 +99,7 @@ jobs:
       # Before the suite, so a dev merge landing mid-run cannot raise this PR's floor.
       - name: Restore dev's passed count
         if: github.event_name == 'pull_request'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: pytest-floor
           key: pytest-passed-${{ github.sha }}
@@ -173,7 +173,7 @@ jobs:
 
       - name: Save dev's passed count
         if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: pytest-floor
           key: pytest-passed-${{ github.sha }}
