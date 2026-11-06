@@ -137,6 +137,8 @@ META_ACCESS_TOKEN=...        # secret — required once WHATSAPP_PROVIDER=cloud 
 META_APP_SECRET=...          # secret — signs inbound /webhook/meta; required for cloud in staging/production
 META_VERIFY_TOKEN=...        # secret — echoed back during the Meta subscription handshake; required for cloud in staging/production
 META_PHONE_NUMBER_ID=...     # not secret — Graph node id, required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
+PUBLIC_BASE_ORIGIN=https://...  # optional — public https origin, no path, serving /privacy and /terms; unset = messages carry no link; localhost, http or a path fails boot
+TERMS_ENABLED=false  # true publishes /terms and its links, but only once app/static/terms.html is the approved text (a draft stays 404 and logs ERROR at boot)
 ENVIRONMENT=production   # per-environment — see below
 ```
 
@@ -163,6 +165,8 @@ how the two silently re-merge.
 | `CLOUDINARY_*` | shared *(pilot decision)* | media is non-sensitive and a second account is friction with little pilot-stage payoff; revisit post-pilot |
 | `GOOGLE_MAPS_API_KEY` | shared *(pilot decision)* | geocoding only; restrict by API + quota in the Google console; revisit post-pilot |
 | `ADMIN_PHONE`, `ONCALL_PHONE` | shared | not secrets — the same operator is paged from both |
+| `PUBLIC_BASE_ORIGIN` | **distinct** | staging messages link to staging's host, production's to the public domain. Needed on the **worker** (it sends the messages) as well as the api |
+| `TERMS_ENABLED` | **distinct** | the operator's per-environment switch for publishing the terms. Needed on the **worker** and the api, or the page and the links disagree |
 
 Railway's **Shared Variables** feature is scoped *within* one environment. It is
 the right tool for "define once, inherit in `api`/`worker`/`admin`" — it cannot
