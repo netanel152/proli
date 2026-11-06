@@ -262,3 +262,4 @@ https://api-production-XXXX.up.railway.app/webhook?token=YOUR_WEBHOOK_TOKEN
 - Each service is meant to build from the same Dockerfile (Railway caches the build layer so only the first service triggers a full build) — see the Railpack warning in Step 3 for why that is not what is happening today.
 - Build config lives in **`railway.json` only**. A second `railway.toml` declaring the same builder was deleted in PRO-128: two sources of build config made it impossible to tell from the repo which one Railway was honouring, and the answer turned out to be neither.
 - To scale: only the API and Worker services can safely have `numReplicas > 1`. The Worker requires distributed locking for scheduler jobs before scaling (see `docs/SCALING_GUIDE.md`).
+- The public one-pager is not on Railway: `site/` and `netlify.toml` deploy as static files on Netlify, and its `/privacy` and `/terms` proxy to this production API, so those routes must stay up for the site to serve them.
