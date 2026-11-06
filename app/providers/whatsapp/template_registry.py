@@ -38,8 +38,13 @@ _BODY_MAX_CHARS = 1024
 # shortcut: Meta rejects "too many variables relative to the message length" but
 # publishes no ratio, so this floor is ours. Change it if a review says otherwise.
 _MIN_FIXED_CHARS_PER_VARIABLE = 20
-_LINE_BREAKS_AND_TABS = re.compile(r"[\r\n\t\v\f\x85  ]+")
+_LINE_BREAKS_AND_TABS = re.compile(r"[\r\n\t\v\f\x85\u2028\u2029]+")
 _LONG_SPACE_RUN = re.compile(r" {4,}")
+# A long customer message must not overflow the body and lose the alert. Meta
+# states 1024 characters for a body and no separate figure for a parameter, so
+# these are ours, chosen to fit the largest body inside that limit.
+_PARAM_MAX_CHARS = {"last_message": 700}
+_PARAM_DEFAULT_MAX_CHARS = 120
 
 
 class TemplateStatus(str, Enum):
@@ -189,6 +194,19 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # P13
         # Customer-facing
         TemplateSpec(
+            "pro_found",
+            "proli_pro_found",
+            source="Messages.Customer.PRO_FOUND",
+            body=Messages.Templates.PRO_FOUND,
+            params=(
+                "pro_name",
+                "issue_type",
+                "full_address",
+                "appointment_time",
+                "pro_phone",
+            ),
+        ),  # the update REASSIGNING and PENDING_REVIEW promise; no catalog row before
+        TemplateSpec(
             "no_pro_available",
             "proli_no_pro_available",
             source="Messages.SOS.NO_PRO_AVAILABLE",
@@ -252,15 +270,18 @@ def freeform_fallback(kind: str) -> TemplateSpec | None:
     return None
 
 
-def sanitize_param(value: Any) -> str:
-    """One runtime value as Meta may receive it.
+def sanitize_param(value: Any, name: str = "") -> str:
+    """One runtime value as Meta may receive it, for the variable ``name``.
 
     Meta's docs do not say whether a parameter value may hold newlines, so this
     assumes not: newlines, tabs and runs of 4+ spaces become one space. A variable
-    cannot be empty either, so an empty result falls back to a Hebrew default.
+    cannot be empty either, so an empty result falls back to a Hebrew default. A
+    value over its limit is cut, since a cut alert beats one Meta refuses.
     """
     text = _LINE_BREAKS_AND_TABS.sub(" ", "" if value is None else str(value))
-    return _LONG_SPACE_RUN.sub(" ", text).strip() or Messages.Fallbacks.UNKNOWN
+    text = _LONG_SPACE_RUN.sub(" ", text).strip()
+    limit = _PARAM_MAX_CHARS.get(name, _PARAM_DEFAULT_MAX_CHARS)
+    return text[:limit].rstrip() or Messages.Fallbacks.UNKNOWN
 
 
 def meta_body(spec: TemplateSpec) -> str:

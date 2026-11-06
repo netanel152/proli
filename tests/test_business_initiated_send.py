@@ -211,6 +211,51 @@ async def test_the_messaging_limit_counter_counts_a_template_and_not_the_text(
 
 
 @pytest.mark.asyncio
+async def test_a_4000_char_sos_is_cut_and_still_sent(
+    facade, graph, fake_redis, monkeypatch
+):
+    _approve(monkeypatch, "sos_alert_pending")
+
+    await facade.send_message(
+        CHAT_ID,
+        "טקסט",
+        template_key="sos_alert_pending",
+        params={"last_message": "א" * 4000},
+    )
+
+    sent = graph[0]["template"]["components"][0]["parameters"][0]["text"]
+    assert sent == "א" * 700
+
+
+@pytest.mark.asyncio
+async def test_a_template_meta_later_fails_pages_once_per_recipient(
+    pages, mock_db, monkeypatch, fake_redis
+):
+    monkeypatch.setattr(delivery, "wa_delivery_collection", mock_db.wa_delivery)
+    monkeypatch.setattr(delivery, "page_critical", pages)
+    logged = MagicMock()
+    monkeypatch.setattr(delivery.logger, "error", logged)
+    for wamid in ("wamid.F1", "wamid.F2"):
+        await delivery.record_outbound(wamid, CHAT_ID, "template")
+        await delivery.apply_status_event(
+            {
+                "wa_message_id": wamid,
+                "chat_id": CHAT_ID,
+                "status": "failed",
+                "error_code": 131026,
+                "error_title": "undeliverable",
+            }
+        )
+
+    assert pages.call_count == 1
+    text = pages.call_args.args[0]
+    assert "wamid.F1" in text
+    assert CHAT_ID not in text
+    assert "undeliverable" not in text
+    assert logged.call_count == 1  # the second is reported, not paged
+
+
+@pytest.mark.asyncio
 async def test_approved_template_with_no_variables_sends_no_components(
     facade, graph, fake_redis, monkeypatch
 ):
@@ -409,6 +454,32 @@ async def test_approve_sends_the_contact_card_and_the_withheld_details(wf, mock_
 
 
 @pytest.mark.asyncio
+async def test_approve_clears_the_withheld_details(wf, mock_db):
+    pro_id = await _pro(mock_db)
+    lead_id = await _lead(mock_db, pro_id=pro_id, offer_withheld_details="\n\nקישור")
+
+    await process_incoming_message(PRO_CHAT, "אשר")
+
+    stored = await mock_db.leads.find_one({"_id": lead_id})
+    assert "offer_withheld_details" not in stored
+
+
+@pytest.mark.asyncio
+async def test_approve_names_the_pro_found_template_for_the_customer(wf, mock_db):
+    pro_id = await _pro(mock_db)
+    await _lead(
+        mock_db, pro_id=pro_id, appointment_time="מחר", customer_phone="972501234567"
+    )
+
+    await process_incoming_message(PRO_CHAT, "אשר")
+
+    call = next(c for c in wf.send_message.call_args_list if c.args[0] == CHAT_ID)
+    assert call.kwargs["template_key"] == "pro_found"
+    assert call.kwargs["params"]["pro_phone"] == "0500000001"
+    assert call.kwargs["params"]["issue_type"] == "נזילה"
+
+
+@pytest.mark.asyncio
 async def test_approve_without_a_template_offer_adds_nothing(wf, mock_db):
     pro_id = await _pro(mock_db)
     await _lead(mock_db, pro_id=pro_id, media_urls=["https://example.com/a.jpg"])
@@ -555,3 +626,63 @@ async def test_a_rejected_pro_writing_נציג_is_paged_as_a_customer(
         "972500000002@c.us"
     )
     assert state == UserStates.PAUSED_FOR_HUMAN
+
+
+# ---------------------------------------------------------------------------
+# send_sos_alert: which template, and the phone only once the lead is BOOKED
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sos_pages(monkeypatch):
+    page = MagicMock()
+    monkeypatch.setattr(notification_service, "page_operator", page)
+    return page
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, expected_key",
+    [
+        (LeadStatus.BOOKED, "sos_alert"),
+        (LeadStatus.NEW, "sos_alert_pending"),
+        (LeadStatus.CONTACTED, "sos_alert_pending"),
+        (None, "sos_alert_pending"),
+    ],
+    ids=["booked", "new", "contacted", "no-lead"],
+)
+async def test_send_sos_alert_template_and_phone(
+    wf, mock_db, monkeypatch, sos_pages, status, expected_key
+):
+    whatsapp = MagicMock()
+    whatsapp.send_message = AsyncMock(return_value={"idMessage": "x"})
+    monkeypatch.setattr(notification_service, "whatsapp", whatsapp)
+    pro_id = await _pro(mock_db)
+    if status is not None:
+        await _lead(mock_db, pro_id=pro_id, status=status)
+
+    await notification_service.send_sos_alert(CHAT_ID, "עזרה", str(pro_id))
+
+    call = whatsapp.send_message.call_args
+    assert call.kwargs["template_key"] == expected_key
+    spec = template_registry.TEMPLATES[expected_key]
+    assert set(call.kwargs["params"]) == set(spec.params)
+    assert call.kwargs["params"]["last_message"] == "עזרה"
+    has_phone = status == LeadStatus.BOOKED
+    assert ("phone" in call.kwargs["params"]) is has_phone
+    assert ("0501234567" in call.args[1]) is has_phone
+    assert "pro_notified=True" in sos_pages.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_send_sos_alert_reports_a_blocked_send_as_not_notified(
+    wf, mock_db, monkeypatch, sos_pages
+):
+    whatsapp = MagicMock()
+    whatsapp.send_message = AsyncMock(return_value=None)
+    monkeypatch.setattr(notification_service, "whatsapp", whatsapp)
+    pro_id = await _pro(mock_db)
+
+    await notification_service.send_sos_alert(CHAT_ID, "א" * 4000, str(pro_id))
+
+    assert "pro_notified=False" in sos_pages.call_args.args[0]

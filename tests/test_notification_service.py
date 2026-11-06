@@ -332,7 +332,7 @@ async def test_sos_alert_pro_whatsapp_failure_does_not_block_admin_page(
     pro_id = ObjectId()
     await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
 
-    async def send_side_effect(chat_id, message):
+    async def send_side_effect(chat_id, message, **template):
         raise Exception("WhatsApp down entirely")
 
     mock_wa.send_message.side_effect = send_side_effect
@@ -341,4 +341,4 @@ async def test_sos_alert_pro_whatsapp_failure_does_not_block_admin_page(
 
     assert mock_wa.send_message.call_count == 1  # attempted the pro, failed
     assert len(pages) == 1  # operator paged regardless
-    assert "pro_notified=True" in pages[0]
+    assert "pro_notified=False" in pages[0]

@@ -2,14 +2,16 @@
 
     python scripts/submit_whatsapp_templates.py                         # dry run
     python scripts/submit_whatsapp_templates.py --status --waba-id <id>
-    python scripts/submit_whatsapp_templates.py --apply --waba-id <id>
+    python scripts/submit_whatsapp_templates.py --apply --waba-id <id> \\
+        --confirm-name "<account name>"
 
 The default prints every payload and touches nothing. ``--status`` reads Meta's
 templates and reports drift from the registry. ``--apply`` creates whatever Meta
-does not already have, and refuses an account whose name contains "Test": the
-WABA currently configured, 1910054379665469, is Meta's "Test WhatsApp Business
-Account", and templates created there are not the ones production will send.
-No id is read from the environment, so it has to be typed.
+does not already have. It prints the account's name and id, needs that name typed
+back as ``--confirm-name``, and refuses an account whose name contains "Test" and
+the id 1910054379665469 outright: that is Meta's test Messaging account, the one
+configured today, and templates created there are not the ones production will
+send. No id is read from the environment, so it has to be typed.
 
 This calls Graph's *management* API and sends no message, so it is outside what
 the single-egress rule protects: the circuit breaker and the kill switch guard a
@@ -45,6 +47,8 @@ from app.providers.whatsapp.template_registry import (  # noqa: E402
 )
 
 GRAPH_ROOT = "https://graph.facebook.com"
+TEST_WABA_ID = "1910054379665469"
+TEMPLATE_FIELDS = "name,language,status,category,components"
 
 
 def to_submit() -> list[TemplateSpec]:
@@ -74,12 +78,14 @@ def invalid_bodies() -> list[str]:
     ]
 
 
-def account_refusal(account_name: str | None) -> str | None:
+def account_refusal(account_name: str | None, confirm_name: str) -> str | None:
     """Why ``--apply`` must not touch this account, or ``None``."""
     if not account_name:
         return "Meta returned no account name, so it cannot be checked."
     if "test" in account_name.lower():
         return f"{account_name!r} is a test account."
+    if account_name != confirm_name:
+        return f"the account is {account_name!r}, but --confirm-name said otherwise."
     return None
 
 
@@ -87,12 +93,14 @@ def fetch_templates(client: httpx.Client, waba_id: str) -> list[dict]:
     """Every template on the account, across Graph's pages."""
     templates: list[dict] = []
     url = f"/{waba_id}/message_templates"
+    params = {"fields": TEMPLATE_FIELDS}
     while url:
-        response = client.get(url)
+        response = client.get(url, params=params)
         response.raise_for_status()
         page = response.json()
         templates.extend(page.get("data") or [])
         url = (page.get("paging") or {}).get("next")
+        params = None  # Graph's next link already carries them
     return templates
 
 
@@ -171,23 +179,30 @@ def show_status(client: httpx.Client, waba_id: str) -> int:
     return 1 if lines else 0
 
 
-def apply(client: httpx.Client, waba_id: str) -> int:
+def apply(client: httpx.Client, waba_id: str, confirm_name: str) -> int:
+    if waba_id == TEST_WABA_ID:
+        print(f"Refusing to submit: {waba_id} is the test account.", file=sys.stderr)
+        return 1
     account = client.get(f"/{waba_id}", params={"fields": "name"})
     if account.status_code >= 400:
         print(f"Could not read the account: {_graph_error(account)}", file=sys.stderr)
         return 1
-    refusal = account_refusal(account.json().get("name"))
+    name = account.json().get("name")
+    print(f"Account: {name!r}, id {waba_id}")
+    refusal = account_refusal(name, confirm_name)
     if refusal:
         print(f"Refusing to submit: {refusal}", file=sys.stderr)
         return 1
 
     existing = {
-        (t.get("name"), t.get("language")) for t in fetch_templates(client, waba_id)
+        (t.get("name"), t.get("language")): t.get("status")
+        for t in fetch_templates(client, waba_id)
     }
     failures = 0
     for spec in to_submit():
         if (spec.meta_name, spec.language) in existing:
-            print(f"{spec.meta_name}: already on Meta, skipped")
+            status = existing[(spec.meta_name, spec.language)]
+            print(f"{spec.meta_name}: already on Meta ({status}), skipped")
             continue
         response = client.post(
             f"/{waba_id}/message_templates", json=build_payload(spec)
@@ -220,6 +235,7 @@ def main(argv: list[str] | None = None, client: httpx.Client | None = None) -> i
     mode.add_argument("--status", action="store_true", help="report Meta's status")
     mode.add_argument("--apply", action="store_true", help="create the templates")
     parser.add_argument("--waba-id", help="required by --status and --apply")
+    parser.add_argument("--confirm-name", help="required by --apply: the account name")
     args = parser.parse_args(argv)
 
     if hasattr(sys.stdout, "reconfigure"):
@@ -235,14 +251,20 @@ def main(argv: list[str] | None = None, client: httpx.Client | None = None) -> i
         return show_dry_run()
     if not args.waba_id:
         parser.error("--status and --apply need an explicit --waba-id")
+    if args.apply and not args.confirm_name:
+        parser.error("--apply needs --confirm-name")
 
     with client or graph_client() as graph:
         try:
             if args.status:
                 return show_status(graph, args.waba_id)
-            return apply(graph, args.waba_id)
+            return apply(graph, args.waba_id, args.confirm_name)
         except httpx.HTTPStatusError as e:
             print(f"Graph refused: {_graph_error(e.response)}", file=sys.stderr)
+            return 1
+        except httpx.HTTPError as e:
+            # The class name only: a transport error's text can quote the request.
+            print(f"Could not reach Graph: {type(e).__name__}", file=sys.stderr)
             return 1
 
 

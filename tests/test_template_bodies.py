@@ -86,9 +86,25 @@ def test_sos_alert_pending_has_no_phone():
     assert "phone" in TEMPLATES["sos_alert"].params
 
 
-def test_bot_paused_states_the_real_pause_length():
-    assert "רבע שעה" in Messages.Templates.BOT_PAUSED
+@pytest.mark.parametrize(
+    "text",
+    [
+        Messages.Templates.BOT_PAUSED,
+        Messages.Pro.PAUSE_NOTIFICATION,
+        Messages.Pro.PAUSE_ACK,
+    ],
+)
+def test_every_pause_message_states_the_real_pause_length(text):
+    assert "רבע שעה" in text
+    assert "שעתיים" not in text
     assert WorkerConstants.PAUSE_TTL_SECONDS == 15 * 60
+
+
+def test_pro_found_ends_on_words_with_the_phone_as_the_last_variable():
+    spec = TEMPLATES["pro_found"]
+    assert spec.params[-1] == "pro_phone"
+    assert meta_body(spec).rstrip().endswith("בקרוב.")
+    assert "*טלפון:* {pro_phone}\n" in spec.body
 
 
 def test_the_two_max_reassignment_messages_promise_the_same_thing():
@@ -246,6 +262,32 @@ def test_every_submitted_template_is_reachable_from_a_call_site():
 )
 def test_sanitize_param_flattens_what_meta_may_refuse(raw, expected):
     assert sanitize_param(raw) == expected
+
+
+def test_line_break_pattern_is_written_with_visible_escapes():
+    source = (ROOT / "app/providers/whatsapp/template_registry.py").read_text(
+        encoding="utf-8"
+    )
+    assert "\u2028" not in source and "\u2029" not in source
+
+
+@pytest.mark.parametrize(
+    "name, limit",
+    [("last_message", 700), ("full_address", 120), ("customer_name", 120)],
+)
+def test_sanitize_param_cuts_a_value_at_its_limit(name, limit):
+    assert sanitize_param("א" * 4000, name) == "א" * limit
+
+
+def test_the_largest_body_fits_with_every_variable_at_its_limit():
+    # Meta's 1024 is stated for the template's body text. Staying inside it at
+    # runtime as well is the safe reading.
+    for spec in SUBMITTED:
+        rendered = meta_body(spec)
+        for number, name in enumerate(spec.params, 1):
+            value = sanitize_param("א" * 4000, name)
+            rendered = rendered.replace("{{" + str(number) + "}}", value)
+        assert len(rendered) <= 1024, spec.key
 
 
 @pytest.mark.parametrize("raw", ["", "   ", "\n\t\n", None])

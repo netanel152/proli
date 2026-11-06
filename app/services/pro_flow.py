@@ -447,7 +447,11 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         address_encoded=urllib.parse.quote(card_address),
     )
     # Only set when the offer went out as a template, which cannot carry these.
-    response_text += lead.get("offer_withheld_details") or ""
+    if lead.get("offer_withheld_details"):
+        response_text += lead["offer_withheld_details"]
+        await leads_collection.update_one(
+            {"_id": lead["_id"]}, {"$unset": {"offer_withheld_details": ""}}
+        )
     # Only when there is something to say — format_lead_extra_info renders '-'
     # placeholders for a missing floor and apartment, and a card advertising
     # "פרטים נוספים: קומה -, דירה -" is noise dressed as information.
@@ -501,7 +505,18 @@ async def _handle_approve(pro, lead_manager, whatsapp):
         price_line=price_line,
         rating_line=rating_line,
     )
-    await whatsapp.send_message(lead["chat_id"], customer_msg)
+    await whatsapp.send_message(
+        lead["chat_id"],
+        customer_msg,
+        template_key="pro_found",
+        params={
+            "pro_name": pro_name,
+            "issue_type": lead.get("issue_type", ""),
+            "full_address": lead.get("full_address", ""),
+            "appointment_time": lead.get("appointment_time", ""),
+            "pro_phone": pro_phone,
+        },
+    )
     # Clear AWAITING_PRO_APPROVAL state so customer can continue normally
     await StateManager.clear_state(lead["chat_id"])
 

@@ -28,7 +28,7 @@ class StateManager:
     async def set_state(cls, chat_id: str, state_value: str, ttl: int = None):
         """
         Sets key state:{chat_id} with TTL.
-        Optional ttl overrides the default (e.g. 7200s for PAUSED_FOR_HUMAN).
+        Optional ttl overrides the default (e.g. PAUSE_TTL_SECONDS for PAUSED_FOR_HUMAN).
         """
         try:
             redis = await get_redis_client()

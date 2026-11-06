@@ -537,11 +537,11 @@ class Messages:
         )
         PAUSE_ACK = (
             "⏸️ הבוט הושהה ואפשר לדבר עם הלקוח ישירות.\n"
-            "הבוט יחזור לפעולה אוטומטית בעוד שעתיים, או מיד עם *המשך*."
+            "הבוט יחזור לפעולה אוטומטית בעוד רבע שעה, או מיד עם *המשך*."
         )
         PAUSE_NOTIFICATION = (
             "🚨 הלקוח מבקש מענה אנושי.\n"
-            "אפשר להיכנס לשיחה בוואטסאפ. הבוט יחזור לפעולה אוטומטית בעוד שעתיים."
+            "אפשר להיכנס לשיחה בוואטסאפ. הבוט יחזור לפעולה אוטומטית בעוד רבע שעה."
         )
         CUSTOMER_CANCELLED = (
             "⚠️ *עדכון חשוב:* הלקוח/ה {customer_name} ביטל/ה את העבודה "
@@ -1300,8 +1300,8 @@ class Messages:
             "עדכון מפרולי: העבודה בנושא {issue_type} הועברה לאיש מקצוע אחר, "
             "כי לא התקבל מענה בזמן."
         )
-        # "רבע שעה" is WorkerConstants.PAUSE_TTL_SECONDS. The free-form
-        # Pro.PAUSE_NOTIFICATION still says two hours, which nothing implements.
+        # "רבע שעה" is WorkerConstants.PAUSE_TTL_SECONDS, as in the free-form
+        # Pro.PAUSE_NOTIFICATION and Pro.PAUSE_ACK. A test pins all three.
         BOT_PAUSED = (
             "🚨 לקוח ביקש מענה אנושי בעבודה בנושא {issue_type}.\n"
             "המענה האוטומטי בשיחה הזו מושהה לרבע שעה."
@@ -1335,6 +1335,18 @@ class Messages:
             "לצערנו הפרופיל שלך בפרולי לא אושר בשלב זה.\n"
             "לפרטים נוספים אפשר לפנות אלינו במייל: info@proli.me\n"
             "תודה על ההתעניינות."
+        )
+        # Customer.PRO_FOUND without its optional profession, price and rating
+        # lines. The phone is the last field and a fixed sentence follows it,
+        # because a body may not end on a variable.
+        PRO_FOUND = (
+            "🎉 *נמצא לך איש מקצוע!*\n\n"
+            "*שם:* {pro_name}\n"
+            "*תקלה:* {issue_type}\n"
+            "*כתובת:* {full_address}\n"
+            "*מועד:* {appointment_time}\n"
+            "*טלפון:* {pro_phone}\n\n"
+            "איש המקצוע ייצור איתך קשר בקרוב."
         )
         NO_PRO_AVAILABLE = (
             "😔 לא הצלחתי למצוא איש מקצוע זמין לפנייה שלך בנושא {issue_type}.\n"
@@ -1376,6 +1388,7 @@ class Messages:
             "date": "15/11",
             "job_count": "3",
             "phone": "050-0000000",
+            "pro_phone": "050-0000001",
             "last_message": "יש נזילה חזקה ואני צריך עזרה",
         }
 

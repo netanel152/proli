@@ -319,7 +319,9 @@ class CloudAPIProvider(WhatsAppProvider):
                     "parameters": [
                         {
                             "type": "text",
-                            "text": template_registry.sanitize_param(params[name]),
+                            "text": template_registry.sanitize_param(
+                                params[name], name
+                            ),
                         }
                         for name in spec.params
                     ],

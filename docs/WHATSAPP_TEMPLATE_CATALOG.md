@@ -8,7 +8,7 @@
 
 Every outbound WhatsApp message Proli sends, classified by whether Meta Cloud API will let us send it as free-form text or will require a **pre-approved template**. This is the input to PRO-89 (`CloudAPIProvider`), and the reason it exists separately: the number of templates we need is a product decision with a review latency attached, and discovering it *during* the Cloud API implementation would stall that ticket.
 
-Scope boundary: this is the inventory and the template design. PRO-87 (the Business Portfolio and the number) is done; **approval is PRO-150's**. `scripts/submit_whatsapp_templates.py` does the submitting: by default it only prints what it would submit, `--status --waba-id <id>` reports Meta's status and any drift from the registry, and `--apply --waba-id <id>` submits and refuses an account whose name contains "Test". The WABA configured today, `1910054379665469`, is Meta's test account, so no real submission can happen against it.
+Scope boundary: this is the inventory and the template design. PRO-87 (the Business Portfolio and the number) is done; **approval is PRO-150's**. `scripts/submit_whatsapp_templates.py` does the submitting: by default it only prints what it would submit, `--status --waba-id <id>` reports Meta's status and any drift from the registry, and `--apply --waba-id <id> --confirm-name "<account name>"` submits, and refuses an account whose name contains "Test" or a name that does not match. The WABA configured today, `1910054379665469`, is Meta's test account, so no real submission can happen against it.
 
 > **Meta's rules, as read on 2026-11-06.** From `developers.facebook.com/documentation/business-messaging/whatsapp/templates/`: `template-review/` (no variable at the start or end, sequential `{{n}}`, no `#`, `$` or `%` in a variable, a sample for every variable, no duplicate wording, not too many variables for the length), `components/` and `utility-templates/` (body maximum 1024 characters), `overview/` (positional format, `example.body_text`, 100 creations an hour), `template-categorization/` (UTILITY must be non-promotional and specific to the user; mixed or unclear content is treated as MARKETING; a recategorised template stays APPROVED and only its category changes, which is why `--status` compares categories). `tests/test_template_bodies.py` holds every body to these. Three things those pages do **not** settle, and the code assumes conservatively: "no adjacent variables" is not on the review page as read and is enforced anyway; the variables-to-length ratio has no published number, so the floor in `template_registry.py` is Proli's own; and nothing says whether a parameter value may hold a newline, so `sanitize_param` flattens newlines, tabs and runs of 4+ spaces. An emoji limit is mentioned with no number, so none is checked.
 
@@ -110,6 +110,7 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | P12 | `customer_cancelled` | `customer_name`, `full_address` | `CUSTOMER_CANCELLED` | `workflow_service` cancel path |
 | P13 | `onboarding_approved` | none | `ONBOARDING_APPROVED` | **Not wired:** `admin_panel/views/professionals.py` |
 | P13 | `onboarding_rejected` | none | `ONBOARDING_REJECTED` | **Not wired:** `admin_panel/views/professionals.py` |
+| — | `pro_found` | `pro_name`, `issue_type`, `full_address`, `appointment_time`, `pro_phone` | `PRO_FOUND` | `pro_flow._handle_approve`. The update `REASSIGNING` and `PENDING_REVIEW` promise, and the only way a closed-window customer gets the pro's phone |
 | C1 | `no_pro_available` | `issue_type` | `NO_PRO_AVAILABLE` | `monitor_service.auto_reject_unassigned_leads` |
 | C2 | `completion_check` | `pro_name` | `COMPLETION_CHECK` | `customer_flow.send_customer_completion_check`. **Not wired:** the operator button in `admin_panel/core/utils.py` |
 | C3 | `reassigning` | `issue_type` | `REASSIGNING` | `monitor_service.reassign_lead` |
@@ -117,7 +118,7 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | C3 | `pending_review` | `issue_type` | `PENDING_REVIEW` | `monitor_service.reassign_lead` (three branches), `pro_flow._escalate_rejected_lead` |
 | P4 | `early_lead` | — | none | **Not submitted, send left free-form**, see below |
 
-That is **18 templates to submit** and one registry entry left out, against the 15 the registry used to list: P11 and P13 were each two bodies under one key, and C3 was three.
+That is **19 templates to submit** and one registry entry left out, against the 15 the registry used to list: P11 and P13 were each two bodies under one key, C3 was three, and `pro_found` had no row.
 
 `tests/test_template_bodies.py` fails if a call site's `params` stop matching its spec, or if a submitted template has no call site. The two P13 entries are named there as the known exception.
 
@@ -133,6 +134,10 @@ That is **18 templates to submit** and one registry entry left out, against the 
 
 **An emergency P3 takes `lead_offer`,** because `lead_offer_reassigned` has no urgency line and the free-form version opens with the emergency header.
 
+**`pro_found` drops the optional lines.** `PRO_FOUND`'s profession, quoted price and rating are not in the template, since a variable cannot be empty and the name would otherwise have to appear twice.
+
+**Runtime values are cut.** `sanitize_param` limits `last_message` to 700 characters and every other variable to 120, so that the whole message stays inside the 1024 Meta states for a body. Those two figures are ours.
+
 **Text-only stays.** Replies are plain keywords in the body (`*אשר*`), so nothing changes in the FSM and no template declares a button.
 
 ## Decisions still open
@@ -145,4 +150,4 @@ That is **18 templates to submit** and one registry entry left out, against the 
 - Whether the sandbox number's 5-recipient limit applies to template sends as well as free-form (determines whether PRO-64 can exercise the template path at all).
 - Whether Meta accepts each body as UTILITY. Only review can answer that, and `--status` reports the result.
 - Whether a parameter value may contain a newline, `#`, `$` or `%`. Meta's pages list those characters as a problem with a template's variables without saying whether a runtime value counts. `sanitize_param` flattens the whitespace and leaves the characters in place, so a customer's message containing `%` still goes out as written.
-- **Sends with no row here.** The claim above that everything from the inbound dispatcher is in-window holds for the *sender*, not the other party. A customer's or pro's message can trigger a send to someone whose window is closed: `Pro.CUSTOMER_RESCHEDULED_SUCCESS`, `Pro.CUSTOMER_EXISTING_JOB_QUERY`, `Pro.CUSTOMER_REPORTED_COMPLETION`, `Pro.CUSTOMER_REPORTED_NO_SHOW`, `Customer.PRO_FOUND`, `Customer.PRO_CANCELLED_BOOKING`, `Customer.RATE_SERVICE`, `Customer.AWAITING_APPROVAL_TRANSPARENT`. None has a template. On a closed window they page and drop, as they always have.
+- **Sends with no row here.** The claim above that everything from the inbound dispatcher is in-window holds for the *sender*, not the other party. A customer's or pro's message can trigger a send to someone whose window is closed: `Pro.CUSTOMER_RESCHEDULED_SUCCESS`, `Pro.CUSTOMER_EXISTING_JOB_QUERY`, `Pro.CUSTOMER_REPORTED_COMPLETION`, `Pro.CUSTOMER_REPORTED_NO_SHOW`, `Customer.PRO_CANCELLED_BOOKING`, `Customer.RATE_SERVICE`, `Customer.AWAITING_APPROVAL_TRANSPARENT`. None has a template. On a closed window they page and drop, as they always have. `AWAITING_APPROVAL_TRANSPARENT` is deliberately left that way: on the reassignment and admin paths it is only a progress note, and `pro_found`, `reassigning` or `pending_review` carries the outcome.

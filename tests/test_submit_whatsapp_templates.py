@@ -99,7 +99,13 @@ def test_waba_id_must_be_explicit(flag):
 def test_apply_refuses_a_test_or_unnamed_account(name, capsys):
     graph = FakeGraph(name=name)
 
-    assert submit.main(["--apply", "--waba-id", "1"], client=graph.client()) == 1
+    assert (
+        submit.main(
+            ["--apply", "--waba-id", "1", "--confirm-name", name or "x"],
+            client=graph.client(),
+        )
+        == 1
+    )
 
     assert graph.posts == []
     assert "Refusing" in capsys.readouterr().err
@@ -109,26 +115,96 @@ def test_apply_creates_what_is_missing_and_skips_what_exists(capsys):
     existing = submit.to_submit()[0]
     graph = FakeGraph(templates=[_meta(existing, status="PENDING")])
 
-    assert submit.main(["--apply", "--waba-id", LIVE_WABA], client=graph.client()) == 0
+    assert (
+        submit.main(
+            ["--apply", "--waba-id", LIVE_WABA, "--confirm-name", "Proli"],
+            client=graph.client(),
+        )
+        == 0
+    )
 
     assert len(graph.posts) == len(submit.to_submit()) - 1
     assert all(
         r.url.path == f"/v23.0/{LIVE_WABA}/message_templates" for r in graph.posts
     )
-    assert f"{existing.meta_name}: already on Meta" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert f"{existing.meta_name}: already on Meta (PENDING)" in out
+    assert f"Account: 'Proli', id {LIVE_WABA}" in out
+
+
+def test_apply_needs_the_account_name_typed_back(capsys):
+    graph = FakeGraph(name="Proli")
+
+    with pytest.raises(SystemExit):
+        submit.main(["--apply", "--waba-id", LIVE_WABA], client=graph.client())
+    assert graph.requests == []
+
+    assert (
+        submit.main(
+            ["--apply", "--waba-id", LIVE_WABA, "--confirm-name", "Other"],
+            client=graph.client(),
+        )
+        == 1
+    )
+    assert graph.posts == []
+    assert "Refusing" in capsys.readouterr().err
+
+
+def test_apply_hard_refuses_the_test_account_id_whatever_it_is_called(capsys):
+    graph = FakeGraph(name="Proli")
+
+    args = ["--apply", "--waba-id", "1910054379665469", "--confirm-name", "Proli"]
+    assert submit.main(args, client=graph.client()) == 1
+
+    assert graph.requests == []
+    assert "Refusing" in capsys.readouterr().err
+
+
+def test_a_transport_error_is_reported_without_a_traceback_or_the_token(capsys):
+    def boom(request):
+        raise httpx.ConnectError("no route, Bearer " + TOKEN)
+
+    client = httpx.Client(
+        base_url="https://graph.test/v23.0", transport=httpx.MockTransport(boom)
+    )
+
+    assert submit.main(["--status", "--waba-id", LIVE_WABA], client=client) == 1
+
+    err = capsys.readouterr().err
+    assert "ConnectError" in err
+    assert TOKEN not in err
+
+
+def test_status_asks_for_the_fields_it_compares():
+    graph = FakeGraph()
+
+    submit.main(["--status", "--waba-id", LIVE_WABA], client=graph.client())
+
+    request = graph.requests[0]
+    assert request.url.params["fields"] == "name,language,status,category,components"
 
 
 def test_apply_reports_a_failed_template_and_exits_nonzero(capsys):
     graph = FakeGraph(post_status=400)
 
-    assert submit.main(["--apply", "--waba-id", LIVE_WABA], client=graph.client()) == 1
+    assert (
+        submit.main(
+            ["--apply", "--waba-id", LIVE_WABA, "--confirm-name", "Proli"],
+            client=graph.client(),
+        )
+        == 1
+    )
 
     assert "FAILED" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
     "args",
-    [[], ["--status", "--waba-id", LIVE_WABA], ["--apply", "--waba-id", LIVE_WABA]],
+    [
+        [],
+        ["--status", "--waba-id", LIVE_WABA],
+        ["--apply", "--waba-id", LIVE_WABA, "--confirm-name", "Proli"],
+    ],
     ids=["dry-run", "status", "apply"],
 )
 def test_the_token_is_never_printed(args, capsys):
@@ -175,7 +251,13 @@ def test_a_body_out_of_order_with_its_params_cannot_be_submitted(monkeypatch, ca
     monkeypatch.setattr(submit, "TEMPLATES", {**TEMPLATES, spec.key: broken})
     graph = FakeGraph()
 
-    assert submit.main(["--apply", "--waba-id", LIVE_WABA], client=graph.client()) == 1
+    assert (
+        submit.main(
+            ["--apply", "--waba-id", LIVE_WABA, "--confirm-name", "Proli"],
+            client=graph.client(),
+        )
+        == 1
+    )
 
     assert graph.requests == []
     assert "sequence" in capsys.readouterr().err

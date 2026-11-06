@@ -315,6 +315,7 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
                 "no_show_reported_at": "",
                 "completion_check_sent_at": "",
                 "completion_check_sent_count": "",
+                "offer_withheld_details": "",
             },
             expected_status=lead.get("status"),
         )
