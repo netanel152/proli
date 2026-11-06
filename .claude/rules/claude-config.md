@@ -21,7 +21,7 @@ parses all of it in the normal `pytest` run.
 | `.claude/rules/*.md` | path-scoped reference, `paths:` frontmatter of globs; loaded when a matching file is read; a rule **without** `paths` loads every session like `CLAUDE.md` and must justify that | `test_claude_config.py` (frontmatter, globs resolve) |
 | `.claude/skills/<name>/SKILL.md` | a procedure Claude picks up by context (`description`, plus `paths` — see the note below); supporting files beside it load on demand | `test_claude_config.py` (frontmatter, referenced paths exist) |
 | `.claude/commands/*.md` | operator workflows invoked as `/name` — see "Commands are skills already" below | `test_claude_config.py` (description, `disable-model-invocation` on the mutating five) |
-| `.claude/agents/*.md` | subagents with their own context and tool set | `test_agent_pack_drift.py` (embedded constants) |
+| `.claude/agents/*.md` | subagents with their own context and an explicit least-privilege tool set; the grants and the incident behind them are in `docs/AGENT_PACK.md` | `test_agent_pack_drift.py` (embedded constants), `test_agent_least_privilege.py` (grants) |
 | `.claude/settings.json` | permissions, hooks, env, plugins; shared | `test_claude_config.py` |
 | `.claude/settings.local.json` | per-machine: `disabledMcpjsonServers`, and any `enabledPlugins` entry whose marketplace is not registered in this repo (a plugin the shared file names but no clone can resolve is a warning on every session start, not a feature) — `last30days@last30days-skill` moved here in September 2026; gitignored | — |
 | `.mcp.json` | project MCP servers, auto-approved via `enableAllProjectMcpServers` | `test_claude_config.py` (transport fields, `${VAR}` env only) |
@@ -39,10 +39,10 @@ is a guard or a formatter, and "no Python" must degrade to "no extra guard", nev
 |---|---|---|
 | `SessionStart` (every matcher) | `session-start-context.sh` | prints branch, last commit and dirty files into context; informs, never blocks. Deliberately unscoped: `compact` and `clear` are exactly when that state would otherwise survive only as a summary |
 | `SessionStart` (`startup\|resume`) | `session-start-web-setup.sh` | **cloud sessions only** (`CLAUDE_CODE_REMOTE=true`): creates `venv/`, installs `requirements.txt` (black and flake8 are pinned there), writes a placeholder `.env` if none, puts the venv on `PATH` via `CLAUDE_ENV_FILE`, sets `core.hooksPath`; synchronous, idempotent, exit 0 always. The matcher is the point: `clear` and `compact` are the same container with the venv already built, so running there only put a pip resolve in front of the first tool call after every compaction |
-| `PreToolUse(Bash)` | `pre-bash-guard.py` | exit 2 blocks: `rm -rf` on dangerous targets, redirects into `.env`, force-push to protected branches, commit/push while on `dev`/`production`, mongo `dropDatabase`/`drop()`, and opening a PR from a branch its base has moved past — the merge into `dev` is a pull request, so that is the moment the branch and its base first have to agree, and the block carries the sync command. `origin/<base>` is fetched first (a session that last fetched an hour ago is exactly the one at risk), measured only for the command it gates, and every failure — no remote, no network, not a repo — reads as unknown and allows. Two narrowings, both found by the rule firing on the commit that added it: heredoc bodies are stripped and the words only count in command position, so writing *about* `gh pr create` is not opening a PR. Logic is `evaluate(command, branch, behind_base)` + `merge_base_branch()` + `strip_heredocs()`, pinned by `tests/test_pre_bash_guard.py` |
-| `PreToolUse(Edit\|Write\|MultiEdit)` | `pre-edit-protect.py` | blocks edits to `.env` and anything under `.git/` |
+| `PreToolUse(Bash\|PowerShell)` | `pre-bash-guard.py` | exit 2 blocks, for a subagent (`agent_type` in the hook input, PRO-95): any command outside its `AGENT_BASH_ALLOW` entry, or, for an agent outside the pack, a mutating git command on the session's checkout (a worktree or clone is fine), via `agent_block()`, pinned by `tests/test_agent_least_privilege.py`. For everyone: `rm -rf` on dangerous targets, redirects into `.env`, force-push to protected branches, commit/push while on `dev`/`production`, mongo `dropDatabase`/`drop()`, and opening a PR from a branch its base has moved past — the merge into `dev` is a pull request, so that is the moment the branch and its base first have to agree, and the block carries the sync command. `origin/<base>` is fetched first (a session that last fetched an hour ago is exactly the one at risk), measured only for the command it gates, and every failure — no remote, no network, not a repo — reads as unknown and allows. Two narrowings, both found by the rule firing on the commit that added it: heredoc bodies are stripped and the words only count in command position, so writing *about* `gh pr create` is not opening a PR. Logic is `evaluate(command, branch, behind_base)` + `merge_base_branch()` + `strip_heredocs()`, pinned by `tests/test_pre_bash_guard.py` |
+| `PreToolUse(Edit\|Write\|MultiEdit)` | `pre-edit-protect.py` | blocks edits to `.env` and anything under `.git/`, and a `docs-syncer`, `test-writer` or `flow-tracer` write outside its scope (`agent_write_block()`, PRO-95) |
 | `PostToolUse(Edit\|Write\|MultiEdit)` | `post-edit-format.py` | runs `black --quiet` on the touched `.py`, then returns any `flake8` finding **to Claude** as `{"decision": "block", "reason": …}` on stdout — the documented PostToolUse shape. stdout and stderr on exit 0 reach only the user's transcript, so a year of findings printed to stderr were invisible to the one party that could fix them; harmless while flake8 was advisory, a committed-to CI failure since #180. Silent when the file is clean, and a black reformat rides along on a message that was going out anyway (the model's copy is then stale) rather than earning one. Logic is `is_checkable()` + `build_reason()`, pinned by `tests/test_post_edit_format.py`; silent no-op without the tools |
-| `Stop` | `stop-docs-guard.py` | exit 2 (once per turn — `stop_hook_active` ends it) when **this session** wrote a `.py` under `app/`, `admin_panel/` or `scripts/` (read from the transcript's Edit/Write calls; dirty-tree fallback) and no `.md` was written by the session, is dirty in the tree, or is committed on the branch since `origin/dev`: the docs-syncer reminder made enforceable without blaming a parallel session's edits. Logic is `evaluate(written, dirty, branch, stop_hook_active)`, pinned by `tests/test_stop_docs_guard.py`; fail-open on any error |
+| `Stop` | `stop-docs-guard.py` | exit 2 (once per turn — `stop_hook_active` ends it) when **this session** wrote a `.py` under `app/`, `admin_panel/` or `scripts/` (read from the transcript's Edit/Write calls; dirty-tree fallback) and no `.md` was written by the session, is dirty in the tree, or is committed on the branch since `origin/dev`: the docs-syncer reminder made enforceable without blaming a parallel session's edits. docs-syncer has no shell, so answering it means passing the changed-file list in the prompt. Logic is `evaluate(written, dirty, branch, stop_hook_active)`, pinned by `tests/test_stop_docs_guard.py`; fail-open on any error |
 
 Adding a hook: script in `.claude/hooks/`, wired in `settings.json` through `run-hook.sh`
 (Python) or `sh` (shell), decision logic in a pure function with its own test file. An
@@ -62,7 +62,11 @@ MCP tool names must match what the server actually exposes — Railway's are hyp
 (`mcp__plugin_mongodb_mongodb__find`) — an entry spelled otherwise matches nothing and only
 looks like a grant. Sentry, Context7 and Redis read tools are allowlisted too, so `/triage`, `/user-debug` and
 a docs lookup do not prompt. The denylist names what must always prompt or never run: Railway
-variable writes and deletes, Redis `delete`, Sentry `update_issue`, `gh pr merge`.
+variable writes and deletes (every documented CLI spelling and alias, in both shells, plus the
+same tools on the `mcp__claude_ai_Railway__` connector), Redis `delete`, Sentry `update_issue`,
+`gh pr merge`. The `railway var* …` rules use a mid-pattern wildcard rather than the prefix form,
+because a flag can sit before the verb (`railway variable -s api delete X`) and `vars`/`var` are
+aliases.
 
 ## Rules and skills: the drift contract
 
@@ -128,7 +132,9 @@ here also carry `paths:`, which is *not* in the documented skill frontmatter. It
 because it costs nothing and may work, but nothing is allowed to depend on it: every skill's
 `description` names the files that should pull it in, and that is what actually selects it.
 
-**Subagents** take `name`, `description`, `tools`, `disallowedTools`, `model`,
+**Subagents** must carry an explicit `tools:` list, because omitting it inherits every tool. It
+takes tool names only, and a Bash specifier in `disallowedTools` removes the whole tool, so
+per-command limits live in `AGENT_BASH_ALLOW`. They take `name`, `description`, `tools`, `disallowedTools`, `model`,
 `permissionMode`, `maxTurns`, `effort`, `skills`, `memory`, `hooks`, `isolation`,
 `background`, `mcpServers` and `color`. `memory: project` is what `flow-tracer` uses —
 Claude Code keeps and reloads the notes itself, which replaced an instruction to hand-write

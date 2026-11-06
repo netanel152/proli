@@ -59,8 +59,9 @@ _WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 REMINDER = (
     "Source under app/, admin_panel/ or scripts/ changed but no .md file did. "
     "CLAUDE.md's session rule: delegate to the docs-syncer subagent "
-    "(incremental mode) to update CLAUDE.md, .claude/rules/, README.md and "
-    "docs/ — or state in one line why the docs are unaffected, then stop again."
+    "(incremental mode), passing it the changed-file list because it has no "
+    "shell, to update CLAUDE.md, .claude/rules/, README.md and docs/ — or state "
+    "in one line why the docs are unaffected, then stop again."
 )
 
 
