@@ -872,6 +872,9 @@ class Messages:
             "*כן* — להמשיך\n"
             "*לא* — לביטול"
         )
+        # Appended by legal_links.consent_request_text, one URL per line (§6).
+        PRIVACY_LINK = "המדיניות המלאה: {privacy_url}"
+        TERMS_LINK = "תנאי השימוש: {terms_url}"
         # PRO-124: a bare ack. It used to end "במה אוכל לעזור?", which the
         # dispatcher's own opening question then repeated on the very next
         # turn — two invitations to describe the same problem, back to back.
@@ -892,11 +895,18 @@ class Messages:
         DECLINE_KEYWORDS = ["לא", "no", "ביטול", "cancel"]
 
     class Onboarding:
-        WELCOME = (
+        _WELCOME_INTRO = (
             "👋 ברוכים הבאים להרשמה כאיש מקצוע בפרולי!\n\n"
             "כמה שאלות קצרות ונבנה את הפרופיל שלך.\n"
             "בסיום, מנהל המערכת יאשר את הפרופיל ותתחיל לקבל עבודות.\n\n"
-            "מה *שם העסק* שלך?"
+        )
+        _WELCOME_QUESTION = "מה *שם העסק* שלך?"
+        WELCOME = _WELCOME_INTRO + _WELCOME_QUESTION
+        # Sent instead of WELCOME once terms are published (legal_links).
+        WELCOME_WITH_TERMS = (
+            _WELCOME_INTRO
+            + "בהרשמה את/ה מאשר/ת את תנאי השימוש: {terms_url}\n\n"
+            + _WELCOME_QUESTION
         )
         # §3/§4: the seven 1️⃣-7️⃣ emoji digits became the canonical menu format.
         # TYPE_MAP still matches the plain digits "1"-"7" the pro replies with.

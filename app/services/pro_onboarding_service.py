@@ -7,6 +7,7 @@ Creates user with is_active=False pending admin approval.
 
 from app.core.database import users_collection
 from app.core.constants import UserStates, ISRAEL_CITIES_COORDS
+from app.core.legal_links import onboarding_welcome_text
 from app.core.phone import strip_suffix
 from app.core.messages import Messages
 from app.core.logger import logger
@@ -43,7 +44,7 @@ async def start_onboarding(chat_id: str, whatsapp) -> bool:
 
     await StateManager.set_state(chat_id, UserStates.ONBOARDING_NAME)
     await StateManager.set_metadata(chat_id, {"onboarding": {}})
-    await whatsapp.send_message(chat_id, Messages.Onboarding.WELCOME)
+    await whatsapp.send_message(chat_id, onboarding_welcome_text())
     return True
 
 

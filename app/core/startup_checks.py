@@ -13,7 +13,23 @@ and the boot paths call it.
 """
 
 from app.core.config import Settings
+from app.core.legal_links import terms_text_is_final
 from app.core.logger import logger
+
+
+def warn_if_terms_enabled_on_draft(settings: Settings) -> bool:
+    """Report ``TERMS_ENABLED`` set while ``terms.html`` is still a draft.
+
+    The page stays hidden either way, so without this the operator's flag would
+    look like it did nothing, for no visible reason. Returns whether it reported.
+    """
+    if not settings.TERMS_ENABLED or terms_text_is_final():
+        return False
+    logger.error(
+        "TERMS_ENABLED is set but app/static/terms.html is still a draft — /terms "
+        "stays 404 and no message links to it until the text is finished."
+    )
+    return True
 
 
 def warn_if_admin_phone_unconfigured(settings: Settings) -> bool:

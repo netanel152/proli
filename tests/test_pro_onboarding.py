@@ -5,6 +5,8 @@ Covers: start, each step, cancel, validation, duplicate detection.
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock
+from app.core import legal_links
+from app.core.config import settings
 from app.core.constants import UserStates
 from app.core.messages import Messages
 from app.services.pro_onboarding_service import start_onboarding, handle_onboarding_step
@@ -43,6 +45,18 @@ async def test_start_onboarding_new_user(onboard_mocks):
     mock_wa.send_message.assert_called_once_with(
         "972501111111@c.us", Messages.Onboarding.WELCOME
     )
+
+
+@pytest.mark.asyncio
+async def test_start_onboarding_links_published_terms(onboard_mocks, monkeypatch):
+    monkeypatch.setattr(settings, "PUBLIC_BASE_ORIGIN", "https://example.test")
+    monkeypatch.setattr(settings, "TERMS_ENABLED", True)
+    monkeypatch.setattr(legal_links, "terms_text_is_final", lambda: True)
+    mock_wa, _, _ = onboard_mocks
+
+    await start_onboarding("972501111111@c.us", mock_wa)
+
+    assert "https://example.test/terms" in mock_wa.send_message.call_args.args[1]
 
 
 @pytest.mark.asyncio
