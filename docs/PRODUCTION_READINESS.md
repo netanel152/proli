@@ -53,7 +53,7 @@ All 19 issues from the March 2026 code review had been resolved at the time of w
 
 ## Test Results
 
-- Full unit suite passes; authoritative pass/skip baseline in `docs/TESTING.md` ("Current status" line). Integration tests require `MONGO_TEST_URI`.
+- Full unit suite passes; CI fails a PR that passes fewer tests than `dev` (`docs/CI_WORKFLOWS.md`). Integration tests require `MONGO_TEST_URI`.
 
 ## Pre-Production Deployment Checklist
 

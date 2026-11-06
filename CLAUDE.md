@@ -125,7 +125,7 @@ pytest tests/test_matching_service.py   # one file
 pytest -m integration                   # needs MONGO_TEST_URI in .env
 ```
 
-The baseline is the "Current status" line in `docs/TESTING.md`, enforced by CI as a **floor** (fewer passed fails, more passed warns). Conventions, the floor's history and the refresh workflow: `.claude/rules/testing.md`. Prefer the **test-runner** subagent (`/test`) over running the suite in the main thread.
+No file holds a test count: CI fails a PR that passes fewer tests than `dev` (`docs/CI_WORKFLOWS.md`). Conventions: `.claude/rules/testing.md`. Prefer the **test-runner** subagent (`/test`) over running the suite in the main thread.
 
 ### Linting / Formatting
 
@@ -175,7 +175,7 @@ All config is in `app/core/config.py` via `pydantic-settings`. Required env vars
 | `constants.md` | `app/core/constants.py`, `app/scheduler.py`, `app/services/**` | every `WorkerConstants` value and why |
 | `config-secrets.md` | `app/core/config.py`, `logger.py`, `sentry.py`, `phone.py`, `scripts/**` | the env-var list, SecretStr and `ENVIRONMENT` rules |
 | `admin-panel.md` | `admin_panel/**`, `scripts/admin_panel_*.py`, `tests/test_admin_*.py` | the Streamlit panel's structure and guards |
-| `testing.md` | `tests/**`, `docs/TESTING.md`, `pytest.ini`, the test workflows | conventions, the baseline floor, the refresh job |
+| `testing.md` | `tests/**`, `docs/TESTING.md`, `pytest.ini`, `tests.yml` | conventions, syncing before a push |
 | `claude-config.md` | `.claude/**`, `.mcp.json`, `.githooks/**` | the config inventory, hook contracts, how to add to it |
 
 A fact that a rule states is owned by the code it describes: change the code first, then the rule, in the same PR. The docs-syncer subagent audits `.claude/rules/` alongside `docs/`.
