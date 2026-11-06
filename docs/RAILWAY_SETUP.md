@@ -35,6 +35,7 @@ All 3 services point to the **same GitHub repo** and are intended to use the **s
 - **Start Command:** `streamlit run admin_panel/main.py --server.port $PORT --server.address 0.0.0.0`
 - **Port:** Automatically detected
 - **Public Domain:** Yes (admin dashboard URL)
+- **Required setting:** `runner.fastReruns` must be off, or the operator can lose the outcome of an offer (`.claude/rules/admin-panel.md`). `.streamlit/config.toml` sets it, and Streamlit reads that file from the working directory, so keep the relative `admin_panel/main.py` path above. A `--runner.fastReruns` flag or a `STREAMLIT_RUNNER_FAST_RERUNS` variable outranks the file, so neither may be set to true. To confirm, look for `runner.fastReruns=False` in this service's logs after a deploy, which appears when the first page loads. `runner.fastReruns is ON` at ERROR means it is wrong.
 
 ## Which branch deploys where
 
