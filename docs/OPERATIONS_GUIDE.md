@@ -418,7 +418,7 @@ python scripts/generate_admin_hash.py
 | `ADMIN_PASSWORD` | — | Plain-text password (hashed on startup) |
 | `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts. Leaving it unset (or empty) in a prod-like environment is reported at ERROR on every api/worker boot — PRO-48; the default is a real number, so an unconfigured deploy pages whoever it names |
 | `WEBHOOK_TOKEN` | — | Enables `?token=<value>` webhook auth. **Required** (boot fails without it) when `ENVIRONMENT` is `staging`/`production` — PRO-86 removed the other half of webhook authentication (the sender instance-id check) |
-| `WHATSAPP_PROVIDER` | `dryrun` | Outbound transport: `dryrun` (logs, never transmits) or `cloud` (the PRO-89 `CloudAPIProvider` — Meta Graph API, code-complete but not yet onboarded, see PRO-87). An unrecognised value falls back to `dryrun` |
+| `WHATSAPP_PROVIDER` | `dryrun` | Read per service, so `admin` needs its own: see "What `admin` needs in order to send" in `docs/RAILWAY_SETUP.md`. Outbound transport: `dryrun` (logs, never transmits) or `cloud` (the PRO-89 `CloudAPIProvider` — Meta Graph API, code-complete but not yet onboarded, see PRO-87). An unrecognised value falls back to `dryrun` |
 | `META_ACCESS_TOKEN` | — | Secret. Meta Graph API System User token; required once `WHATSAPP_PROVIDER=cloud` and `WHATSAPP_DRY_RUN` is not `true` |
 | `META_APP_SECRET` | — | Secret. Signs inbound `/webhook/meta` (`X-Hub-Signature-256`); required for `cloud` in staging/production |
 | `META_VERIFY_TOKEN` | — | Secret. Echoed back during the Meta subscription handshake (`GET /webhook/meta`); required for `cloud` in staging/production |

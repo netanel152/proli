@@ -473,12 +473,16 @@ def render_pending_approvals(T):
                     log_audit(
                         "reject_pro", {"pro_id": pro_id, "name": p.get("business_name")}
                     )
-                    _notify_pro_rejected(p.get("phone_number"))
-                    set_flash(
-                        "pro_flash",
-                        T["pro_rejected"].replace(
+                    notified = _notify_pro_rejected(p.get("phone_number"))
+                    rejected = (
+                        T["pro_rejected"] if notified else T["pro_rejected_untold"]
+                    )
+                    _flash_pro_result(
+                        T,
+                        rejected.replace(
                             "{name}", str(p.get("business_name") or T["unnamed_pro"])
                         ),
+                        notified,
                     )
                     del st.session_state[f"confirm_reject_{pro_id}"]
                     st.session_state.pop(_geo_check_key(pro_id), None)
@@ -545,23 +549,24 @@ def _approve_pending_pro(p: dict, T, resolution: ServiceAreaResolution) -> None:
             "service_areas_geocode_pending": resolution.needs_recheck,
         },
     )
-    _notify_pro_approved(p.get("phone_number"))
+    notified = _notify_pro_approved(p.get("phone_number"))
 
     shown_name = name or T["unnamed_pro"]
     if resolution.unresolved:
-        set_flash(
-            "pro_flash",
+        _flash_pro_result(
+            T,
             T["geo_approved_flagged"].format(
                 name=shown_name, areas=", ".join(resolution.unresolved)
             ),
+            notified,
             "warning",
         )
     elif resolution.needs_recheck:
-        set_flash(
-            "pro_flash", T["geo_approved_recheck"].format(name=shown_name), "warning"
+        _flash_pro_result(
+            T, T["geo_approved_recheck"].format(name=shown_name), notified, "warning"
         )
     else:
-        set_flash("pro_flash", T["approved_ok"].format(name=shown_name))
+        _flash_pro_result(T, T["approved_ok"].format(name=shown_name), notified)
     st.session_state.pop(_geo_check_key(pro_id), None)
     st.cache_data.clear()
     st.rerun()
@@ -642,24 +647,44 @@ def _render_service_area_correction(
         st.rerun()
 
 
-def _notify_pro_approved(phone_number: str):
+def _flash_pro_result(T, message: str, notified, level: str = "success") -> None:
+    """A pro action's confirmation, saying so when the pro's message did not go.
+
+    ``notified`` is None when no send was attempted, for a pro with no phone.
+    Unmuting would not help that pro, so it gets the plain sentence.
+    """
+    if notified:
+        set_flash("pro_flash", message, level)
+        return
+    from app.providers.whatsapp import sync
+
+    muted = notified is False and not sync.can_transmit()
+    note = T["pro_not_told_muted"] if muted else T["pro_not_told"]
+    set_flash("pro_flash", f"{message} {note}", "warning")
+
+
+def _notify_pro_approved(phone_number: str) -> bool | None:
     # PRO-86: was a raw httpx.post straight at the legacy vendor, bypassing the circuit
     # breaker and kill switch entirely. Now goes through the one egress.
     if not phone_number:
-        return
+        return None
     from app.core.messages import Messages
     from app.core.phone import to_chat_id
     from app.providers.whatsapp.sync import send_text_sync
 
-    send_text_sync(to_chat_id(phone_number), Messages.Onboarding.APPROVED_NOTIFICATION)
+    return send_text_sync(
+        to_chat_id(phone_number), Messages.Onboarding.APPROVED_NOTIFICATION
+    )
 
 
-def _notify_pro_rejected(phone_number: str):
+def _notify_pro_rejected(phone_number: str) -> bool | None:
     # PRO-86: see _notify_pro_approved — same bypass, same fix.
     if not phone_number:
-        return
+        return None
     from app.core.messages import Messages
     from app.core.phone import to_chat_id
     from app.providers.whatsapp.sync import send_text_sync
 
-    send_text_sync(to_chat_id(phone_number), Messages.Onboarding.REJECTED_NOTIFICATION)
+    return send_text_sync(
+        to_chat_id(phone_number), Messages.Onboarding.REJECTED_NOTIFICATION
+    )
