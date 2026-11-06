@@ -226,6 +226,14 @@ class WorkerConstants:
     # state by design; its only reader is gated on the state anyway, which is
     # the same shape PRO-119's loyalty gate already has.
     NEW_OR_EXISTING_TTL_SECONDS = 300
+    # What a customer wrote before answering the consent question, held in Redis
+    # and nowhere else (StateManager.hold_message). Refreshed by each new message.
+    # Expiry drops it: a later *yes* gets the bare ack and they describe the
+    # problem again. Shorter than AWAITING_CONSENT's 4h on purpose: content
+    # nobody agreed to store should not sit for as long as a state flag does.
+    CONSENT_HOLD_TTL_SECONDS = 3600
+    # One customer writing past this before answering is not describing a problem.
+    CONSENT_HOLD_MAX_MESSAGES = 5
     PRO_APPROVAL_TTL_SECONDS = (
         3600  # 60 min — pro must approve a finalized deal within this window
     )

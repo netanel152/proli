@@ -269,7 +269,7 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `CUSTOMER_MODE` | Professional acting as a customer. Entered via the `לקוח` keyword or a confirmed intent prompt; sticky until their own lead closes |
 | `AWAITING_INTENT_CONFIRMATION` | Prompting Pro to switch to `CUSTOMER_MODE` (5m TTL, one re-prompt) |
 | `AWAITING_ADDRESS` | Waiting for customer to provide missing parts of 5-field address |
-| `AWAITING_CONSENT` | Waiting for customer to accept the privacy policy (first contact) |
+| `AWAITING_CONSENT` | Waiting for customer to accept the privacy policy (first contact). What they write meanwhile is held in Redis only (`consent_hold:{chat_id}`, `CONSENT_HOLD_TTL_SECONDS`) and replayed through the normal pipeline on accept |
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold (1h TTL) |
 | `PRO_SELECTING_JOB_TO_FINISH` | Pro has multiple active jobs and is picking which one to finish |
 | `PRO_SELECTING_JOB_TO_CANCEL` | Pro has multiple booked jobs and is picking which one to cancel |

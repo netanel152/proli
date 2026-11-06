@@ -73,9 +73,9 @@ redis-cli DEL "state:972523651414@c.us"
 |------|-----------|-------------|----------------------|--------|
 | 1 | 972523651414 | "שלום" | Consent request message (privacy policy) | State = AWAITING_CONSENT |
 | 2 | 972523651414 | "בלה בלה" | Consent request repeated | State still AWAITING_CONSENT |
-| 3 | 972523651414 | "כן" | "✅ תודה! אפשר להתחיל." | State = IDLE, consent saved |
+| 3 | 972523651414 | "כן" | "✅ תודה! אפשר להתחיל.", then the dispatcher answers "שלום" and "בלה בלה" without being asked again | State = IDLE, consent saved, those two messages now in `messages` |
 
-**Redis check:** `redis-cli GET "state:972523651414@c.us"` → empty/idle
+**Redis check:** `redis-cli GET "state:972523651414@c.us"` → empty/idle. Before step 3, `redis-cli LRANGE "consent_hold:972523651414@c.us" 0 -1` shows the held messages and `db.messages` has none; answering "לא" instead must leave both empty.
 
 ---
 

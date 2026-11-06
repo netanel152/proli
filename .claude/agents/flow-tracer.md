@@ -38,7 +38,7 @@ Every incoming message is evaluated top-down; the **first** branch whose conditi
 3. **Help / menu** — text in `HELP_COMMANDS` + `MENU_COMMANDS` and not `PRO_MODE` → send help info, no state change.
 4. **Inbound rate-limit gate** — PRO-21 per-customer sliding window (pros/admin exempt); over the limit → RATE_LIMITED, drop.
 5. **AWAITING_INTENT_CONFIRMATION** — zero-touch confirm after a pro→customer intent switch: `1`/`כן` → CUSTOMER_MODE; `2`/`לא` → cancel; unmatched → re-prompt once, then fall through.
-6. **Consent gate** — non-pro without stored consent: handle an `AWAITING_CONSENT` reply, or on first contact / prior decline → send consent request + `AWAITING_CONSENT`.
+6. **Consent gate** — non-pro without stored consent: handle an `AWAITING_CONSENT` reply, or on first contact / prior decline → send consent request + `AWAITING_CONSENT`. What the customer wrote meanwhile is held in Redis only (`consent_hold:{chat_id}`): a decline or reset drops it, and an accept takes it and _(↩ falls through)_ with it as the turn's message, recomputing `is_emergency_detected`, so it runs every branch below. Inbound media is re-hosted at the end of this guard, never before it.
 7. **Politeness interceptor** — `THANKS_KEYWORDS` and not `PRO_MODE` → "you're welcome", no state change.
 8. **Customer status pull** — `STATUS_COMMANDS` and not `PRO_MODE` / `ADMIN_*` → deterministic status reply.
 9. **SOS / human handoff** — `SOS_COMMANDS` and not `PRO_MODE` → set `PAUSED_FOR_HUMAN` (15-min TTL), fire SOS alert, notify the assigned pro.
@@ -86,6 +86,7 @@ Failure to clear context causes the AI to hallucinate from a previous conversati
 - `CANCEL_CONFIRM_TTL_SECONDS = 300` (5 min) — AWAITING_CANCEL_CONFIRMATION; expiry = job stays booked
 - `LOYALTY_CONFIRM_TTL_SECONDS = 300` (5 min) — AWAITING_LOYALTY_CONFIRMATION; expiry = normal matching resumes
 - `NEW_OR_EXISTING_TTL_SECONDS = 300` (5 min) — AWAITING_NEW_OR_EXISTING (PRO-193); expiry = normal routing resumes. The guard re-prompts and keeps the state on any reply it cannot parse, so this window is the only exit that does not require a reset keyword
+- `CONSENT_HOLD_TTL_SECONDS = 3600` (1 h) — pre-consent messages held in Redis; expiry = they are gone and an accept gets the bare ack
 - `PRO_SEARCH_RATE_LIMIT_SECONDS = 600` (10 min) — מצא cool-down
 - `SOS_TIMEOUT_MINUTES = 60` — reassignment trigger
 - `STALE_BOOKED_LEAD_HOURS = 24` — stale job reminder threshold

@@ -157,7 +157,7 @@ Protected by bcrypt cookie-based auth; views for lead management, professional p
 ### Data Layer
 
 - **MongoDB**: Primary store — `users` (pros + customers), `leads`, `slots`, `messages`, `settings`, `reviews`, `consent`, `audit_log`, `admins`, `wa_delivery` (PRO-89 — per-wamid outbound delivery statuses, kept out of `messages` so status callbacks never get replayed into the AI context)  
-- **Redis**: ARQ task queue + context cache (chat history) + state machine (FSM)
+- **Redis**: ARQ task queue + context cache (chat history) + state machine (FSM) + the short hold on pre-consent messages
 
 ### Key Constants (`app/core/constants.py`)
 

@@ -24,6 +24,8 @@ def consent_mocks(monkeypatch, mock_db):
     mock_state.get_state = AsyncMock(return_value=UserStates.IDLE)
     mock_state.set_state = AsyncMock()
     mock_state.clear_state = AsyncMock()
+    mock_state.hold_message = AsyncMock()
+    mock_state.take_held_messages = AsyncMock(return_value=None)
     monkeypatch.setattr(app.services.workflow_service, "StateManager", mock_state)
 
     mock_has_consent = AsyncMock(return_value=None)
