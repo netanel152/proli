@@ -462,8 +462,12 @@ async def _handle_approve(pro, lead_manager, whatsapp):
 
     type_labels = M.Onboarding.TYPE_LABELS
     profession_line = ""
-    if pro.get("profession_type"):
-        label = type_labels.get(pro["profession_type"], pro["profession_type"])
+    # `type` first: that is the field onboarding and the seeds actually write.
+    # Reading only `profession_type` (a name just the unit tests ever wrote)
+    # meant this line never once rendered for a real pro.
+    trade = pro.get("type") or pro.get("profession_type")
+    if trade:
+        label = type_labels.get(trade, trade)
         profession_line = Messages.Customer.PROFESSION_LINE.format(label=label)
 
     # PRO-55: show the customer the exact price the AI quoted them (persisted on the

@@ -57,6 +57,7 @@ from app.core.phone import mask_chat_id, to_chat_id
 from app.core.prompts import Prompts
 from app.services.ai_engine_service import AIResponse
 from app.services.dispatch_guards import DispatchContext, GuardDeps
+from app.services.matching_service import probable_trade, trade_fits
 
 
 async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
@@ -576,36 +577,55 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     ):
         current_lead_doc = await leads_collection.find_one({"_id": current_lead_id})
         if current_lead_doc and not current_lead_doc.get("loyalty_offered"):
-            past_lead = await leads_collection.find_one(
-                {"chat_id": chat_id, "status": LeadStatus.COMPLETED},
-                sort=[("created_at", -1)],
+            # The offer has to name a pro who can do *this* job. It used to
+            # take the single most recent COMPLETED lead whatever its trade, so
+            # the plumber who fixed a leak got offered for an electrical short.
+            # Walk back a bounded slice of completed jobs and take the most
+            # recent pro whose trade fits; when the issue clearly names a trade
+            # nobody in the history has, make no offer at all and let normal
+            # matching find someone suitable.
+            wanted_trade = probable_trade(extracted_issue)
+            past_pro = None
+            past_leads = (
+                leads_collection.find(
+                    {
+                        "chat_id": chat_id,
+                        "status": LeadStatus.COMPLETED,
+                        "pro_id": {"$ne": None},
+                    }
+                )
+                .sort("created_at", -1)
+                .limit(WorkerConstants.LOYALTY_HISTORY_SCAN_LIMIT)
             )
-            if past_lead and past_lead.get("pro_id"):
-                past_pro = await users_collection.find_one(
+            async for past_lead in past_leads:
+                candidate = await users_collection.find_one(
                     {"_id": past_lead["pro_id"], "is_active": True}
                 )
-                if past_pro:
-                    await leads_collection.update_one(
-                        {"_id": current_lead_id},
-                        {"$set": {"loyalty_offered": True}},
-                    )
-                    await StateManager.set_metadata(
-                        chat_id, {"past_pro_id": str(past_pro["_id"])}
-                    )
-                    # PRO-119: bounded TTL — without one this inherited the 4h
-                    # default and a customer whose reply we failed to parse
-                    # was trapped with no way out but a reset keyword.
-                    await StateManager.set_state(
-                        chat_id,
-                        UserStates.AWAITING_LOYALTY_CONFIRMATION,
-                        ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
-                    )
-                    loyalty_msg = Messages.Customer.LOYALTY_OFFER.format(
-                        pro_name=past_pro.get("business_name", "איש המקצוע")
-                    )
-                    await whatsapp.send_message(chat_id, loyalty_msg)
-                    await lead_manager.log_message(chat_id, "model", loyalty_msg)
-                    return
+                if candidate and trade_fits(candidate, wanted_trade):
+                    past_pro = candidate
+                    break
+            if past_pro:
+                await leads_collection.update_one(
+                    {"_id": current_lead_id},
+                    {"$set": {"loyalty_offered": True}},
+                )
+                await StateManager.set_metadata(
+                    chat_id, {"past_pro_id": str(past_pro["_id"])}
+                )
+                # PRO-119: bounded TTL — without one this inherited the 4h
+                # default and a customer whose reply we failed to parse
+                # was trapped with no way out but a reset keyword.
+                await StateManager.set_state(
+                    chat_id,
+                    UserStates.AWAITING_LOYALTY_CONFIRMATION,
+                    ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
+                )
+                loyalty_msg = Messages.Customer.LOYALTY_OFFER.format(
+                    pro_name=past_pro.get("business_name", "איש המקצוע")
+                )
+                await whatsapp.send_message(chat_id, loyalty_msg)
+                await lead_manager.log_message(chat_id, "model", loyalty_msg)
+                return
 
     # 6. Logic Gate: Dispatcher vs Professional
     best_pro = None
