@@ -881,7 +881,7 @@ class Messages:
         # The greeting and the question belong to the dispatcher; this line
         # only confirms the consent was recorded.
         ACCEPTED = "✅ תודה! אפשר להתחיל."
-        DECLINED = "🙏 הבנתי, לא נשמור מידע עליך. אם תשנה/י את דעתך — פשוט לשלוח הודעה."
+        DECLINED = "🙏 הבנתי, לא נשמור את תוכן ההודעות שלך. אם תשנה/י את דעתך — פשוט לשלוח הודעה."
         ACCEPT_KEYWORDS = [
             "כן",
             "אישור",
