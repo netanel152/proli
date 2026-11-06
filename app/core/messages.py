@@ -242,6 +242,9 @@ class Messages:
         LOYALTY_ALREADY_UPDATED = (
             "🙏 הפנייה שלך כבר עודכנה במערכת — ממשיכים לטפל בה ואעדכן אותך."
         )
+        # PRO-215: the lead left a pro outside its trade. "אעביר" stays true when
+        # nobody fits: PENDING_REVIEW then says the team assigns a suitable pro.
+        MOVING_TO_FITTING_PRO = "👍 אעביר את הפנייה לאיש מקצוע שמתאים לתקלה הזו."
         LOYALTY_DECLINED = "בסדר גמור, אחפש עבורך את איש המקצוע הפנוי והמתאים ביותר."
         LOYALTY_REPROMPT = (
             "🙂 לא בטוח שהבנתי. לבדוק מול איש המקצוע הקודם?\n"
@@ -410,6 +413,12 @@ class Messages:
             "אם סיימת אותה — אפשר לכתוב *סיימתי* כדי לשחרר מקום לעבודות חדשות."
         )
         CUSTOMER_REPORTED_COMPLETION = "👍 הלקוח דיווח שהעבודה הסתיימה. הסטטוס עודכן."
+        # PRO-215: also not `SOS.PRO_LOST_LEAD` — nobody failed to answer. Says
+        # nothing about where the lead went, since that may be a human's queue.
+        LEAD_OUTSIDE_TRADE = (
+            "ℹ️ הפנייה על {issue} כבר לא אצלך, כי היא מחוץ לתחום המקצוע שלך."
+        )
+        LEAD_OUTSIDE_TRADE_OFFER = LEAD_OUTSIDE_TRADE + "\nאין צורך לאשר או לדחות אותה."
         # PRO-45: replaces `SOS.PRO_LOST_LEAD` ("הועברה עקב חוסר מענה") for this
         # path — the lead is taken away for a reason the pro is entitled to be
         # told accurately, and "no response" is not that reason.

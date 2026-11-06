@@ -1,9 +1,11 @@
 import math
+import re
 
 from app.core.database import users_collection, leads_collection, slots_collection
 from app.core.logger import logger
 from app.core.constants import LeadStatus, WorkerConstants, ISRAEL_CITIES_COORDS
 from app.core.messages import Messages
+from app.core.text_matching import contains_keyword
 from app.services.geocoding_service import resolve_city_to_coords
 from app.services.scheduling_service import check_pro_availability
 from datetime import datetime, timedelta, timezone
@@ -42,15 +44,76 @@ APPROVED_PRO_FILTER = {
 }
 
 
+async def _available_candidates(pros: list) -> list:
+    """`pros` under MAX_PRO_LOAD, with what the final score reads."""
+    pro_ids = [pro["_id"] for pro in pros]
+    load_pipeline = [
+        {
+            "$match": {
+                "pro_id": {"$in": pro_ids},
+                "status": {
+                    "$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]
+                },
+            }
+        },
+        {"$group": {"_id": "$pro_id", "count": {"$sum": 1}}},
+    ]
+    load_counts = {}
+    async for doc in leads_collection.aggregate(load_pipeline):
+        load_counts[doc["_id"]] = doc["count"]
+
+    candidates = []
+
+    for pro in pros:
+        current_load = load_counts.get(pro["_id"], 0)
+        rating = pro.get("social_proof", {}).get("rating", 0)
+        no_shows = pro.get("no_show_count", 0)
+
+        if current_load < WorkerConstants.MAX_PRO_LOAD:
+            has_slots = True
+            try:
+                has_slots = await check_pro_availability(pro["_id"])
+            except Exception as e:
+                # Fail-open (pro stays eligible) but no longer silent: a
+                # broken availability check hands leads to booked-out
+                # pros with zero trace. ERROR so the Sentry bridge sees
+                # a systematic failure (throttled per site).
+                logger.error(
+                    f"Availability check failed for pro {pro['_id']} — "
+                    f"treating as available: {e}"
+                )
+
+            candidates.append(
+                {
+                    "pro": pro,
+                    "load": current_load,
+                    "rating": rating,
+                    "has_slots": has_slots,
+                    "no_shows": no_shows,
+                }
+            )
+        else:
+            logger.debug(
+                f"Skipping Pro '{pro.get('business_name')}' - Overloaded ({current_load} active leads)"
+            )
+
+    return candidates
+
+
 async def determine_best_pro(
-    issue_type: str = None, location: str = None, excluded_pro_ids: list = None
+    issue_type: str = None,
+    location: str = None,
+    excluded_pro_ids: list = None,
+    require_trade: bool = True,
 ) -> dict:
     """
     Intelligent Routing Engine with Progressive Geo-Spatial Search:
     1. Active Status, and a trade that fits the issue (PRO-215 — no fallback to
-       another trade; an issue with no recognisable trade imposes no constraint)
+       another trade). An issue with no recognisable trade gets no pro, so it
+       reaches a human; `require_trade=False` is for a human choosing from the list.
     2. Location Match ($geoNear with expanding radius 10→20→30km, or Regex fallback)
-    3. Load Balancing (Skip pros with >= MAX_PRO_LOAD active leads)
+    3. Load Balancing (Skip pros with >= MAX_PRO_LOAD active leads; on the geo
+       path a radius this empties widens to the next one)
     4. Rating (High to Low)
     Returns None if no qualified pro is found (caller should set PENDING_ADMIN_REVIEW).
     """
@@ -58,6 +121,9 @@ async def determine_best_pro(
         # 1. Base query filter — only fully approved, active professionals
         base_filter = dict(APPROVED_PRO_FILTER)
         wanted_trade = probable_trade(issue_type)
+        if require_trade and not wanted_trade:
+            logger.warning("Issue names no known trade. Lead requires admin review.")
+            return None
 
         if excluded_pro_ids:
             base_filter["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
@@ -72,6 +138,7 @@ async def determine_best_pro(
         coordinates = [resolved[0], resolved[1]] if resolved else None
         geo_enabled = False
         matching_pros = []
+        candidates = []
 
         if coordinates:
             geo_enabled = True
@@ -101,16 +168,19 @@ async def determine_best_pro(
                     if trade_fits(doc, wanted_trade):
                         matching_pros.append(doc)
 
-                if matching_pros:
+                candidates = (
+                    await _available_candidates(matching_pros) if matching_pros else []
+                )
+                if candidates:
                     logger.info(
-                        f"✅ Found {len(matching_pros)} pros within {radius // 1000}km"
+                        f"✅ Found {len(candidates)} pros within {radius // 1000}km"
                     )
                     break
                 logger.info(
                     f"No pros found within {radius // 1000}km, expanding radius..."
                 )
 
-            if not matching_pros:
+            if not candidates:
                 # WARNING, not CRITICAL: a coverage gap is a routine business event
                 # handled via the admin PENDING_ADMIN_REVIEW view — not an infra page.
                 # The worker forwards CRITICAL-only to Sentry, so keeping this below
@@ -165,57 +235,9 @@ async def determine_best_pro(
             )
             return None
 
-        # 3. Load Balancing — batch-fetch active lead counts
-        pro_ids = [pro["_id"] for pro in matching_pros]
-        load_pipeline = [
-            {
-                "$match": {
-                    "pro_id": {"$in": pro_ids},
-                    "status": {
-                        "$in": [LeadStatus.NEW, LeadStatus.CONTACTED, LeadStatus.BOOKED]
-                    },
-                }
-            },
-            {"$group": {"_id": "$pro_id", "count": {"$sum": 1}}},
-        ]
-        load_counts = {}
-        async for doc in leads_collection.aggregate(load_pipeline):
-            load_counts[doc["_id"]] = doc["count"]
-
-        candidates = []
-
-        for pro in matching_pros:
-            current_load = load_counts.get(pro["_id"], 0)
-            rating = pro.get("social_proof", {}).get("rating", 0)
-            no_shows = pro.get("no_show_count", 0)
-
-            if current_load < WorkerConstants.MAX_PRO_LOAD:
-                has_slots = True
-                try:
-                    has_slots = await check_pro_availability(pro["_id"])
-                except Exception as e:
-                    # Fail-open (pro stays eligible) but no longer silent: a
-                    # broken availability check hands leads to booked-out
-                    # pros with zero trace. ERROR so the Sentry bridge sees
-                    # a systematic failure (throttled per site).
-                    logger.error(
-                        f"Availability check failed for pro {pro['_id']} — "
-                        f"treating as available: {e}"
-                    )
-
-                candidates.append(
-                    {
-                        "pro": pro,
-                        "load": current_load,
-                        "rating": rating,
-                        "has_slots": has_slots,
-                        "no_shows": no_shows,
-                    }
-                )
-            else:
-                logger.debug(
-                    f"Skipping Pro '{pro.get('business_name')}' - Overloaded ({current_load} active leads)"
-                )
+        # 3. Load Balancing. The geo path already did this per radius.
+        if not geo_enabled:
+            candidates = await _available_candidates(matching_pros)
 
         if not candidates:
             logger.warning(
@@ -297,25 +319,36 @@ def required_profession(lead: dict) -> Optional[str]:
     return None
 
 
-#: Customer phrasing → trade: the words customers actually use ("קצר בחשמל"
-#: never contains "חשמלאי"). This gates real work since PRO-215, so a word that
-#: means something else in common Hebrew doesn't belong here ("תקע" sits inside
-#: "נתקע", stuck). A wrong guess narrows the search and, at worst, reaches
+#: Stored issue → trade. Regex fragments searched anywhere in the AI's issue
+#: text ("קצר בחשמל" never contains "חשמלאי"). This gates real work since
+#: PRO-215, so a stem carries a lookaround where common Hebrew contains it by
+#: accident ("ברזל", "השקעה", "אצבע", "הבטיח", "זמן קצר"), and "תקע" is out
+#: ("נתקע"). A wrong guess narrows the search and, at worst, reaches
 #: PENDING_ADMIN_REVIEW. First match wins, so the order is the tie-break:
 #: electrical first, because "קצר ליד הכיור" must not go to a plumber.
+#: Never for raw chat text: that is `CHAT_TRADE_WORDS`.
 ISSUE_TRADE_HINTS = {
     "electrician": (
         "חשמל",
-        "קצר",
-        "שקע",
+        "(?<!זמן )קצר(?!ה|ים|ות)",
+        "שקע(?!ה|ות)",
         "מפסק",
-        "פחת",
+        "הפחת(?!ה|ת)",
         "תאורה",
         "נורה",
         "ארקה",
+        r"אין אור(?!\w)",
+        "הפקקים",
+        "נפל הזרם",
+        "הלוח קפץ",
     ),
     "plumber": (
         "נזילה",
+        "נזילות",
+        "נוזלת",
+        "סתומים",
+        "מטפטף",
+        "הצפ",
         "דליפ",
         "דולף",
         "דולפ",
@@ -325,14 +358,14 @@ ISSUE_TRADE_HINTS = {
         "ביוב",
         "דוד",
         "בוילר",
-        "ברז",
+        "ברז(?!ל)",
         "כיור",
         "מקלחת",
         "אסלה",
         "ניאגרה",
     ),
-    "locksmith": ("מנעול", "מפתח", "צילינדר", "פריצה"),
-    "painter": ("צבע", "סיוד", "טיח"),
+    "locksmith": ("מנעול", "מפתח", "צילינדר", "פריצה", "ננעלתי"),
+    "painter": ("(?<!א)צבע", "סיוד", "(?<![המ]ב)טיח(?!ות)"),
     "cleaner": ("ניקיון", "נקיון", "לנקות"),
 }
 
@@ -348,9 +381,65 @@ def probable_trade(issue: str) -> Optional[str]:
     if named and named != "general":
         return named
     for trade, hints in ISSUE_TRADE_HINTS.items():
-        if any(hint in issue for hint in hints):
+        if any(re.search(hint, issue) for hint in hints):
             return trade
     return None
+
+
+#: Whole tokens that name a trade in what a customer writes in chat (PRO-118's
+#: rule: chat text is never read by substring). Deliberately only unambiguous
+#: inflections, so "דוד", "קצר" and "ברז" stay out: "דוד המלך 10", "זמן קצר".
+CHAT_TRADE_WORDS = {
+    "electrician": (
+        "חשמל",
+        "בחשמל",
+        "החשמל",
+        "מהחשמל",
+        "חשמלאי",
+        "הפחת",
+        "השקע",
+        "בשקע",
+        "שקעים",
+        "קצר חשמלי",
+        "אין אור",
+        "הפקקים",
+        "נפל הזרם",
+        "הלוח קפץ",
+    ),
+    "plumber": (
+        "נזילה",
+        "הנזילה",
+        "נזילות",
+        "נוזלת",
+        "סתימה",
+        "הסתימה",
+        "סתומים",
+        "מטפטף",
+        "ביוב",
+        "צנרת",
+        "אינסטלטור",
+        "שרברב",
+    ),
+    "locksmith": ("מנעול", "המנעול", "במנעול", "מנעולן", "ננעלתי"),
+    "painter": ("צבעי",),
+}
+
+
+def trade_named_in_chat(text: str) -> Optional[str]:
+    """The trade a customer's chat message plainly names, or None."""
+    for trade, words in CHAT_TRADE_WORDS.items():
+        if contains_keyword(text, words):
+            return trade
+    return None
+
+
+def issue_update(fresh: Optional[str], known: Optional[str]) -> Optional[str]:
+    """`fresh`, or None when it would turn a classified issue unclassified.
+
+    Otherwise a vaguer re-extraction lifts the trade constraint, and the pro just
+    dropped for not fitting can be matched straight back.
+    """
+    return None if probable_trade(known) and not probable_trade(fresh) else fresh
 
 
 def pro_trades(pro: dict) -> set:
@@ -368,10 +457,20 @@ def pro_trades(pro: dict) -> set:
 
 
 def trade_fits(pro: dict, wanted: Optional[str]) -> bool:
-    """Can this pro take work in `wanted`? Unknown on either side → yes."""
+    """Can this pro take work in `wanted`? No trade asked for → yes.
+
+    A new assignment has to rule out an unknown `wanted` itself: this answer also
+    keeps a pro already holding a lead whose trade nobody can name. Electrical
+    work is the owner's exception to "general and handyman fit anything": it
+    needs an electrician, or one of those two whose profile says they do it.
+    """
     if not wanted:
         return True
     own = pro_trades(pro)
+    if wanted == "electrician":
+        return "electrician" in own or bool(
+            pro.get("handles_electrical") and own & {"general", "handyman"}
+        )
     if not own:
         return True
     return bool(own & {wanted, "general", "handyman"})
@@ -404,7 +503,8 @@ async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:
     if lead.get("no_show_reported_at") and lead.get("pro_id") == pro["_id"]:
         return False
 
-    if not trade_fits(pro, probable_trade(lead.get("issue_type"))):
+    wanted = probable_trade(lead.get("issue_type"))
+    if not wanted or not trade_fits(pro, wanted):
         return False
 
     location = lead.get("city") or lead.get("full_address")

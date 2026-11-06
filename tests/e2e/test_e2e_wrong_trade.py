@@ -5,13 +5,16 @@ in the plumber's name that he is not an electrician. These run real routing over
 the geo shim, because the bug was routing never reading the issue at all.
 """
 
+from unittest.mock import AsyncMock
+
 import pytest
 from bson import ObjectId
 
 from app.core.constants import LeadStatus, UserStates
 from app.core.messages import Messages
 from tests.e2e import reserved_numbers as R
-from tests.e2e.ai_replay import reply
+from tests.e2e.ai_replay import deal, reply
+from tests.e2e.world import media_url_for
 
 
 async def _plumber(world):
@@ -137,19 +140,235 @@ async def test_offered_lead_with_the_wrong_trade_goes_through_reassignment(world
 
 
 @pytest.mark.asyncio
-async def test_vague_issue_is_read_with_what_the_customer_just_wrote(world):
-    """The dispatcher is skipped once a pro is assigned, so a vague issue never gets
-    refined. The customer's own words are all that can reveal the trade."""
+async def test_vague_issue_records_the_trade_and_never_the_customers_words(world):
+    """The dispatcher is skipped once a pro is assigned, so this message is all that
+    can reveal the trade. `issue_type` reaches unapproved pros, logs and pages (PRO-59),
+    so it takes the trade's name and none of what the customer typed."""
     plumber = await _plumber(world)
+    await _electrician(world)
     await world.grant_consent()
     await _contacted_lead(world, plumber, issue_type="תקלה במטבח")
-    world.ai.script(reply("רגע.", city="תל אביב", issue="תקלה במטבח קצר בכל המטבח"))
+    world.ai.script(reply("רגע."), reply("שלום, כאן דני החשמלאי."))
 
-    await world.send("קצר בכל המטבח")
+    await world.send("הפקקים קפצו אצל לוי, דיזנגוף 50, טלפון 0501234567")
 
     lead = await world.lead()
-    assert lead["issue_type"] == "תקלה במטבח קצר בכל המטבח"
+    assert lead["issue_type"] == "תקלה במטבח (חשמלאי)"
+    for pro_phone in (R.PRO_PRIMARY, R.PRO_SECONDARY):
+        for body in world.recorder.bodies_to(world.pro_chat(pro_phone)):
+            for private in ("0501234567", "דיזנגוף", "לוי"):
+                assert private not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    ["משפחת לוי", "זמן קצר", "דוד המלך 10", "דלת ברזל", "הבטיח", "אצבע", "השקעה"],
+)
+async def test_ordinary_words_leave_the_pro_alone(world, text):
+    """A cleaner fits none of the trades these contain by substring, so any
+    misreading would drop them."""
+    cleaner = await world.add_pro(
+        R.PRO_PRIMARY, name="מיכל ניקיון", profession="cleaner"
+    )
+    await world.grant_consent()
+    await _contacted_lead(world, cleaner, issue_type="תקלה במטבח")
+    world.ai.script(reply("שלום, כאן מיכל."))
+
+    await world.send(text)
+
+    lead = await world.lead()
+    assert lead["pro_id"] == cleaner["_id"]
+    assert lead["issue_type"] == "תקלה במטבח"
+    world.recorder.assert_text_to(world.customer, "כאן מיכל")
+
+
+@pytest.mark.asyncio
+async def test_passing_mention_of_another_trade_leaves_a_fitting_pro_alone(world):
+    plumber = await _plumber(world)
+    await _electrician(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber, issue_type="נזילה במטבח")
+    world.ai.script(reply("שלום, כאן אבי."))
+
+    await world.send("השקע ליד הכיור לא עובד")
+
+    lead = await world.lead()
+    assert lead["pro_id"] == plumber["_id"]
+    assert lead["issue_type"] == "נזילה במטבח"
+
+
+@pytest.mark.asyncio
+async def test_contacted_drop_tells_the_pro_and_the_customer(world):
+    plumber = await _plumber(world)
+    await _electrician(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber, quoted_price="450")
+    world.ai.script(
+        reply("רגע.", city="תל אביב", issue="קצר במטבח"),
+        reply("שלום, כאן דני החשמלאי."),
+    )
+
+    await world.send("מתי אתה מגיע?")
+
+    assert "quoted_price" not in await world.lead()
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY),
+        Messages.Pro.LEAD_OUTSIDE_TRADE.format(issue="קצר במטבח"),
+    )
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.MOVING_TO_FITTING_PRO
+    )
+    assert Messages.SOS.PRO_LOST_LEAD not in world.recorder.bodies_to(
+        world.pro_chat(R.PRO_PRIMARY)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement_exists", [True, False])
+async def test_offered_drop_tells_the_pro_on_every_outcome(world, replacement_exists):
+    plumber = await _plumber(world)
+    if replacement_exists:
+        await _electrician(world)
+    await world.grant_consent()
+    await world.awaiting_approval_job(plumber, issue_type="קצר במטבח")
+    await world.set_state(UserStates.IDLE)
+
+    await world.send("מתי אתה מגיע?")
+
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY),
+        Messages.Pro.LEAD_OUTSIDE_TRADE_OFFER.format(issue="קצר במטבח"),
+    )
+    expected = LeadStatus.NEW if replacement_exists else LeadStatus.PENDING_ADMIN_REVIEW
+    assert (await world.lead())["status"] == expected
+
+
+@pytest.mark.asyncio
+async def test_offered_drop_records_the_turn_before_reassigning(world):
+    plumber = await _plumber(world)
+    electrician = await _electrician(world)
+    await world.grant_consent()
+    await world.awaiting_approval_job(plumber, issue_type="קצר במטבח")
+    await world.set_state(UserStates.IDLE)
+
+    await world.send("הנה תמונה", media="image")
+
+    lead = await world.lead()
+    assert lead["pro_id"] == electrician["_id"]
+    assert media_url_for("image") in lead["media_urls"]
+    assert media_url_for("image") in "".join(
+        world.recorder.bodies_to(world.pro_chat(R.PRO_SECONDARY))
+    )
+
+
+@pytest.mark.asyncio
+async def test_emergency_with_no_replacement_pages_the_operator(world):
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    lead = await world.awaiting_approval_job(
+        plumber, issue_type="קצר במטבח", is_emergency=True
+    )
+    await world.set_state(UserStates.IDLE)
+
+    await world.send("מתי אתה מגיע?")
+
+    world.assert_paged("EMERGENCY", str(lead["_id"]))
+
+
+@pytest.mark.asyncio
+async def test_a_raising_reassignment_does_not_strand_the_lead(world, monkeypatch):
+    from app.services import monitor_service
+
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    await world.awaiting_approval_job(plumber, issue_type="קצר במטבח")
+    await world.set_state(UserStates.IDLE)
+    monkeypatch.setattr(
+        monitor_service,
+        "reassign_lead",
+        AsyncMock(side_effect=RuntimeError("boom")),
+    )
+
+    await world.send("מתי אתה מגיע?")
+
+    lead = await world.lead()
     assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert lead["escalation_reason"] == "wrong_trade_rematch_failed"
+    world.recorder.assert_text_to(world.customer, Messages.Customer.PENDING_REVIEW)
+
+
+@pytest.mark.asyncio
+async def test_a_lead_that_moved_first_is_left_alone(world, monkeypatch):
+    """The pro approved between this turn's read and its write."""
+    from app.services import workflow_service
+
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber)
+    real = workflow_service.leads_collection
+
+    class MovesFirst:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        async def update_one(self, query, update, **kwargs):
+            if "status" in query:
+                await real.update_one(
+                    {"_id": query["_id"]}, {"$set": {"status": LeadStatus.BOOKED}}
+                )
+            return await real.update_one(query, update, **kwargs)
+
+    monkeypatch.setattr(workflow_service, "leads_collection", MovesFirst())
+
+    await world.send("מתי אתה מגיע?")
+
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.BOOKED
+    assert lead["pro_id"] == plumber["_id"]
+    world.recorder.assert_silent(world.pro_chat(R.PRO_PRIMARY), "nothing was dropped")
+
+
+@pytest.mark.asyncio
+async def test_a_vaguer_extraction_does_not_lift_the_trade(world):
+    """Otherwise the dropped plumber is matched straight back."""
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber)
+    world.ai.script(reply("רגע.", city="תל אביב", issue="תקלה במטבח"))
+
+    await world.send("מתי אתה מגיע?")
+
+    lead = await world.lead()
+    assert lead["issue_type"] == "קצר במטבח"
+    assert lead["pro_id"] is None
+    assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_closing_a_deal_keeps_the_classified_issue(world):
+    """`_finalize_deal` writes the persona's extraction over the lead."""
+    electrician = await _electrician(world)
+    await world.grant_consent()
+    await _contacted_lead(world, electrician)
+    world.ai.script(
+        deal(
+            "קבענו!",
+            city="תל אביב",
+            issue="תקלה במטבח",
+            street="דיזנגוף",
+            street_number="50",
+            floor="3",
+            apartment="12",
+            appointment_time="מחר ב-10:00",
+        )
+    )
+
+    await world.send("דיזנגוף 50 קומה 3 דירה 12, מחר ב-10")
+
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.NEW
+    assert lead["issue_type"] == "קצר במטבח"
 
 
 @pytest.mark.asyncio
@@ -169,15 +388,114 @@ async def test_a_humans_explicit_assignment_stands(world):
 
 
 @pytest.mark.asyncio
-async def test_unknown_trade_imposes_no_constraint(world):
-    """An issue naming no trade keeps today's behaviour: the best pro nearby."""
+async def test_unknown_trade_escalates_at_the_point_of_matching(world):
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    world.ai.script(reply("הבנתי.", city="תל אביב", issue="המזגן לא מקרר"))
+
+    await world.send("המזגן לא מקרר, תל אביב")
+
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert lead["pro_id"] is None
+    world.recorder.assert_text_to(world.customer, Messages.Customer.PENDING_REVIEW)
+    world.recorder.assert_silent(
+        world.pro_chat(R.PRO_PRIMARY), plumber["business_name"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_vague_first_message_does_not_escalate(world):
+    """Nothing is extracted yet, so matching hasn't run: the dispatcher asks, and the
+    next turn's answer routes normally."""
     plumber = await _plumber(world)
     await world.grant_consent()
     world.ai.script(
-        reply("הבנתי.", city="תל אביב", issue="משהו לא עובד במטבח"),
+        reply("מה בדיוק קרה?", city="תל אביב"),
+        reply("הבנתי.", city="תל אביב", issue="נזילה מתחת לכיור"),
         reply("שלום, כאן אבי."),
     )
 
-    await world.send("משהו לא עובד במטבח, תל אביב")
+    await world.send("יש לי בעיה בבית בתל אביב")
 
-    assert (await world.lead())["pro_id"] == plumber["_id"]
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.CONTACTED
+    world.recorder.assert_never_contains(
+        Messages.Customer.PENDING_REVIEW, "the dispatcher is still asking"
+    )
+
+    await world.send("נזילה מתחת לכיור")
+
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.CONTACTED
+    assert lead["pro_id"] == plumber["_id"]
+
+
+@pytest.mark.asyncio
+async def test_unknown_trade_leaves_a_pro_already_holding_the_lead(world):
+    """The rule is for a new assignment."""
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber, issue_type="תקלה במטבח")
+    world.ai.script(reply("שלום, כאן אבי."))
+
+    await world.send("מתי אתה מגיע?")
+
+    lead = await world.lead()
+    assert lead["pro_id"] == plumber["_id"]
+    assert lead["status"] == LeadStatus.CONTACTED
+
+
+@pytest.mark.asyncio
+async def test_unknown_trade_makes_no_loyalty_offer(world):
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    await world.db.leads.insert_one(
+        {
+            "chat_id": world.customer,
+            "status": LeadStatus.COMPLETED,
+            "pro_id": plumber["_id"],
+            "issue_type": "נזילה",
+            "created_at": world.anchor,
+        }
+    )
+    world.ai.script(reply("הבנתי.", city="תל אביב", issue="המזגן לא מקרר"))
+
+    await world.send("המזגן לא מקרר, תל אביב")
+
+    await world.assert_lead_status(LeadStatus.PENDING_ADMIN_REVIEW)
+    assert plumber["business_name"] not in "".join(
+        world.recorder.bodies_to(world.customer)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "trade,flag,gets_the_job",
+    [
+        ("electrician", False, True),
+        ("handyman", True, True),
+        ("general", True, True),
+        ("handyman", False, False),
+        ("general", False, False),
+    ],
+)
+async def test_electrical_issue_routing(world, trade, flag, gets_the_job):
+    pro = await world.add_pro(R.PRO_PRIMARY, name="בעל מקצוע", profession=trade)
+    await world.db.users.update_one(
+        {"_id": pro["_id"]}, {"$set": {"handles_electrical": flag}}
+    )
+    await world.grant_consent()
+    world.ai.script(
+        reply("הבנתי.", city="תל אביב", issue="קצר במטבח"),
+        reply("שלום."),
+    )
+
+    await world.send("יש קצר במטבח בתל אביב")
+
+    lead = await world.lead()
+    if gets_the_job:
+        assert lead["pro_id"] == pro["_id"]
+    else:
+        assert lead["pro_id"] is None
+        assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
