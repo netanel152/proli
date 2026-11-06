@@ -186,6 +186,8 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             # a flow change this issue did not ask for.
             await whatsapp.send_message(chat_id, Messages.Errors.MEDIA_FETCH_FAILED)
             media_fetch_failed = True  # logged after the history read, below
+    # Already apologised for above; the engine would otherwise report it again.
+    ai_media_url = None if media_fetch_failed else media_url
 
     # 4. Check for existing active lead with assigned pro (skip dispatcher if so)
     active_lead = await leads_collection.find_one(
@@ -323,7 +325,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 transcription,
                 media_data=media_data,
                 media_mime=media_mime,
-                media_url=media_url,
+                media_url=ai_media_url,
             )
         except Exception as e:
             logger.error(f"Pro response failed for {mask_chat_id(chat_id)}: {e}")
@@ -440,7 +442,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             custom_system_prompt=dispatcher_prompt,
             media_data=media_data,
             media_mime_type=media_mime,
-            media_url=media_url,
+            media_url=ai_media_url,
             require_json=True,
         )
     except Exception as e:
@@ -703,7 +705,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     transcription,
                     media_data=media_data,
                     media_mime=media_mime,
-                    media_url=media_url,
+                    media_url=ai_media_url,
                 )
             except Exception as e:
                 logger.error(
