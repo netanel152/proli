@@ -141,23 +141,28 @@ process_incoming_message(chat_id, text, media_url)
         ├─ State == PRO_MODE, or a prompt pro_flow itself is holding open
         │  (PRO_SELECTING_JOB_TO_FINISH / PRO_SELECTING_JOB_TO_CANCEL /
         │  PRO_SELECTING_JOB_TO_APPROVE / PRO_SELECTING_JOB_TO_REJECT /
+        │  PRO_SELECTING_JOB_TO_PAUSE / PRO_SELECTING_JOB_TO_RESUME /
         │  PRO_AWAITING_FINAL_PRICE — PRO_DISPATCH_STATES, PRO-186)?
         │      └─ handle_pro_text_command(pro, text)
         │            (a real pro command typed mid-prompt abandons the prompt —
         │             checked after the selection mapping, since "1"/"2"/"3"
         │             are themselves pro commands — and dispatches normally)
-        │            ├─ "אשר" / "1" → lead BOOKED, clear customer state (strict scope check);
-        │            │      more than one NEW lead → numbered prompt first (PRO-212)
+        │            ├─ is_active False and no self_paused → RESUME_NEEDS_ADMIN, clear state,
+        │            │      nothing else runs (PRO-212)
+        │            ├─ "אשר" → lead BOOKED, clear customer state (strict scope check);
+        │            │      more than one NEW lead, or a bare "1" → numbered prompt first (PRO-212)
         │            ├─ "השהה" / "pause" → BOOKED lead: customer PAUSED_FOR_HUMAN (TTL 900 s);
+        │            │      more than one → numbered prompt first;
         │            │      only a NEW lead: PAUSE_NEEDS_APPROVAL, nothing paused (PRO-212)
-        │            ├─ "דחה" / "2" → (same prompt rule) lead REJECTED (way-station) then handed to reassign_lead:
+        │            ├─ "דחה" → (same prompt rule, and a bare "2") lead REJECTED (way-station) then handed to reassign_lead:
         │            │      reassigned → lead NEW under the next pro, customer told, SLA re-armed;
         │            │      no replacement, or a found pro whose offer send fails → PENDING_ADMIN_REVIEW,
         │            │      admin paged, customer told (strict scope check)
-        │            ├─ "סיימתי" / "3" → finish job (multi-job selection if needed)
-        │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN
-        │            ├─ "הפסקה" / "חופשה" → set pro is_active=False
-        │            ├─ "זמין" / "חזרתי" → set pro is_active=True
+        │            ├─ "סיימתי" → finish job (selection if several, or on a bare "3")
+        │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN on the paused chat
+        │            │      (more than one → numbered prompt first, PRO-212)
+        │            ├─ "הפסקה" / "חופשה" → set pro is_active=False, self_paused=True
+        │            ├─ "זמין" / "חזרתי" → set pro is_active=True, unset self_paused
         │            ├─ other commands (4-7) → status/history/etc.
         │            ├─ "מצא" / "search" → claim oldest PENDING_ADMIN_REVIEW lead
         │            │     (rate-limited 10 min per pro via Redis rate_limit:pro_search:*)
@@ -188,8 +193,10 @@ process_incoming_message(chat_id, text, media_url)
         │         stranded, so the bypass must not fire there (PRO-186) — it used
         │         to overwrite PRO_SELECTING_JOB_TO_FINISH, making "1" run approve
         │         instead of finishing job 1
-        │      └─ a pro on break counts (is_active False, not pending_approval), so
-        │         "חזרתי" and answers to reminders work once PRO_MODE has expired (PRO-212)
+        │      └─ a pro on break counts (self_paused True, not pending_approval), so
+        │         "חזרתי" and answers to reminders work once PRO_MODE has expired (PRO-212),
+        │         except a bare digit, or any word but the resume ones while their own
+        │         request is open: those stay on the customer side
         │
         ├─ Phone matches active pro? → set PRO_MODE, handle pro flow
         │      └─ unless the pro has an open lead of their own (_get_active_customer_lead)
@@ -280,6 +287,8 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `PRO_SELECTING_JOB_TO_CANCEL` | Pro has multiple booked jobs and is picking which one to cancel |
 | `PRO_SELECTING_JOB_TO_APPROVE` | Pro has multiple NEW leads and is picking which one *אשר* is about (PRO-212) |
 | `PRO_SELECTING_JOB_TO_REJECT` | Pro has multiple NEW leads and is picking which one *דחה* is about (PRO-212) |
+| `PRO_SELECTING_JOB_TO_PAUSE` | Pro has multiple booked jobs and is picking which customer's chat *השהה* pauses (PRO-212) |
+| `PRO_SELECTING_JOB_TO_RESUME` | Pro has multiple paused chats and is picking which one *המשך* resumes (PRO-212) |
 | `PRO_AWAITING_FINAL_PRICE` | Post-completion prompt asking the pro what they charged (skippable, never gates COMPLETED) |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
 | `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |

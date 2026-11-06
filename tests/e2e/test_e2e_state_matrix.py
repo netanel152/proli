@@ -42,6 +42,8 @@ Input classes
 | `pro_selecting_job_to_cancel` | → idle, "✅ העבודה בוטלה. הלקוח עודכן." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
 | `pro_selecting_job_to_approve` | → idle, "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
 | `pro_selecting_job_to_reject` | → idle, "העבודה נדחתה. הפנייה הועברה לאיש מקצוע אחר." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
+| `pro_selecting_job_to_pause` | → idle, "⏸️ הבוט הושהה בשיחה הזו, ואפשר לדבר ישירות עם" | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
+| `pro_selecting_job_to_resume` | → idle, "✅ הבוט חזר לפעולה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
 | `pro_awaiting_final_price` | → idle, "💰 נרשם:" | → idle, "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל." | → idle, "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל." | N/A[pro-text-only] | → idle, "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל." | TTL ≤ 600s | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
 | `onboarding_name` | → onboarding_type, "סוג המקצוע" | → onboarding_type, "סוג המקצוע" | "שם העסק חייב להיות באורך 2 עד 100 תווים. אפשר לנסות שוב:" | N/A[pro-text-only] | "שם העסק חייב להיות באורך 2 עד 100 תווים. אפשר לנסות שוב:" | N/A[ttl-class] | → idle, "ההרשמה בוטלה" | N/A[race] |
 | `onboarding_type` | → onboarding_areas, "👍 באילו *ערים או אזורים* אתה עובד?" | → onboarding_areas, "👍 באילו *ערים או אזורים* אתה עובד?" | "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע (אינסטלטור, חשמלאי וכו')." | N/A[pro-text-only] | "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע (אינסטלטור, חשמלאי וכו')." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
@@ -345,8 +347,42 @@ async def _arrange_pro_selecting_offer(world, state, context_key):
     await world.awaiting_approval_job(
         world.pros[R.PRO_PRIMARY], chat_id=R.chat(R.CUSTOMER_B)
     )
-    await world.set_state(state, chat_id=pro_chat)
+    await world.set_state(
+        state, chat_id=pro_chat, ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS
+    )
     await world.set_metadata({context_key: {"1": str(first["_id"])}}, chat_id=pro_chat)
+    return pro_chat
+
+
+async def arrange_pro_selecting_pause(world):
+    await world.standard_cast()
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    first = await world.booked_job(world.pros[R.PRO_PRIMARY])
+    await world.booked_job(world.pros[R.PRO_PRIMARY], chat_id=R.chat(R.CUSTOMER_B))
+    await world.set_state(
+        UserStates.PRO_SELECTING_JOB_TO_PAUSE,
+        chat_id=pro_chat,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
+    )
+    await world.set_metadata(
+        {"pausing_jobs_context": {"1": str(first["_id"])}}, chat_id=pro_chat
+    )
+    return pro_chat
+
+
+async def arrange_pro_selecting_resume(world):
+    await world.standard_cast()
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    first = await world.booked_job(world.pros[R.PRO_PRIMARY], is_paused=True)
+    await world.set_state(UserStates.PAUSED_FOR_HUMAN, ttl=900)
+    await world.set_state(
+        UserStates.PRO_SELECTING_JOB_TO_RESUME,
+        chat_id=pro_chat,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
+    )
+    await world.set_metadata(
+        {"resuming_jobs_context": {"1": str(first["_id"])}}, chat_id=pro_chat
+    )
     return pro_chat
 
 
@@ -774,7 +810,7 @@ MATRIX: dict[str, dict] = {
         "offtopic": Cell(send="מה קורה", expect=(_INVALID_JOB_SELECTION,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
         "emoji": Cell(send="👍", expect=(_INVALID_JOB_SELECTION,)),
-        "silence": Cell(max_ttl=14400),
+        "silence": Cell(max_ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS),
         "interrupt": Cell(
             send="הפסקה",
             expect_state=UserStates.IDLE,
@@ -792,7 +828,43 @@ MATRIX: dict[str, dict] = {
         "offtopic": Cell(send="מה קורה", expect=(_INVALID_JOB_SELECTION,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
         "emoji": Cell(send="👍", expect=(_INVALID_JOB_SELECTION,)),
-        "silence": Cell(max_ttl=14400),
+        "silence": Cell(max_ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS),
+        "interrupt": Cell(
+            send="הפסקה",
+            expect_state=UserStates.IDLE,
+            expect=(_STATUS_PAUSED_LINE,),
+        ),
+        "race": Cell(na=RACE_NA),
+    },
+    UserStates.PRO_SELECTING_JOB_TO_PAUSE: {
+        "keyword": Cell(
+            send="1",
+            expect_state=UserStates.IDLE,
+            expect=(static_prefix(Messages.Pro.PAUSE_ACK),),
+        ),
+        "free": Cell(send="נראה לי הראשונה", expect=(_INVALID_JOB_SELECTION,)),
+        "offtopic": Cell(send="מה קורה", expect=(_INVALID_JOB_SELECTION,)),
+        "wrong": Cell(na=PRO_MEDIA_NA),
+        "emoji": Cell(send="👍", expect=(_INVALID_JOB_SELECTION,)),
+        "silence": Cell(max_ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS),
+        "interrupt": Cell(
+            send="הפסקה",
+            expect_state=UserStates.IDLE,
+            expect=(_STATUS_PAUSED_LINE,),
+        ),
+        "race": Cell(na=RACE_NA),
+    },
+    UserStates.PRO_SELECTING_JOB_TO_RESUME: {
+        "keyword": Cell(
+            send="1",
+            expect_state=UserStates.IDLE,
+            expect=(Messages.Pro.BOT_RESUMED,),
+        ),
+        "free": Cell(send="נראה לי הראשונה", expect=(_INVALID_JOB_SELECTION,)),
+        "offtopic": Cell(send="מה קורה", expect=(_INVALID_JOB_SELECTION,)),
+        "wrong": Cell(na=PRO_MEDIA_NA),
+        "emoji": Cell(send="👍", expect=(_INVALID_JOB_SELECTION,)),
+        "silence": Cell(max_ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS),
         "interrupt": Cell(
             send="הפסקה",
             expect_state=UserStates.IDLE,
@@ -1014,6 +1086,8 @@ _COLLAPSED: dict[str, list[tuple[str, str]]] = {
         (UserStates.PRO_SELECTING_JOB_TO_CANCEL, "silence"),
         (UserStates.PRO_SELECTING_JOB_TO_APPROVE, "silence"),
         (UserStates.PRO_SELECTING_JOB_TO_REJECT, "silence"),
+        (UserStates.PRO_SELECTING_JOB_TO_PAUSE, "silence"),
+        (UserStates.PRO_SELECTING_JOB_TO_RESUME, "silence"),
         (UserStates.ONBOARDING_NAME, "silence"),
         (UserStates.ONBOARDING_TYPE, "silence"),
         (UserStates.ONBOARDING_AREAS, "silence"),
@@ -1094,6 +1168,8 @@ ARRANGERS = {
     UserStates.PRO_SELECTING_JOB_TO_CANCEL: arrange_pro_selecting_cancel,
     UserStates.PRO_SELECTING_JOB_TO_APPROVE: arrange_pro_selecting_approve,
     UserStates.PRO_SELECTING_JOB_TO_REJECT: arrange_pro_selecting_reject,
+    UserStates.PRO_SELECTING_JOB_TO_PAUSE: arrange_pro_selecting_pause,
+    UserStates.PRO_SELECTING_JOB_TO_RESUME: arrange_pro_selecting_resume,
     UserStates.PRO_AWAITING_FINAL_PRICE: arrange_pro_awaiting_final_price,
     UserStates.ONBOARDING_NAME: _arrange_onboarding(UserStates.ONBOARDING_NAME, {}),
     UserStates.ONBOARDING_TYPE: _arrange_onboarding(

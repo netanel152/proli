@@ -351,6 +351,9 @@ def render_pro_form(T, pro_data=None):
                     "phone_number": phone,
                     "type": ptype,
                     "is_active": active,
+                    # This form is the admin's decision, so the pro's own *חזרתי*
+                    # can't undo it (PRO-212).
+                    "self_paused": False,
                     "is_verified": is_verified,
                     "license_number": license_number,
                     "profile_image_url": final_image_url,

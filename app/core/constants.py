@@ -90,6 +90,10 @@ class UserStates(str, Enum):
     # PRO-212: more than one NEW lead, so אשר/דחה asks which one it is about.
     PRO_SELECTING_JOB_TO_APPROVE = "pro_selecting_job_to_approve"
     PRO_SELECTING_JOB_TO_REJECT = "pro_selecting_job_to_reject"
+    # More than one BOOKED lead, so השהה asks which customer's chat it pauses.
+    PRO_SELECTING_JOB_TO_PAUSE = "pro_selecting_job_to_pause"
+    # More than one paused chat, so המשך asks which one it resumes.
+    PRO_SELECTING_JOB_TO_RESUME = "pro_selecting_job_to_resume"
     # PRO-33: after a job is marked COMPLETED, the pro is asked what they charged.
     # Skippable and never gates completion — the lead is already COMPLETED when
     # this state is set, so a missed/garbage reply just leaves final_price null.
@@ -248,6 +252,11 @@ class WorkerConstants:
     # 10–20 rows; now every row is reachable and a longer list says how many
     # rows it is showing out of how many, with *עוד* for the next page.
     PRO_LIST_PAGE_SIZE = 10
+    # PRO-212: how long an אשר/דחה/השהה/המשך numbered prompt stays answerable. Its numbers
+    # act on a customer, and approving one hands over their phone, so a digit sent
+    # hours later must not count. Expiry drops the prompt and acts on nothing: the
+    # next digit opens a fresh list.
+    PRO_ACTION_PICKER_TTL_SECONDS = 600
     # PRO-33 monetization: platform take-rate applied to a recorded final_price to
     # derive commission_amount. GMV = sum(final_price); commission = sum(commission_amount).
     COMMISSION_RATE = 0.10  # 10% — configurable take-rate for unit economics

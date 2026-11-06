@@ -512,8 +512,9 @@ async def guard_sos_human_handoff(ctx: DispatchContext, deps: GuardDeps):
     pro_id = active_lead["pro_id"] if active_lead and "pro_id" in active_lead else None
     await wf.send_sos_alert(ctx.chat_id, ctx.user_text, pro_id)
 
-    # Notify the pro about the pause (if assigned)
-    if pro_id:
+    # Notify the pro about the pause. PRO-212: only a pro who has the customer's
+    # number can step into the conversation.
+    if pro_id and active_lead.get("status") == LeadStatus.BOOKED:
         pro = await deps.users_collection.find_one({"_id": pro_id})
         if pro and pro.get("phone_number"):
             pro_phone = to_chat_id(pro["phone_number"])
@@ -1035,7 +1036,7 @@ async def guard_customer_mode_switch(ctx: DispatchContext, deps: GuardDeps):
         ctx.normalized_text in Messages.Keywords.CUSTOMER_MODE_COMMANDS
         and ctx.current_state in (UserStates.PRO_MODE, UserStates.IDLE)
     ):
-        if await wf._is_registered_pro(ctx.chat_id):
+        if await wf._is_registered_pro(ctx.chat_id, include_on_break=True):
             await deps.state_manager.set_state(ctx.chat_id, UserStates.CUSTOMER_MODE)
             await deps.context_manager.clear_context(ctx.chat_id)
             await deps.whatsapp.send_message(
@@ -1070,12 +1071,27 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
 
     PRO-212: a pro on break counts. PRO_MODE lasts 4 hours and a break lasts days,
     so a reminder's answer, and the *חזרתי* that ends the break, used to reach the
-    customer side. Matching never reads this, so they stay out of it.
+    customer side. Matching never reads this, so they stay out of it. But a pro on
+    break is often writing as a customer, and auto-detect leaves them there: a bare
+    digit may answer "which floor?", and with their own request open so may any
+    word, except the one that ends the break.
     """
     from app.services import workflow_service as wf
 
     if ctx.normalized_text in wf.PRO_BUSINESS_KEYWORDS:
         is_pro_doc = await wf._is_registered_pro(ctx.chat_id, include_on_break=True)
+        if (
+            is_pro_doc
+            and not is_pro_doc.get("is_active", True)
+            and (
+                ctx.normalized_text.isdigit()
+                or (
+                    ctx.normalized_text not in Messages.Keywords.RESUME_COMMANDS
+                    and await wf._get_active_customer_lead(ctx.chat_id)
+                )
+            )
+        ):
+            is_pro_doc = None
         if is_pro_doc and ctx.current_state not in wf.PRO_DISPATCH_STATES:
             defer_to_customer_flow = (
                 ctx.normalized_text in wf.AMBIGUOUS_PRO_KEYWORDS

@@ -299,6 +299,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
         # renders those fields properly and does not retain them in Sentry.
 
         # 1. Alert the Pro (if assigned)
+        pro_notified = False
         if pro_id:
             if isinstance(pro_id, str):
                 pro_id = ObjectId(pro_id)
@@ -318,16 +319,17 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                         phone=customer_phone_display, last_message=last_message
                     )
                 elif status == LeadStatus.NEW:
-                    pro_msg = Messages.SOS.PRO_ALERT_PENDING.format(
-                        last_message=last_message
-                    )
+                    pro_msg = Messages.SOS.PRO_ALERT_PENDING
                 else:
-                    # PRO-212: only NEW has anything for *אשר* to approve.
-                    pro_msg = Messages.SOS.PRO_ALERT_NOT_OFFERED.format(
-                        last_message=last_message
+                    # PRO-212: never offered, so the pro has nothing to do about
+                    # it. The operator page below covers this customer.
+                    pro_msg = None
+                if pro_msg:
+                    pro_notified = await _send_best_effort(pro_chat_id, pro_msg)
+                if pro_notified:
+                    logger.info(
+                        f"SOS alert sent to Pro {pro_id} for user {_mask(chat_id)}"
                     )
-                await _send_best_effort(pro_chat_id, pro_msg)
-                logger.info(f"SOS alert sent to Pro {pro_id} for user {_mask(chat_id)}")
 
         # 2. Always page the Admin — via Sentry, not WhatsApp (PRO-88).
         # The customer's message is deliberately NOT included: it is free-form
@@ -338,7 +340,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
             f"SOS from customer ***{customer_phone_display[-4:]} — "
             f"issue={(active_lead or {}).get('issue_type') or 'unknown'}, "
             f"lead={(active_lead or {}).get('_id') or 'none active'}, "
-            f"pro_notified={bool(pro_id)}. Open the lead in the admin panel."
+            f"pro_notified={pro_notified}. Open the lead in the admin panel."
         )
 
     except Exception as e:
