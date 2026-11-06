@@ -552,6 +552,13 @@ def test_required_profession_ignores_type_map_digit_keys():
         ("סתימה באסלה", "plumber"),
         ("צריך אינסטלטור", "plumber"),  # the profession noun still wins
         ("נשבר לי המנעול בדלת", "locksmith"),
+        ("קצר במטבח", "electrician"),  # the phrasing from the PRO-215 staging test
+        ("הפחת קפץ", "electrician"),
+        ("קצר ליד הכיור", "electrician"),  # electrical wins the tie-break
+        ("התקרה דולפת", "plumber"),
+        ("המפתח נתקע במנעול", "locksmith"),  # "נתקע" is not a plug ("תקע")
+        ("בדיקה כללית של הצנרת", "plumber"),  # "כללי" is not a trade request
+        ("בדיקה כללית", None),
         ("יש לי תקלה בבית", None),  # no trade named and no hint -> no constraint
         ("", None),
     ],
@@ -561,6 +568,82 @@ def test_probable_trade_reads_customer_phrasing(issue, expected):
     `required_profession` only matches a profession noun, so "השקע לא עובד"
     resolved to None and the gate fell back to whoever finished last."""
     assert probable_trade(issue) == expected
+
+
+def _text_search_pros(mock_users, direct, everyone):
+    """The text path's two finds: the service_areas query, then the reverse match."""
+    direct_cursor, all_cursor = MagicMock(), MagicMock()
+    direct_cursor.to_list = AsyncMock(return_value=direct)
+    all_cursor.to_list = AsyncMock(return_value=everyone)
+    mock_users.find.side_effect = [direct_cursor, all_cursor]
+
+
+@pytest.mark.asyncio
+async def test_text_routing_does_not_fall_back_to_another_trade(
+    mock_matching_dependencies,
+):
+    """PRO-215: no coordinates, and the only pro serving the city is a plumber."""
+    mock_users, _ = mock_matching_dependencies
+    plumber = {
+        "_id": ObjectId(),
+        "type": "plumber",
+        "categories": ["plumber"],
+        "service_areas": ["Unknown City"],
+    }
+    _text_search_pros(mock_users, [plumber], [plumber])
+
+    assert await determine_best_pro("קצר במטבח", "Unknown City") is None
+
+
+@pytest.mark.asyncio
+async def test_text_routing_takes_a_pro_whose_trade_fits(mock_matching_dependencies):
+    """A general pro fits any trade; the better-rated plumber does not fit this one."""
+    mock_users, _ = mock_matching_dependencies
+    plumber = {
+        "_id": ObjectId(),
+        "type": "plumber",
+        "social_proof": {"rating": 5.0},
+    }
+    general = {
+        "_id": ObjectId(),
+        "type": "general",
+        "social_proof": {"rating": 3.0},
+    }
+    _text_search_pros(mock_users, [plumber, general], [])
+
+    assert await determine_best_pro("קצר במטבח", "Unknown City") == general
+
+
+@pytest.mark.asyncio
+async def test_geo_routing_filters_by_trade_when_a_radius_has_only_the_wrong_one(
+    mock_matching_dependencies,
+):
+    """PRO-215, the acceptance case: an electrical issue with only a plumber."""
+    mock_users, _ = mock_matching_dependencies
+    plumber = {"_id": ObjectId(), "type": "plumber", "categories": ["plumber"]}
+
+    async def only_the_plumber(*args, **kwargs):
+        yield plumber
+
+    mock_users.aggregate = MagicMock(side_effect=only_the_plumber)
+
+    assert await determine_best_pro("קצר במטבח", "Tel Aviv") is None
+    assert mock_users.aggregate.call_count == len(WorkerConstants.GEO_RADIUS_STEPS)
+
+
+@pytest.mark.asyncio
+async def test_pro_search_cannot_claim_a_lead_outside_its_trade(eligible_env):
+    """PRO-215: otherwise a lead escalated because no electrician exists goes
+    straight to any plumber who sends מצא."""
+    coords = {"type": "Point", "coordinates": [34.7818, 32.0853]}
+    lead = _lead(issue_type="קצר במטבח")
+
+    assert not await is_pro_eligible_for_lead(
+        _pro(type="plumber", location=coords), lead
+    )
+    assert await is_pro_eligible_for_lead(
+        _pro(type="electrician", location=coords), lead
+    )
 
 
 def test_pro_trades_reads_the_field_onboarding_actually_writes():

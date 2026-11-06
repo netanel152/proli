@@ -242,7 +242,7 @@ pipeline = [
 ]
 ```
 
-Breaks on first non-empty result set. If all three radii return empty, falls through to step 2.
+Candidates are also filtered by trade (`probable_trade(issue_type)` + `trade_fits`, PRO-215) inside each radius, so the radius widens past a wrong-trade pro; an issue naming no trade imposes no constraint. Breaks on first non-empty result set. If all three radii return empty, the lead goes to admin review (`None`).
 
 **Step 2 — Text fallback (no coordinates or geo empty):**
 

@@ -201,6 +201,33 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             {"_id": active_lead["pro_id"], "is_active": True}
         )
 
+    # PRO-215: a pro whose trade doesn't fit is not an assigned pro — answering
+    # in their name leaves the customer with "I'm a plumber, not an electrician".
+    # An issue too vague to classify is read together with what the customer
+    # just wrote; a human's explicit assignment stands. An unoffered lead falls
+    # through to the dispatcher and matching below; one the pro was already
+    # offered goes through the reassignment path, which tells the customer.
+    if existing_pro and not active_lead.get("assigned_by_admin_at"):
+        issue = active_lead.get("issue_type") or ""
+        if not probable_trade(issue) and probable_trade(user_text):
+            issue = f"{issue} {user_text}".strip()
+        if not trade_fits(existing_pro, probable_trade(issue)):
+            logger.warning(
+                f"Lead {active_lead['_id']} is with pro {existing_pro['_id']} outside "
+                f"its trade ({probable_trade(issue)}) — rematching"
+            )
+            await leads_collection.update_one(
+                {"_id": active_lead["_id"]},
+                {"$set": {"pro_id": None, "issue_type": issue}},
+            )
+            active_lead["issue_type"] = issue
+            if active_lead["status"] == LeadStatus.NEW:
+                from app.services import monitor_service
+
+                await monitor_service.reassign_lead(active_lead, notify_old_pro=False)
+                return
+            existing_pro = None
+
     # PRO-116 Q3: a customer with a CONFIRMED (BOOKED) job who writes about
     # something else must not silently spawn a second parallel lead — that was
     # the root of the "3 leads / too many approvals" incident (BOOKED is absent

@@ -47,7 +47,8 @@ async def determine_best_pro(
 ) -> dict:
     """
     Intelligent Routing Engine with Progressive Geo-Spatial Search:
-    1. Active Status
+    1. Active Status, and a trade that fits the issue (PRO-215 — no fallback to
+       another trade; an issue with no recognisable trade imposes no constraint)
     2. Location Match ($geoNear with expanding radius 10→20→30km, or Regex fallback)
     3. Load Balancing (Skip pros with >= MAX_PRO_LOAD active leads)
     4. Rating (High to Low)
@@ -56,6 +57,7 @@ async def determine_best_pro(
     try:
         # 1. Base query filter — only fully approved, active professionals
         base_filter = dict(APPROVED_PRO_FILTER)
+        wanted_trade = probable_trade(issue_type)
 
         if excluded_pro_ids:
             base_filter["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
@@ -92,8 +94,12 @@ async def determine_best_pro(
                     {"$limit": WorkerConstants.DB_QUERY_LIMIT},
                 ]
                 matching_pros = []
+                # shortcut: filtered after $limit, so DB_QUERY_LIMIT better-rated
+                # pros of other trades in one radius could hide a fit; move it
+                # into `query` (and tests/e2e/geo_shim.py) at that scale.
                 async for doc in users_collection.aggregate(pipeline):
-                    matching_pros.append(doc)
+                    if trade_fits(doc, wanted_trade):
+                        matching_pros.append(doc)
 
                 if matching_pros:
                     logger.info(
@@ -111,7 +117,7 @@ async def determine_best_pro(
                 # CRITICAL keeps no-pro leads out of the operator's email (PRO-77).
                 logger.warning(
                     f"No professional found within {WorkerConstants.GEO_RADIUS_STEPS[-1] // 1000}km "
-                    f"for '{location}'. Lead requires admin review."
+                    f"for '{location}' (trade={wanted_trade}). Lead requires admin review."
                 )
                 return None
         elif location:
@@ -122,7 +128,11 @@ async def determine_best_pro(
             }
             logger.info(f"🔍 Text-based location query for '{location}'")
             cursor = users_collection.find(query)
-            matching_pros = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+            matching_pros = [
+                pro
+                for pro in await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
+                if trade_fits(pro, wanted_trade)
+            ]
 
             # Reverse match (only if text-based search found nothing)
             if not matching_pros:
@@ -141,14 +151,17 @@ async def determine_best_pro(
 
                 for pro in all_pros:
                     areas = pro.get("service_areas", [])
-                    if any(area.lower() in location.lower() for area in areas):
+                    if trade_fits(pro, wanted_trade) and any(
+                        area.lower() in location.lower() for area in areas
+                    ):
                         matching_pros.append(pro)
         else:
             logger.info("⚠️ No location provided for routing.")
 
         if not matching_pros:
             logger.warning(
-                f"No pros found for location '{location}'. Lead requires admin review."
+                f"No pros found for location '{location}' (trade={wanted_trade}). "
+                "Lead requires admin review."
             )
             return None
 
@@ -271,11 +284,9 @@ def required_profession(lead: dict) -> Optional[str]:
     """The profession a lead explicitly asks for, or None when it doesn't.
 
     ``lead.issue_type`` is free text written by the AI ("נזילה בכיור"), not a
-    controlled vocabulary — there is no profession field on a lead, and
-    ``determine_best_pro`` does not filter on one either. So this only answers
-    the confident case: the text names a profession from the onboarding
-    vocabulary. Anything else returns None and imposes no constraint, rather
-    than inventing a taxonomy that would wrongly block pros from real work.
+    controlled vocabulary — there is no profession field on a lead. So this only
+    answers the confident case: the text names a profession from the onboarding
+    vocabulary. `probable_trade` is what routing reads; it tries this first.
     """
     issue = (lead.get("issue_type") or "").lower()
     if not issue:
@@ -286,15 +297,28 @@ def required_profession(lead: dict) -> Optional[str]:
     return None
 
 
-#: Customer phrasing → trade, for picking *which* past pro to ask about.
-#: `required_profession` above deliberately only matches a profession noun
-#: because it gates real work; this one gates a question about preference,
-#: where a wrong guess costs one message and falls back to normal matching,
-#: so it can afford to read the words customers actually use ("קצר בחשמל"
-#: never contains "חשמלאי"). First match wins, so the order is the tie-break.
+#: Customer phrasing → trade: the words customers actually use ("קצר בחשמל"
+#: never contains "חשמלאי"). This gates real work since PRO-215, so a word that
+#: means something else in common Hebrew doesn't belong here ("תקע" sits inside
+#: "נתקע", stuck). A wrong guess narrows the search and, at worst, reaches
+#: PENDING_ADMIN_REVIEW. First match wins, so the order is the tie-break:
+#: electrical first, because "קצר ליד הכיור" must not go to a plumber.
 ISSUE_TRADE_HINTS = {
+    "electrician": (
+        "חשמל",
+        "קצר",
+        "שקע",
+        "מפסק",
+        "פחת",
+        "תאורה",
+        "נורה",
+        "ארקה",
+    ),
     "plumber": (
         "נזילה",
+        "דליפ",
+        "דולף",
+        "דולפ",
         "אינסטלצ",
         "צנרת",
         "סתימה",
@@ -306,16 +330,6 @@ ISSUE_TRADE_HINTS = {
         "מקלחת",
         "אסלה",
         "ניאגרה",
-    ),
-    "electrician": (
-        "חשמל",
-        "קצר",
-        "שקע",
-        "מפסק",
-        "תאורה",
-        "נורה",
-        "ארקה",
-        "תקע",
     ),
     "locksmith": ("מנעול", "מפתח", "צילינדר", "פריצה"),
     "painter": ("צבע", "סיוד", "טיח"),
@@ -329,7 +343,9 @@ def probable_trade(issue: str) -> Optional[str]:
     if not issue:
         return None
     named = required_profession({"issue_type": issue})
-    if named:
+    # "כללי" is usually an adjective here ("בדיקה כללית"), not a request for a
+    # general pro, and every pro type should stay eligible for it.
+    if named and named != "general":
         return named
     for trade, hints in ISSUE_TRADE_HINTS.items():
         if any(hint in issue for hint in hints):
@@ -388,7 +404,7 @@ async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:
     if lead.get("no_show_reported_at") and lead.get("pro_id") == pro["_id"]:
         return False
 
-    if not trade_fits(pro, required_profession(lead)):
+    if not trade_fits(pro, probable_trade(lead.get("issue_type"))):
         return False
 
     location = lead.get("city") or lead.get("full_address")
