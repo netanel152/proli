@@ -59,6 +59,7 @@ from app.core.prompts import Prompts
 from app.services.ai_engine_service import AIResponse, file_notice_in
 from app.services.dispatch_guards import DispatchContext, GuardDeps
 from app.services.matching_service import (
+    customer_phones,
     issue_update,
     probable_trade,
     trade_fits,
@@ -776,7 +777,11 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             )
             async for past_lead in past_leads:
                 candidate = await users_collection.find_one(
-                    {"_id": past_lead["pro_id"], "is_active": True}
+                    {
+                        "_id": past_lead["pro_id"],
+                        "is_active": True,
+                        "phone_number": {"$nin": customer_phones(chat_id)},
+                    }
                 )
                 if candidate and trade_fits(candidate, wanted_trade):
                     past_pro = candidate
@@ -823,7 +828,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     ):
         try:
             best_pro = await determine_best_pro(
-                issue_type=extracted_issue, location=extracted_city
+                issue_type=extracted_issue,
+                location=extracted_city,
+                customer_chat_id=chat_id,
             )
         except Exception as e:
             logger.error(f"Pro matching failed for {mask_chat_id(chat_id)}: {e}")
