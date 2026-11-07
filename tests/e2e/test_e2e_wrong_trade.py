@@ -12,6 +12,7 @@ from bson import ObjectId
 
 from app.core.constants import LeadStatus, UserStates
 from app.core.messages import Messages
+from app.core.prompts import Prompts
 from tests.e2e import reserved_numbers as R
 from tests.e2e.ai_replay import deal, reply
 from tests.e2e.world import media_url_for
@@ -346,6 +347,12 @@ async def test_emergency_without_an_issue_pages_and_reaches_review(world):
     assert lead["escalation_reason"] == "unknown_trade"
     world.assert_paged("EMERGENCY", str(lead["_id"]), "names no known trade")
     world.recorder.assert_text_to(world.customer, Messages.Customer.PENDING_REVIEW)
+
+
+def test_the_prompt_allows_the_city_that_test_scripts():
+    """The test above scripts a city on the first turn; the prompt must allow it."""
+    assert "EMERGENCY EXCEPTION" in Prompts.DISPATCHER_SYSTEM
+    assert "including the first message" in Prompts.DISPATCHER_SYSTEM
 
 
 @pytest.mark.asyncio

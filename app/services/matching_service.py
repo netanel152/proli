@@ -440,11 +440,17 @@ CHAT_TRADE_WORDS = {
 }
 
 
-#: Mentions that say the job is not that trade, or quote someone from it.
+#: Mentions that say the job is not that trade, or quote someone from it. Only a
+#: negation directly before the word counts: "לא עובד החשמל" is electrical. And
+#: "אין חשמל" is not a negation at all: no power is the fault itself.
 CHAT_TRADE_NEGATIONS = (
-    "לא חשמל",
-    "לא החשמל",
-    "לא בחשמל",
+    *(
+        f"{negation} {word}"
+        for words in CHAT_TRADE_WORDS.values()
+        for word in words
+        for negation in ("לא", "אין")
+        if (negation, word) != ("אין", "חשמל")
+    ),
     "החשמלאי אמר",
     "חשמלאי אמר",
 )
@@ -462,8 +468,11 @@ def trade_named_in_chat(text: str) -> Optional[str]:
 
 #: A phone number, email or link. `issue_type` reaches unapproved pros, logs and
 #: pages (PRO-59). Names and street names can't be spotted here: the dispatcher
-#: prompt is all that keeps those out.
-_CONTACT_IN_ISSUE = re.compile(r"\d[\d\-\s]{6,}\d|@|https?://")
+#: prompt is all that keeps those out. A phone is 9+ digits because the shortest
+#: Israeli number has 9 and a date has 8; `(?!:?\d)` leaves a date's time alone.
+_CONTACT_IN_ISSUE = re.compile(
+    r"\d(?:[\s.\-–—()]*\d){8,}(?!:?\d)|@|https?://|www\.", re.IGNORECASE
+)
 
 
 def issue_update(fresh: Optional[str], known: Optional[str]) -> Optional[str]:

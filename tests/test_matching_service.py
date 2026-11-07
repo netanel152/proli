@@ -665,6 +665,10 @@ def test_chat_text_plain_words_name_their_trade(text, expected):
         ("החשמלאי אמר שיש נזילה", "plumber"),
         ("חשמלאי אמר שיש נזילה", "plumber"),
         ("נזילה ליד השקע", None),  # two trades: not plainly either
+        ("זה לא מהחשמל", None),
+        ("לא חשמלאי", None),
+        ("אין נזילה", None),
+        ("אין נזילה, זו בעיה בחשמל", "electrician"),
     ],
 )
 def test_chat_text_reads_negation_and_refuses_two_trades(text, expected):
@@ -672,16 +676,57 @@ def test_chat_text_reads_negation_and_refuses_two_trades(text, expected):
 
 
 @pytest.mark.parametrize(
+    "text",
+    ["לא עובד החשמל", "החשמל לא עובד", "אין חשמל בבית", "אין אור בסלון"],
+)
+def test_chat_text_a_fault_worded_with_a_negative_still_names_the_trade(text):
+    assert trade_named_in_chat(text) == "electrician"
+
+
+def test_no_hot_water_reads_as_it_did():
+    """The chat list has no water-supply word; the stored-issue table does."""
+    assert trade_named_in_chat("אין מים חמים") is None
+    assert probable_trade("אין מים חמים") == "plumber"
+
+
+@pytest.mark.parametrize(
     "fresh",
-    ["נזילה 050-1234567", "נזילה 0501234567", "נזילה a@b.co", "https://x.co נזילה"],
+    [
+        "נזילה 050-1234567",
+        "נזילה 0501234567",
+        "נזילה a@b.co",
+        "https://x.co נזילה",
+        "נזילה 050.123.4567",
+        "נזילה (050) 1234567",
+        "נזילה 050–1234567",
+        "נזילה 050 - 1234567",
+        "נזילה 03-1234567",
+        "נזילה +972-50-1234567",
+        "נזילה 050-1234567: דחוף",
+        "נזילה www.x.co.il",
+    ],
 )
 def test_issue_update_drops_contact_details(fresh):
     assert issue_update(fresh, None) is None
     assert issue_update(fresh, "נזילה") is None
 
 
-def test_issue_update_keeps_ordinary_numbers():
-    assert issue_update("נזילה בדירה 12", None) == "נזילה בדירה 12"
+@pytest.mark.parametrize(
+    "fresh",
+    [
+        "נזילה בדירה 12",
+        "נזילה בדוד דגם WH-1000",
+        "נזילה בדוד דגם 12345678",
+        "נזילה, הצעת מחיר 350",
+        "נזילה, הצעת מחיר 350-450",
+        "נזילה בדיזנגוף 50",
+        "נזילה מאז 12.10.2026",
+        "נזילה מאז 12/10/2026",
+        "נזילה מאז 12.10.2026 14:30",
+    ],
+)
+def test_issue_update_keeps_ordinary_numbers(fresh):
+    assert issue_update(fresh, None) == fresh
 
 
 @pytest.mark.parametrize(
