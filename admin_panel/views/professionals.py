@@ -10,6 +10,7 @@ from admin_panel.core.utils import (
 )
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import PROFESSION_TYPES, profession_label
+from admin_panel.core.pro_phone import ERR_TAKEN, check_pro_phone
 from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from admin_panel.core.rbac import can_edit, has_permission
 from app.core.constants import LeadStatus
@@ -309,6 +310,18 @@ def render_pro_form(T, pro_data=None):
         submit_label = T["btn_create"] if not is_edit else T["save_btn"]
         if st.form_submit_button(submit_label, type="primary"):
             if name and phone and st.session_state.pro_areas:
+                # Stored in the bare 972… form the bot looks a pro up by (PRO-224).
+                phone, phone_error = check_pro_phone(
+                    users_collection,
+                    phone,
+                    exclude_id=ObjectId(pro_id) if is_edit else None,
+                )
+                if phone_error == ERR_TAKEN:
+                    st.error(T["pro_phone_taken"])
+                    return
+                if phone_error:
+                    st.error(T["invalid_pro_phone"])
+                    return
 
                 # Handle Image Upload
                 final_image_url = existing_image_url
