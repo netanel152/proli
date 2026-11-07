@@ -87,6 +87,13 @@ class UserStates(str, Enum):
     # Pro flow
     PRO_SELECTING_JOB_TO_FINISH = "pro_selecting_job_to_finish"
     PRO_SELECTING_JOB_TO_CANCEL = "pro_selecting_job_to_cancel"
+    # PRO-212: more than one NEW lead, so אשר/דחה asks which one it is about.
+    PRO_SELECTING_JOB_TO_APPROVE = "pro_selecting_job_to_approve"
+    PRO_SELECTING_JOB_TO_REJECT = "pro_selecting_job_to_reject"
+    # More than one BOOKED lead, so השהה asks which customer's chat it pauses.
+    PRO_SELECTING_JOB_TO_PAUSE = "pro_selecting_job_to_pause"
+    # More than one paused chat, so המשך asks which one it resumes.
+    PRO_SELECTING_JOB_TO_RESUME = "pro_selecting_job_to_resume"
     # PRO-33: after a job is marked COMPLETED, the pro is asked what they charged.
     # Skippable and never gates completion — the lead is already COMPLETED when
     # this state is set, so a missed/garbage reply just leaves final_price null.
@@ -226,6 +233,14 @@ class WorkerConstants:
     # state by design; its only reader is gated on the state anyway, which is
     # the same shape PRO-119's loyalty gate already has.
     NEW_OR_EXISTING_TTL_SECONDS = 300
+    # What a customer wrote before answering the consent question, held in Redis
+    # (StateManager.hold_message); the only other copy is the queued job's args,
+    # until it runs. Each new message refreshes this TTL, so a customer who keeps
+    # writing can extend it past AWAITING_CONSENT's fixed 4h. Expiry drops it: a
+    # later *yes* gets the bare ack and they describe the problem again.
+    CONSENT_HOLD_TTL_SECONDS = 3600
+    # One customer writing past this before answering is not describing a problem.
+    CONSENT_HOLD_MAX_MESSAGES = 5
     PRO_APPROVAL_TTL_SECONDS = (
         3600  # 60 min — pro must approve a finalized deal within this window
     )
@@ -237,6 +252,11 @@ class WorkerConstants:
     # 10–20 rows; now every row is reachable and a longer list says how many
     # rows it is showing out of how many, with *עוד* for the next page.
     PRO_LIST_PAGE_SIZE = 10
+    # PRO-212: how long a pro's numbered job prompt stays answerable. Its numbers act
+    # on a customer, and approving one hands over their phone, so a digit sent hours
+    # later must not count. Expiry drops the prompt and acts on nothing: the next
+    # digit opens a fresh list.
+    PRO_ACTION_PICKER_TTL_SECONDS = 600
     # PRO-33 monetization: platform take-rate applied to a recorded final_price to
     # derive commission_amount. GMV = sum(final_price); commission = sum(commission_amount).
     COMMISSION_RATE = 0.10  # 10% — configurable take-rate for unit economics
@@ -272,6 +292,20 @@ class WorkerConstants:
     # polarity is inverted: an expired pause key releases the breaker, an expired
     # confirmation key engages it.
     WA_STATE_CONFIRM_TTL_SECONDS = 360  # 6 min (3× the 2-min poll interval)
+    # PRO-90 — quality-rating watchdog. Meta's rating reflects recent days of
+    # messages, so 15 minutes is ample, and it also runs once after boot (PRO-176
+    # boot slot) so a deploy immediately has a real reading on /health.
+    WA_QUALITY_CHECK_INTERVAL_MINUTES = 15
+    # Consecutive failed polls before "can't read Meta" becomes a page (45 min).
+    WA_QUALITY_POLL_FAILURE_THRESHOLD = 3
+    # No poll attempted for this long means the watchdog itself is not running.
+    WA_QUALITY_STALE_MINUTES = 45
+    # At most one page per condition per window, standing or flapping, matching
+    # the other standing alerts (the PRO-162 unbounded-page lesson).
+    WA_QUALITY_PAGE_COOLDOWN_HOURS = 24
+    # Alert when business-initiated conversations reach this share of the cap.
+    # The cap itself follows Meta's live limit, see Settings.WA_BUSINESS_INITIATED_CAP.
+    WA_BUSINESS_INITIATED_ALERT_RATIO = 0.8
     # PRO-89 — Meta Cloud API 24h customer-service window. Free-form messages
     # are deliverable only inside the 24 hours following the recipient's most
     # recent inbound message; outside it only a pre-approved template can be

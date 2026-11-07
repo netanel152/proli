@@ -10,8 +10,10 @@ from admin_panel.core.utils import (
 )
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import PROFESSION_TYPES, profession_label
+from admin_panel.core.pro_phone import ERR_TAKEN, check_pro_phone
 from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from admin_panel.core.rbac import can_edit, has_permission
+from app.core.constants import LeadStatus
 from app.services.geocoding_service import (
     ServiceAreaResolution,
     parse_service_areas,
@@ -116,11 +118,12 @@ def render_pro_list(T):
             with c_info:
                 # Status + Name + Verified
                 # Icon + text, never colour alone (PRO-61).
-                status_txt = (
-                    f"🟢 {T['status_active']}"
-                    if is_active
-                    else f"🔴 {T['status_inactive']}"
-                )
+                if is_active:
+                    status_txt = f"🟢 {T['status_active']}"
+                elif p.get("self_paused"):
+                    status_txt = f"☕ {T['status_self_paused']}"
+                else:
+                    status_txt = f"🔴 {T['status_inactive']}"
                 verified_badge = (
                     f" · ✅ {T['verified']}" if p.get("is_verified") else ""
                 )
@@ -256,6 +259,11 @@ def render_pro_form(T, pro_data=None):
                     T.get("verified", "Verified"),
                     value=pro_data.get("is_verified", False) if is_edit else False,
                 )
+            handles_electrical = st.checkbox(
+                T["handles_electrical"],
+                value=pro_data.get("handles_electrical", False) if is_edit else False,
+                help=T["handles_electrical_help"],
+            )
 
         # Image Upload
         existing_image_url = pro_data.get("profile_image_url", "") if is_edit else ""
@@ -302,6 +310,18 @@ def render_pro_form(T, pro_data=None):
         submit_label = T["btn_create"] if not is_edit else T["save_btn"]
         if st.form_submit_button(submit_label, type="primary"):
             if name and phone and st.session_state.pro_areas:
+                # Stored in the bare 972… form the bot looks a pro up by (PRO-224).
+                phone, phone_error = check_pro_phone(
+                    users_collection,
+                    phone,
+                    exclude_id=ObjectId(pro_id) if is_edit else None,
+                )
+                if phone_error == ERR_TAKEN:
+                    st.error(T["pro_phone_taken"])
+                    return
+                if phone_error:
+                    st.error(T["invalid_pro_phone"])
+                    return
 
                 # Handle Image Upload
                 final_image_url = existing_image_url
@@ -350,7 +370,13 @@ def render_pro_form(T, pro_data=None):
                     "business_name": name,
                     "phone_number": phone,
                     "type": ptype,
+                    # Routing reads these, so a changed type can't leave a stale one.
+                    "categories": [ptype],
+                    "handles_electrical": handles_electrical,
                     "is_active": active,
+                    # This form is the admin's decision, so the pro's own *חזרתי*
+                    # can't undo it (PRO-212).
+                    "self_paused": False,
                     "is_verified": is_verified,
                     "license_number": license_number,
                     "profile_image_url": final_image_url,
@@ -369,7 +395,26 @@ def render_pro_form(T, pro_data=None):
                         {"_id": ObjectId(pro_id)}, {"$set": pro_payload}
                     )
                     log_audit("edit_pro", {"pro_id": pro_id, "name": name})
-                    set_flash("pro_flash", T["success_update"])
+                    open_jobs = (
+                        leads_collection.count_documents(
+                            {
+                                "pro_id": ObjectId(pro_id),
+                                "status": {
+                                    "$in": [LeadStatus.NEW, LeadStatus.BOOKED],
+                                },
+                            }
+                        )
+                        if pro_data.get("is_active", True) and not active
+                        else 0
+                    )
+                    if open_jobs:
+                        set_flash(
+                            "pro_flash",
+                            T["deactivated_with_open_jobs"].format(count=open_jobs),
+                            "warning",
+                        )
+                    else:
+                        set_flash("pro_flash", T["success_update"])
                 else:
                     pro_payload.update(
                         {

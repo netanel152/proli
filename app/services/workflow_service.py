@@ -1,3 +1,5 @@
+import asyncio
+import uuid
 from types import SimpleNamespace
 from app.providers.whatsapp import get_whatsapp
 from app.services.ai_engine_service import AIEngine
@@ -20,6 +22,7 @@ from app.core.datetime_utils import parse_iso_to_utc
 from app.core.redis_client import (
     acquire_chat_lock,
     release_chat_lock,
+    keep_chat_lock,
     ChatLockBusyError,
 )
 from app.core.text_matching import is_emergency_text
@@ -38,6 +41,7 @@ from app.services.conversation_pipeline import run_customer_pipeline
 # cannot see that and reports it unused; deleting it on that advice breaks
 # matching at runtime, not at import. Same for `detect_and_fetch_media` below.
 from app.services.matching_service import determine_best_pro  # noqa: F401
+from app.services.matching_service import issue_update
 
 # The next few imports look unused since PRO-180 moved the holding-state
 # cluster into dispatch_guards, but they are load-bearing: the guards resolve
@@ -75,7 +79,10 @@ from app.services.pro_onboarding_service import (  # noqa: F401
     handle_onboarding_step,
     ONBOARDING_STATES,
 )
-from app.services.media_handler import detect_and_fetch_media  # noqa: F401
+from app.services.media_handler import (  # noqa: F401
+    detect_and_fetch_media,
+    resolve_inbound_media,
+)
 from app.services.security_service import SecurityService
 from app.core.config import settings
 from bson import ObjectId
@@ -181,6 +188,10 @@ PRO_ONLY_KEYWORDS = PRO_BUSINESS_KEYWORDS - AMBIGUOUS_PRO_KEYWORDS
 PRO_HOLDING_STATES = (
     UserStates.PRO_SELECTING_JOB_TO_FINISH,
     UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+    UserStates.PRO_SELECTING_JOB_TO_APPROVE,
+    UserStates.PRO_SELECTING_JOB_TO_REJECT,
+    UserStates.PRO_SELECTING_JOB_TO_PAUSE,
+    UserStates.PRO_SELECTING_JOB_TO_RESUME,
     UserStates.PRO_AWAITING_FINAL_PRICE,
 )
 
@@ -206,15 +217,44 @@ CUSTOMER_ACTIVE_STATUSES = [
 ]
 
 
-async def _is_registered_pro(chat_id: str):
-    """Return the professional doc for this chat, or None."""
+async def _is_registered_pro(chat_id: str, include_on_break: bool = False):
+    """Return the professional doc for this chat, or None.
+
+    ``include_on_break`` also admits a pro who took a break themselves (PRO-212), for
+    the keyword bypass and the לקוח switch. is_active False alone also describes an
+    application awaiting review and a pro the admin deactivated, and neither may
+    reach the handler that sets is_active True.
+    """
     phone = strip_suffix(chat_id)
     return await users_collection.find_one(
         {
             "phone_number": {"$in": [phone, chat_id]},
             "role": "professional",
-            "is_active": True,
+            **(
+                {
+                    "pending_approval": {"$ne": True},
+                    "$or": [{"is_active": True}, {"self_paused": True}],
+                }
+                if include_on_break
+                else {"is_active": True}
+            ),
         }
+    )
+
+
+async def _is_deactivated_pro(chat_id: str) -> bool:
+    """True for a pro the admin deactivated: not a break they took, not an application."""
+    phone = strip_suffix(chat_id)
+    return bool(
+        await users_collection.find_one(
+            {
+                "phone_number": {"$in": [phone, chat_id]},
+                "role": "professional",
+                "is_active": False,
+                "pending_approval": {"$ne": True},
+                "self_paused": {"$ne": True},
+            }
+        )
     )
 
 
@@ -287,13 +327,15 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     task wrapper can requeue; on Redis failure the helper returns True and we
     proceed in degraded mode.
     """
-    acquired = await acquire_chat_lock(chat_id, ttl=10)
+    token = uuid.uuid4().hex
+    acquired = await acquire_chat_lock(chat_id, token=token)
     if not acquired:
         logger.info(
             f"🔒 Chat lock held for {mask_chat_id(chat_id)} — another task is mid-flight; deferring"
         )
         raise ChatLockBusyError(chat_id)
 
+    renewal = asyncio.create_task(keep_chat_lock(chat_id, token))
     try:
         spawn_background_task(
             whatsapp.send_chat_state_typing(chat_id),
@@ -301,7 +343,8 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
         )
         await _process_incoming_message_inner(chat_id, user_text, media_url)
     finally:
-        await release_chat_lock(chat_id)
+        renewal.cancel()
+        await release_chat_lock(chat_id, token)
 
 
 async def _decline_loyalty_offer(chat_id) -> None:
@@ -539,10 +582,12 @@ EMERGENCY_HOLDING_STATES = (
 )
 
 
-def _inbound_log_text(user_text, media_url) -> str:
+def _inbound_log_text(user_text, media_url, file_lost=False) -> str:
     """The single rendering of an inbound turn for the chat history."""
     if media_url:
         return f"{user_text or ''} [MEDIA: {media_url}]"
+    if file_lost and not (user_text or "").strip():
+        return "[MEDIA: lost]"
     return user_text
 
 
@@ -731,20 +776,48 @@ async def _process_incoming_message_inner(
         settings=settings,
     )
 
-    if await run_guard_chain(ctx, deps) is HANDLED:
-        return
+    try:
+        if await run_guard_chain(ctx, deps) is HANDLED:
+            return
 
-    # PRO-182 (PRO-139 slice B): everything the chain falls through to is a
-    # straight line rather than a decision table — one message, top to bottom,
-    # each step consuming what the one above it produced — so it lives in
-    # `conversation_pipeline` as a function instead of as more guards.
-    #
-    # The post-chain values travel on `ctx`, not on this function's locals: the
-    # guards mutate them on the way past (the rate limiter resolves `is_exempt`,
-    # several guards refresh `current_state` before falling through, and the
-    # emergency hoist sets `emergency_inbound_logged` so the pipeline's step 1
-    # does not log the same turn twice), and the pipeline reads them there.
-    await run_customer_pipeline(ctx, deps)
+        # PRO-182 (PRO-139 slice B): everything the chain falls through to is a
+        # straight line rather than a decision table — one message, top to bottom,
+        # each step consuming what the one above it produced — so it lives in
+        # `conversation_pipeline` as a function instead of as more guards.
+        #
+        # The post-chain values travel on `ctx`, not on this function's locals: the
+        # guards mutate them on the way past (the rate limiter resolves `is_exempt`,
+        # several guards refresh `current_state` before falling through, and the
+        # emergency hoist sets `emergency_inbound_logged` so the pipeline's step 1
+        # does not log the same turn twice), and the pipeline reads them there.
+        await run_customer_pipeline(ctx, deps)
+    except BaseException:
+        # BaseException because a worker shutdown cancels the job and arq re-runs
+        # it. The opening is in the history and is not replayed, but the re-run's
+        # text is only the customer's "yes", so nothing would flag the emergency.
+        if ctx.replayed_held_messages and ctx.is_emergency_detected:
+            await page_emergency_turn(chat_id, "failed right after consent")
+        raise
+
+
+async def page_emergency_turn(chat_id: str, what: str) -> None:
+    """Page about an emergency turn that did not finish, with something to look up."""
+    try:
+        lead = await leads_collection.find_one(
+            {"chat_id": chat_id}, sort=[("created_at", -1)]
+        )
+    except Exception:
+        lead = None
+    handle = (
+        f"Latest lead: {lead['_id']}."
+        if lead
+        else "No lead found, so nothing to open in the panel: the full number is "
+        "in the `consent` collection, under the chat id ending in those digits."
+    )
+    notification_service.page_operator(
+        f"Emergency message from {mask_chat_id(chat_id)} {what}. {handle} "
+        "Contact the customer."
+    )
 
 
 # --- Private Helpers ---
@@ -760,6 +833,7 @@ async def _build_pro_response(
     media_data=None,
     media_mime=None,
     media_url=None,
+    media_lost=False,
 ):
     """Build the pro persona AI response."""
     pro_name = best_pro.get("business_name", Defaults.PROLI_PRO_NAME)
@@ -804,6 +878,7 @@ async def _build_pro_response(
         media_data=media_data,
         media_mime_type=media_mime,
         media_url=media_url,
+        media_lost=media_lost,
         require_json=True,
         pro_id=str(best_pro["_id"]),
     )
@@ -859,13 +934,11 @@ async def _finalize_deal(
     ok, reason = is_address_complete(ed)
 
     # Task 3: Bypass for emergency
-    bypass_address_logic = False
     if not ok and is_emergency and (ed.city or extracted_city):
         logger.info(
             f"🚑 EMERGENCY BYPASS: allowing incomplete address for {mask_chat_id(chat_id)} (city={ed.city or extracted_city})"
         )
         ok = True
-        bypass_address_logic = True
 
     if not ok:
         # Persist whatever partial address parts we already have so the sticky
@@ -876,7 +949,7 @@ async def _finalize_deal(
             "city": ed.city or extracted_city,
             "floor": ed.floor,
             "apartment": ed.apartment,
-            "issue_type": ed.issue or extracted_issue,
+            "issue_type": issue_update(ed.issue, extracted_issue) or extracted_issue,
         }
         partial_update = {k: v for k, v in partial_update.items() if v}
         if current_lead_id and partial_update:
@@ -900,13 +973,26 @@ async def _finalize_deal(
     # nudger. None when the customer gave no concrete time; read paths tolerate that.
     d_datetime = parse_iso_to_utc(final_response.extracted_data.appointment_datetime)
 
-    if bypass_address_logic and not (ed.street and ed.street_number):
-        d_address = ed.city or extracted_city
+    # Parts this turn didn't extract come from the lead, so a turn that extracted
+    # nothing can't shrink a known address to a bare city.
+    lead_facts = active_lead_doc or {}
+    street = ed.street or lead_facts.get("street")
+    street_number = ed.street_number or lead_facts.get("street_number")
+    if street and street_number:
+        d_address = compose_full_address(
+            SimpleNamespace(
+                street=street,
+                street_number=street_number,
+                city=ed.city or lead_facts.get("city") or extracted_city,
+            )
+        )
     else:
-        d_address = compose_full_address(ed)
+        d_address = ed.city or extracted_city
 
     d_issue = (
-        final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
+        issue_update(final_response.extracted_data.issue, extracted_issue)
+        or extracted_issue
+        or Defaults.UNKNOWN_ISSUE
     )
 
     d_name = final_response.extracted_data.customer_name or extracted_name
@@ -934,6 +1020,11 @@ async def _finalize_deal(
         lead_update["quoted_price"] = quoted_price
 
     if current_lead_id:
+        # A turn that extracted nothing (a failed file on an emergency lead reaches
+        # here with an empty response) must not erase what the lead already has.
+        for field in ("street", "street_number", "city", "floor", "apartment"):
+            if not lead_update[field]:
+                del lead_update[field]
         # CONTACTED -> NEW once the routing engine has matched a pro. Goes
         # through set_lead_status so the transition lands in status_history.
         lead = await set_lead_status(

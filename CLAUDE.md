@@ -115,6 +115,7 @@ python scripts/create_indexes.py   # Create MongoDB indexes (runs automatically 
 python scripts/clear_history.py    # Clear chat history
 python scripts/check_pro_service_areas.py  # Backfill/audit: geocode every approved pro's service_areas, --apply to write
 #                                            (against staging/production, run the 🗺️ Check pro service areas workflow instead — branch picks the environment, report lands in the job summary)
+python scripts/normalize_pro_phones.py     # Backfill/audit: every pro's phone_number in the bare 972… form, --apply to write (refuses on a would-be duplicate)
 ```
 
 ### Testing
@@ -144,7 +145,7 @@ Entry point for inbound WhatsApp webhooks. Its only job is to validate the incom
 
 ### Process 2: ARQ Worker (`app/worker.py` + `app/core/arq_worker.py`)
 
-Picks up `process_message_task` jobs from Redis and calls `workflow_service.process_incoming_message`. Also hosts APScheduler for periodic jobs (SOS healer every 10 mins, stale monitor every 30 mins, stale lead nudger every 4h, daily agenda at 08:00 Israel time, pro-approval SLA check every 5 mins, WhatsApp instance deauth watchdog every 2 mins, backup freshness watchdog every hour — production only, PRO-185); the four long-interval jobs (SOS Reporter, stale lead nudger, lead janitor, backup freshness watchdog) also run once shortly after boot so a deploy cadence shorter than their interval can't starve them (PRO-176).
+Picks up `process_message_task` jobs from Redis and calls `workflow_service.process_incoming_message`. Also hosts APScheduler for periodic jobs (SOS healer every 10 mins, stale monitor every 30 mins, stale lead nudger every 4h, daily agenda at 08:00 Israel time, pro-approval SLA check every 5 mins, WhatsApp instance deauth watchdog every 2 mins, backup freshness watchdog every hour — production only, PRO-185, WhatsApp quality watchdog every 15 mins, PRO-90); the long-interval jobs (SOS Reporter, stale lead nudger, lead janitor, backup freshness watchdog, quality watchdog) also run once shortly after boot so a deploy cadence shorter than their interval can't starve them (PRO-176).
 
 ### Process 3: Streamlit Admin Panel (`admin_panel/`)
 
@@ -157,7 +158,7 @@ Protected by bcrypt cookie-based auth; views for lead management, professional p
 ### Data Layer
 
 - **MongoDB**: Primary store — `users` (pros + customers), `leads`, `slots`, `messages`, `settings`, `reviews`, `consent`, `audit_log`, `admins`, `wa_delivery` (PRO-89 — per-wamid outbound delivery statuses, kept out of `messages` so status callbacks never get replayed into the AI context)  
-- **Redis**: ARQ task queue + context cache (chat history) + state machine (FSM)
+- **Redis**: ARQ task queue + context cache (chat history) + state machine (FSM) + the short hold on pre-consent messages
 
 ### Key Constants (`app/core/constants.py`)
 

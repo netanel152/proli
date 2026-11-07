@@ -1,6 +1,8 @@
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
+from app.core.config import settings
 from app.core.database import leads_collection, users_collection
 from app.core.constants import (
     LeadStatus,
@@ -16,6 +18,7 @@ from app.core.logger import logger, page_critical
 from app.core.redis_client import get_redis_client
 from app.core.datetime_utils import within_business_hours
 from app.providers.whatsapp import get_whatsapp, record_account_state
+from app.providers.whatsapp import quality
 from app.providers.whatsapp.facade import _PAUSE_KEY
 from app.services import matching_service
 from app.services.notification_service import (
@@ -117,7 +120,9 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
         )
 
 
-async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
+async def reassign_lead(
+    lead, notify_old_pro: bool = True, announce: bool = True
+) -> bool:
     """Reassign one lead to the next-best pro, excluding its current pro.
 
     Notifies the customer, the new pro, and the old pro; escalates to
@@ -131,7 +136,9 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
     reassignment offer (customer chose "find someone else"), and the PRO-117
     pro-reject handoff. ``notify_old_pro=False`` skips the ``PRO_LOST_LEAD``
     message ("הועברה עקב חוסר מענה") — wrong for a pro who explicitly rejected
-    and already got the reject acknowledgement.
+    and already got the reject acknowledgement. ``announce=False`` skips
+    ``CUSTOMER_REASSIGNING``, whose apology for the wait is false for a caller that
+    moved the lead for another reason and told the customer so itself.
     """
     lead_id = lead["_id"]
     chat_id = lead["chat_id"]
@@ -231,21 +238,27 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
         return False
 
     # 1. Notify customer
-    try:
-        await whatsapp.send_message(chat_id, Messages.SOS.CUSTOMER_REASSIGNING)
-    except Exception as e:
-        logger.error(f"Failed to notify customer ...{chat_id[-8:]}: {e}")
+    if announce:
+        try:
+            await whatsapp.send_message(chat_id, Messages.SOS.CUSTOMER_REASSIGNING)
+        except Exception as e:
+            logger.error(f"Failed to notify customer ...{chat_id[-8:]}: {e}")
 
     # 2. Find replacement — exclude the current pro AND everyone who already
     # explicitly rejected this lead (PRO-117: excluding only the current pro
-    # lets the reject chain ping-pong A→B→A within MAX_REASSIGNMENTS).
+    # lets the reject chain ping-pong A→B→A within MAX_REASSIGNMENTS), and
+    # everyone dropped from it for trade (PRO-225).
     excluded_ids = list(lead.get("rejected_by") or [])
+    excluded_ids += [
+        pid for pid in lead.get("excluded_pro_ids") or [] if pid not in excluded_ids
+    ]
     if current_pro_id and current_pro_id not in excluded_ids:
         excluded_ids.append(current_pro_id)
     new_pro = await matching_service.determine_best_pro(
         issue_type=lead.get("issue_type"),
         location=raw_location,
         excluded_pro_ids=excluded_ids,
+        customer_chat_id=chat_id,
     )
 
     if new_pro:
@@ -697,6 +710,123 @@ async def send_periodic_admin_report():
         logger.error(f"❌ [SOS Reporter] Error: {e}")
 
 
+# What each condition from `quality.active_conditions` tells the operator.
+_QUALITY_PAGE_TEXT = {
+    "rating": "quality rating left GREEN",
+    "phone": "Meta flagged the number",
+    "waba": "account cannot send freely",
+    "poll": "the quality watchdog cannot fully read Meta",
+}
+_QUALITY_PAGE_ACTION = (
+    "Rating prompts and loyalty offers are paused; dispatch continues."
+)
+# Claiming "dispatch continues" here would be false comfort.
+_QUALITY_PAGE_ACTION_BLOCKED = (
+    "Rating prompts and loyalty offers are paused. Proli does not pause dispatch, "
+    "but Meta may reject its sends."
+)
+
+
+def _page_as_new_issue(condition: str, message: str) -> None:
+    """Page with a fingerprint of its own. Sentry groups by message otherwise, so
+    a repeat would land in the existing issue and could send no email."""
+    paged = False
+    try:
+        import sentry_sdk
+
+        with sentry_sdk.isolation_scope() as scope:
+            scope.fingerprint = ["whatsapp-quality", condition, uuid.uuid4().hex]
+            paged = True
+            page_critical(message)
+    except Exception as e:
+        logger.warning(f"[WA Quality] could not set the page's fingerprint: {e}")
+        # A page without its own issue beats no page, but never send two.
+        if not paged:
+            page_critical(message)
+
+
+async def check_whatsapp_quality():
+    """PRO-90 — early warning on the number's quality rating, tier and health.
+
+    Staging runs on Meta's Test Number, whose WABA is BLOCKED by design until
+    billing and verification land, and it has no reputation worth protecting. So
+    staging polls and reports on /health but never pages or tightens; only
+    production acts. Every page is limited by `quality.claim_page`.
+    """
+    if not whatsapp.provider.transmits:
+        return
+
+    reading = await whatsapp.get_quality()
+    previous_readable = True
+    try:
+        previous = await quality.read_snapshot() or {}
+    except ValueError as e:
+        # Corrupt, not unreachable: this tick's write is what repairs it.
+        logger.warning(f"[WA Quality] stored snapshot corrupt, replacing it: {e}")
+        previous = {}
+    except Exception as e:
+        logger.warning(f"[WA Quality] previous snapshot unreadable: {e}")
+        previous = {}
+        previous_readable = False
+    snapshot = quality.merge_reading(reading, previous)
+    conditions = quality.active_conditions(snapshot)
+    snapshot["conditions"] = conditions
+    snapshot["tightened"] = settings.is_production and bool(conditions)
+    # Written over a good snapshot, this partial one would reset its history.
+    if previous_readable:
+        try:
+            await quality.write_snapshot(snapshot)
+        except Exception as e:
+            logger.warning(f"[WA Quality] snapshot not written: {e}")
+
+    tier = snapshot.get("messaging_tier")
+    if conditions != previous.get("conditions", []) or tier != previous.get(
+        "messaging_tier"
+    ):
+        logger.warning(
+            f"[WA Quality] conditions={conditions} tier={tier} "
+            f"(was {previous.get('conditions', [])}, "
+            f"{previous.get('messaging_tier')})"
+        )
+
+    if not settings.is_production:
+        return
+
+    summary = (
+        f"rating={snapshot.get('quality_rating')} tier={tier} "
+        f"can_send={snapshot.get('can_send_message')} "
+        f"errors={snapshot.get('health_errors') or []}"
+    )
+    for condition in conditions:
+        if await quality.claim_page(condition):
+            kind = condition.split(":", 1)[0]
+            action = (
+                _QUALITY_PAGE_ACTION_BLOCKED
+                if condition == "waba:BLOCKED"
+                else _QUALITY_PAGE_ACTION
+            )
+            _page_as_new_issue(
+                condition,
+                f"🚨 WhatsApp {_QUALITY_PAGE_TEXT[kind]} ({condition}): {summary}. "
+                f"{action} See docs/RUNBOOK_WHATSAPP_OUTAGE.md §8.",
+            )
+
+    count = await quality.business_initiated_count()
+    cap = quality.business_initiated_cap(tier)
+    threshold = cap * WorkerConstants.WA_BUSINESS_INITIATED_ALERT_RATIO
+    if (
+        count is not None
+        and count >= threshold
+        and await quality.claim_page(f"cap:{cap}")
+    ):
+        _page_as_new_issue(
+            f"cap:{cap}",
+            f"🚨 WhatsApp business-initiated conversations at {count}/{cap} in the "
+            "last 24h, against Meta's messaging limit. "
+            "See docs/RUNBOOK_WHATSAPP_OUTAGE.md §8.",
+        )
+
+
 async def check_whatsapp_instance_state():
     """PRO-20 — WhatsApp account deauth watchdog (SPOF protection).
 
@@ -841,6 +971,11 @@ async def check_pro_approval_sla():
       * T+APPROVAL_REASSIGN_OFFER_MINUTES → offer the customer a reassignment once
         (``reassign_offered`` flag); the 1/2 reply is handled in workflow_service.
     Emergency leads use half the thresholds. Idempotent via the boolean flags.
+
+    PRO-212: an offer held by a pro the admin deactivated moves to another pro in
+    business hours, whatever the flags or the customer's state, unless the customer
+    is with a human. Waiting overnight outlasts AWAITING_PRO_APPROVAL, so neither
+    can be required of it, which is why the query no longer filters on the flags.
     """
     logger.info("⏰ [Approval SLA] Checking leads awaiting pro approval...")
     now = datetime.now(timezone.utc)
@@ -849,10 +984,6 @@ async def check_pro_approval_sla():
             "status": LeadStatus.NEW,
             "pro_id": {"$ne": None},
             "pro_notified_at": {"$ne": None},
-            "$or": [
-                {"approval_nudged": {"$ne": True}},
-                {"reassign_offered": {"$ne": True}},
-            ],
         }
         leads = await leads_collection.find(query).to_list(
             length=WorkerConstants.DB_QUERY_LIMIT
@@ -864,11 +995,23 @@ async def check_pro_approval_sla():
     for lead in leads:
         try:
             chat_id = lead["chat_id"]
-            # Only act while the customer is genuinely waiting for approval.
+            customer_state = await StateManager.get_state(chat_id)
+
+            # PRO-212: a pro the admin deactivated can't answer this offer, so don't
+            # wait for them. Moving it messages the customer, hence the PRO-73 gate.
+            owner = await users_collection.find_one({"_id": lead.get("pro_id")})
             if (
-                await StateManager.get_state(chat_id)
-                != UserStates.AWAITING_PRO_APPROVAL
+                owner
+                and not owner.get("is_active", True)
+                and not owner.get("self_paused")
+                and customer_state != UserStates.PAUSED_FOR_HUMAN
             ):
+                if within_business_hours():
+                    await reassign_lead(lead, notify_old_pro=False)
+                continue
+
+            # Only act while the customer is genuinely waiting for approval.
+            if customer_state != UserStates.AWAITING_PRO_APPROVAL:
                 continue
 
             notified_at = lead.get("pro_notified_at")

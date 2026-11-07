@@ -75,7 +75,7 @@ All 19 issues from the March 2026 code review had been resolved at the time of w
 |---|---|---|
 | Automated Backups | Done | Daily mongodump at 02:00 IL, S3 upload, 7-day retention |
 | Privacy/Consent | Done | Consent gate on first contact, data export/delete |
-| Error Hardening | Done | Per-section try/except in workflow, user-friendly errors, ARQ max_tries=5 |
+| Error Hardening | Done | Per-section try/except in workflow, user-friendly errors, ARQ max_tries=18 |
 | Admin RBAC | Done | Owner/Editor/Viewer roles, multi-admin auth, audit logging |
 | Monitoring | Done | Expanded /health (DB/Redis latency, worker heartbeat), PII masking in logs |
 

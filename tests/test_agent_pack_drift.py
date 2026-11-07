@@ -58,6 +58,8 @@ _FLOW_TRACER_EMBEDDED_TTLS = [
     "CANCEL_CONFIRM_TTL_SECONDS",
     "LOYALTY_CONFIRM_TTL_SECONDS",
     "NEW_OR_EXISTING_TTL_SECONDS",
+    "CONSENT_HOLD_TTL_SECONDS",
+    "PRO_ACTION_PICKER_TTL_SECONDS",
     "PRO_SEARCH_RATE_LIMIT_SECONDS",
     "SOS_TIMEOUT_MINUTES",
     "STALE_BOOKED_LEAD_HOURS",
@@ -264,7 +266,7 @@ _DISPATCH_SEQUENCE = [
     # `ctx.` fields and the workflow-owned names became `wf.` lookups.
     ("Pro safety-bypass", "ctx.normalized_text in wf.PRO_BUSINESS_KEYWORDS"),
     # PRO-186 re-anchored: the branch no longer tests PRO_MODE alone — it takes
-    # every state pro_flow owns, including the three prompts it holds open.
+    # every state pro_flow owns, including the prompts it holds open.
     # PRO-181: the bypass guard directly above makes the same
     # `not in PRO_DISPATCH_STATES` comparison, so the bare expression is no
     # longer unique. What distinguishes them is that the routing guard's test is

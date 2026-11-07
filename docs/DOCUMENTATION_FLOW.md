@@ -15,9 +15,9 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 |--------|----------|------------|
 | `contacted` | AI extracts city + issue, opens conversation | Dispatcher (Phase 1) |
 | `new` | Pro matched and approval message sent | `_finalize_deal` |
-| `booked` | Pro approves via text ("אשר"/"1") — also not terminal: a customer reporting a no-show (option *3* on the completion check, PRO-45) claims the lead and hands it to `reassign_lead`, which reopens it as `new` under the next pro or escalates it | `_handle_approve` in `pro_flow.py` |
+| `booked` | Pro approves via text ("אשר", or a number in the list a bare "1" opens) — also not terminal: a customer reporting a no-show (option *3* on the completion check, PRO-45) claims the lead and hands it to `reassign_lead`, which reopens it as `new` under the next pro or escalates it | `_handle_approve` in `pro_flow.py` |
 | `completed` | Pro or customer confirms work done | `customer_flow.py` |
-| `rejected` | Pro rejects via text ("דחה"/"2") — a way-station, not terminal: `_handle_reject` claims it then hands off to `monitor_service.reassign_lead`, which reopens the lead as `new` under the next pro or escalates it (PRO-117) | `_handle_reject` in `pro_flow.py` |
+| `rejected` | Pro rejects via text ("דחה", or a number in the list a bare "2" opens) — a way-station, not terminal: `_handle_reject` claims it then hands off to `monitor_service.reassign_lead`, which reopens the lead as `new` under the next pro or escalates it (PRO-117) | `_handle_reject` in `pro_flow.py` |
 | `cancelled` | Customer cancels — a cancel keyword on a BOOKED job first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit | `workflow_service.py` |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h | `admin_flow.py` / `monitor_service.py` |
 | `pending_admin_review` | No replacement pro found at any radius, `MAX_REASSIGNMENTS` exhausted, or a rejected/no-show lead's rematch itself fails (PRO-45: `escalation_reason: "no_show_reassign_failed"`) | `monitor_service.py` / `workflow_service.py` / `pro_flow.py` / `customer_flow.py` |
@@ -65,7 +65,7 @@ When Phase 2 returns `is_deal=True` (or the lead is flagged `is_emergency` and a
 1. Create or update lead with `status=new`, `pro_id`, `full_address` (composed), `street`, `street_number`, `city`, `floor`, `apartment`, `issue_type`, `appointment_time`, `appointment_datetime` (parsed to a BSON UTC date via `parse_iso_to_utc`), `media_url`
 2. Set customer state to `AWAITING_PRO_APPROVAL` (customer sees a soft-hold message on next message)
 3. Send customer `Messages.Customer.AWAITING_APPROVAL`
-4. Send pro a text-based approval request (e.g., "Reply 'אשר' or '1' to approve")
+4. Send pro a text-based approval request (`*אשר*` / `*דחה*`). With more than one NEW lead, or on a bare digit, the pro picks from a numbered list first
 
 If the customer is themselves a registered pro, they are **not** returned to `PRO_MODE` here — they stay on the customer side until their own lead closes, so follow-ups like "מתי הוא מגיע?" aren't answered with the pro dashboard. The ways back are a pro business keyword (Safety Bypass) or the IDLE auto-detect once the lead is done.
 
@@ -88,7 +88,7 @@ If the customer is themselves a registered pro, they are **not** returned to `PR
 When the customer sends a trigger phrase (e.g., "אני צריך נציג"):
 
 1. Customer state set to `PAUSED_FOR_HUMAN` with `ttl=900` (15 min)
-2. `send_sos_alert()` sends alerts to both the assigned pro (if any) and admin
+2. `send_sos_alert()` always pages the admin. It alerts the assigned pro only on a BOOKED lead (with the customer's phone and words) or a NEW one (neither, offering `*אשר*`/`*דחה*`), and never a pro the admin deactivated. The page's `pro_notified` says whether a send to the pro succeeded. A BOOKED lead's pro also gets `PAUSE_NOTIFICATION`
 3. Customer receives `Messages.Customer.BOT_PAUSED_BY_CUSTOMER`
 4. All subsequent messages reset the 15-minute TTL.
 5. If 15 minutes of silence pass, the **SLA Monitor** triggers `SLA_DEFLECTION_MESSAGE` (PRO-73: business hours + `sla_monitor_active` toggle, default OFF).
