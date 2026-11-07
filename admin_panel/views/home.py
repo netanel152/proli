@@ -54,6 +54,7 @@ from admin_panel.core.lead_queries import (
     audit_change,
     build_edit_form_payload,
     build_lead_row,
+    end_conversation_sync,
     new_save_report,
     record_change,
     report_acted,
@@ -1029,6 +1030,7 @@ def view_leads_dashboard(T):
                                 status_by_label=status_by_label(T),
                                 offer_pending=_offer_pending,
                                 report=result,
+                                end_conversation=end_conversation_sync,
                             )
                             # A stale refusal too: the retry needs a fresh frame.
                             if report_acted(result) or any(
@@ -1451,6 +1453,7 @@ def _render_selected_lead_actions(
                                     if isinstance(frame_pro_id, str)
                                     else None
                                 ),
+                                end_conversation=end_conversation_sync,
                             )
                             if change["found"]:
                                 # PRO-161: the st.success here was discarded by the

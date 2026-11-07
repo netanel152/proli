@@ -64,6 +64,68 @@ async def set_lead_status(
     )
 
 
+TERMINAL_STATUSES = (
+    LeadStatus.COMPLETED,
+    LeadStatus.REJECTED,
+    LeadStatus.CLOSED,
+    LeadStatus.CANCELLED,
+)
+_END_STAMPS = ("completed_at", "cancelled_at", "closed_at", "updated_at", "created_at")
+
+
+def _naive_utc(value):
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _ended_at(lead) -> Optional[datetime]:
+    """When a terminal lead ended, as naive UTC (the form Mongo returns).
+
+    Its latest terminal ``status_history`` entry, which every status writer
+    pushes, the admin panel's included (the panel writes no other stamp). A
+    legacy lead with no such entry falls back to its latest stamp.
+    """
+    stamps = [
+        e.get("at")
+        for e in lead.get("status_history") or []
+        if e.get("status") in TERMINAL_STATUSES
+    ] or [lead.get(f) for f in _END_STAMPS]
+    stamps = [s for s in map(_naive_utc, stamps) if s]
+    return max(stamps) if stamps else None
+
+
+ADDRESS_PARTS = ("street", "street_number", "floor", "apartment")
+
+
+def _city_key(city) -> str:
+    return " ".join(str(city or "").replace("-", " ").split())
+
+
+def parts_from_other_city(lead, city) -> bool:
+    """PRO-228: does ``city`` differ from the city ``lead``'s stored address parts
+    were given with (``address_city``, else the lead's ``city``)?
+
+    False when either city is unknown or nothing is stored. A spelling variant
+    ("תל אביב יפו") reads as a different city: asking again is the safe mistake.
+    """
+    known = (lead or {}).get("address_city") or (lead or {}).get("city")
+    return bool(
+        city
+        and known
+        and _city_key(city) != _city_key(known)
+        and any((lead or {}).get(f) for f in ADDRESS_PARTS)
+    )
+
+
+def stated_in(parts: dict, text) -> dict:
+    """The parts whose value appears in ``text``: what the customer wrote this
+    turn, not what the model re-read from the history."""
+    return {k: v for k, v in parts.items() if str(v) in (text or "")}
+
+
 def is_address_complete(extracted_data) -> tuple[bool, str]:
     """
     Pure check: does extracted_data carry street+street_number+city+floor+apartment?
@@ -244,24 +306,19 @@ class LeadManager:
         # lead closed belong to an old session and MUST NOT leak into the new
         # AI prompt. Without this cutoff, every post-completion rehydration
         # would re-inject stale context and confuse Gemini.
-        terminal_statuses = [
-            LeadStatus.COMPLETED,
-            LeadStatus.REJECTED,
-            LeadStatus.CLOSED,
-            LeadStatus.CANCELLED,
-        ]
-        last_terminal = await leads_collection.find_one(
-            {"chat_id": chat_id, "status": {"$in": terminal_statuses}},
-            sort=[("completed_at", -1), ("created_at", -1)],
-        )
+        #
+        # PRO-228: the cutoff is the latest end across *all* of them. It used to
+        # be one lead picked by `completed_at`, so an old COMPLETED job beat a
+        # lead cancelled an hour ago, and that lead's address reached the new
+        # lead through the model.
         cutoff = None
-        if last_terminal:
-            cutoff = (
-                last_terminal.get("completed_at")
-                or last_terminal.get("closed_at")
-                or last_terminal.get("updated_at")
-                or last_terminal.get("created_at")
-            )
+        async for lead in leads_collection.find(
+            {"chat_id": chat_id, "status": {"$in": list(TERMINAL_STATUSES)}},
+            {f: 1 for f in _END_STAMPS + ("status_history",)},
+        ):
+            ended = _ended_at(lead)
+            if ended and (cutoff is None or ended > cutoff):
+                cutoff = ended
 
         query = {"chat_id": chat_id}
         if cutoff:

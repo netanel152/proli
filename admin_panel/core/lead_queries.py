@@ -42,6 +42,7 @@ from app.core.constants import Actor, LeadStatus
 from app.core.lead_history import status_history_entry
 from app.core.logger import logger
 from app.core.phone import strip_suffix
+from app.services.lead_manager_service import TERMINAL_STATUSES
 
 #: Columns the leads editor frame carries. ``id`` and ``_chat_id`` are hidden
 #: from the admin by ``column_config`` — hidden, not dropped: they are still
@@ -356,8 +357,14 @@ def apply_lead_changes(
     leads_collection,
     offer_pending=None,
     expected_pro=None,
+    end_conversation=None,
 ):
     """Write one lead's edits and decide what setting its pro *means*.
+
+    ``end_conversation(chat_id)``, when given, runs after a status move into a
+    terminal status if the customer has no other open lead: what a cancel in
+    chat does to the FSM state and the cached context (PRO-228). Its failure is
+    logged, never raised, since the lead is already saved.
 
     Shared by the leads table and the Edit form, so the two cannot disagree:
 
@@ -414,7 +421,9 @@ def apply_lead_changes(
         }
 
     # Doubles as the existence check for every kind of edit.
-    current = leads_collection.find_one({"_id": oid}, {"status": 1, "pro_id": 1})
+    current = leads_collection.find_one(
+        {"_id": oid}, {"status": 1, "pro_id": 1, "chat_id": 1}
+    )
     if current is None:
         logger.warning(f"[LeadsEditor] Lead {lead_id} vanished before it was read.")
         return _result(False)
@@ -490,11 +499,49 @@ def apply_lead_changes(
             )
             return _result(False)
 
+    if status_moved and new_status in TERMINAL_STATUSES and end_conversation:
+        _end_conversation_quietly(leads_collection, oid, current, end_conversation)
+
     if offer_to is None:
         return _result(True)
 
     outcome, pro_name = offer_pending(lead_id, offer_to)
     return _result(True, (outcome, pro_name))
+
+
+def _end_conversation_quietly(leads_collection, oid, lead, end_conversation):
+    """Skip it while the customer has another open lead: that conversation is live."""
+    chat_id = lead.get("chat_id")
+    try:
+        if not chat_id or leads_collection.find_one(
+            {
+                "chat_id": chat_id,
+                "_id": {"$ne": oid},
+                "status": {"$nin": list(TERMINAL_STATUSES)},
+            },
+            {"_id": 1},
+        ):
+            return
+        end_conversation(chat_id)
+    except Exception as e:
+        logger.error(f"[LeadsEditor] Ending the conversation of lead {oid} failed: {e}")
+
+
+def end_conversation_sync(chat_id, timeout=5.0):
+    """Clear the customer's FSM state and cached context, as a cancel in chat does.
+
+    On the one sync→async bridge loop (``app.core.sync_bridge``), so the panel
+    never builds a second loop around the cached Redis client.
+    """
+    from app.core.sync_bridge import run_blocking
+    from app.services.context_manager_service import ContextManager
+    from app.services.state_manager_service import StateManager
+
+    async def _end():
+        await StateManager.clear_state(chat_id)
+        await ContextManager.clear_context(chat_id)
+
+    run_blocking(_end(), timeout)
 
 
 def _audit_quietly(audit, action, details):
@@ -609,6 +656,7 @@ def save_lead_edits(
     status_by_label=None,
     offer_pending=None,
     report=None,
+    end_conversation=None,
 ):
     """Apply the leads editor's edits, resolving row identity safely.
 
@@ -649,6 +697,7 @@ def save_lead_edits(
         offer_pending: ``callable(lead_id, pro_id) -> (outcome, pro_name)``,
             see :func:`apply_lead_changes`.
         report: the :func:`new_save_report` to fill; a new one if omitted.
+        end_conversation: ``callable(chat_id)``, see :func:`apply_lead_changes`.
 
     Returns:
         The report: ``{"updated", "skipped", "skipped_rows", "assignments",
@@ -716,6 +765,7 @@ def save_lead_edits(
                 leads_collection=leads_collection,
                 offer_pending=offer_pending,
                 expected_pro=_frame_pro_id(row),
+                end_conversation=end_conversation,
             )
         except Exception as e:
             logger.error(f"[LeadsEditor] Saving lead {lead_id} failed: {e}")

@@ -58,6 +58,11 @@ from app.core.phone import mask_chat_id, to_chat_id
 from app.core.prompts import Prompts
 from app.services.ai_engine_service import AIResponse, file_notice_in
 from app.services.dispatch_guards import DispatchContext, GuardDeps
+from app.services.lead_manager_service import (
+    ADDRESS_PARTS,
+    parts_from_other_city,
+    stated_in,
+)
 from app.services.matching_service import (
     customer_phones,
     issue_update,
@@ -672,6 +677,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 # to confuse matching_service (see 2026-04-18 Unknown Address
                 # incident) — see migration script migrate_unknown_address.py.
                 full_address=extracted_city or None,
+                # PRO-228: without it the loyalty accept saw no city and asked
+                # for one the opening message had already named.
+                city=extracted_city or None,
                 status=LeadStatus.CONTACTED,
                 appointment_time=Defaults.PENDING_TIME,
                 media_url=media_url,
@@ -721,10 +729,23 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     if current_lead_id:
         extracted_parts = {
             field: getattr(dispatcher_response.extracted_data, field, None)
-            for field in ("street", "street_number", "floor", "apartment")
+            for field in ADDRESS_PARTS
         }
         extracted_parts = {k: v for k, v in extracted_parts.items() if v}
+        # PRO-228: parts are never joined to another city. A new city unsets
+        # the stored ones, and of this turn's it keeps only those the customer
+        # wrote now: the model re-reads the old street from the history.
+        if parts_from_other_city(lead_facts, ai_city):
+            extracted_parts = stated_in(
+                extracted_parts, f"{user_text or ''} {transcription or ''}"
+            )
+            await leads_collection.update_one(
+                {"_id": current_lead_id},
+                {"$unset": {f: "" for f in ADDRESS_PARTS if f not in extracted_parts}},
+            )
         if extracted_parts:
+            # The city they were given with, which parts_from_other_city reads.
+            extracted_parts["address_city"] = ai_city or extracted_city
             await leads_collection.update_one(
                 {"_id": current_lead_id}, {"$set": extracted_parts}
             )

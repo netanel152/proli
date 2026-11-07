@@ -178,6 +178,8 @@ process_incoming_message(chat_id, text, media_url)
         │         re-prompt so a cry for a human gets out on the first try.
         │
         ├─ State == AWAITING_ADDRESS? → re-extract missing address parts, save; once complete, continue the blocked step (loyalty dispatch or the rejected deal, PRO-227)
+        │      └─ a reply naming another city than the stored parts' `address_city` drops them,
+        │         keeping only parts written in that reply, and asks again (PRO-228)
         │
         ├─ Registered pro types "לקוח" (from PRO_MODE or IDLE)?
         │      └─ set CUSTOMER_MODE, clear context, send SWITCHED_TO_CUSTOMER, return
@@ -213,7 +215,9 @@ process_incoming_message(chat_id, text, media_url)
                ├─ media handling (image bytes / audio+video URL)
                │
                ├─ Phase 1 — Dispatcher AI (last 5 turns = 10 messages)
-               │      extracts city + issue
+               │      extracts city + issue (a new lead stores the city as `city`, PRO-228)
+               │      address parts are saved with the city they came with (`address_city`);
+               │      a new city unsets them, keeping only parts written this turn (PRO-228)
                │      if city+issue found (emergency: city alone) → matching_service.determine_best_pro()
                │
                ├─ Phase 2 — Pro Persona AI (if pro assigned)
@@ -336,8 +340,8 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | Collection | Purpose |
 |-----------|---------|
 | `users` | Professionals and customers. Pros have `location` (2dsphere), `service_areas`, `price_list`, `social_proof`, `total_tokens_used` |
-| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `customer_name` (AI-extracted from the conversation), `display_name` (optional, admin-set label from the admin panel's Edit-Lead form; falls back to `customer_name`, then the phone), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count` |
-| `messages` | Chat history log per `chat_id` |
+| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `customer_name` (AI-extracted from the conversation), `display_name` (optional, admin-set label from the admin panel's Edit-Lead form; falls back to `customer_name`, then the phone), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `address_city` (the city the street/number/floor/apartment were given with, PRO-228), `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count` |
+| `messages` | Chat history log per `chat_id`. When the Redis context is empty, `LeadManager.get_chat_history` rebuilds it from here, starting after the latest end of any terminal lead of that chat (its last terminal `status_history` entry), so a cancelled lead's messages never reach a new lead (PRO-228) |
 | `slots` | Appointment slots per pro with atomic locking (`is_taken`) |
 | `settings` | Scheduler config toggles (`sos_healer_active`, `lead_janitor_active`, `sla_monitor_active`, etc. — the three cold customer-facing toggles default OFF, PRO-73) |
 | `reviews` | Customer ratings and text reviews |
