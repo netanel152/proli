@@ -3,18 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>פרולי: התאמה בוואטסאפ בין לקוחות לבעלי מקצוע</title>
-<meta name="description" content="כותבים בוואטסאפ מה צריך לתקן, ופרולי מחברת אתכם לבעל מקצוע מתאים. השירות בשלב פיילוט.">
+<title>פרולי | Proli — חיבור חכם לבעלי מקצוע בוואטסאפ</title>
+<meta name="description" content="כותבים בוואטסאפ מה צריך לתקן, ופרולי מחברת אתכם לבעל מקצוע מתאים באזורכם. עוזרת AI לאינסטלציה, חשמל ותיקונים לבית.">
 <meta name="theme-color" content="#f6c31c" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0e1b2e" media="(prefers-color-scheme: dark)">
 <meta property="og:type" content="website">
 <meta property="og:locale" content="he_IL">
-<meta property="og:site_name" content="פרולי">
-<meta property="og:title" content="פרולי: התאמה בוואטסאפ בין לקוחות לבעלי מקצוע">
-<meta property="og:description" content="כותבים בוואטסאפ מה צריך לתקן, ופרולי מחברת אתכם לבעל מקצוע מתאים. השירות בשלב פיילוט.">
+<meta property="og:site_name" content="פרולי | Proli">
+<meta property="og:title" content="פרולי | Proli — בעל מקצוע מתאים בהודעת וואטסאפ">
+<meta property="og:description" content="מתארים את התקלה בטקסט, בתמונה או בהודעה קולית, ופרולי מאתרת עבורכם איש מקצוע פנוי וקרוב.">
 <meta property="og:url" content="https://proli.me/">
 <link rel="canonical" href="https://proli.me/">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f6c31c'/%3E%3Cpath d='M7 8h18v13H14l-6 5v-5H7z' fill='%2310243e'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230e1b2e'/%3E%3Cpath d='M16 5C9.9 5 5 9.3 5 14.6c0 2.9 1.5 5.5 3.8 7.3L8 27l5.2-2.7c.9.2 1.8.3 2.8.3 6.1 0 11-4.3 11-9.6S22.1 5 16 5z' fill='%2325d366'/%3E%3Cpath d='M13 10h4.2c2.4 0 3.9 1.4 3.9 3.5s-1.5 3.5-3.9 3.5h-1.7v4H13zm2.5 2.1v2.8h1.5c1 0 1.6-.5 1.6-1.4s-.6-1.4-1.6-1.4z' fill='%230e1b2e'/%3E%3C/svg%3E">
 <style>
   :root {
     color-scheme: light dark;
@@ -79,6 +79,16 @@
   .band h3 { margin-block-start: 2.25rem; }
   .band h3 + p { margin-block-start: .5rem; }
 
+  .hero nav { display: flex; flex-wrap: wrap; gap: 0 1.75rem; margin-block-start: .5rem; }
+  .features { list-style: none; padding: 0; margin-block-start: 2rem; display: grid; gap: 1.25rem; }
+  .features li { border-block-start: 3px solid var(--rule); padding-block-start: .75rem; max-width: 34rem; }
+  .features strong { display: block; font-size: 1.125rem; }
+  .band .features li { border-color: var(--band-link); }
+  .alert { margin-block-start: 2rem; padding: 1rem 1.25rem; border-inline-start: 6px solid #c62828; background: var(--bubble); color: var(--on-bubble); max-width: 44rem; }
+  .faq dl { margin-block: 1.5rem 0; max-width: 44rem; }
+  .faq dt { font-weight: 800; font-size: 1.125rem; margin-block-start: 1.5rem; }
+  .faq dd { margin: .35rem 0 0; }
+
   .about p { max-width: 36rem; margin-block-start: 1rem; }
 
   footer { border-block-start: 1px solid var(--rule); padding-block: 1.5rem 2rem; }
@@ -93,6 +103,7 @@
     .steps li { grid-template-columns: 5rem minmax(0, 1fr) minmax(0, 1fr); column-gap: 1.5rem; align-items: start; }
     .num { font-size: 3.75rem; }
     .msg { grid-column: 3; margin-block-start: 0; }
+    .features { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   }
   @media (prefers-reduced-motion: no-preference) {
     html { scroll-behavior: smooth; }
@@ -102,74 +113,102 @@
 <body>
 <header class="hero">
   <div class="wrap">
-    <p class="mark">פרולי</p>
+    <p class="mark">פרולי | Proli</p>
     <h1>כותבים בוואטסאפ מה צריך לתקן, ופרולי מחברת אתכם לבעל מקצוע מתאים.</h1>
-    <p class="lede">פרולי היא עוזרת בינה מלאכותית בוואטסאפ, שמתאימה בין לקוחות לבעלי מקצוע כמו אינסטלטורים וחשמלאים. השירות בשלב פיילוט ועדיין לא פתוח לכולם.</p>
-    <a href="#pros">מידע לבעלי מקצוע</a>
+    <p class="lede">פרולי היא עוזרת בינה מלאכותית (AI) בוואטסאפ המקשרת בין לקוחות לבעלי מקצוע כמו אינסטלטורים, חשמלאים וטכנאים. בלי להוריד אפליקציה ובלי לחפש בעשרות אתרים. השירות פועל כעת במתכונת פיילוט.</p>
+    <nav aria-label="ניווט בעמוד">
+      <a href="#how-it-works">איך זה עובד</a>
+      <a href="#pros">מידע לבעלי מקצוע</a>
+    </nav>
   </div>
 </header>
 
 <main>
-  <section aria-labelledby="how">
+  <section id="how-it-works" aria-labelledby="how-title">
     <div class="wrap">
-      <h2 id="how">איך זה עובד</h2>
-      <p class="note">ההודעות כאן הן דוגמה להמחשה.</p>
+      <h2 id="how-title">איך זה עובד</h2>
+      <p class="note">ההודעות המוצגות להלן הן להמחשה בלבד.</p>
       <ol class="steps">
         <li>
           <span class="num" aria-hidden="true">1</span>
           <div class="step-text">
-            <h3>לקוח כותב</h3>
-            <p>מתארים את התקלה בטקסט, בתמונה, בהודעה קולית או בסרטון. בפנייה הראשונה פרולי מבקשת את אישורכם, והשירות מתחיל רק אחריו.</p>
+            <h3>לקוח פונה בוואטסאפ</h3>
+            <p>מתארים את התקלה בטקסט, בתמונה, בהודעה קולית או בסרטון, ומציינים כתובת מלאה. בפנייה הראשונה פרולי תבקש את הסכמתכם לשמירת הפרטים הנדרשים לטיפול בפנייה, והטיפול יחל מיד לאחר מכן.</p>
           </div>
-          <p class="msg">יש לי נזילה מתחת לכיור במטבח. אפשר להגיע מחר בבוקר?</p>
+          <p class="msg">יש לי נזילה מתחת לכיור במטבח ברחוב הרצל 15, תל אביב, קומה 2 דירה 4. אפשר להגיע מחר בבוקר?</p>
         </li>
         <li>
           <span class="num" aria-hidden="true">2</span>
           <div class="step-text">
-            <h3>פרולי מתאימה</h3>
-            <p>פרולי מבינה מה צריך ובאיזה אזור, ומחפשת בעל מקצוע מתאים וקרוב. אם היא נותנת הערכת מחיר, זו הערכה בלבד.</p>
+            <h3>פרולי מאתרת בעל מקצוע פנוי</h3>
+            <p>המערכת מנתחת את מהות התקלה, מאתרת בעל מקצוע זמין באזורכם ומוודאת שהוא פנוי לקחת את העבודה. אם מוצגת הערכת מחיר בשיחה, היא אומדן ראשוני ובלתי מחייב בלבד.</p>
           </div>
-          <p class="msg msg-proli">פניתי לבעל מקצוע עם הפרטים, ואעדכן אותך ברגע שיאשר.</p>
+          <p class="msg msg-proli">פניתי לבעל מקצוע מתאים באזורך עם פרטי התקלה, ואעדכן אותך כאן ברגע שיאשר. תמיד אפשר להקליד "סטטוס" לעדכון.</p>
         </li>
         <li>
           <span class="num" aria-hidden="true">3</span>
           <div class="step-text">
-            <h3>בעל מקצוע מאשר</h3>
-            <p>הפרטים מגיעים אליו בוואטסאפ, והוא מחליט אם לקבל את העבודה. המחיר הסופי והעבודה עצמה נסגרים ישירות ביניכם.</p>
+            <h3>בעל המקצוע מאשר ויוצר קשר</h3>
+            <p>פרטי הקריאה נשלחים לבעל המקצוע בוואטסאפ. מספר הטלפון שלכם נשאר חסוי ומועבר אליו רק לאחר שאישר את העבודה. המחיר הסופי וביצוע העבודה מתואמים ישירות ביניכם.</p>
           </div>
-          <p class="msg"><strong>אשר</strong> — לקבלת העבודה<br><strong>דחה</strong> — לדחייה</p>
+          <p class="msg"><strong>אשר</strong> — לאישור העבודה<br><strong>דחה</strong> — לדחיית העבודה</p>
         </li>
       </ol>
-      <p class="note"><strong>פרולי אינה שירות חירום.</strong> בסכנה מיידית התקשרו למשטרה 100, למד״א 101 או לכבאות 102.</p>
+      <ul class="features">
+        <li><strong>שקיפות מלאה</strong>הקלידו "סטטוס" בכל שלב כדי לבדוק היכן עומדת הפנייה שלכם, או "נציג" למעבר למענה אנושי.</li>
+        <li><strong>שמירה על פרטיותכם</strong>מספר הטלפון שלכם אינו נחשף לבעלי מקצוע שלא אישרו את העבודה.</li>
+        <li><strong>בקרת איכות</strong>בסיום העבודה פרולי תוודא איתכם שהתקלה טופלה לשביעות רצונכם.</li>
+      </ul>
+      <p class="alert"><strong>פרולי אינה שירות חירום.</strong> במקרה של סכנה מיידית (כגון חשד לדליפת גז, שריפה או התחשמלות) אל תמתינו למענה: צאו מהמבנה והתקשרו מיד לכבאות והצלה (102), למשטרה (100) או למד״א (101).</p>
     </div>
   </section>
 
   <section class="band" id="pros" aria-labelledby="pros-title">
     <div class="wrap">
       <h2 id="pros-title">לבעלי מקצוע</h2>
-      <p>העבודות מגיעות לוואטסאפ, בלי אפליקציה נוספת. בכל פנייה רואים את הפרטים ובוחרים אם לקבל או לדחות.</p>
-      <h3>הפיילוט</h3>
-      <p>הפיילוט נפתח למספר קטן של בעלי מקצוע. בתקופת הפיילוט שסוכמה איתכם השימוש ללא תשלום. התמחור יכול להשתנות בהודעה של 30 יום מראש.</p>
-      <p>פרולי מתווכת בלבד ואינה צד לעבודה. רישוי, תמחור ואיכות העבודה באחריותכם.</p>
-      <p>רוצים להצטרף? פרטי הקשר בסעיף <a href="#about">מי אנחנו</a>.</p>
+      <p>מערכת CRM וניהול קריאות חכמה ישירות בוואטסאפ שלכם, ללא צורך בהתקנת אפליקציה חיצונית. מקבלים רק פניות רלוונטיות באזור השירות שלכם, עם תיאור התקלה והכתובת.</p>
+      <ul class="features">
+        <li><strong>סינון וניתוב חכם</strong>הצעות עבודה ממוקדות לפי תחום ההתמחות, האזור הגיאוגרפי ועומס העבודה הנוכחי שלכם.</li>
+        <li><strong>שליטה מלאה בפקודות טקסט</strong>אישור ודחיית עבודות ("אשר" / "דחה"), איתור עבודות פתוחות באזורכם ("חפש"), ומעבר להפסקה וחזרה ("הפסקה" / "זמין") בהודעה אחת.</li>
+        <li><strong>סדר וניהול יומן</strong>תפריט אישי ("תפריט"), רשימת העבודות שלכם לפי מועד ("עבודות") וסיכום עבודות יומי בכל בוקר.</li>
+      </ul>
+      <h3>השתתפות בפיילוט</h3>
+      <p>הפיילוט פתוח כעת למספר מצומצם של בעלי מקצוע. בתקופת הפיילוט שתיקבע מולכם, השימוש במערכת הוא ללא עלות. מודל התמחור עשוי להשתנות בהודעה מוקדמת של 30 יום.</p>
+      <p>פרולי מספקת שירות טכנולוגי לתיווך בלבד ואינה צד להתקשרות שבין בעל המקצוע ללקוח. הרישוי המקצועי, הצעת המחיר, גביית התשלום, הבטיחות ואיכות העבודה הם באחריותו הבלעדית של בעל המקצוע.</p>
+      <p>רוצים להצטרף לפיילוט? שלחו לנו מייל עם תחום ההתמחות ואזור השירות שלכם לכתובת <a href="mailto:info@proli.me">info@proli.me</a>, או ראו בסעיף <a href="#about">מי אנחנו</a>.</p>
       <!-- The wa.me button to the production number goes here once that number exists. -->
+    </div>
+  </section>
+
+  <section class="faq" id="faq" aria-labelledby="faq-title">
+    <div class="wrap">
+      <h2 id="faq-title">שאלות נפוצות</h2>
+      <dl>
+        <dt>האם השימוש בפרולי עולה כסף ללקוחות?</dt>
+        <dd>לא. השירות ללקוחות הפונים דרך וואטסאפ הוא ללא עלות. התשלום על התיקון מתבצע ישירות מול בעל המקצוע שביצע את העבודה.</dd>
+        <dt>האם המספר שלי מועבר לכל בעלי המקצוע?</dt>
+        <dd>לא. לפני שבעל המקצוע מאשר את העבודה הוא רואה רק את תיאור התקלה, השם הפרטי, הרחוב והעיר והמועד המבוקש. מספר הטלפון, הקומה והדירה מועברים אליו רק לאחר שאישר את העבודה.</dd>
+        <dt>איך מתבצע החיבור בוואטסאפ?</dt>
+        <dd>הכל פועל בתוך שיחת וואטסאפ רגילה מול העוזרת החכמה של פרולי, באמצעות הודעות טקסט, תמונות או הקלטות קוליות, ללא צורך בהורדת אפליקציה.</dd>
+      </dl>
     </div>
   </section>
 
   <section class="about" id="about" aria-labelledby="about-title">
     <div class="wrap">
       <h2 id="about-title">מי אנחנו</h2>
-      <p>פרולי היא שירות בשלב פיילוט. מי שעומד מאחוריו: נתנאל אקנין.</p>
-      <p>ליצירת קשר: <a href="mailto:info@proli.me">info@proli.me</a></p>
-      <p>לשאלות על המידע שלכם ולבקשות עיון או מחיקה: <a href="/privacy">מדיניות הפרטיות</a></p>
+      <p>פרולי (Proli) היא שירות הפועל במתכונת פיילוט, המופעל ומנוהל על ידי נתנאל אקנין.</p>
+      <p>ליצירת קשר ולהצטרפות לפיילוט: <a href="mailto:info@proli.me">info@proli.me</a></p>
+      <p>למידע על אופן שמירת הנתונים ולבקשות עיון, תיקון או מחיקה של מידע אישי: <a href="/privacy">מדיניות הפרטיות</a></p>
     </div>
   </section>
 </main>
 
 <footer>
   <div class="wrap">
-    <p>פרולי</p>
-    <a href="/privacy">מדיניות פרטיות</a>
+    <p>פרולי | Proli</p>
+    <a href="/privacy">מדיניות הפרטיות</a>
+    <a href="mailto:info@proli.me">info@proli.me</a>
     <!-- The /terms link stays out until the owner approves the text: the route answers 404 until then. -->
   </div>
 </footer>
