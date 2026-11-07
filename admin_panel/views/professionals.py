@@ -12,6 +12,7 @@ from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import PROFESSION_TYPES, profession_label
 from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from admin_panel.core.rbac import can_edit, has_permission
+from app.core.constants import LeadStatus
 from app.services.geocoding_service import (
     ServiceAreaResolution,
     parse_service_areas,
@@ -116,11 +117,12 @@ def render_pro_list(T):
             with c_info:
                 # Status + Name + Verified
                 # Icon + text, never colour alone (PRO-61).
-                status_txt = (
-                    f"🟢 {T['status_active']}"
-                    if is_active
-                    else f"🔴 {T['status_inactive']}"
-                )
+                if is_active:
+                    status_txt = f"🟢 {T['status_active']}"
+                elif p.get("self_paused"):
+                    status_txt = f"☕ {T['status_self_paused']}"
+                else:
+                    status_txt = f"🔴 {T['status_inactive']}"
                 verified_badge = (
                     f" · ✅ {T['verified']}" if p.get("is_verified") else ""
                 )
@@ -351,6 +353,9 @@ def render_pro_form(T, pro_data=None):
                     "phone_number": phone,
                     "type": ptype,
                     "is_active": active,
+                    # This form is the admin's decision, so the pro's own *חזרתי*
+                    # can't undo it (PRO-212).
+                    "self_paused": False,
                     "is_verified": is_verified,
                     "license_number": license_number,
                     "profile_image_url": final_image_url,
@@ -369,7 +374,26 @@ def render_pro_form(T, pro_data=None):
                         {"_id": ObjectId(pro_id)}, {"$set": pro_payload}
                     )
                     log_audit("edit_pro", {"pro_id": pro_id, "name": name})
-                    set_flash("pro_flash", T["success_update"])
+                    open_jobs = (
+                        leads_collection.count_documents(
+                            {
+                                "pro_id": ObjectId(pro_id),
+                                "status": {
+                                    "$in": [LeadStatus.NEW, LeadStatus.BOOKED],
+                                },
+                            }
+                        )
+                        if pro_data.get("is_active", True) and not active
+                        else 0
+                    )
+                    if open_jobs:
+                        set_flash(
+                            "pro_flash",
+                            T["deactivated_with_open_jobs"].format(count=open_jobs),
+                            "warning",
+                        )
+                    else:
+                        set_flash("pro_flash", T["success_update"])
                 else:
                     pro_payload.update(
                         {
