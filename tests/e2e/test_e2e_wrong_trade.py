@@ -756,6 +756,66 @@ def test_fault_words_outrank_job_titles(text, titles, trade):
     assert trade_named_in_chat(text, titles=titles) == trade
 
 
+def test_a_title_nobody_wants_names_no_trade():
+    from app.services.matching_service import CHAT_TRADE_TITLES, trade_named_in_chat
+
+    for title in CHAT_TRADE_TITLES:
+        for lead_in in ("אני לא צריך", "לא רוצה", "שלחתם", "שלחת"):
+            assert trade_named_in_chat(f"{lead_in} {title}") is None, (lead_in, title)
+        assert trade_named_in_chat(f"צריך {title}") is not None, title
+
+
+@pytest.mark.parametrize(
+    "text,trade",
+    [
+        ("יש קצר", "electrician"),
+        ("יש לי קצר במטבח", "electrician"),
+        ("זה תיקון קצר?", None),
+        ("יש זמן קצר", None),
+        ("רק שאלה קצרה", None),
+    ],
+)
+def test_a_short_circuit_in_chat(text, trade):
+    """ "קצר" is also the everyday word for short, so it counts only behind "יש"."""
+    from app.services.matching_service import trade_named_in_chat
+
+    assert trade_named_in_chat(text) == trade
+
+
+@pytest.mark.asyncio
+async def test_a_plumber_nobody_wants_does_not_label_a_vague_issue(world):
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber, issue_type="תקלה במטבח")
+    world.ai.script(reply("שלום, כאן אבי."))
+
+    await world.send("אני לא צריך אינסטלטור")
+
+    lead = await world.lead()
+    assert lead["issue_type"] == "תקלה במטבח"
+    assert lead["pro_id"] == plumber["_id"]
+
+
+@pytest.mark.asyncio
+async def test_a_vague_issue_with_a_short_circuit_moves_like_a_stored_one(world):
+    """The same sentence on a stored "קצר במטבח" drops the plumber; so it does here."""
+    plumber = await _plumber(world)
+    electrician = await _electrician(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber, issue_type="תקלה במטבח")
+    world.ai.script(
+        reply("רגע.", city="תל אביב"),
+        reply("שלום, כאן דני החשמלאי."),
+    )
+
+    await world.send("אני לא צריך אינסטלטור, יש קצר")
+
+    lead = await world.lead()
+    assert lead["issue_type"] == "תקלה במטבח (חשמלאי)"
+    assert lead["pro_id"] == electrician["_id"]
+    assert lead["excluded_pro_ids"] == [plumber["_id"]]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("replacement_exists", [True, False])
 async def test_an_offered_drop_says_it_moved_only_once_it_has(
