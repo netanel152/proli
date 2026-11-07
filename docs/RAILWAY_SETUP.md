@@ -35,6 +35,7 @@ All 3 services point to the **same GitHub repo** and are intended to use the **s
 - **Start Command:** `streamlit run admin_panel/main.py --server.port $PORT --server.address 0.0.0.0`
 - **Port:** Automatically detected
 - **Public Domain:** Yes (admin dashboard URL)
+- **Required setting:** `runner.fastReruns` must be off, or the operator can lose the outcome of an offer (`.claude/rules/admin-panel.md`). `.streamlit/config.toml` sets it, and Streamlit reads that file from the working directory, so keep the relative `admin_panel/main.py` path above. A `--runner.fastReruns` flag or a `STREAMLIT_RUNNER_FAST_RERUNS` variable outranks the file, so neither may be set to true. To confirm, look for `runner.fastReruns=False` in this service's logs after a deploy, which appears when the first page loads. `runner.fastReruns is ON` at ERROR means it is wrong.
 
 ## Which branch deploys where
 
@@ -137,6 +138,7 @@ META_ACCESS_TOKEN=...        # secret — required once WHATSAPP_PROVIDER=cloud 
 META_APP_SECRET=...          # secret — signs inbound /webhook/meta; required for cloud in staging/production
 META_VERIFY_TOKEN=...        # secret — echoed back during the Meta subscription handshake; required for cloud in staging/production
 META_PHONE_NUMBER_ID=...     # not secret — Graph node id, required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
+WA_BUSINESS_INITIATED_CAP=250  # worker only; fallback cap for the 80% alert when Meta's live limit can't be read
 PUBLIC_BASE_ORIGIN=https://...  # optional — public https origin, no path, serving /privacy and /terms; unset = messages carry no link; a malformed or non-public value (localhost, private IP, http, a path) also means no link, and logs ERROR at boot
 TERMS_ENABLED=false  # true publishes /terms and its links, but only once app/static/terms.html is the approved text (a draft stays 404 and logs ERROR at boot)
 ENVIRONMENT=production   # per-environment — see below

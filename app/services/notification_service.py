@@ -299,11 +299,17 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
         # renders those fields properly and does not retain them in Sentry.
 
         # 1. Alert the Pro (if assigned)
+        pro_notified = False
         if pro_id:
             if isinstance(pro_id, str):
                 pro_id = ObjectId(pro_id)
             pro = await users_collection.find_one({"_id": pro_id})
-            if pro and pro.get("phone_number"):
+            # PRO-212: a pro the admin deactivated gets neither number nor words.
+            if (
+                pro
+                and pro.get("phone_number")
+                and (pro.get("is_active", True) or pro.get("self_paused"))
+            ):
                 pro_chat_id = to_chat_id(pro["phone_number"])
                 # PRO-59: the number only goes to a pro who has taken the job.
                 # The lead re-read above uses the same three-status query the
@@ -312,16 +318,23 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                 # has seen nothing but an issue and a city. Fails closed: an
                 # absent lead is not BOOKED, so it takes the phone-free branch
                 # rather than assuming the pro has earned the number.
-                if (active_lead or {}).get("status") == LeadStatus.BOOKED:
+                status = (active_lead or {}).get("status")
+                if status == LeadStatus.BOOKED:
                     pro_msg = Messages.SOS.PRO_ALERT.format(
                         phone=customer_phone_display, last_message=last_message
                     )
+                elif status == LeadStatus.NEW:
+                    pro_msg = Messages.SOS.PRO_ALERT_PENDING
                 else:
-                    pro_msg = Messages.SOS.PRO_ALERT_PENDING.format(
-                        last_message=last_message
+                    # PRO-212: never offered, so the pro has nothing to do about
+                    # it. The operator page below covers this customer.
+                    pro_msg = None
+                if pro_msg:
+                    pro_notified = await _send_best_effort(pro_chat_id, pro_msg)
+                if pro_notified:
+                    logger.info(
+                        f"SOS alert sent to Pro {pro_id} for user {_mask(chat_id)}"
                     )
-                await _send_best_effort(pro_chat_id, pro_msg)
-                logger.info(f"SOS alert sent to Pro {pro_id} for user {_mask(chat_id)}")
 
         # 2. Always page the Admin — via Sentry, not WhatsApp (PRO-88).
         # The customer's message is deliberately NOT included: it is free-form
@@ -332,7 +345,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
             f"SOS from customer ***{customer_phone_display[-4:]} — "
             f"issue={(active_lead or {}).get('issue_type') or 'unknown'}, "
             f"lead={(active_lead or {}).get('_id') or 'none active'}, "
-            f"pro_notified={bool(pro_id)}. Open the lead in the admin panel."
+            f"pro_notified={pro_notified}. Open the lead in the admin panel."
         )
 
     except Exception as e:

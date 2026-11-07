@@ -8,7 +8,11 @@ from app.core.startup_checks import (
     warn_if_public_origin_malformed,
     warn_if_terms_enabled_on_draft,
 )
-from app.services.workflow_service import process_incoming_message, whatsapp
+from app.services.workflow_service import (
+    page_emergency_turn,
+    process_incoming_message,
+    whatsapp,
+)
 from app.core.logger import logger, mask_pii, new_trace_id, page_critical
 from app.core.phone import mask_chat_id
 from app.core.sentry import sentry_active
@@ -16,8 +20,7 @@ from app.core.database import client
 from app.core.http_client import close_http_client
 from app.core.redis_client import get_redis_client, ChatLockBusyError
 from app.core.messages import Messages
-from app.providers.whatsapp.cloud_api import META_MEDIA_SCHEME, fetch_meta_media
-from app.services.cloudinary_client_service import upload_media_bytes
+from app.core.text_matching import is_emergency_text
 from app.scheduler import start_scheduler
 
 # Redis configuration for ARQ
@@ -27,6 +30,14 @@ else:
     redis_settings = RedisSettings(
         host=settings.REDIS_HOST, port=settings.REDIS_PORT, database=settings.REDIS_DB
     )
+
+
+# How many times a job may really start. Tries spent waiting on the chat lock
+# don't count, so this is separate from WorkerSettings.max_tries.
+MAX_REAL_STARTS = 5
+# Longer than a job can live: max_tries of backoff plus the turns ahead of it.
+LOCK_BUSY_COUNT_TTL_SECONDS = 3600
+RETRY_NOTICE_TTL_SECONDS = 60
 
 
 async def startup(ctx):
@@ -87,31 +98,6 @@ async def shutdown(ctx):
     await close_http_client()
 
 
-async def _resolve_inbound_media(media_url: str | None) -> str | None:
-    """PRO-89: turn a ``meta-media://<id>`` marker into a permanent URL.
-
-    Meta webhooks carry a media *id*; the real CDN URL needs an authorized
-    fetch and expires within minutes, so the route enqueues the marker and the
-    worker re-hosts the bytes on Cloudinary here — downstream code (lead
-    ``media_urls``, the pro's offer message, the AI engine) then sees an
-    ordinary public URL, exactly as it always has. Failure degrades to
-    text-only processing (returns ``None``), never to a crashed task.
-    """
-    if not media_url or not media_url.startswith(META_MEDIA_SCHEME):
-        return media_url
-    media_id = media_url[len(META_MEDIA_SCHEME) :]
-    data, _mime = await fetch_meta_media(media_id)
-    if data is None:
-        logger.warning(f"Could not fetch Meta media {media_id} — processing text only.")
-        return None
-    hosted_url = await asyncio.to_thread(upload_media_bytes, data)
-    if hosted_url is None:
-        logger.warning(
-            f"Could not re-host Meta media {media_id} — processing text only."
-        )
-    return hosted_url
-
-
 async def process_message_task(
     ctx,
     chat_id: str,
@@ -142,15 +128,81 @@ async def process_message_task(
     # match the api's half of that turn, but it still groups the worker's,
     # which is what makes those lines readable at all.
     with logger.contextualize(trace_id=trace_id or new_trace_id()):
-        await _process_message(chat_id, user_text, media_url, message_id)
+        await _process_message(ctx, chat_id, user_text, media_url, message_id)
 
 
 async def _process_message(
-    chat_id: str, user_text: str, media_url: str = None, message_id: str = None
+    ctx, chat_id: str, user_text: str, media_url: str = None, message_id: str = None
 ):
     """The task body, split out so all of it — the ``except`` arms included —
     runs inside the ``trace_id`` binding."""
-    logger.info(f"Task started: processing message for {mask_chat_id(chat_id)}")
+    # These two lines are the only way to tie arq's own WARNINGs, which name just
+    # the job id, to a chat. Its INFO lines carry the message, so they are off.
+    job_id = ctx.get("job_id")
+    job_try = ctx.get("job_try") or 1
+    started = time.monotonic()
+    logger.info(f"Task started: job {job_id} try {job_try} for {mask_chat_id(chat_id)}")
+    try:
+        if await _ran_too_many_times(job_id, job_try):
+            await _drop_job(
+                chat_id,
+                user_text,
+                f"re-run too many times: job {job_id}, try {job_try}",
+            )
+            return
+        await _run_message(chat_id, user_text, media_url, message_id, job_id, job_try)
+    finally:
+        logger.info(
+            f"Task ended: job {job_id} try {job_try} for {mask_chat_id(chat_id)} "
+            f"after {time.monotonic() - started:.2f}s"
+        )
+
+
+async def _ran_too_many_times(job_id, job_try: int) -> bool:
+    """`max_tries` is sized for waiting on the lock, which runs nothing. A job that
+    keeps starting and dying repeats its AI call and reply, so real starts keep a
+    lower cap. If Redis cannot say how many tries were waits, the job runs."""
+    if job_try < MAX_REAL_STARTS:
+        return False
+    try:
+        redis = await get_redis_client()
+        busy = int(await redis.get(f"lock_busy:{job_id}") or 0)
+    except Exception as e:
+        logger.warning(f"Could not read the lock-wait count of job {job_id}: {e}")
+        return False
+    return job_try - busy >= MAX_REAL_STARTS
+
+
+async def _count_lock_wait(job_id) -> None:
+    try:
+        redis = await get_redis_client()
+        pipe = redis.pipeline()
+        pipe.incr(f"lock_busy:{job_id}")
+        pipe.expire(f"lock_busy:{job_id}", LOCK_BUSY_COUNT_TTL_SECONDS)
+        await pipe.execute()
+    except Exception as e:
+        logger.warning(f"Could not count a lock wait for job {job_id}: {e}")
+
+
+async def _drop_job(chat_id: str, user_text: str, reason: str) -> None:
+    """arq would delete the job with no trace of whose it was. The message is lost
+    either way; at least the customer and the operator know."""
+    logger.error(f"Message from {mask_chat_id(chat_id)} dropped, it is lost ({reason})")
+    if is_emergency_text((user_text or "").strip().lower()):
+        await page_emergency_turn(chat_id, "was dropped by the worker")
+    try:
+        redis = await get_redis_client()
+        # Followers queued behind the same turn run out together.
+        first = await redis.set(
+            f"retry_notice:{chat_id}", "1", ex=RETRY_NOTICE_TTL_SECONDS, nx=True
+        )
+    except Exception:
+        first = True
+    if first:
+        await _tell_customer_to_retry(chat_id)
+
+
+async def _run_message(chat_id, user_text, media_url, message_id, job_id, job_try):
     if sentry_active():
         # PRO-134: tags set at task start (not in an except) so they ride
         # every event and breadcrumb this job produces. ArqIntegration
@@ -163,15 +215,21 @@ async def _process_message(
         if message_id:
             scope.set_tag("wamid", message_id)
     try:
-        media_url = await _resolve_inbound_media(media_url)
         await process_incoming_message(chat_id, user_text, media_url)
     except ChatLockBusyError:
         # Another worker is mid-flight for this chat_id — defer so we preserve
         # message order without duplicate-processing.
+        if job_try >= WorkerSettings.max_tries:
+            await _drop_job(
+                chat_id, user_text, f"chat lock busy on the last try: job {job_id}"
+            )
+            return
+        await _count_lock_wait(job_id)
+        defer = 2 * job_try
         logger.info(
-            f"Chat lock busy for {mask_chat_id(chat_id)} — requeuing with 2s defer"
+            f"Chat lock busy for {mask_chat_id(chat_id)} — requeuing with {defer}s defer"
         )
-        raise Retry(defer=2)
+        raise Retry(defer=defer)
     except Exception as e:
         # sentry_skip: the re-raise below propagates to ArqIntegration, which
         # captures the full exception — the bridge reporting this log line
@@ -180,12 +238,16 @@ async def _process_message(
             f"Error in process_message_task for {mask_chat_id(chat_id)}: {e}",
             exc_info=True,
         )
-        # Send user-friendly fallback message
-        try:
-            await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
-        except Exception:
-            logger.error(f"Failed to send error message to {mask_chat_id(chat_id)}")
+        await _tell_customer_to_retry(chat_id)
         raise
+
+
+async def _tell_customer_to_retry(chat_id: str) -> None:
+    """Send user-friendly fallback message."""
+    try:
+        await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
+    except Exception:
+        logger.error(f"Failed to send error message to {mask_chat_id(chat_id)}")
 
 
 class WorkerSettings:
@@ -199,8 +261,16 @@ class WorkerSettings:
     on_shutdown = shutdown
     max_jobs = 10
     job_timeout = 300  # 5 minutes per job
-    max_tries = 5  # Retry transient failures up to 5 times
+    # arq re-runs a job only on Retry (a busy chat lock) or CancelledError (a worker
+    # shutdown); any other exception fails it for good. With the lock backoff of
+    # 2s, 4s, 6s... the last try lands 306s in, past job_timeout, so a follower
+    # outlives even the slowest single turn ahead of it. MAX_REAL_STARTS caps the
+    # re-runs that actually do something.
+    max_tries = 18
     retry_jobs = True
-    # Keep results in Redis for 7 days so failed jobs are visible for debugging
-    keep_result = 604800  # 7 days in seconds
+    # A result stores the job's args, and the args are the customer's message, so
+    # keeping them would hold text from someone who declined consent. Nothing
+    # reads results. An exception reaches Sentry and the logs; a job arq drops at
+    # max_tries is only a WARNING naming its id, traced through "Task started".
+    keep_result = 0
     keep_result_forever = False

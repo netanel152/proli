@@ -1066,9 +1066,11 @@ async def test_consent_is_required_on_first_contact(world):
     await world.assert_state(UserStates.AWAITING_CONSENT)
 
     world.recorder.clear()
+    world.ai.script(reply("באיזו עיר?"))
     await world.send("כן")
     world.recorder.assert_text_to(world.customer, Messages.Consent.ACCEPTED)
     await world.assert_state(UserStates.IDLE)
+    assert world.ai.calls[-1]["user_text"] == "היי, יש לי נזילה\nמה זה?"
 
 
 @pytest.mark.asyncio

@@ -38,7 +38,7 @@ template path PRO-64 can exercise later.
 
 ## Staging configuration (before Part 1)
 
-- [ ] `META_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_PHONE_NUMBER_ID` set on staging api + worker (Railway). Store `META_WABA_ID` alongside them — no code reads it (`Settings` ignores extras); it is console/template-API bookkeeping only.
+- [ ] `META_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_PHONE_NUMBER_ID` set on staging api + worker (Railway). Store `META_WABA_ID` alongside them — `Settings` ignores it; only `scripts/meta_healthcheck.py` reads it, for its WABA checks.
 - [ ] `WHATSAPP_PROVIDER=dryrun` for Part 1 (inbound only), flipped to `cloud` for Part 2+.
 - [ ] `WHATSAPP_DRY_RUN` **unset/false** when Part 2 begins — it overrides everything.
 - [ ] `ENVIRONMENT=staging`, `WEBHOOK_TOKEN` set (legacy route), Sentry paging live.

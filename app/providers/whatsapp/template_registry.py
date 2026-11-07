@@ -122,6 +122,11 @@ TEMPLATES: dict[str, TemplateSpec] = {
             "proli_onboarding_verdict",
             source="Messages.Onboarding.APPROVED_NOTIFICATION",
         ),  # P13
+        TemplateSpec(
+            "pro_lead_outside_trade",
+            "proli_pro_lead_outside_trade",
+            source="Messages.Pro.LEAD_OUTSIDE_TRADE",
+        ),  # P14
         # Customer-facing
         TemplateSpec(
             "no_pro_available",

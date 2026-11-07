@@ -52,11 +52,32 @@ from app.core.constants import (
     WorkerConstants,
 )
 from app.core.logger import logger
+from app.providers.whatsapp.quality import non_essential_sends_paused
 from app.core.messages import Messages
 from app.core.phone import mask_chat_id, to_chat_id
 from app.core.prompts import Prompts
-from app.services.ai_engine_service import AIResponse
+from app.services.ai_engine_service import AIResponse, file_notice_in
 from app.services.dispatch_guards import DispatchContext, GuardDeps
+from app.services.matching_service import (
+    customer_phones,
+    issue_update,
+    probable_trade,
+    trade_fits,
+    trade_named_in_chat,
+)
+
+
+async def _send_file_notice(response: AIResponse, chat_id, whatsapp, lead_manager):
+    """For an exit that sends a fixed message instead of the reply carrying this.
+
+    First line only: the state these exits lead to won't read a description, so
+    the media-only notice's request for one would mislead.
+    """
+    notice = file_notice_in(response.reply_to_user)
+    if notice:
+        first_line = notice.split("\n")[0]
+        await whatsapp.send_message(chat_id, first_line)
+        await lead_manager.log_message(chat_id, "model", first_line)
 
 
 async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
@@ -111,18 +132,15 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     # `is_exempt` (still read at the two daily AI-cap call sites below), the
     # consent gate, zero-touch's second miss, the emergency hoist's "released"
     # path and loyalty's double-miss release all refresh `current_state` before
-    # falling through, and the emergency hoist (PRO-180) sets
-    # `emergency_inbound_logged` so step 1 does not log the same turn twice —
-    # so this must take the post-chain values, not the pre-chain ones.
+    # falling through, and the emergency hoist (PRO-180) and the consent gate's
+    # replay set `emergency_inbound_logged` so step 1 does not log the same turn
+    # twice — so this must take the post-chain values, not the pre-chain ones.
     #
-    # Only three of the seven are actually mutated, though. `chat_id`,
-    # `user_text` and `media_url` were `_process_incoming_message_inner`'s
-    # *parameters* in the pre-image and were never re-read from `ctx`; taking
-    # them off `ctx` here is equivalent only because no guard assigns them. That
-    # is a property the chain now has to preserve rather than one it happens to
-    # have: a guard that rewrote `ctx.user_text` used to be ignored below this
-    # line and would now be honoured. Said out loud because the widening is
-    # invisible in a diff that is otherwise byte-identical.
+    # `chat_id` alone is never rewritten. `user_text`, `media_url` and
+    # `is_emergency_detected` are, by exactly one guard and deliberately: the
+    # consent gate, which swaps in the messages held from before consent on an
+    # accept and resolves `media_url` once a message is past it. Any other guard
+    # assigning them would be changing what the customer said.
     chat_id = ctx.chat_id
     user_text = ctx.user_text
     media_url = ctx.media_url
@@ -134,7 +152,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     #    which case logging again would duplicate the turn (PRO-116 Q5).
     if not emergency_inbound_logged:
         await lead_manager.log_message(
-            chat_id, "user", _inbound_log_text(user_text, media_url)
+            chat_id, "user", _inbound_log_text(user_text, media_url, ctx.file_lost)
         )
 
     # 2. Check for Customer Completion, Rating, or Review
@@ -187,6 +205,16 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             # a flow change this issue did not ask for.
             await whatsapp.send_message(chat_id, Messages.Errors.MEDIA_FETCH_FAILED)
             media_fetch_failed = True  # logged after the history read, below
+    # Already apologised for above; the engine would otherwise report it again.
+    ai_media_url = None if media_fetch_failed else media_url
+
+    if ctx.file_lost and not (user_text or "").strip():
+        # Nothing to answer and no link to keep, so no AI call. Its type went with
+        # it, so TEXT_ONLY. With text, the engine says so on the reply (media_lost).
+        notice = Messages.Errors.MEDIA_UPLOAD_FAILED_TEXT_ONLY
+        await whatsapp.send_message(chat_id, notice)
+        await lead_manager.log_message(chat_id, "model", notice)
+        return
 
     # 4. Check for existing active lead with assigned pro (skip dispatcher if so)
     active_lead = await leads_collection.find_one(
@@ -199,6 +227,152 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         existing_pro = await users_collection.find_one(
             {"_id": active_lead["pro_id"], "is_active": True}
         )
+
+    # PRO-215: a pro whose trade doesn't fit is not an assigned pro — answering
+    # in their name leaves the customer with "I'm a plumber, not an electrician".
+    # A human's explicit assignment stands. An unoffered lead falls through to the
+    # dispatcher and matching below; one the pro was already offered goes through
+    # the reassignment path.
+    rematch_pending = False
+    if existing_pro and not active_lead.get("assigned_by_admin_at"):
+        issue = active_lead.get("issue_type") or ""
+        wanted = probable_trade(issue)
+        if not wanted or not trade_fits(existing_pro, wanted, held=True):
+            # The dispatcher is skipped from here on, so an issue that is vague,
+            # or names a trade this pro doesn't do, can only be refined from this
+            # message (PRO-225: the conversation moved on from "קצר" to a leak).
+            # A pro who fits the stored issue keeps it, whatever else is
+            # mentioned in passing. `issue_type` reaches unapproved pros, logs
+            # and pages, so it records the trade, never the words (PRO-59).
+            named = trade_named_in_chat(user_text)
+            if named and named != wanted:
+                # The stored words describe the other trade, so they go.
+                base = Messages.Fallbacks.ISSUE if wanted else issue
+                wanted = named
+                if base in ("", Defaults.UNKNOWN_ISSUE):
+                    base = Messages.Fallbacks.ISSUE
+                label = Messages.Onboarding.TYPE_LABELS[wanted]
+                issue = f"{base} ({label})"
+                await leads_collection.update_one(
+                    {"_id": active_lead["_id"]}, {"$set": {"issue_type": issue}}
+                )
+                active_lead["issue_type"] = issue
+        if not trade_fits(existing_pro, wanted, held=True):
+            logger.warning(
+                f"Lead {active_lead['_id']} is with pro {existing_pro['_id']} outside "
+                f"its trade ({wanted}) — rematching"
+            )
+            offered = active_lead["status"] == LeadStatus.NEW
+            dropped = await leads_collection.update_one(
+                {
+                    "_id": active_lead["_id"],
+                    "pro_id": existing_pro["_id"],
+                    "status": active_lead["status"],
+                },
+                {
+                    "$set": {"pro_id": None},
+                    # That pro's estimate, not the next one's.
+                    "$unset": {"quoted_price": ""},
+                    # Read by every matcher, so no path offers it back to them.
+                    # Not `rejected_by`: that counts as the pro's own rejection.
+                    "$addToSet": {"excluded_pro_ids": existing_pro["_id"]},
+                },
+            )
+            if not dropped.modified_count:
+                logger.info(
+                    f"Lead {active_lead['_id']} moved before its wrong-trade rematch"
+                )
+                return
+            active_lead.pop("quoted_price", None)
+            excluded = active_lead.get("excluded_pro_ids") or []
+            if existing_pro["_id"] not in excluded:
+                active_lead["excluded_pro_ids"] = [*excluded, existing_pro["_id"]]
+
+            # True on every outcome below, so it goes first. Without it a pro
+            # holding the offer answers "אשר" and finds nothing, or books the
+            # other NEW lead they hold.
+            notice = (
+                Messages.Pro.LEAD_OUTSIDE_TRADE_OFFER
+                if offered
+                else Messages.Pro.LEAD_OUTSIDE_TRADE
+            )
+            try:
+                if existing_pro.get("phone_number"):
+                    sent = await whatsapp.send_message(
+                        to_chat_id(existing_pro["phone_number"]),
+                        notice.format(issue=issue),
+                    )
+                    # None is the facade's "blocked": a closed 24h window, usually.
+                    if not sent:
+                        logger.warning(
+                            f"Wrong-trade notice for lead {active_lead['_id']} did not "
+                            f"reach pro {existing_pro['_id']}"
+                        )
+            except Exception as e:
+                logger.error(f"Failed to tell pro about the wrong-trade rematch: {e}")
+
+            if offered:
+                from app.services import monitor_service
+
+                try:
+                    # This turn never reaches the pipeline's own recording below.
+                    turn_ops = {}
+                    if is_emergency_detected:
+                        turn_ops["$set"] = {"is_emergency": True}
+                        active_lead["is_emergency"] = True
+                    if media_url:
+                        turn_ops["$addToSet"] = {"media_urls": media_url}
+                        urls = active_lead.get("media_urls") or []
+                        if media_url not in urls:
+                            active_lead["media_urls"] = [*urls, media_url]
+                    if turn_ops:
+                        await leads_collection.update_one(
+                            {"_id": active_lead["_id"]}, turn_ops
+                        )
+                    await whatsapp.send_message(
+                        chat_id, Messages.Customer.MOVING_TO_FITTING_PRO
+                    )
+                    await lead_manager.log_message(
+                        chat_id, "model", Messages.Customer.MOVING_TO_FITTING_PRO
+                    )
+                    moved = await monitor_service.reassign_lead(
+                        active_lead, notify_old_pro=False, announce=False
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Wrong-trade rematch failed for lead {active_lead['_id']}: {e}"
+                    )
+                    # Not when `reassign_lead` got as far as a new owner.
+                    current = await leads_collection.find_one(
+                        {"_id": active_lead["_id"]}
+                    )
+                    moved = bool(current and current.get("pro_id"))
+                    if current and not current.get("pro_id"):
+                        escalated = await set_lead_status(
+                            active_lead["_id"],
+                            LeadStatus.PENDING_ADMIN_REVIEW,
+                            Actor.SYSTEM,
+                            extra_set={
+                                "escalation_reason": "wrong_trade_rematch_failed"
+                            },
+                            expected_status=LeadStatus.NEW,
+                        )
+                        if escalated:
+                            await whatsapp.send_message(
+                                chat_id, Messages.Customer.PENDING_REVIEW
+                            )
+                if not moved and (
+                    is_emergency_detected or active_lead.get("is_emergency")
+                ):
+                    notification_service.page_operator(
+                        f"EMERGENCY lead {active_lead['_id']} was with a pro outside "
+                        "its trade and has no replacement — needs manual routing now"
+                    )
+                return
+
+            # "אעביר…" waits for matching below to actually find another pro.
+            rematch_pending = True
+            existing_pro = None
 
     # PRO-116 Q3: a customer with a CONFIRMED (BOOKED) job who writes about
     # something else must not silently spawn a second parallel lead — that was
@@ -324,7 +498,8 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 transcription,
                 media_data=media_data,
                 media_mime=media_mime,
-                media_url=media_url,
+                media_url=ai_media_url,
+                media_lost=ctx.file_lost,
             )
         except Exception as e:
             logger.error(f"Pro response failed for {mask_chat_id(chat_id)}: {e}")
@@ -441,7 +616,8 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             custom_system_prompt=dispatcher_prompt,
             media_data=media_data,
             media_mime_type=media_mime,
-            media_url=media_url,
+            media_url=ai_media_url,
+            media_lost=ctx.file_lost,
             require_json=True,
         )
     except Exception as e:
@@ -452,7 +628,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     # Merge: prefer fresh AI output, fall back to stored lead facts so a trimmed
     # window or a silent parse-failure can't erase a previously-confirmed fact.
     ai_city = dispatcher_response.extracted_data.city
-    ai_issue = dispatcher_response.extracted_data.issue
+    ai_issue = issue_update(
+        dispatcher_response.extracted_data.issue, lead_facts.get("issue_type")
+    )
     ai_name = dispatcher_response.extracted_data.customer_name
     extracted_city = ai_city or lead_facts.get("city") or lead_facts.get("full_address")
     extracted_issue = ai_issue or lead_facts.get("issue_type")
@@ -571,41 +749,77 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         extracted_city
         and extracted_issue
         and extracted_issue != Defaults.UNKNOWN_ISSUE
+        # PRO-215: an issue no trade can be named for goes to a human, not to
+        # whoever this customer used last.
+        and probable_trade(extracted_issue)
         and current_lead_id
         and not lead_is_emergency
+        # PRO-90: no offer while WhatsApp quality is degraded. The lead carries
+        # on into normal matching below, so dispatch is untouched.
+        and not await non_essential_sends_paused()
     ):
         current_lead_doc = await leads_collection.find_one({"_id": current_lead_id})
         if current_lead_doc and not current_lead_doc.get("loyalty_offered"):
-            past_lead = await leads_collection.find_one(
-                {"chat_id": chat_id, "status": LeadStatus.COMPLETED},
-                sort=[("created_at", -1)],
-            )
-            if past_lead and past_lead.get("pro_id"):
-                past_pro = await users_collection.find_one(
-                    {"_id": past_lead["pro_id"], "is_active": True}
+            # The offer has to name a pro who can do *this* job. It used to
+            # take the single most recent COMPLETED lead whatever its trade, so
+            # the plumber who fixed a leak got offered for an electrical short.
+            # Walk back a bounded slice of completed jobs and take the most
+            # recent pro whose trade fits; when the issue clearly names a trade
+            # nobody in the history has, make no offer at all and let normal
+            # matching find someone suitable.
+            wanted_trade = probable_trade(extracted_issue)
+            past_pro = None
+            past_leads = (
+                leads_collection.find(
+                    {
+                        "chat_id": chat_id,
+                        "status": LeadStatus.COMPLETED,
+                        "pro_id": {"$ne": None},
+                    }
                 )
-                if past_pro:
-                    await leads_collection.update_one(
-                        {"_id": current_lead_id},
-                        {"$set": {"loyalty_offered": True}},
-                    )
-                    await StateManager.set_metadata(
-                        chat_id, {"past_pro_id": str(past_pro["_id"])}
-                    )
-                    # PRO-119: bounded TTL — without one this inherited the 4h
-                    # default and a customer whose reply we failed to parse
-                    # was trapped with no way out but a reset keyword.
-                    await StateManager.set_state(
-                        chat_id,
-                        UserStates.AWAITING_LOYALTY_CONFIRMATION,
-                        ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
-                    )
-                    loyalty_msg = Messages.Customer.LOYALTY_OFFER.format(
-                        pro_name=past_pro.get("business_name", "איש המקצוע")
-                    )
-                    await whatsapp.send_message(chat_id, loyalty_msg)
-                    await lead_manager.log_message(chat_id, "model", loyalty_msg)
-                    return
+                .sort("created_at", -1)
+                .limit(WorkerConstants.LOYALTY_HISTORY_SCAN_LIMIT)
+            )
+            async for past_lead in past_leads:
+                if past_lead["pro_id"] in (
+                    current_lead_doc.get("excluded_pro_ids") or []
+                ):
+                    continue
+                candidate = await users_collection.find_one(
+                    {
+                        "_id": past_lead["pro_id"],
+                        "is_active": True,
+                        "phone_number": {"$nin": customer_phones(chat_id)},
+                    }
+                )
+                if candidate and trade_fits(candidate, wanted_trade):
+                    past_pro = candidate
+                    break
+            if past_pro:
+                await leads_collection.update_one(
+                    {"_id": current_lead_id},
+                    {"$set": {"loyalty_offered": True}},
+                )
+                await StateManager.set_metadata(
+                    chat_id, {"past_pro_id": str(past_pro["_id"])}
+                )
+                # PRO-119: bounded TTL — without one this inherited the 4h
+                # default and a customer whose reply we failed to parse
+                # was trapped with no way out but a reset keyword.
+                await StateManager.set_state(
+                    chat_id,
+                    UserStates.AWAITING_LOYALTY_CONFIRMATION,
+                    ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
+                )
+                loyalty_msg = Messages.Customer.LOYALTY_OFFER.format(
+                    pro_name=past_pro.get("business_name", "איש המקצוע")
+                )
+                await _send_file_notice(
+                    dispatcher_response, chat_id, whatsapp, lead_manager
+                )
+                await whatsapp.send_message(chat_id, loyalty_msg)
+                await lead_manager.log_message(chat_id, "model", loyalty_msg)
+                return
 
     # 6. Logic Gate: Dispatcher vs Professional
     best_pro = None
@@ -613,10 +827,20 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
 
     # Note: the explicit `!= UNKNOWN_ADDRESS` check is gone because we no longer
     # persist that sentinel. `extracted_city` is either a real city string or None.
-    if extracted_city and extracted_issue and extracted_issue != Defaults.UNKNOWN_ISSUE:
+    #
+    # An emergency doesn't wait for an issue. With none, matching finds nobody and
+    # the block below pages the operator; otherwise the dispatcher could keep asking
+    # with nobody told.
+    if extracted_city and (
+        lead_is_emergency
+        or (extracted_issue and extracted_issue != Defaults.UNKNOWN_ISSUE)
+    ):
         try:
             best_pro = await determine_best_pro(
-                issue_type=extracted_issue, location=extracted_city
+                issue_type=extracted_issue,
+                location=extracted_city,
+                excluded_pro_ids=(active_lead or {}).get("excluded_pro_ids"),
+                customer_chat_id=chat_id,
             )
         except Exception as e:
             logger.error(f"Pro matching failed for {mask_chat_id(chat_id)}: {e}")
@@ -625,8 +849,19 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         if not best_pro and current_lead_id:
             existing_lead = await leads_collection.find_one({"_id": current_lead_id})
             if existing_lead and not existing_lead.get("pro_id"):
+                unknown_trade = not probable_trade(extracted_issue)
                 await set_lead_status(
-                    current_lead_id, LeadStatus.PENDING_ADMIN_REVIEW, Actor.SYSTEM
+                    current_lead_id,
+                    LeadStatus.PENDING_ADMIN_REVIEW,
+                    Actor.SYSTEM,
+                    extra_set=(
+                        {"escalation_reason": "unknown_trade"}
+                        if unknown_trade
+                        else None
+                    ),
+                )
+                why = (
+                    "names no known trade" if unknown_trade else "has no available pro"
                 )
                 # WARNING, not CRITICAL: no-pro-available is a routine coverage gap
                 # (admin handles it via PENDING_ADMIN_REVIEW), not an infra page. The
@@ -634,7 +869,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 # operator's email (PRO-77). chat_id masked per PII convention.
                 logger.warning(
                     f"Lead {current_lead_id} for {mask_chat_id(chat_id)} requires admin "
-                    "review — no pro available"
+                    f"review — it {why}"
                 )
                 # PRO-121: a routine coverage gap is deliberately not a page
                 # (see above), but an *emergency* with no pro is the one case
@@ -643,10 +878,13 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 # short-circuit answering STILL_PENDING_REVIEW every 30 min.
                 if lead_is_emergency:
                     notification_service.page_operator(
-                        f"EMERGENCY lead {current_lead_id} has no available pro "
+                        f"EMERGENCY lead {current_lead_id} {why} "
                         f"(city={extracted_city!r}, issue={extracted_issue!r}) — "
                         "PENDING_ADMIN_REVIEW, needs manual routing now"
                     )
+                await _send_file_notice(
+                    dispatcher_response, chat_id, whatsapp, lead_manager
+                )
                 await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
                 await lead_manager.log_message(
                     chat_id, "model", Messages.Customer.PENDING_REVIEW
@@ -668,6 +906,15 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             else:
                 is_new_assignment = True
 
+            # The pro dropped for trade is excluded above, so this is a new one.
+            if rematch_pending:
+                await whatsapp.send_message(
+                    chat_id, Messages.Customer.MOVING_TO_FITTING_PRO
+                )
+                await lead_manager.log_message(
+                    chat_id, "model", Messages.Customer.MOVING_TO_FITTING_PRO
+                )
+
             # Build the persona response FIRST so we know whether this same turn
             # already closes the deal — PRO-116 Q1: if it does, sending the pro
             # the "שיחה בתהליך — אין צורך לפעול" early notice milliseconds before
@@ -682,7 +929,8 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     transcription,
                     media_data=media_data,
                     media_mime=media_mime,
-                    media_url=media_url,
+                    media_url=ai_media_url,
+                    media_lost=ctx.file_lost,
                 )
             except Exception as e:
                 logger.error(
