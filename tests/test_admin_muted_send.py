@@ -549,6 +549,42 @@ def test_customer_check_button_says_the_environment_is_muted(muted, monkeypatch)
     assert audited["details"]["sent"] is False
 
 
+def test_table_save_offer_through_the_real_offer_path(panel):
+    """The table's Save, minus the data editor AppTest cannot type into: the real
+    `save_lead_edits` the view calls, with the real `_offer_pending` and provider."""
+    import pandas as pd
+
+    from admin_panel.core.lead_queries import save_lead_edits
+
+    db, lead_id = panel
+    pro_id = db["users"].find_one({"business_name": "Dana"})["_id"]
+    frame = pd.DataFrame(
+        [
+            {
+                "id": str(lead_id),
+                "client": "Yossi",
+                "professional": EN["unknown_pro"],
+                "_pro_id": "",
+            }
+        ]
+    )
+
+    report = save_lead_edits(
+        frame,
+        {0: {"professional": "Dana"}},
+        leads_collection=db["leads"],
+        pro_map_name_to_id={"Dana": pro_id},
+        unknown_pro_label=EN["unknown_pro"],
+        offer_pending=home._offer_pending,
+    )
+
+    shown = [text for text, _ in home._report_messages(EN, report)]
+    assert f"Yossi: {EN['assign_muted'].format(pro='Dana')}" in shown, shown
+    assert not any(EN["assign_ok"].format(pro="Dana") in t for t in shown), shown
+    lead = db["leads"].find_one({"_id": lead_id})
+    assert (lead["status"], lead["pro_id"]) == ("new", pro_id)
+
+
 def test_table_report_renders_the_muted_sentence():
     """The table's Save reaches `_offer_pending` and renders through this."""
     messages = home._report_messages(
