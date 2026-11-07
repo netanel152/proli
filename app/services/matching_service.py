@@ -456,18 +456,20 @@ def pro_trades(pro: dict) -> set:
     return {t for t in claimed if t}
 
 
-def trade_fits(pro: dict, wanted: Optional[str]) -> bool:
+def trade_fits(pro: dict, wanted: Optional[str], held: bool = False) -> bool:
     """Can this pro take work in `wanted`? No trade asked for → yes.
 
     A new assignment has to rule out an unknown `wanted` itself: this answer also
     keeps a pro already holding a lead whose trade nobody can name. Electrical
     work is the owner's exception to "general and handyman fit anything": it
     needs an electrician, or one of those two whose profile says they do it.
+    It's for new assignments only: `held` is a pro already on the lead, who doesn't
+    lose it to that rule.
     """
     if not wanted:
         return True
     own = pro_trades(pro)
-    if wanted == "electrician":
+    if wanted == "electrician" and not held:
         return "electrician" in own or bool(
             pro.get("handles_electrical") and own & {"general", "handyman"}
         )

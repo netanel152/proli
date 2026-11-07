@@ -108,6 +108,25 @@ async def test_lead_already_with_the_wrong_trade_is_rematched(world):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("trade", ["handyman", "general"])
+async def test_a_held_electrical_lead_is_not_lost_to_the_electrical_rule(world, trade):
+    """That rule is for new assignment. No flag, and an electrician is free to take
+    the job, yet the pro already holding it keeps it."""
+    holder = await world.add_pro(R.PRO_PRIMARY, name="בעל מקצוע", profession=trade)
+    await _electrician(world)
+    await world.grant_consent()
+    await _contacted_lead(world, holder)
+    world.ai.script(reply("שלום, כאן בעל המקצוע."))
+
+    await world.send("מתי אתה מגיע?")
+
+    lead = await world.lead()
+    assert lead["pro_id"] == holder["_id"]
+    assert lead["status"] == LeadStatus.CONTACTED
+    world.recorder.assert_silent(world.pro_chat(R.PRO_PRIMARY), "nothing was dropped")
+
+
+@pytest.mark.asyncio
 async def test_lead_with_the_wrong_trade_and_nobody_fitting_escalates(world):
     plumber = await _plumber(world)
     await world.grant_consent()

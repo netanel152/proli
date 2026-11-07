@@ -223,7 +223,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             if wanted:
                 label = Messages.Onboarding.TYPE_LABELS[wanted]
                 issue = f"{issue} ({label})".strip()
-        if not trade_fits(existing_pro, wanted):
+        if not trade_fits(existing_pro, wanted, held=True):
             logger.warning(
                 f"Lead {active_lead['_id']} is with pro {existing_pro['_id']} outside "
                 f"its trade ({wanted}) — rematching"

@@ -726,6 +726,18 @@ def test_electrical_work_needs_an_electrician_or_the_explicit_flag(pro, fits):
     assert trade_fits(pro, "electrician") is fits
 
 
+@pytest.mark.parametrize(
+    "pro,fits",
+    [
+        ({"type": "handyman"}, True),
+        ({"type": "general"}, True),
+        ({"type": "plumber"}, False),
+    ],
+)
+def test_a_held_lead_is_exempt_only_from_the_electrical_rule(pro, fits):
+    assert trade_fits(pro, "electrician", held=True) is fits
+
+
 @pytest.mark.parametrize("trade", ["plumber", "locksmith", "painter", "cleaner"])
 def test_general_and_handyman_still_fit_every_other_trade(trade):
     assert trade_fits({"type": "handyman"}, trade)
