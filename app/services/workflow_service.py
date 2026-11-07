@@ -3,10 +3,13 @@ import uuid
 from types import SimpleNamespace
 from app.providers.whatsapp import get_whatsapp
 from app.services.ai_engine_service import AIEngine
-from app.services.lead_manager_service import (
+from app.services.lead_manager_service import (  # noqa: F401 — the guards read the address helpers off this module
+    ADDRESS_PARTS,
     LeadManager,
     is_address_complete,
     compose_full_address,
+    parts_from_other_city,
+    stated_in,
 )
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
@@ -1003,6 +1006,8 @@ async def _finalize_deal(
     # Parts this turn didn't extract come from the lead, so a turn that extracted
     # nothing can't shrink a known address to a bare city.
     lead_facts = active_lead_doc or {}
+    if parts_from_other_city(lead_facts, ed.city):
+        lead_facts = {}  # PRO-228: another city's street is not this address
     street = ed.street or lead_facts.get("street")
     street_number = ed.street_number or lead_facts.get("street_number")
     if street and street_number:

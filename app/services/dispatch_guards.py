@@ -1268,15 +1268,19 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         await deps.whatsapp.send_message(ctx.chat_id, Messages.Errors.AI_OVERLOAD)
         return HANDLED
 
+    ed = follow_up.extracted_data
+    stored_parts = {f: lead_facts.get(f) for f in wf.ADDRESS_PARTS}
+    new_parts = {f: getattr(ed, f, None) for f in wf.ADDRESS_PARTS}
+    moved = wf.parts_from_other_city(lead_facts, ed.city)
+    if moved:
+        # PRO-228: never join parts to another city. Drop the stored ones, and
+        # keep of this reply's only those the customer actually wrote in it.
+        stored_parts = dict.fromkeys(wf.ADDRESS_PARTS)
+        new_parts = wf.stated_in(new_parts, ctx.user_text)
     merged = {
-        "customer_name": follow_up.extracted_data.customer_name
-        or lead_facts.get("customer_name"),
-        "street": follow_up.extracted_data.street or lead_facts.get("street"),
-        "street_number": follow_up.extracted_data.street_number
-        or lead_facts.get("street_number"),
-        "city": follow_up.extracted_data.city or lead_facts.get("city"),
-        "floor": follow_up.extracted_data.floor or lead_facts.get("floor"),
-        "apartment": follow_up.extracted_data.apartment or lead_facts.get("apartment"),
+        "customer_name": ed.customer_name or lead_facts.get("customer_name"),
+        **{f: new_parts.get(f) or stored_parts[f] for f in wf.ADDRESS_PARTS},
+        "city": ed.city or lead_facts.get("city"),
     }
     logger.info(
         f"🔍 AWAITING_ADDRESS re-extraction for {mask_chat_id(ctx.chat_id)}: "
@@ -1289,10 +1293,12 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         f"merged_present={sorted(k for k, v in merged.items() if v)}"
     )
     non_empty = {k: v for k, v in merged.items() if v}
-    if non_empty:
-        await wf.leads_collection.update_one(
-            {"_id": active_lead_await["_id"]}, {"$set": non_empty}
-        )
+    if any(merged[f] for f in wf.ADDRESS_PARTS):
+        non_empty["address_city"] = merged["city"]
+    gone = {f: "" for f in wf.ADDRESS_PARTS if moved and not merged[f]}
+    update = {op: v for op, v in (("$set", non_empty), ("$unset", gone)) if v}
+    if update:
+        await wf.leads_collection.update_one({"_id": active_lead_await["_id"]}, update)
 
     class _AddrProbe:
         pass
