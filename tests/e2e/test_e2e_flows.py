@@ -1133,8 +1133,76 @@ async def test_incomplete_address_parks_in_awaiting_address_and_recovers(world):
     world.recorder.clear()
     await world.send("קומה 3 דירה 12")
     world.recorder.assert_text_to(world.customer, Messages.Customer.ADDRESS_SAVED)
-    assert (await world.lead())["full_address"] == "דיזנגוף 50, תל אביב"
-    await world.assert_state(UserStates.IDLE)
+    # PRO-227: the deal the gate rejected is finalized on this same turn, with
+    # the time the customer agreed to before the gate stopped it.
+    lead = await world.lead()
+    assert lead["full_address"] == "דיזנגוף 50, תל אביב"
+    assert lead["status"] == LeadStatus.NEW
+    assert lead["appointment_time"] == "מחר ב-10:00"
+    await world.assert_state(UserStates.AWAITING_PRO_APPROVAL)
+    world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.AWAITING_APPROVAL_TRANSPARENT)
+    )
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY),
+        static_prefix(Messages.Pro.APPROVAL_REQUEST),
+        "מחר ב-10:00",
+    )
+
+
+@pytest.mark.asyncio
+async def test_loyalty_accept_with_incomplete_address_dispatches_once_completed(
+    world,
+):
+    """PRO-227: '1' to the loyalty offer on a lead with no floor/apartment parks
+    in AWAITING_ADDRESS; the reply that completes the address must dispatch the
+    lead to that pro, not stop at ADDRESS_SAVED."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    await world.booked_job(
+        pro,
+        status=LeadStatus.CONTACTED,
+        booked_slot_id=None,
+        street="דיזנגוף",
+        street_number="50",
+    )
+    await world.set_state(
+        UserStates.AWAITING_LOYALTY_CONFIRMATION,
+        ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
+    )
+    await world.set_metadata({"past_pro_id": str(pro["_id"])})
+
+    await world.send("1")
+    await world.assert_state(UserStates.AWAITING_ADDRESS)
+    assert (await world.lead())["status"] == LeadStatus.CONTACTED
+    world.recorder.assert_silent(world.pro_chat(R.PRO_PRIMARY), "address incomplete")
+
+    world.recorder.clear()
+    world.ai.script(
+        reply(
+            "תודה!",
+            city="תל אביב",
+            street="דיזנגוף",
+            street_number="50",
+            floor="3",
+            apartment="12",
+        )
+    )
+    await world.send("קומה 3 דירה 12")
+
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.NEW
+    assert lead["pro_id"] == pro["_id"]
+    await world.assert_state(UserStates.AWAITING_PRO_APPROVAL)
+    world.recorder.assert_text_to(
+        world.customer,
+        Messages.Customer.LOYALTY_ACCEPTED_NOTIFYING.format(
+            pro_name=pro["business_name"]
+        ),
+    )
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY), Messages.Pro.NEW_LEAD_HEADER
+    )
 
 
 @pytest.mark.asyncio
