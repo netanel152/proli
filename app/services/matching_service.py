@@ -470,13 +470,33 @@ CHAT_TRADE_NEGATIONS = (
 )
 
 
-def trade_named_in_chat(text: str) -> Optional[str]:
-    """The one trade a customer's chat message plainly names, or None."""
-    named = [
+#: The job titles in `CHAT_TRADE_WORDS`. A title names who was sent or who isn't
+#: wanted as often as the job ("שלחתם אינסטלטור אבל יש קצר"), so a fault word
+#: outranks it.
+CHAT_TRADE_TITLES = frozenset({"חשמלאי", "אינסטלטור", "שרברב", "מנעולן", "צבעי"})
+
+
+def _trades_named(text: str, titles: bool) -> list:
+    return [
         trade
         for trade, words in CHAT_TRADE_WORDS.items()
-        if contains_keyword(text, words, CHAT_TRADE_NEGATIONS)
+        if contains_keyword(
+            text,
+            [word for word in words if (word in CHAT_TRADE_TITLES) == titles],
+            CHAT_TRADE_NEGATIONS,
+        )
     ]
+
+
+def trade_named_in_chat(text: str, titles: bool = True) -> Optional[str]:
+    """The one trade a customer's chat message plainly names, or None.
+
+    Fault words decide first. Job titles count only when no fault word names a
+    trade, and not at all with `titles=False`.
+    """
+    named = _trades_named(text, titles=False)
+    if not named and titles:
+        named = _trades_named(text, titles=True)
     return named[0] if len(named) == 1 else None
 
 

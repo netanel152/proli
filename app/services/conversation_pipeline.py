@@ -242,9 +242,11 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             # or names a trade this pro doesn't do, can only be refined from this
             # message (PRO-225: the conversation moved on from "קצר" to a leak).
             # A pro who fits the stored issue keeps it, whatever else is
-            # mentioned in passing. `issue_type` reaches unapproved pros, logs
-            # and pages, so it records the trade, never the words (PRO-59).
-            named = trade_named_in_chat(user_text)
+            # mentioned in passing, and a stored trade yields only to a fault
+            # word, never a job title ("לא צריך אינסטלטור, יש קצר").
+            # `issue_type` reaches unapproved pros, logs and pages, so it
+            # records the trade, never the words (PRO-59).
+            named = trade_named_in_chat(user_text, titles=not wanted)
             if named and named != wanted:
                 # The stored words describe the other trade, so they go.
                 base = Messages.Fallbacks.ISSUE if wanted else issue
@@ -329,12 +331,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                         await leads_collection.update_one(
                             {"_id": active_lead["_id"]}, turn_ops
                         )
-                    await whatsapp.send_message(
-                        chat_id, Messages.Customer.MOVING_TO_FITTING_PRO
-                    )
-                    await lead_manager.log_message(
-                        chat_id, "model", Messages.Customer.MOVING_TO_FITTING_PRO
-                    )
+                    # No "אעביר…" here: `reassign_lead` sends AWAITING_APPROVAL_
+                    # TRANSPARENT only once it has found another pro, and before
+                    # the search nobody knows whether one exists.
                     moved = await monitor_service.reassign_lead(
                         active_lead, notify_old_pro=False, announce=False
                     )
