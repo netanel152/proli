@@ -409,6 +409,8 @@ TRANS = {
         # stashed and rendered on the next run (see components.render_flash),
         # otherwise the rerun discards it before the browser paints it.
         "status_inactive": "לא פעיל",
+        "status_self_paused": "בהפסקה",
+        "deactivated_with_open_jobs": "נשמר. לאיש המקצוע הזה יש עבודות פתוחות: {count}. הצעות שממתינות לאישור יועברו אוטומטית, ועבודות מאושרות יישארו אצלו עד שיטופלו ידנית.",
         "pro_deleted": "איש המקצוע {name} נמחק.",
         "pro_rejected": "הפרופיל של {name} נדחה ונשלחה לו הודעה.",
         "admin_role_updated": "התפקיד של {name} עודכן.",
@@ -808,6 +810,8 @@ TRANS = {
         "help_sos_healer": "Automatically reassigns leads that pros ignored.",
         "help_sos_reporter": "Sends batched reports of stuck leads to the admin's WhatsApp.",
         "status_inactive": "Inactive",
+        "status_self_paused": "On break",
+        "deactivated_with_open_jobs": "Saved. This professional has open jobs: {count}. Offers awaiting approval move automatically, and booked jobs stay with them until handled manually.",
         "pro_deleted": "Professional {name} deleted.",
         "pro_rejected": "{name} was rejected and notified.",
         "admin_role_updated": "Role of {name} updated.",

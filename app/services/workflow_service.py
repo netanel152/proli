@@ -190,6 +190,8 @@ PRO_HOLDING_STATES = (
     UserStates.PRO_SELECTING_JOB_TO_CANCEL,
     UserStates.PRO_SELECTING_JOB_TO_APPROVE,
     UserStates.PRO_SELECTING_JOB_TO_REJECT,
+    UserStates.PRO_SELECTING_JOB_TO_PAUSE,
+    UserStates.PRO_SELECTING_JOB_TO_RESUME,
     UserStates.PRO_AWAITING_FINAL_PRICE,
 )
 
@@ -218,9 +220,10 @@ CUSTOMER_ACTIVE_STATUSES = [
 async def _is_registered_pro(chat_id: str, include_on_break: bool = False):
     """Return the professional doc for this chat, or None.
 
-    ``include_on_break`` is for the keyword bypass only (PRO-212). is_active False
-    also describes an application awaiting review, and its *חזרתי* must not reach
-    the handler that sets is_active True, so that one stays out by name.
+    ``include_on_break`` also admits a pro who took a break themselves (PRO-212), for
+    the keyword bypass and the לקוח switch. is_active False alone also describes an
+    application awaiting review and a pro the admin deactivated, and neither may
+    reach the handler that sets is_active True.
     """
     phone = strip_suffix(chat_id)
     return await users_collection.find_one(
@@ -228,11 +231,30 @@ async def _is_registered_pro(chat_id: str, include_on_break: bool = False):
             "phone_number": {"$in": [phone, chat_id]},
             "role": "professional",
             **(
-                {"pending_approval": {"$ne": True}}
+                {
+                    "pending_approval": {"$ne": True},
+                    "$or": [{"is_active": True}, {"self_paused": True}],
+                }
                 if include_on_break
                 else {"is_active": True}
             ),
         }
+    )
+
+
+async def _is_deactivated_pro(chat_id: str) -> bool:
+    """True for a pro the admin deactivated: not a break they took, not an application."""
+    phone = strip_suffix(chat_id)
+    return bool(
+        await users_collection.find_one(
+            {
+                "phone_number": {"$in": [phone, chat_id]},
+                "role": "professional",
+                "is_active": False,
+                "pending_approval": {"$ne": True},
+                "self_paused": {"$ne": True},
+            }
+        )
     )
 
 
