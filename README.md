@@ -23,7 +23,7 @@
 - **Self-Service Rescheduling** — Customers with confirmed bookings can reschedule by picking from the professional's live available slots directly in WhatsApp.
 - **Progressive Geo Routing** — Finds the best pro within 10 km, expanding to 20 km then 30 km if needed. Falls back to city-name matching for non-geo queries.
 - **Rating + Load Balancing** — Prioritizes highest-rated pros; skips any pro carrying 3 or more active leads.
-- **Pro Approval Flow** — Every deal requires explicit pro consent via text reply. Customers wait in a soft-hold state (`AWAITING_PRO_APPROVAL`) while the pro reviews and approves, pauses, or rejects.
+- **Pro Approval Flow** — Every deal requires explicit pro consent via text reply. Customers wait in a soft-hold state (`AWAITING_PRO_APPROVAL`) while the pro reviews and approves or rejects.
 - **Transparent Approval** — Customers see the name of the professional being contacted, reducing uncertainty during the wait.
 - **Live Handoff (SOS)** — Customer can request a human representative. The bot pauses for a **15-Minute Dynamic Idle Timeout** that resets on every message.
 - **SLA Deflection** — If a Pro remains silent for 15 minutes during a handoff, the bot proactively "wakes up" to offer the customer a direct phone call escalation.

@@ -71,5 +71,5 @@ Proli בנויה כפלטפורמה מולטי-מודאלית ומבוזרת. מ
 אם נדרש שינוי בלוגיקת הניתוב:
 *   קובץ: `app/services/matching_service.py`
 *   פונקציה: `determine_best_pro`
-*   ניתן להוסיף סינון לפי שדה `type` (ProType enum) ב-User Object.
+*   הסינון לפי מקצוע כבר קיים: `probable_trade(issue_type)` + `trade_fits`, שקוראת את `type`, `categories` ו-`profession_type` ב-User Object.
 *   להוספת עיר חדשה לניתוב Geo: הוסיפו את הקורדינטות ל-`ISRAEL_CITIES_COORDS` ב-`constants.py`.

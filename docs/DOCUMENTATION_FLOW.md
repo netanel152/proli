@@ -20,7 +20,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 | `rejected` | Pro rejects via text ("דחה", or a number in the list a bare "2" opens) — a way-station, not terminal: `_handle_reject` claims it then hands off to `monitor_service.reassign_lead`, which reopens the lead as `new` under the next pro or escalates it (PRO-117) | `_handle_reject` in `pro_flow.py` |
 | `cancelled` | Customer cancels — a cancel keyword on a BOOKED job first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit | `workflow_service.py` |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h | `admin_flow.py` / `monitor_service.py` |
-| `pending_admin_review` | No replacement pro found at any radius, `MAX_REASSIGNMENTS` exhausted, or a rejected/no-show lead's rematch itself fails (PRO-45: `escalation_reason: "no_show_reassign_failed"`) | `monitor_service.py` / `workflow_service.py` / `pro_flow.py` / `customer_flow.py` |
+| `pending_admin_review` | No replacement pro found at any radius, an issue naming no known trade (`escalation_reason: "unknown_trade"`), `MAX_REASSIGNMENTS` exhausted, or a rejected/no-show/wrong-trade lead's rematch itself fails (PRO-45: `escalation_reason: "no_show_reassign_failed"`; `"wrong_trade_rematch_failed"`) | `monitor_service.py` / `conversation_pipeline.py` / `workflow_service.py` / `pro_flow.py` / `customer_flow.py` |
 
 Each transition is appended to the lead's `status_history` array (`{status, at, by}`) via `set_lead_status()`, the single writer for lead status in `lead_manager_service.py`.
 
@@ -34,7 +34,7 @@ Activated when no pro is assigned to the active lead.
 
 - Receives the last **5 conversational turns** (10 messages max — centrally trimmed in `ai_engine_service.py`)
 - Extracts `city`, `issue`, `street`, `street_number`, `floor`, `apartment`, `appointment_time`, `appointment_datetime` (ISO 8601, resolved from relative expressions; left null for open-ended times like "בהקדם") from the conversation
-- If `city` + `issue` are found → calls `matching_service.determine_best_pro()`
+- If `city` + `issue` are found (an emergency needs only the city) → calls `matching_service.determine_best_pro()`
 - If `city` or `issue` missing → sends a clarifying reply, waits for next message
 - If pro found → calls Phase 2 immediately
 - If no pro found after all radius steps → escalates lead to `PENDING_ADMIN_REVIEW`, sends `Messages.Customer.PENDING_REVIEW`
@@ -54,7 +54,7 @@ Activated when a pro is assigned (either from Phase 1 or an existing `pro_id` on
 
 ### Phase Skip Optimization
 
-If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatcher) is skipped entirely and the message goes directly to Phase 2. This eliminates a full AI call per message during ongoing conversations.
+If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatcher) is skipped entirely and the message goes directly to Phase 2 — unless that pro doesn't fit the lead's trade and no admin assigned them: the pipeline's wrong-trade check then drops them, a CONTACTED lead goes back through Phase 1 and matching, and a NEW one goes to `reassign_lead`. This eliminates a full AI call per message during ongoing conversations.
 
 ---
 

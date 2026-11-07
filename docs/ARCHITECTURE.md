@@ -214,7 +214,7 @@ process_incoming_message(chat_id, text, media_url)
                │
                ├─ Phase 1 — Dispatcher AI (last 5 turns = 10 messages)
                │      extracts city + issue
-               │      if city+issue found → matching_service.determine_best_pro()
+               │      if city+issue found (emergency: city alone) → matching_service.determine_best_pro()
                │
                ├─ Phase 2 — Pro Persona AI (if pro assigned)
                │      adopts pro's system prompt, pricing, social proof
@@ -237,7 +237,7 @@ process_incoming_message(chat_id, text, media_url)
 
 ## 4. Matching Service
 
-`matching_service.determine_best_pro(location, issue_type, excluded_pro_ids)`
+`matching_service.determine_best_pro(issue_type, location, excluded_pro_ids, require_trade, customer_chat_id)` — `customer_chat_id` drops any pro whose `phone_number` is that customer, so a pro writing in as a customer is never offered their own lead
 
 **Step 1 — Geo search (if city has coordinates):**
 
