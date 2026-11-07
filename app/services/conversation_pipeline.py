@@ -58,7 +58,12 @@ from app.core.phone import mask_chat_id, to_chat_id
 from app.core.prompts import Prompts
 from app.services.ai_engine_service import AIResponse, file_notice_in
 from app.services.dispatch_guards import DispatchContext, GuardDeps
-from app.services.matching_service import probable_trade, trade_fits
+from app.services.matching_service import (
+    issue_update,
+    probable_trade,
+    trade_fits,
+    trade_named_in_chat,
+)
 
 
 async def _send_file_notice(response: AIResponse, chat_id, whatsapp, lead_manager):
@@ -224,29 +229,139 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
 
     # PRO-215: a pro whose trade doesn't fit is not an assigned pro — answering
     # in their name leaves the customer with "I'm a plumber, not an electrician".
-    # An issue too vague to classify is read together with what the customer
-    # just wrote; a human's explicit assignment stands. An unoffered lead falls
-    # through to the dispatcher and matching below; one the pro was already
-    # offered goes through the reassignment path, which tells the customer.
+    # A human's explicit assignment stands. An unoffered lead falls through to the
+    # dispatcher and matching below; one the pro was already offered goes through
+    # the reassignment path.
+    rematch_notice_sent = False
     if existing_pro and not active_lead.get("assigned_by_admin_at"):
         issue = active_lead.get("issue_type") or ""
-        if not probable_trade(issue) and probable_trade(user_text):
-            issue = f"{issue} {user_text}".strip()
-        if not trade_fits(existing_pro, probable_trade(issue)):
+        wanted = probable_trade(issue)
+        if not wanted:
+            # The dispatcher is skipped from here on, so a vague issue can only
+            # be refined from this message. `issue_type` reaches unapproved pros,
+            # logs and pages, so it records the trade, never the words (PRO-59).
+            wanted = trade_named_in_chat(user_text)
+            if wanted:
+                base = issue
+                if base in ("", Defaults.UNKNOWN_ISSUE):
+                    base = Messages.Fallbacks.ISSUE
+                label = Messages.Onboarding.TYPE_LABELS[wanted]
+                issue = f"{base} ({label})"
+                await leads_collection.update_one(
+                    {"_id": active_lead["_id"]}, {"$set": {"issue_type": issue}}
+                )
+                active_lead["issue_type"] = issue
+        if not trade_fits(existing_pro, wanted, held=True):
             logger.warning(
                 f"Lead {active_lead['_id']} is with pro {existing_pro['_id']} outside "
-                f"its trade ({probable_trade(issue)}) — rematching"
+                f"its trade ({wanted}) — rematching"
             )
-            await leads_collection.update_one(
-                {"_id": active_lead["_id"]},
-                {"$set": {"pro_id": None, "issue_type": issue}},
+            offered = active_lead["status"] == LeadStatus.NEW
+            dropped = await leads_collection.update_one(
+                {
+                    "_id": active_lead["_id"],
+                    "pro_id": existing_pro["_id"],
+                    "status": active_lead["status"],
+                },
+                {
+                    "$set": {"pro_id": None},
+                    # That pro's estimate, not the next one's.
+                    "$unset": {"quoted_price": ""},
+                },
             )
-            active_lead["issue_type"] = issue
-            if active_lead["status"] == LeadStatus.NEW:
+            if not dropped.modified_count:
+                logger.info(
+                    f"Lead {active_lead['_id']} moved before its wrong-trade rematch"
+                )
+                return
+            active_lead.pop("quoted_price", None)
+
+            # True on every outcome below, so it goes first. Without it a pro
+            # holding the offer answers "אשר" and finds nothing, or books the
+            # other NEW lead they hold.
+            notice = (
+                Messages.Pro.LEAD_OUTSIDE_TRADE_OFFER
+                if offered
+                else Messages.Pro.LEAD_OUTSIDE_TRADE
+            )
+            try:
+                if existing_pro.get("phone_number"):
+                    sent = await whatsapp.send_message(
+                        to_chat_id(existing_pro["phone_number"]),
+                        notice.format(issue=issue),
+                    )
+                    # None is the facade's "blocked": a closed 24h window, usually.
+                    if not sent:
+                        logger.warning(
+                            f"Wrong-trade notice for lead {active_lead['_id']} did not "
+                            f"reach pro {existing_pro['_id']}"
+                        )
+            except Exception as e:
+                logger.error(f"Failed to tell pro about the wrong-trade rematch: {e}")
+
+            if offered:
                 from app.services import monitor_service
 
-                await monitor_service.reassign_lead(active_lead, notify_old_pro=False)
+                try:
+                    # This turn never reaches the pipeline's own recording below.
+                    turn_ops = {}
+                    if is_emergency_detected:
+                        turn_ops["$set"] = {"is_emergency": True}
+                        active_lead["is_emergency"] = True
+                    if media_url:
+                        turn_ops["$addToSet"] = {"media_urls": media_url}
+                        urls = active_lead.get("media_urls") or []
+                        if media_url not in urls:
+                            active_lead["media_urls"] = [*urls, media_url]
+                    if turn_ops:
+                        await leads_collection.update_one(
+                            {"_id": active_lead["_id"]}, turn_ops
+                        )
+                    await whatsapp.send_message(
+                        chat_id, Messages.Customer.MOVING_TO_FITTING_PRO
+                    )
+                    await lead_manager.log_message(
+                        chat_id, "model", Messages.Customer.MOVING_TO_FITTING_PRO
+                    )
+                    moved = await monitor_service.reassign_lead(
+                        active_lead, notify_old_pro=False, announce=False
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Wrong-trade rematch failed for lead {active_lead['_id']}: {e}"
+                    )
+                    # Not when `reassign_lead` got as far as a new owner.
+                    current = await leads_collection.find_one(
+                        {"_id": active_lead["_id"]}
+                    )
+                    moved = bool(current and current.get("pro_id"))
+                    if current and not current.get("pro_id"):
+                        escalated = await set_lead_status(
+                            active_lead["_id"],
+                            LeadStatus.PENDING_ADMIN_REVIEW,
+                            Actor.SYSTEM,
+                            extra_set={
+                                "escalation_reason": "wrong_trade_rematch_failed"
+                            },
+                            expected_status=LeadStatus.NEW,
+                        )
+                        if escalated:
+                            await whatsapp.send_message(
+                                chat_id, Messages.Customer.PENDING_REVIEW
+                            )
+                if not moved and (
+                    is_emergency_detected or active_lead.get("is_emergency")
+                ):
+                    notification_service.page_operator(
+                        f"EMERGENCY lead {active_lead['_id']} was with a pro outside "
+                        "its trade and has no replacement — needs manual routing now"
+                    )
                 return
+
+            await whatsapp.send_message(
+                chat_id, Messages.Customer.MOVING_TO_FITTING_PRO
+            )
+            rematch_notice_sent = True
             existing_pro = None
 
     # PRO-116 Q3: a customer with a CONFIRMED (BOOKED) job who writes about
@@ -319,6 +434,10 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     if media_fetch_failed:
         await lead_manager.log_message(
             chat_id, "model", Messages.Errors.MEDIA_FETCH_FAILED
+        )
+    if rematch_notice_sent:
+        await lead_manager.log_message(
+            chat_id, "model", Messages.Customer.MOVING_TO_FITTING_PRO
         )
 
     # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
@@ -503,7 +622,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     # Merge: prefer fresh AI output, fall back to stored lead facts so a trimmed
     # window or a silent parse-failure can't erase a previously-confirmed fact.
     ai_city = dispatcher_response.extracted_data.city
-    ai_issue = dispatcher_response.extracted_data.issue
+    ai_issue = issue_update(
+        dispatcher_response.extracted_data.issue, lead_facts.get("issue_type")
+    )
     ai_name = dispatcher_response.extracted_data.customer_name
     extracted_city = ai_city or lead_facts.get("city") or lead_facts.get("full_address")
     extracted_issue = ai_issue or lead_facts.get("issue_type")
@@ -622,6 +743,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         extracted_city
         and extracted_issue
         and extracted_issue != Defaults.UNKNOWN_ISSUE
+        # PRO-215: an issue no trade can be named for goes to a human, not to
+        # whoever this customer used last.
+        and probable_trade(extracted_issue)
         and current_lead_id
         and not lead_is_emergency
         # PRO-90: no offer while WhatsApp quality is degraded. The lead carries
@@ -689,7 +813,14 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
 
     # Note: the explicit `!= UNKNOWN_ADDRESS` check is gone because we no longer
     # persist that sentinel. `extracted_city` is either a real city string or None.
-    if extracted_city and extracted_issue and extracted_issue != Defaults.UNKNOWN_ISSUE:
+    #
+    # An emergency doesn't wait for an issue. With none, matching finds nobody and
+    # the block below pages the operator; otherwise the dispatcher could keep asking
+    # with nobody told.
+    if extracted_city and (
+        lead_is_emergency
+        or (extracted_issue and extracted_issue != Defaults.UNKNOWN_ISSUE)
+    ):
         try:
             best_pro = await determine_best_pro(
                 issue_type=extracted_issue, location=extracted_city
@@ -701,8 +832,19 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         if not best_pro and current_lead_id:
             existing_lead = await leads_collection.find_one({"_id": current_lead_id})
             if existing_lead and not existing_lead.get("pro_id"):
+                unknown_trade = not probable_trade(extracted_issue)
                 await set_lead_status(
-                    current_lead_id, LeadStatus.PENDING_ADMIN_REVIEW, Actor.SYSTEM
+                    current_lead_id,
+                    LeadStatus.PENDING_ADMIN_REVIEW,
+                    Actor.SYSTEM,
+                    extra_set=(
+                        {"escalation_reason": "unknown_trade"}
+                        if unknown_trade
+                        else None
+                    ),
+                )
+                why = (
+                    "names no known trade" if unknown_trade else "has no available pro"
                 )
                 # WARNING, not CRITICAL: no-pro-available is a routine coverage gap
                 # (admin handles it via PENDING_ADMIN_REVIEW), not an infra page. The
@@ -710,7 +852,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 # operator's email (PRO-77). chat_id masked per PII convention.
                 logger.warning(
                     f"Lead {current_lead_id} for {mask_chat_id(chat_id)} requires admin "
-                    "review — no pro available"
+                    f"review — it {why}"
                 )
                 # PRO-121: a routine coverage gap is deliberately not a page
                 # (see above), but an *emergency* with no pro is the one case
@@ -719,7 +861,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 # short-circuit answering STILL_PENDING_REVIEW every 30 min.
                 if lead_is_emergency:
                     notification_service.page_operator(
-                        f"EMERGENCY lead {current_lead_id} has no available pro "
+                        f"EMERGENCY lead {current_lead_id} {why} "
                         f"(city={extracted_city!r}, issue={extracted_issue!r}) — "
                         "PENDING_ADMIN_REVIEW, needs manual routing now"
                     )

@@ -590,8 +590,8 @@ async def test_the_instruction_never_reaches_user_text(
 async def test_the_instruction_never_reaches_issue_type(
     wf_mocks, mock_db, monkeypatch  # noqa: F811
 ):
-    """The wrong-trade check writes the customer's message into a vague issue_type,
-    which goes on to the lead and to the next pro."""
+    """The wrong-trade check writes only a trade's label into a vague issue_type,
+    never the customer's message, so nothing of this turn's text reaches the lead."""
     _lose_the_file(monkeypatch)
     chat = "972500217012@c.us"
     pro_id = ObjectId()
@@ -619,7 +619,7 @@ async def test_the_instruction_never_reaches_issue_type(
     lead = await mock_db.leads.find_one({"_id": lead_id})
     # The check did fire, or this would pass without testing anything.
     assert lead["pro_id"] is None
-    assert lead["issue_type"] == "בעיה קצר בחשמל"
+    assert lead["issue_type"] == "בעיה (חשמלאי)"
 
 
 @pytest.mark.asyncio

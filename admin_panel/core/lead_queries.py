@@ -33,6 +33,8 @@ wrong — and there is no ``VALID_TRANSITIONS`` helper in ``app/`` to validate
 against. Recorded here so the absence reads as a decision, not an oversight.
 """
 
+from datetime import datetime, timezone
+
 import pytz
 from bson.objectid import ObjectId
 
@@ -469,7 +471,12 @@ def apply_lead_changes(
         held_pro = True
 
     if set_ops:
-        update_op["$set"] = set_ops
+        update_op["$set"] = dict(set_ops)
+    if record_only:
+        # PRO-215: a human chose this pro, so the bot must not rematch it away.
+        # Beside `set_ops`, which reports what the operator edited. The offer
+        # path stamps it in `assign_lead_to_pro`.
+        update_op["$set"]["assigned_by_admin_at"] = datetime.now(timezone.utc)
     if unset_ops:
         update_op["$unset"] = unset_ops
     if update_op:

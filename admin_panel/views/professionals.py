@@ -258,6 +258,11 @@ def render_pro_form(T, pro_data=None):
                     T.get("verified", "Verified"),
                     value=pro_data.get("is_verified", False) if is_edit else False,
                 )
+            handles_electrical = st.checkbox(
+                T["handles_electrical"],
+                value=pro_data.get("handles_electrical", False) if is_edit else False,
+                help=T["handles_electrical_help"],
+            )
 
         # Image Upload
         existing_image_url = pro_data.get("profile_image_url", "") if is_edit else ""
@@ -352,6 +357,9 @@ def render_pro_form(T, pro_data=None):
                     "business_name": name,
                     "phone_number": phone,
                     "type": ptype,
+                    # Routing reads these, so a changed type can't leave a stale one.
+                    "categories": [ptype],
+                    "handles_electrical": handles_electrical,
                     "is_active": active,
                     # This form is the admin's decision, so the pro's own *חזרתי*
                     # can't undo it (PRO-212).

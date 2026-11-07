@@ -45,6 +45,7 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 | **P11** | SOS alert (`SOS.PRO_ALERT` / `SOS.PRO_ALERT_PENDING`) | `notification_service.send_sos_alert` | Customer distress | Time-critical; a rejected template here is a safety regression. **PRO-59**: the phone-bearing `PRO_ALERT` sends only when the lead is BOOKED; a NEW lead's pro (offered, not yet approved) gets the phone-free `PRO_ALERT_PENDING` instead, which since PRO-212 has no `{last_message}` variable either, because a customer can type their number there — two template bodies, same trigger. A CONTACTED or absent lead's pro gets no alert (PRO-212). |
 | **P12** | Customer cancelled (`CUSTOMER_CANCELLED`) | `workflow_service` | Customer cancels | |
 | **P13** | Onboarding approved / rejected | `professionals.py:486, 497` | **Operator clicks a button in the admin panel** | Arbitrary delay after the pro's registration — hours or days. Assume closed. |
+| **P14** | Lead left a pro outside its trade (`LEAD_OUTSIDE_TRADE`, `LEAD_OUTSIDE_TRADE_OFFER`) | `conversation_pipeline.py` wrong-trade check | The customer's next message on a lead whose pro doesn't fit its trade (PRO-215) | Not `PRO_LOST_LEAD`: nobody failed to answer. Worded to stay true whether the lead goes to another pro or to manual review. |
 
 ### Customer-facing
 
@@ -116,6 +117,6 @@ With 1 done and 2–3 taken, the catalog is roughly **9–11 professional-facing
 
 ## Open questions for PRO-87
 
-- Current category definitions and which of P1–P13 fall under UTILITY vs MARKETING (affects both cost and opt-out obligations).
+- Current category definitions and which of P1–P14 fall under UTILITY vs MARKETING (affects both cost and opt-out obligations).
 - Current per-variable formatting rules — specifically newlines inside variables, which decides whether the details block can stay one variable or must become five.
 - Whether the sandbox number's 5-recipient limit applies to template sends as well as free-form (determines whether PRO-64 can exercise the template path at all).
