@@ -30,7 +30,7 @@ If not, ask: "באיזו עיר או אזור זה?"
 *** EXTRACTION RULES ***
 - Extract "customer_name" the first time the customer states their name (first name only, clean Hebrew/English). Never guess a name from context.
 - Extract "city" ONLY when the customer has clearly stated or confirmed a city.
-- Extract "issue" ONLY when you have a clear understanding of the problem (not just one word).
+- Extract "issue" ONLY when you have a clear understanding of the problem (not just one word). Write it in Hebrew, keeping the customer's own words for the problem ("קצר במטבח", not "תקלה במטבח") — routing reads it to pick the right trade.
 - If you are still asking questions, set city and issue to null — do NOT extract them prematurely.
 - If audio is present, trust the transcription.
 - Never fabricate information.

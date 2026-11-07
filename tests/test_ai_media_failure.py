@@ -587,6 +587,42 @@ async def test_the_instruction_never_reaches_user_text(
 
 
 @pytest.mark.asyncio
+async def test_the_instruction_never_reaches_issue_type(
+    wf_mocks, mock_db, monkeypatch  # noqa: F811
+):
+    """The wrong-trade check writes the customer's message into a vague issue_type,
+    which goes on to the lead and to the next pro."""
+    _lose_the_file(monkeypatch)
+    chat = "972500217012@c.us"
+    pro_id = ObjectId()
+    await mock_db.users.insert_one(
+        {
+            "_id": pro_id,
+            "is_active": True,
+            "business_name": "יוסי",
+            "type": "plumber",
+        }
+    )
+    lead_id = (
+        await mock_db.leads.insert_one(
+            {
+                "chat_id": chat,
+                "status": LeadStatus.CONTACTED,
+                "pro_id": pro_id,
+                "issue_type": "בעיה",
+            }
+        )
+    ).inserted_id
+
+    await process_incoming_message(chat, "קצר בחשמל", media_url="meta-media://M1")
+
+    lead = await mock_db.leads.find_one({"_id": lead_id})
+    # The check did fire, or this would pass without testing anything.
+    assert lead["pro_id"] is None
+    assert lead["issue_type"] == "בעיה קצר בחשמל"
+
+
+@pytest.mark.asyncio
 async def test_media_lost_with_every_model_down_does_not_claim_an_answer(engine):
     engine.client.aio.models.generate_content = AsyncMock(
         side_effect=RuntimeError("overloaded")

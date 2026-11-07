@@ -1082,11 +1082,15 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
     PRO_SELECTING_JOB_TO_FINISH here is what made the job list unanswerable —
     pro_flow re-reads the state and saw PRO_MODE, so "1" ran approve. Hence
     PRO_DISPATCH_STATES rather than PRO_MODE alone.
+
+    PRO-212: a pro on break counts. PRO_MODE lasts 4 hours and a break lasts days,
+    so a reminder's answer, and the *חזרתי* that ends the break, used to reach the
+    customer side. Matching never reads this, so they stay out of it.
     """
     from app.services import workflow_service as wf
 
     if ctx.normalized_text in wf.PRO_BUSINESS_KEYWORDS:
-        is_pro_doc = await wf._is_registered_pro(ctx.chat_id)
+        is_pro_doc = await wf._is_registered_pro(ctx.chat_id, include_on_break=True)
         if is_pro_doc and ctx.current_state not in wf.PRO_DISPATCH_STATES:
             defer_to_customer_flow = (
                 ctx.normalized_text in wf.AMBIGUOUS_PRO_KEYWORDS

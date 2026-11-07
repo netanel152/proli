@@ -279,10 +279,11 @@ can reach a subscriber. Remove them with `--purge` (deletes only
   availability, not rating, is the dominant signal. `[FILL] חשמל חולון 01` is
   deliberately the highest-rated pro in the Tel Aviv ring (5.0) with no slots, so
   TC-19 only produces its documented answer if that bonus is working.
-* **Routing does not filter on profession.** `determine_best_pro` takes
-  `issue_type` but never uses it in `base_filter` — the seven types are seeded for
-  realistic prompts and admin-panel variety, not because any case above tests
-  profession matching.
+* **Routing filters on the trade the issue names (PRO-215).** `determine_best_pro`
+  keeps only pros whose trade fits `probable_trade(issue_type)`; an issue that names
+  no trade imposes no constraint. The expected winners above span all trades, so
+  these cases must be sent with an issue that names no trade — an issue like
+  "נזילה" now restricts routing to plumbers (and general/handyman pros).
 
 All ten are also asserted automatically in `tests/test_seed_coverage_matrix.py`,
 which runs the real routing engine against the same matrix — so a routing
