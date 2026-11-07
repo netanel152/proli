@@ -1284,3 +1284,115 @@ async def test_pause_does_not_turn_a_deactivation_into_the_pros_own_break(world)
     await world.send(PAUSE_WORD, chat_id=pro_chat)
 
     assert not (await world.db.users.find_one({"_id": pro["_id"]})).get("self_paused")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flags",
+    [{}, {"approval_nudged": True, "reassign_offered": True}],
+    ids=["unflagged", "both-flags"],
+)
+async def test_sla_moves_an_offer_that_waited_overnight_with_the_state_expired(
+    world, flags
+):
+    """AWAITING_PRO_APPROVAL lasts an hour, and business hours can be a night away."""
+    pro, pro_chat = await _deactivated_pro(world)
+    lead = await world.awaiting_approval_job(pro, chat_id=CUSTOMER_A, **flags)
+
+    await _run_approval_sla(world, inside_hours=False)
+    assert (await world.lead_by_id(lead["_id"]))["pro_id"] == pro["_id"]
+
+    await world.set_state(UserStates.IDLE, chat_id=CUSTOMER_A)
+    await _run_approval_sla(world, inside_hours=True)
+
+    moved = await world.lead_by_id(lead["_id"])
+    assert moved["pro_id"] != pro["_id"]
+    assert moved["status"] == LeadStatus.NEW
+    # notify_old_pro=False: the deactivated pro hears nothing about it.
+    world.recorder.assert_silent(pro_chat, "the admin deactivated this pro")
+
+
+@pytest.mark.asyncio
+async def test_sla_leaves_an_offer_while_the_customer_is_with_a_human(world):
+    pro, pro_chat = await _deactivated_pro(world)
+    lead = await world.awaiting_approval_job(pro, chat_id=CUSTOMER_A)
+    await world.set_state(UserStates.PAUSED_FOR_HUMAN, chat_id=CUSTOMER_A, ttl=900)
+
+    await _run_approval_sla(world)
+
+    assert (await world.lead_by_id(lead["_id"]))["pro_id"] == pro["_id"]
+    await world.assert_state(UserStates.PAUSED_FOR_HUMAN, chat_id=CUSTOMER_A)
+    world.recorder.assert_silent(CUSTOMER_A, "a human has this conversation")
+
+
+@pytest.mark.asyncio
+async def test_sla_still_ignores_an_active_pros_offer_once_the_state_expired(world):
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    lead = await world.awaiting_approval_job(pro, chat_id=CUSTOMER_A)
+    await world.age(lead["_id"], 60, "pro_notified_at")
+    await world.set_state(UserStates.IDLE, chat_id=CUSTOMER_A)
+
+    await _run_approval_sla(world)
+
+    kept = await world.lead_by_id(lead["_id"])
+    assert kept["pro_id"] == pro["_id"]
+    assert not kept.get("approval_nudged")
+    assert not kept.get("reassign_offered")
+
+
+# ===========================================================================
+# A list stays open for minutes, and the job on a row can close meanwhile
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "word, context_key",
+    [
+        (CANCEL_WORD, "cancelling_jobs_context"),
+        (FINISH_WORD, "finishing_jobs_context"),
+    ],
+    ids=["cancel", "finish"],
+)
+@pytest.mark.parametrize(
+    "closed_as", [LeadStatus.CANCELLED, LeadStatus.COMPLETED], ids=["cancelled", "done"]
+)
+async def test_picking_a_row_that_already_closed_changes_nothing(
+    world, word, context_key, closed_as
+):
+    pro_chat, first, _ = await _pro_with_two_jobs(world)
+    await world.send(word, chat_id=pro_chat)
+    number = await _number_of(world, pro_chat, context_key, first)
+    await world.db.leads.update_one(
+        {"_id": first["_id"]}, {"$set": {"status": closed_as}}
+    )
+    await world.set_state(UserStates.AWAITING_NEW_OR_EXISTING, chat_id=CUSTOMER_A)
+    before = await world.lead_by_id(first["_id"])
+    world.recorder.clear()
+
+    await world.send(number, chat_id=pro_chat)
+
+    after = await world.lead_by_id(first["_id"])
+    assert after["status"] == closed_as
+    assert after.get("cancel_reason") == before.get("cancel_reason")
+    assert after.get("status_history") == before.get("status_history")
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.SELECTION_LIST_CHANGED)
+    world.recorder.assert_silent(CUSTOMER_A, "their job had already closed")
+    await world.assert_state(UserStates.AWAITING_NEW_OR_EXISTING, chat_id=CUSTOMER_A)
+    assert await world.state(pro_chat) != UserStates.PRO_AWAITING_FINAL_PRICE
+
+
+@pytest.mark.asyncio
+async def test_cancelling_a_row_that_closed_keeps_its_slot_taken(world):
+    """The slot may belong to whatever replaced this job."""
+    pro_chat, first, _ = await _pro_with_two_jobs(world)
+    await world.send(CANCEL_WORD, chat_id=pro_chat)
+    number = await _number_of(world, pro_chat, "cancelling_jobs_context", first)
+    await world.db.leads.update_one(
+        {"_id": first["_id"]}, {"$set": {"status": LeadStatus.COMPLETED}}
+    )
+
+    await world.send(number, chat_id=pro_chat)
+
+    assert (await world.slot(first["booked_slot_id"]))["is_taken"] is True

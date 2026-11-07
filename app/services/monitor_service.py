@@ -961,6 +961,11 @@ async def check_pro_approval_sla():
       * T+APPROVAL_REASSIGN_OFFER_MINUTES → offer the customer a reassignment once
         (``reassign_offered`` flag); the 1/2 reply is handled in workflow_service.
     Emergency leads use half the thresholds. Idempotent via the boolean flags.
+
+    PRO-212: an offer held by a pro the admin deactivated moves to another pro in
+    business hours, whatever the flags or the customer's state, unless the customer
+    is with a human. Waiting overnight outlasts AWAITING_PRO_APPROVAL, so neither
+    can be required of it, which is why the query no longer filters on the flags.
     """
     logger.info("⏰ [Approval SLA] Checking leads awaiting pro approval...")
     now = datetime.now(timezone.utc)
@@ -969,10 +974,6 @@ async def check_pro_approval_sla():
             "status": LeadStatus.NEW,
             "pro_id": {"$ne": None},
             "pro_notified_at": {"$ne": None},
-            "$or": [
-                {"approval_nudged": {"$ne": True}},
-                {"reassign_offered": {"$ne": True}},
-            ],
         }
         leads = await leads_collection.find(query).to_list(
             length=WorkerConstants.DB_QUERY_LIMIT
@@ -984,12 +985,7 @@ async def check_pro_approval_sla():
     for lead in leads:
         try:
             chat_id = lead["chat_id"]
-            # Only act while the customer is genuinely waiting for approval.
-            if (
-                await StateManager.get_state(chat_id)
-                != UserStates.AWAITING_PRO_APPROVAL
-            ):
-                continue
+            customer_state = await StateManager.get_state(chat_id)
 
             # PRO-212: a pro the admin deactivated can't answer this offer, so don't
             # wait for them. Moving it messages the customer, hence the PRO-73 gate.
@@ -998,9 +994,14 @@ async def check_pro_approval_sla():
                 owner
                 and not owner.get("is_active", True)
                 and not owner.get("self_paused")
+                and customer_state != UserStates.PAUSED_FOR_HUMAN
             ):
                 if within_business_hours():
                     await reassign_lead(lead, notify_old_pro=False)
+                continue
+
+            # Only act while the customer is genuinely waiting for approval.
+            if customer_state != UserStates.AWAITING_PRO_APPROVAL:
                 continue
 
             notified_at = lead.get("pro_notified_at")

@@ -411,7 +411,8 @@ async def _handle_job_selection(
             return Messages.Pro.SELECTION_RESUME_LIST_CHANGED
         return await _resume_lead(lead, pro)
     if current_state == UserStates.PRO_SELECTING_JOB_TO_CANCEL:
-        await _execute_cancel(lead, pro, whatsapp)
+        if not await _execute_cancel(lead, pro, whatsapp):
+            return Messages.Pro.SELECTION_LIST_CHANGED
         return Messages.Pro.CANCEL_SUCCESS
     return await _execute_finish(lead, pro, whatsapp, chat_id)
 
@@ -863,7 +864,9 @@ async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
     # PRO-90: while WhatsApp quality is degraded the review request is skipped,
     # and waiting_for_rating with it so no stray digit is later read as a rating.
     ask_for_rating = not await non_essential_sends_paused()
-    await set_lead_status(
+    # PRO-212: a list stays open for minutes, and the customer may have closed this
+    # job since. Guarded on the write, so nothing below runs for a closed job.
+    claimed = await set_lead_status(
         lead["_id"],
         LeadStatus.COMPLETED,
         Actor.PRO,
@@ -872,7 +875,11 @@ async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
             "waiting_for_rating": ask_for_rating,
             "is_paused": False,
         },
+        expected_status=LeadStatus.BOOKED,
+        expected_pro_id=pro["_id"],
     )
+    if claimed is None:
+        return Messages.Pro.SELECTION_LIST_CHANGED
 
     # Clear cached context
     if lead.get("chat_id"):
@@ -1201,10 +1208,12 @@ async def _handle_cancel(pro, chat_id):
     )
 
 
-async def _execute_cancel(lead, pro, whatsapp):
+async def _execute_cancel(lead, pro, whatsapp) -> bool:
+    """Cancel a BOOKED lead. False means it had already closed and nothing changed."""
     from app.core.database import slots_collection
 
-    await set_lead_status(
+    # PRO-212: guarded on the write, as in `_execute_finish`.
+    claimed = await set_lead_status(
         lead["_id"],
         LeadStatus.CANCELLED,
         Actor.PRO,
@@ -1213,7 +1222,11 @@ async def _execute_cancel(lead, pro, whatsapp):
             "cancel_reason": "pro_cancelled",
             "is_paused": False,
         },
+        expected_status=LeadStatus.BOOKED,
+        expected_pro_id=pro["_id"],
     )
+    if claimed is None:
+        return False
 
     if lead.get("booked_slot_id"):
         await slots_collection.update_one(
@@ -1229,6 +1242,7 @@ async def _execute_cancel(lead, pro, whatsapp):
         )
 
     logger.info(f"Pro {pro['_id']} cancelled BOOKED lead {lead['_id']}")
+    return True
 
 
 async def _handle_history(pro):
