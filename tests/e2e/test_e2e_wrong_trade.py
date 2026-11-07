@@ -703,6 +703,82 @@ async def test_an_electrical_message_still_moves_the_lead_and_never_back(world):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text",
+    ["אני לא צריך אינסטלטור, יש קצר", "שלחתם אינסטלטור אבל יש קצר", "יש קצר"],
+)
+async def test_a_job_title_never_overrides_the_stored_trade(world, text):
+    """A title names who was sent, or who isn't wanted, as often as the job."""
+    plumber = await _plumber(world)
+    electrician = await _electrician(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber)
+    world.ai.script(
+        reply("רגע.", city="תל אביב", issue="קצר במטבח"),
+        reply("שלום, כאן דני החשמלאי."),
+    )
+
+    await world.send(text)
+
+    lead = await world.lead()
+    assert lead["pro_id"] == electrician["_id"]
+    assert lead["issue_type"] == "קצר במטבח"
+    assert lead["excluded_pro_ids"] == [plumber["_id"]]
+
+
+@pytest.mark.asyncio
+async def test_an_electricians_title_never_overrides_a_stored_leak(world):
+    electrician = await _electrician(world)
+    await world.grant_consent()
+    await _contacted_lead(world, electrician, issue_type="נזילה במטבח")
+    world.ai.script(reply("רגע.", city="תל אביב", issue="נזילה במטבח"))
+
+    await world.send("שלחתם חשמלאי")
+
+    lead = await world.lead()
+    assert lead["pro_id"] is None
+    assert lead["issue_type"] == "נזילה במטבח"
+    assert lead["excluded_pro_ids"] == [electrician["_id"]]
+
+
+@pytest.mark.parametrize(
+    "text,titles,trade",
+    [
+        ("שלחתם חשמלאי ויש נזילה", True, "plumber"),
+        ("צריך אינסטלטור", True, "plumber"),
+        ("צריך אינסטלטור", False, None),
+        ("יש נזילה וגם הפקקים קפצו", True, None),
+    ],
+)
+def test_fault_words_outrank_job_titles(text, titles, trade):
+    from app.services.matching_service import trade_named_in_chat
+
+    assert trade_named_in_chat(text, titles=titles) == trade
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement_exists", [True, False])
+async def test_an_offered_drop_says_it_moved_only_once_it_has(
+    world, replacement_exists
+):
+    plumber = await _plumber(world)
+    if replacement_exists:
+        await _electrician(world)
+    await world.grant_consent()
+    await world.awaiting_approval_job(plumber, issue_type="קצר במטבח")
+    await world.set_state(UserStates.IDLE)
+
+    await world.send("מתי אתה מגיע?")
+
+    bodies = world.recorder.bodies_to(world.customer)
+    assert Messages.Customer.MOVING_TO_FITTING_PRO not in bodies
+    if replacement_exists:
+        world.recorder.assert_text_to(world.customer, "דני החשמלאי")
+    else:
+        world.recorder.assert_text_to(world.customer, Messages.Customer.PENDING_REVIEW)
+
+
+@pytest.mark.asyncio
 async def test_the_dropped_pro_is_not_matched_straight_back(world):
     """The dispatcher re-extracts a plumbing issue after the drop. Matching used to
     find the plumber it had just dropped, and the customer heard "אעביר…" and then
