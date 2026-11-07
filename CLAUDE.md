@@ -115,6 +115,7 @@ python scripts/create_indexes.py   # Create MongoDB indexes (runs automatically 
 python scripts/clear_history.py    # Clear chat history
 python scripts/check_pro_service_areas.py  # Backfill/audit: geocode every approved pro's service_areas, --apply to write
 #                                            (against staging/production, run the 🗺️ Check pro service areas workflow instead — branch picks the environment, report lands in the job summary)
+python scripts/normalize_pro_phones.py     # Backfill/audit: every pro's phone_number in the bare 972… form, --apply to write (refuses on a would-be duplicate)
 ```
 
 ### Testing
