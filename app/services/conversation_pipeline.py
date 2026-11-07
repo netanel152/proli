@@ -221,8 +221,15 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             # logs and pages, so it records the trade, never the words (PRO-59).
             wanted = trade_named_in_chat(user_text)
             if wanted:
+                base = issue
+                if base in ("", Defaults.UNKNOWN_ISSUE):
+                    base = Messages.Fallbacks.ISSUE
                 label = Messages.Onboarding.TYPE_LABELS[wanted]
-                issue = f"{issue} ({label})".strip()
+                issue = f"{base} ({label})"
+                await leads_collection.update_one(
+                    {"_id": active_lead["_id"]}, {"$set": {"issue_type": issue}}
+                )
+                active_lead["issue_type"] = issue
         if not trade_fits(existing_pro, wanted, held=True):
             logger.warning(
                 f"Lead {active_lead['_id']} is with pro {existing_pro['_id']} outside "
@@ -236,7 +243,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     "status": active_lead["status"],
                 },
                 {
-                    "$set": {"pro_id": None, "issue_type": issue},
+                    "$set": {"pro_id": None},
                     # That pro's estimate, not the next one's.
                     "$unset": {"quoted_price": ""},
                 },
@@ -246,7 +253,6 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     f"Lead {active_lead['_id']} moved before its wrong-trade rematch"
                 )
                 return
-            active_lead["issue_type"] = issue
             active_lead.pop("quoted_price", None)
 
             # True on every outcome below, so it goes first. Without it a pro
@@ -259,10 +265,16 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             )
             try:
                 if existing_pro.get("phone_number"):
-                    await whatsapp.send_message(
+                    sent = await whatsapp.send_message(
                         to_chat_id(existing_pro["phone_number"]),
                         notice.format(issue=issue),
                     )
+                    # None is the facade's "blocked": a closed 24h window, usually.
+                    if not sent:
+                        logger.warning(
+                            f"Wrong-trade notice for lead {active_lead['_id']} did not "
+                            f"reach pro {existing_pro['_id']}"
+                        )
             except Exception as e:
                 logger.error(f"Failed to tell pro about the wrong-trade rematch: {e}")
 
@@ -291,17 +303,17 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                         chat_id, "model", Messages.Customer.MOVING_TO_FITTING_PRO
                     )
                     moved = await monitor_service.reassign_lead(
-                        active_lead, notify_old_pro=False
+                        active_lead, notify_old_pro=False, announce=False
                     )
                 except Exception as e:
                     logger.error(
                         f"Wrong-trade rematch failed for lead {active_lead['_id']}: {e}"
                     )
-                    moved = False
                     # Not when `reassign_lead` got as far as a new owner.
                     current = await leads_collection.find_one(
                         {"_id": active_lead["_id"]}
                     )
+                    moved = bool(current and current.get("pro_id"))
                     if current and not current.get("pro_id"):
                         escalated = await set_lead_status(
                             active_lead["_id"],
@@ -775,7 +787,14 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
 
     # Note: the explicit `!= UNKNOWN_ADDRESS` check is gone because we no longer
     # persist that sentinel. `extracted_city` is either a real city string or None.
-    if extracted_city and extracted_issue and extracted_issue != Defaults.UNKNOWN_ISSUE:
+    #
+    # An emergency doesn't wait for an issue. With none, matching finds nobody and
+    # the block below pages the operator; otherwise the dispatcher could keep asking
+    # with nobody told.
+    if extracted_city and (
+        lead_is_emergency
+        or (extracted_issue and extracted_issue != Defaults.UNKNOWN_ISSUE)
+    ):
         try:
             best_pro = await determine_best_pro(
                 issue_type=extracted_issue, location=extracted_city
@@ -787,8 +806,19 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         if not best_pro and current_lead_id:
             existing_lead = await leads_collection.find_one({"_id": current_lead_id})
             if existing_lead and not existing_lead.get("pro_id"):
+                unknown_trade = not probable_trade(extracted_issue)
                 await set_lead_status(
-                    current_lead_id, LeadStatus.PENDING_ADMIN_REVIEW, Actor.SYSTEM
+                    current_lead_id,
+                    LeadStatus.PENDING_ADMIN_REVIEW,
+                    Actor.SYSTEM,
+                    extra_set=(
+                        {"escalation_reason": "unknown_trade"}
+                        if unknown_trade
+                        else None
+                    ),
+                )
+                why = (
+                    "names no known trade" if unknown_trade else "has no available pro"
                 )
                 # WARNING, not CRITICAL: no-pro-available is a routine coverage gap
                 # (admin handles it via PENDING_ADMIN_REVIEW), not an infra page. The
@@ -796,7 +826,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 # operator's email (PRO-77). chat_id masked per PII convention.
                 logger.warning(
                     f"Lead {current_lead_id} for {mask_chat_id(chat_id)} requires admin "
-                    "review — no pro available"
+                    f"review — it {why}"
                 )
                 # PRO-121: a routine coverage gap is deliberately not a page
                 # (see above), but an *emergency* with no pro is the one case
@@ -805,7 +835,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 # short-circuit answering STILL_PENDING_REVIEW every 30 min.
                 if lead_is_emergency:
                     notification_service.page_operator(
-                        f"EMERGENCY lead {current_lead_id} has no available pro "
+                        f"EMERGENCY lead {current_lead_id} {why} "
                         f"(city={extracted_city!r}, issue={extracted_issue!r}) — "
                         "PENDING_ADMIN_REVIEW, needs manual routing now"
                     )

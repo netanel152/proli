@@ -314,7 +314,8 @@ def required_profession(lead: dict) -> Optional[str]:
     if not issue:
         return None
     for name, profession in Messages.Onboarding.TYPE_MAP.items():
-        if not name.isdigit() and name.lower() in issue:
+        # "צבעי" sits inside "אצבעי", finger.
+        if not name.isdigit() and re.search(f"(?<!א){re.escape(name.lower())}", issue):
             return profession
     return None
 
@@ -330,10 +331,10 @@ def required_profession(lead: dict) -> Optional[str]:
 ISSUE_TRADE_HINTS = {
     "electrician": (
         "חשמל",
-        "(?<!זמן )קצר(?!ה|ים|ות)",
-        "שקע(?!ה|ות)",
+        "(?<!זמן )(?<!תיקון )(?<!הסבר )(?<!רגע )(?<!טיפול )קצר(?!ה|ים|ות)",
+        "(?<!מו)(?<!מ)שקע(?!ה|ות|ת)",
         "מפסק",
-        "הפחת(?!ה|ת)",
+        "(?<!ש)פחת(?!ה|ת)",
         "תאורה",
         "נורה",
         "ארקה",
@@ -343,20 +344,33 @@ ISSUE_TRADE_HINTS = {
         "הלוח קפץ",
     ),
     "plumber": (
-        "נזילה",
-        "נזילות",
-        "נוזלת",
-        "סתומים",
+        "נזיל",
+        "נוזל",
+        "מטפטפ",
         "מטפטף",
-        "הצפ",
+        "טפטוף",
+        "סתימ",
+        "סתום",
+        "סתומ",
+        "צינור",
+        "אין מים",
+        "מים חמים",
+        "רטיבות",
+        "מוצף",
+        "מוצפ",
+        "הוצף",
+        "הוצפ",
+        "הצפ(?!ו[ןנ]|וי)",
         "דליפ",
         "דולף",
         "דולפ",
         "אינסטלצ",
         "צנרת",
-        "סתימה",
         "ביוב",
-        "דוד",
+        "הדוד",
+        "בדוד",
+        "דוד שמש",
+        "דוד מים",
         "בוילר",
         "ברז(?!ל)",
         "כיור",
@@ -364,9 +378,10 @@ ISSUE_TRADE_HINTS = {
         "אסלה",
         "ניאגרה",
     ),
-    "locksmith": ("מנעול", "מפתח", "צילינדר", "פריצה", "ננעלתי"),
-    "painter": ("(?<!א)צבע", "סיוד", "(?<![המ]ב)טיח(?!ות)"),
-    "cleaner": ("ניקיון", "נקיון", "לנקות"),
+    "locksmith": ("מנעול", "נעול", "ננעל", "מפתח", "צילינדר", "פריצה"),
+    "painter": ("(?<!א)צבע", "צביע", "צבוע", "סיוד", "(?<![המ]ב)טיח(?!ות)"),
+    "cleaner": ("ניקיון", "נקיון", "לנקות", "ניקוי"),
+    "handyman": ("מדף", "הרכבת ארון", "תיקון דלת", "תריס"),
 }
 
 
@@ -425,20 +440,42 @@ CHAT_TRADE_WORDS = {
 }
 
 
+#: Mentions that say the job is not that trade, or quote someone from it.
+CHAT_TRADE_NEGATIONS = (
+    "לא חשמל",
+    "לא החשמל",
+    "לא בחשמל",
+    "החשמלאי אמר",
+    "חשמלאי אמר",
+)
+
+
 def trade_named_in_chat(text: str) -> Optional[str]:
-    """The trade a customer's chat message plainly names, or None."""
-    for trade, words in CHAT_TRADE_WORDS.items():
-        if contains_keyword(text, words):
-            return trade
-    return None
+    """The one trade a customer's chat message plainly names, or None."""
+    named = [
+        trade
+        for trade, words in CHAT_TRADE_WORDS.items()
+        if contains_keyword(text, words, CHAT_TRADE_NEGATIONS)
+    ]
+    return named[0] if len(named) == 1 else None
+
+
+#: A phone number, email or link. `issue_type` reaches unapproved pros, logs and
+#: pages (PRO-59). Names and street names can't be spotted here: the dispatcher
+#: prompt is all that keeps those out.
+_CONTACT_IN_ISSUE = re.compile(r"\d[\d\-\s]{6,}\d|@|https?://")
 
 
 def issue_update(fresh: Optional[str], known: Optional[str]) -> Optional[str]:
-    """`fresh`, or None when it would turn a classified issue unclassified.
+    """`fresh`, or None when it carries contact details or would turn a classified
+    issue unclassified.
 
     Otherwise a vaguer re-extraction lifts the trade constraint, and the pro just
     dropped for not fitting can be matched straight back.
     """
+    if fresh and _CONTACT_IN_ISSUE.search(fresh):
+        logger.warning("Dropped an extracted issue that carried contact details")
+        return None
     return None if probable_trade(known) and not probable_trade(fresh) else fresh
 
 

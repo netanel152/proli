@@ -63,6 +63,8 @@ async def test_electrical_issue_with_only_a_plumber_goes_to_admin_review(world):
     assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
     assert lead["pro_id"] is None
     world.recorder.assert_text_to(world.customer, Messages.Customer.PENDING_REVIEW)
+    # It has a trade, so this is a coverage gap, not an unknown trade.
+    assert "escalation_reason" not in lead
     world.recorder.assert_silent(
         world.pro_chat(R.PRO_PRIMARY),
         f"{plumber['business_name']} is not an electrician",
@@ -261,6 +263,10 @@ async def test_offered_drop_tells_the_pro_on_every_outcome(world, replacement_ex
     )
     expected = LeadStatus.NEW if replacement_exists else LeadStatus.PENDING_ADMIN_REVIEW
     assert (await world.lead())["status"] == expected
+    # Its apology for the wait would be false here.
+    assert Messages.SOS.CUSTOMER_REASSIGNING not in world.recorder.bodies_to(
+        world.customer
+    )
 
 
 @pytest.mark.asyncio
@@ -278,6 +284,116 @@ async def test_offered_drop_records_the_turn_before_reassigning(world):
     assert media_url_for("image") in lead["media_urls"]
     assert media_url_for("image") in "".join(
         world.recorder.bodies_to(world.pro_chat(R.PRO_SECONDARY))
+    )
+
+
+@pytest.mark.asyncio
+async def test_offered_drop_records_an_emergency_declared_this_turn(world):
+    plumber = await _plumber(world)
+    electrician = await _electrician(world)
+    await world.grant_consent()
+    await world.awaiting_approval_job(plumber, issue_type="קצר במטבח")
+    await world.set_state(UserStates.IDLE)
+
+    await world.send("יש שריפה בלוח")
+
+    lead = await world.lead()
+    assert lead["is_emergency"] is True
+    assert lead["pro_id"] == electrician["_id"]
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_notice_is_logged(world, monkeypatch):
+    from app.core.logger import logger
+    from app.services import workflow_service
+
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    lead = await _contacted_lead(world, plumber)
+    world.ai.script(reply("רגע.", city="תל אביב", issue="קצר במטבח"))
+    real_send = workflow_service.whatsapp.send_message
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+
+    async def blocked_for_the_pro(chat_id, text, *args, **kwargs):
+        if chat_id == pro_chat:
+            return None
+        return await real_send(chat_id, text, *args, **kwargs)
+
+    monkeypatch.setattr(workflow_service.whatsapp, "send_message", blocked_for_the_pro)
+    logged: list[str] = []
+    sink_id = logger.add(lambda message: logged.append(str(message)), level="WARNING")
+    try:
+        await world.send("מתי אתה מגיע?")
+    finally:
+        logger.remove(sink_id)
+
+    assert any(
+        "did not" in line and str(lead["_id"]) in line for line in logged
+    ), logged
+
+
+@pytest.mark.asyncio
+async def test_emergency_without_an_issue_pages_and_reaches_review(world):
+    """The dispatcher may keep asking what happened. An emergency doesn't wait."""
+    await _plumber(world)
+    await world.grant_consent()
+    world.ai.script(reply("מה בדיוק קרה?", city="תל אביב"))
+
+    await world.send("יש שריפה בבית בתל אביב")
+
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert lead["escalation_reason"] == "unknown_trade"
+    world.assert_paged("EMERGENCY", str(lead["_id"]), "names no known trade")
+    world.recorder.assert_text_to(world.customer, Messages.Customer.PENDING_REVIEW)
+
+
+@pytest.mark.asyncio
+async def test_an_extracted_issue_carrying_a_phone_never_reaches_the_lead(world):
+    await _plumber(world)
+    await world.grant_consent()
+    world.ai.script(reply("מה קרה?", city="תל אביב", issue="נזילה, 050-1234567"))
+
+    await world.send("נזילה בתל אביב, הטלפון שלי 050-1234567")
+
+    lead = await world.lead()
+    assert "1234567" not in lead["issue_type"]
+    world.recorder.assert_silent(world.pro_chat(R.PRO_PRIMARY), "no issue yet")
+
+
+@pytest.mark.asyncio
+async def test_a_trade_named_in_chat_is_kept_when_the_pro_fits(world):
+    """Otherwise a later passing mention of another trade is read as the first."""
+    plumber = await _plumber(world)
+    await _electrician(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber, issue_type="תקלה במטבח")
+    world.ai.script(reply("הבנתי."), reply("בסדר."))
+
+    await world.send("יש נזילה")
+
+    lead = await world.lead()
+    assert lead["issue_type"] == "תקלה במטבח (אינסטלטור)"
+    assert lead["pro_id"] == plumber["_id"]
+
+    await world.send("גם השקע לא עובד")
+
+    assert (await world.lead())["pro_id"] == plumber["_id"]
+
+
+@pytest.mark.asyncio
+async def test_a_placeholder_issue_gets_a_hebrew_word_before_the_label(world):
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber, issue_type="Issue")
+    world.ai.script(reply("רגע.", city="תל אביב"))
+
+    await world.send("נפל הזרם בכל הבית")
+
+    assert (await world.lead())["issue_type"] == "תקלה (חשמלאי)"
+    world.recorder.assert_text_to(
+        world.pro_chat(R.PRO_PRIMARY),
+        Messages.Pro.LEAD_OUTSIDE_TRADE.format(issue="תקלה (חשמלאי)"),
     )
 
 
@@ -417,6 +533,7 @@ async def test_unknown_trade_escalates_at_the_point_of_matching(world):
     lead = await world.lead()
     assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
     assert lead["pro_id"] is None
+    assert lead["escalation_reason"] == "unknown_trade"
     world.recorder.assert_text_to(world.customer, Messages.Customer.PENDING_REVIEW)
     world.recorder.assert_silent(
         world.pro_chat(R.PRO_PRIMARY), plumber["business_name"]

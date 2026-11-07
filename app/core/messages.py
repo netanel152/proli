@@ -1264,6 +1264,7 @@ class Messages:
         # message. All lead-offer fallbacks come from here.
         CUSTOMER_NAME = "לקוח"
         UNKNOWN = "לא ידוע"
+        ISSUE = "תקלה"
         TIME_ASAP = "בהקדם"
         # PRO-168: the pro-facing job lists and the admin wizard hand-rolled
         # these inline. §9 — a value that can be empty formats through a

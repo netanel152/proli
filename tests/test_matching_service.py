@@ -576,6 +576,36 @@ def test_required_profession_ignores_type_map_digit_keys():
         ("פגיעה באצבע", None),
         ("השקעה בדירה", None),
         ("המזגן לא מקרר", None),  # no trade covers air conditioning
+        ("פגיעה באצבעי", None),  # "צבעי" as a substring
+        ("נפל הפחת", "electrician"),
+        ("פחת קופץ כל הזמן", "electrician"),
+        ("הברז נוזל", "plumber"),
+        ("התקרה מטפטפת", "plumber"),
+        ("טפטוף מהתקרה", "plumber"),
+        ("הכיור סתום", "plumber"),
+        ("צינור התפוצץ", "plumber"),
+        ("אין מים בדירה", "plumber"),
+        ("אין מים חמים", "plumber"),
+        ("רטיבות בקיר", "plumber"),
+        ("המרתף מוצף", "plumber"),
+        ("הבית הוצף", "plumber"),
+        ("הצפה במטבח", "plumber"),
+        ("הדלת נעולה", "locksmith"),
+        ("הדלת ננעלה", "locksmith"),
+        ("צביעת סלון", "painter"),
+        ("הקיר צבוע בכתמים", "painter"),
+        ("ניקוי דירה", "cleaner"),
+        ("התקנת מדף", "handyman"),
+        ("הרכבת ארון", "handyman"),
+        ("תיקון דלת", "handyman"),
+        ("תריס תקוע", "handyman"),
+        ("תיקון קצר בברז", "plumber"),
+        ("מנעול בכניסה הצפונית", "locksmith"),
+        ("צביעה מושקעת", "painter"),
+        ("מנעול תקוע, דוד המלך 10", "locksmith"),
+        ("הדוד לא מחמם", "plumber"),
+        ("דוד שמש נוזל", "plumber"),
+        ("דוד המלך 10", None),
         ("קצר ליד הכיור", "electrician"),  # electrical wins the tie-break
         ("התקרה דולפת", "plumber"),
         ("המפתח נתקע במנעול", "locksmith"),  # "נתקע" is not a plug ("תקע")
@@ -625,6 +655,33 @@ def test_chat_text_innocent_words_name_no_trade(text):
 )
 def test_chat_text_plain_words_name_their_trade(text, expected):
     assert trade_named_in_chat(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("זה לא חשמל, זו נזילה", "plumber"),
+        ("זה לא בחשמל, זו נזילה", "plumber"),
+        ("החשמלאי אמר שיש נזילה", "plumber"),
+        ("חשמלאי אמר שיש נזילה", "plumber"),
+        ("נזילה ליד השקע", None),  # two trades: not plainly either
+    ],
+)
+def test_chat_text_reads_negation_and_refuses_two_trades(text, expected):
+    assert trade_named_in_chat(text) == expected
+
+
+@pytest.mark.parametrize(
+    "fresh",
+    ["נזילה 050-1234567", "נזילה 0501234567", "נזילה a@b.co", "https://x.co נזילה"],
+)
+def test_issue_update_drops_contact_details(fresh):
+    assert issue_update(fresh, None) is None
+    assert issue_update(fresh, "נזילה") is None
+
+
+def test_issue_update_keeps_ordinary_numbers():
+    assert issue_update("נזילה בדירה 12", None) == "נזילה בדירה 12"
 
 
 @pytest.mark.parametrize(
