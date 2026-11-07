@@ -48,6 +48,29 @@ def warn_if_public_origin_malformed(settings: Settings) -> bool:
     return True
 
 
+def warn_if_cannot_transmit(settings: Settings, provider) -> bool:
+    """Report a process whose WhatsApp provider cannot reach a handset.
+
+    Each service picks its provider from its own variables, so the panel can be
+    muted while the api and worker send. WARNING rather than a refusal: production
+    ``admin`` is muted on purpose until the cutover, and every panel send already
+    tells the operator it did not go. Returns whether it reported.
+    """
+    if provider.transmits:
+        return False
+    message = (
+        f"WhatsApp provider {provider.name!r} cannot transmit "
+        f"(WHATSAPP_PROVIDER={settings.WHATSAPP_PROVIDER!r}, "
+        f"WHATSAPP_DRY_RUN={settings.WHATSAPP_DRY_RUN}) — nothing this process "
+        "sends reaches a handset. docs/RAILWAY_SETUP.md lists what sending needs."
+    )
+    if settings.is_prod_like:
+        logger.warning(message)
+    else:
+        logger.info(message)
+    return True
+
+
 def warn_if_admin_phone_unconfigured(settings: Settings) -> bool:
     """Report a prod-like deployment that never set ``ADMIN_PHONE`` (PRO-48).
 

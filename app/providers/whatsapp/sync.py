@@ -27,6 +27,15 @@ def _run_blocking(coro, timeout: float):
     return run_blocking(coro, timeout)
 
 
+def can_transmit() -> bool:
+    """Whether this process's provider can reach a handset at all.
+
+    For choosing what to tell the operator after a send came back False: a muted
+    environment needs its variables changed, and retrying will not help.
+    """
+    return get_whatsapp().provider.transmits
+
+
 def send_text_sync(chat_id: str, text: str) -> bool:
     """Send one text message from sync code.
 
@@ -34,15 +43,23 @@ def send_text_sync(chat_id: str, text: str) -> bool:
     A suppressed send — breaker engaged, kill switch set, or (PRO-159) a closed
     24h service window with no approved fallback template — returns False, so
     the admin panel can tell the operator "not sent" instead of showing a
-    success toast for a message nobody received.
+    success toast for a message nobody received. So does a provider that cannot
+    transmit, whose ``send_text`` returns a dict without sending anything.
 
     Never raises: every caller is a best-effort notification hanging off a UI
     action, and a failed courtesy message must not abort the database mutation
     that preceded it.
     """
     try:
+        facade = get_whatsapp()
+        if not facade.provider.transmits:
+            logger.warning(
+                f"Admin-panel send to ...{chat_id[-4:]} not sent — provider "
+                f"{facade.provider.name!r} cannot transmit."
+            )
+            return False
         result = _run_blocking(
-            get_whatsapp().send_message(chat_id, text), _SEND_TIMEOUT_SECONDS
+            facade.send_message(chat_id, text), _SEND_TIMEOUT_SECONDS
         )
     except Exception as e:
         logger.error(f"Admin-panel send to ...{chat_id[-4:]} failed: {e}")

@@ -1,10 +1,14 @@
-"""Reports the Streamlit setting the panel's save paths depend on."""
+"""Reports the runtime settings the panel's sends and save paths depend on."""
 
 from streamlit import config
 
+from app.core.config import settings
 from app.core.logger import logger
+from app.core.startup_checks import warn_if_cannot_transmit
+from app.providers.whatsapp import get_whatsapp
 
 _reported = False
+_reported_egress = False
 
 
 def report_fast_reruns(get_option=config.get_option):
@@ -29,3 +33,20 @@ def report_fast_reruns(get_option=config.get_option):
         )
     else:
         logger.info(f"[admin_panel] runner.fastReruns={value}")
+
+
+def report_whatsapp_egress(whatsapp_factory=get_whatsapp):
+    """Report once per server process whether this panel can send at all.
+
+    Never raises: this runs at the top of ``main.py``, and a report must not cost
+    the operator the panel.
+    """
+    global _reported_egress
+    if _reported_egress:
+        return
+    _reported_egress = True
+
+    try:
+        warn_if_cannot_transmit(settings, whatsapp_factory().provider)
+    except Exception as e:
+        logger.error(f"[admin_panel] Could not check the WhatsApp provider: {e}")

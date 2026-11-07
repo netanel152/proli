@@ -22,7 +22,7 @@ from admin_panel.core.refresh import (
 )
 from admin_panel.ui.components import load_css
 from admin_panel.core.auth import check_password, logout, get_manager
-from admin_panel.core.runtime_config import report_fast_reruns
+from admin_panel.core.runtime_config import report_fast_reruns, report_whatsapp_egress
 from app.core.sentry import init_sentry, sentry_active, should_send
 
 # Idempotent (module state survives Streamlit's per-interaction reruns), so
@@ -31,6 +31,7 @@ from app.core.sentry import init_sentry, sentry_active, should_send
 # own error UI, so the view dispatch below captures explicitly instead.
 init_sentry("proli-admin")
 report_fast_reruns()
+report_whatsapp_egress()
 
 from admin_panel.views.home import view_leads_dashboard
 from admin_panel.views.professionals import view_professionals
