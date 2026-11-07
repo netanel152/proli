@@ -357,8 +357,8 @@ The routing engine found no matching pro.
 ### Bot doesn't respond to images / audio / video
 
 - Check: is the media URL publicly accessible?
-- The customer is told the file could not be read (`Messages.Errors.MEDIA_UPLOAD_FAILED`) whenever a media link was passed and nothing was attached for the model.
-- Check logs for: `Error downloading media`, `Gemini File Processing Failed`, `Error handling media URL for Gemini`, `Media for this turn was not fetched` or `Failed to download media for Gemini`
+- The customer is told (`MEDIA_UPLOAD_FAILED`, `MEDIA_UPLOAD_FAILED_TEXT_ONLY` or `MEDIA_FAILED_TEXT_ANSWERED`) when a file doesn't reach the model on a turn the customer pipeline handles: lost re-hosting it, failed download or upload, or refused by every model. A refusal is a 4xx other than 429 on the last model tried, or every model returning unparseable JSON. They are not told when an emergency dispatches on that turn (the reply is withheld), when a guard, the completion/rating/review step or the booked-job question answers the turn first, when the wrong-trade check reassigns a lead already offered to a pro (that exit returns before any AI call, so it covers every file on that turn, not only a lost one; a file that re-hosted is still saved on the lead for the next pro, and a lost file with no text has already had its notice), when the daily AI cap stops the turn, or when an attached file meets anything else from the models, such as a 429 or a 5xx: that is an outage, and they get `AI_OVERLOAD` only, with no second round of calls.
+- Check logs for: `Error downloading media`, `Gemini File Processing Failed`, `Error handling media URL for Gemini`, `Media for this turn was not fetched`, `Failed to download media for Gemini`, `Could not fetch Meta media` or `Could not re-host Meta media`
 - For video: Gemini waits up to 120 s for processing — timeouts are logged as errors.
 
 ### Leads not appearing in the dashboard

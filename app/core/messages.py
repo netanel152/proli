@@ -1290,12 +1290,21 @@ class Messages:
             "🙏 לא הצלחתי לפתוח את הקובץ ששלחת.\n"
             "אפשר לשלוח שוב, או פשוט לתאר במילים."
         )
-        # PRO-204: the file reached us but not the model, so this turn's reply
-        # cannot speak to it. Sent alone on a media-only turn, and ahead of the
-        # AI's reply when there was text to answer. Infinitives, as above.
+        # The model never saw the file and there was no text to answer. Infinitives,
+        # as above. TEXT_ONLY is for a failed recording, or a file of unknown type:
+        # offering a voice note after one failed can send them round again.
         MEDIA_UPLOAD_FAILED = (
             "🙏 לא הצלחתי לעבד את הקובץ ששלחת.\n"
             "אפשר לתאר את הבעיה בטקסט או בהודעה קולית?"
+        )
+        MEDIA_UPLOAD_FAILED_TEXT_ONLY = (
+            "🙏 לא הצלחתי לעבד את הקובץ ששלחת.\nאפשר לתאר את הבעיה בטקסט?"
+        )
+        # The model never saw the file but there was text, which they already wrote,
+        # so this asks for nothing. Also sent ahead of LOYALTY_OFFER and
+        # PENDING_REVIEW, so it says "התייחסתי", not "עניתי".
+        MEDIA_FAILED_TEXT_ANSWERED = (
+            "🙏 לא הצלחתי לעבד את הקובץ ששלחת, אז התייחסתי רק למה שכתבת."
         )
         DAILY_AI_CAP_REACHED = (
             "🙏 הגעת למכסת הפניות היומית. אפשר לנסות שוב מחר — "

@@ -81,6 +81,9 @@ class DispatchContext:
     emergency_inbound_logged: bool = False
     #: This turn is the messages held from before consent, replayed by the gate.
     replayed_held_messages: bool = False
+    #: The customer sent a file and re-hosting lost it, so `media_url` is None
+    #: and nothing below can tell. The pipeline passes it to the AI engine.
+    file_lost: bool = False
 
     async def refresh_state(self, state_manager) -> Optional[str]:
         """Re-read the FSM state after a guard may have changed it.
@@ -303,6 +306,16 @@ async def _hold_pre_consent_message(ctx: DispatchContext, deps: GuardDeps) -> No
         await deps.state_manager.hold_message(ctx.chat_id, ctx.user_text, ctx.media_url)
 
 
+async def _resolve_media(ctx: DispatchContext, media_url: Optional[str]) -> None:
+    from app.services import workflow_service as wf
+
+    ctx.media_url = await wf.resolve_inbound_media(media_url)
+    # Only ever set: a replayed turn comes through here twice, the second time
+    # with the None the first pass left.
+    if media_url and not ctx.media_url:
+        ctx.file_lost = True
+
+
 async def _replay_held_messages(
     ctx: DispatchContext, deps: GuardDeps, retrying_accept: bool
 ) -> bool:
@@ -323,11 +336,13 @@ async def _replay_held_messages(
         if not held:
             return False
         ctx.user_text = held["text"]
-        ctx.media_url = await wf.resolve_inbound_media(held["media_url"])
+        await _resolve_media(ctx, held["media_url"])
         ctx.normalized_text = held["text"].strip().lower()
         ctx.is_emergency_detected = wf.is_emergency_text(ctx.normalized_text)
         await wf.lead_manager.log_message(
-            ctx.chat_id, "user", wf._inbound_log_text(ctx.user_text, ctx.media_url)
+            ctx.chat_id,
+            "user",
+            wf._inbound_log_text(ctx.user_text, ctx.media_url, ctx.file_lost),
         )
     except BaseException as e:
         if held:
@@ -427,7 +442,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
                 )
                 return HANDLED
 
-    ctx.media_url = await wf.resolve_inbound_media(ctx.media_url)
+    await _resolve_media(ctx, ctx.media_url)
 
     # Refresh state after potential consent state changes
     await ctx.refresh_state(deps.state_manager)
