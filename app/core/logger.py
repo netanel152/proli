@@ -559,7 +559,11 @@ def setup_logging():
     # PRO-79: httpx/httpcore log "HTTP Request: GET <url>" at INFO. The legacy
     # WhatsApp vendor put its auth token in the URL path; keep these at WARNING
     # so no credential a provider ever puts in a URL reaches the logs.
-    for noisy in ["httpx", "httpcore"]:
+    #
+    # arq.worker logs every job's args at INFO, and those args are the customer's
+    # chat id and message text, consent or no consent. Its WARNINGs name only a job
+    # id, so arq_worker logs the id beside the masked chat at task start.
+    for noisy in ["httpx", "httpcore", "arq.worker"]:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 

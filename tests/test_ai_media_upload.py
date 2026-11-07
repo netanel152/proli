@@ -5,14 +5,12 @@ Why this is a *static* check rather than a normal unit test:
 `ai_engine_service.analyze_conversation` reaches the File API only for audio
 and video, and the whole media block sits inside one
 ``except Exception as e: logger.error(...)``. A wrong keyword therefore raises
-a ``TypeError`` that is caught, logged, and then *discarded* — `current_parts`
-stays empty, the prompt ("transcribe this audio") still goes to Gemini with no
-audio attached, and the customer gets a confident answer about a recording the
-model never heard. Nothing crashes and nothing fails CI.
+a ``TypeError`` that is caught and logged, and every voice note and video gets
+the "could not process your file" notice. Nothing crashes and nothing fails CI.
 
-That is exactly how PRO-204 shipped: the call passed ``path=tmp_path``, but
-``google-genai`` takes a keyword-only ``file=``, so every voice note and every
-video silently reached Gemini as text alone.
+PRO-204 shipped that bug before the notice existed: the call passed
+``path=tmp_path``, but ``google-genai`` takes a keyword-only ``file=``, so every
+voice note and every video silently reached Gemini as text alone.
 
 Both sides are parsed with `ast` and nothing is imported, for two reasons:
 `tests/conftest.py` replaces `google.genai` in `sys.modules` with a

@@ -26,6 +26,7 @@ later call sites; `current_state` is re-read after any guard that clears state).
 closure over function locals.
 """
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional, Tuple
@@ -78,6 +79,11 @@ class DispatchContext:
     #: inbound turn ahead of the emergency ack, so the pipeline's step 1 skips
     #: its own log instead of duplicating the turn in the AI's history window.
     emergency_inbound_logged: bool = False
+    #: This turn is the messages held from before consent, replayed by the gate.
+    replayed_held_messages: bool = False
+    #: The customer sent a file and re-hosting lost it, so `media_url` is None
+    #: and nothing below can tell. The pipeline passes it to the AI engine.
+    file_lost: bool = False
 
     async def refresh_state(self, state_manager) -> Optional[str]:
         """Re-read the FSM state after a guard may have changed it.
@@ -290,13 +296,88 @@ async def guard_zero_touch_intent(ctx: DispatchContext, deps: GuardDeps):
 # ---------------------------------------------------------------------------
 
 
+async def _hold_pre_consent_message(ctx: DispatchContext, deps: GuardDeps) -> None:
+    """Keep what the customer wrote for after they agree. A bare yes/no sent before
+    the question was asked says nothing about their problem, so it is not kept."""
+    answer_words = Messages.Consent.ACCEPT_KEYWORDS + Messages.Consent.DECLINE_KEYWORDS
+    if ctx.media_url or (
+        ctx.normalized_text and ctx.normalized_text not in answer_words
+    ):
+        await deps.state_manager.hold_message(ctx.chat_id, ctx.user_text, ctx.media_url)
+
+
+async def _resolve_media(ctx: DispatchContext, media_url: Optional[str]) -> None:
+    from app.services import workflow_service as wf
+
+    ctx.media_url = await wf.resolve_inbound_media(media_url)
+    # Only ever set: a replayed turn comes through here twice, the second time
+    # with the None the first pass left.
+    if media_url and not ctx.media_url:
+        ctx.file_lost = True
+
+
+async def _replay_held_messages(
+    ctx: DispatchContext, deps: GuardDeps, retrying_accept: bool
+) -> bool:
+    """Make what was held this turn's message and log it; False if nothing was held.
+
+    The log is the commit point, and it is here rather than in the pipeline's step 1
+    so nothing below the gate runs first: a failure up to here re-arms the gate and
+    replays, and past here no guard can fire twice or answer without it being logged.
+    """
+    from app.services import workflow_service as wf
+
+    # Before clear_state, which would drop it.
+    held = await deps.state_manager.take_held_messages(ctx.chat_id)
+    try:
+        await deps.state_manager.clear_state(ctx.chat_id)
+        if not (retrying_accept and held):
+            await deps.whatsapp.send_message(ctx.chat_id, Messages.Consent.ACCEPTED)
+        if not held:
+            return False
+        ctx.user_text = held["text"]
+        await _resolve_media(ctx, held["media_url"])
+        ctx.normalized_text = held["text"].strip().lower()
+        ctx.is_emergency_detected = wf.is_emergency_text(ctx.normalized_text)
+        await wf.lead_manager.log_message(
+            ctx.chat_id,
+            "user",
+            wf._inbound_log_text(ctx.user_text, ctx.media_url, ctx.file_lost),
+        )
+    except BaseException as e:
+        if held:
+            await deps.state_manager.hold_message(
+                ctx.chat_id, held["text"], held["media_url"]
+            )
+            await deps.state_manager.set_state(ctx.chat_id, UserStates.AWAITING_CONSENT)
+            # A cancelled job is re-run and replays. Otherwise this waits for the
+            # customer to write again, which an emergency must not.
+            if not isinstance(e, asyncio.CancelledError) and wf.is_emergency_text(
+                held["text"].strip().lower()
+            ):
+                await wf.page_emergency_turn(ctx.chat_id, "failed right after consent")
+        raise
+    ctx.emergency_inbound_logged = True
+    ctx.replayed_held_messages = True
+    return True
+
+
 async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
     """Consent check (skip for professionals — they're added by admin).
+
+    Nothing a customer says before agreeing may reach `messages`, logs, Sentry,
+    the AI or Cloudinary, so this gate holds it in Redis only: the decline branch
+    and a reset drop it through `clear_state`, the TTL drops it otherwise. An
+    accept takes it and **falls through** with it as this turn's message, so it
+    runs the rest of the chain and the pipeline like any other, logged here rather
+    than at step 1; the "yes" itself is not logged. With nothing held, an accept
+    stays handled here.
 
     On fall-through this guard re-reads the FSM state and logs it — the
     original inline block did both unconditionally after the consent section,
     and every guard below (and the pipeline after them) takes the refreshed
-    value.
+    value. It also re-hosts inbound media, here and not in the worker, because
+    this is the first point a message is known to be past consent.
     """
     from app.services import workflow_service as wf
 
@@ -311,13 +392,23 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
             # Handle consent response first (state takes priority over DB status)
             if ctx.current_state == UserStates.AWAITING_CONSENT:
-                if ctx.normalized_text in Messages.Consent.ACCEPT_KEYWORDS:
-                    await wf.record_consent(ctx.chat_id, accepted=True)
-                    await deps.state_manager.clear_state(ctx.chat_id)
-                    await deps.whatsapp.send_message(
-                        ctx.chat_id, Messages.Consent.ACCEPTED
-                    )
-                    return HANDLED
+                # Consent on record with this state means an accept that failed
+                # before its log re-armed the gate. They already said yes.
+                retrying_accept = (
+                    consent_status is True
+                    and ctx.normalized_text not in Messages.Consent.DECLINE_KEYWORDS
+                )
+                if (
+                    retrying_accept
+                    or ctx.normalized_text in Messages.Consent.ACCEPT_KEYWORDS
+                ):
+                    if retrying_accept:
+                        await _hold_pre_consent_message(ctx, deps)
+                    else:
+                        await wf.record_consent(ctx.chat_id, accepted=True)
+                    if not await _replay_held_messages(ctx, deps, retrying_accept):
+                        return HANDLED
+                    consent_status = True
                 elif ctx.normalized_text in Messages.Consent.DECLINE_KEYWORDS:
                     await wf.record_consent(ctx.chat_id, accepted=False)
                     await deps.state_manager.clear_state(ctx.chat_id)
@@ -327,6 +418,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
                     return HANDLED
                 else:
                     # Repeat consent request if unclear response
+                    await _hold_pre_consent_message(ctx, deps)
                     await deps.whatsapp.send_message(
                         ctx.chat_id, consent_request_text()
                     )
@@ -334,6 +426,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
             if consent_status is None:
                 # First contact — send consent request
+                await _hold_pre_consent_message(ctx, deps)
                 await deps.whatsapp.send_message(ctx.chat_id, consent_request_text())
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
@@ -342,11 +435,14 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
 
             if consent_status is False:
                 # User previously declined — re-ask on new contact
+                await _hold_pre_consent_message(ctx, deps)
                 await deps.whatsapp.send_message(ctx.chat_id, consent_request_text())
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
                 )
                 return HANDLED
+
+    await _resolve_media(ctx, ctx.media_url)
 
     # Refresh state after potential consent state changes
     await ctx.refresh_state(deps.state_manager)
@@ -431,10 +527,15 @@ async def guard_sos_human_handoff(ctx: DispatchContext, deps: GuardDeps):
     pro_id = active_lead["pro_id"] if active_lead and "pro_id" in active_lead else None
     await wf.send_sos_alert(ctx.chat_id, ctx.user_text, pro_id)
 
-    # Notify the pro about the pause (if assigned)
-    if pro_id:
+    # Notify the pro about the pause. PRO-212: only a pro who has the customer's
+    # number can step into the conversation, and not one the admin deactivated.
+    if pro_id and active_lead.get("status") == LeadStatus.BOOKED:
         pro = await deps.users_collection.find_one({"_id": pro_id})
-        if pro and pro.get("phone_number"):
+        if (
+            pro
+            and pro.get("phone_number")
+            and (pro.get("is_active", True) or pro.get("self_paused"))
+        ):
             pro_phone = to_chat_id(pro["phone_number"])
             await deps.whatsapp.send_message(pro_phone, Messages.Pro.PAUSE_NOTIFICATION)
 
@@ -954,7 +1055,7 @@ async def guard_customer_mode_switch(ctx: DispatchContext, deps: GuardDeps):
         ctx.normalized_text in Messages.Keywords.CUSTOMER_MODE_COMMANDS
         and ctx.current_state in (UserStates.PRO_MODE, UserStates.IDLE)
     ):
-        if await wf._is_registered_pro(ctx.chat_id):
+        if await wf._is_registered_pro(ctx.chat_id, include_on_break=True):
             await deps.state_manager.set_state(ctx.chat_id, UserStates.CUSTOMER_MODE)
             await deps.context_manager.clear_context(ctx.chat_id)
             await deps.whatsapp.send_message(
@@ -986,12 +1087,29 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
     PRO_SELECTING_JOB_TO_FINISH here is what made the job list unanswerable —
     pro_flow re-reads the state and saw PRO_MODE, so "1" ran approve. Hence
     PRO_DISPATCH_STATES rather than PRO_MODE alone.
+
+    PRO-212: a pro on break counts. PRO_MODE lasts 4 hours and a break lasts days,
+    so a reminder's answer, and the *חזרתי* that ends the break, used to reach the
+    customer side. Matching never reads this, so they stay out of it. But a pro on
+    break is often writing as a customer, and auto-detect leaves them there: a bare
+    digit may answer "which floor?", and with their own request open so may any
+    word, except the one that ends the break. An active pro with their own request
+    open keeps their digits for it too. A pro the admin deactivated is sent to the
+    refusal when they try to come back, rather than to the customer AI.
     """
     from app.services import workflow_service as wf
 
     if ctx.normalized_text in wf.PRO_BUSINESS_KEYWORDS:
-        is_pro_doc = await wf._is_registered_pro(ctx.chat_id)
+        is_pro_doc = await wf._is_registered_pro(ctx.chat_id, include_on_break=True)
+        is_resume = ctx.normalized_text in Messages.Keywords.RESUME_COMMANDS
         if is_pro_doc and ctx.current_state not in wf.PRO_DISPATCH_STATES:
+            own_lead = await wf._get_active_customer_lead(ctx.chat_id)
+            on_break = not is_pro_doc.get("is_active", True)
+            digit = ctx.normalized_text.isdigit()
+            if (digit and (on_break or own_lead)) or (
+                on_break and own_lead and not is_resume
+            ):
+                return None
             defer_to_customer_flow = (
                 ctx.normalized_text in wf.AMBIGUOUS_PRO_KEYWORDS
                 and (await wf._customer_prompt_pending(ctx.chat_id, ctx.current_state))
@@ -1004,6 +1122,14 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
             else:
                 await deps.state_manager.set_state(ctx.chat_id, UserStates.PRO_MODE)
                 ctx.current_state = UserStates.PRO_MODE
+        elif (
+            not is_pro_doc
+            and is_resume
+            and await wf._is_deactivated_pro(ctx.chat_id)
+            and not await wf._get_active_customer_lead(ctx.chat_id)
+        ):
+            # Routing's gate in pro_flow answers RESUME_NEEDS_ADMIN and clears this.
+            ctx.current_state = UserStates.PRO_MODE
     return None
 
 
@@ -1299,7 +1425,8 @@ async def guard_pending_admin_review_shortcircuit(
     log_text_pending = ctx.user_text or ""
     if ctx.media_url:
         log_text_pending = f"{log_text_pending} [MEDIA: {ctx.media_url}]"
-    await wf.lead_manager.log_message(ctx.chat_id, "user", log_text_pending)
+    if not ctx.emergency_inbound_logged:  # the consent gate may have logged it
+        await wf.lead_manager.log_message(ctx.chat_id, "user", log_text_pending)
 
     # Throttle the ack: at most once per 30 minutes so the customer isn't
     # spammed if they send a burst of messages while waiting for admin.

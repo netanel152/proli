@@ -27,7 +27,8 @@ async def guard_<name>(ctx: DispatchContext, deps: GuardDeps):
 ```
 
 - `DispatchContext` (`chat_id`, `user_text`, `normalized_text`, `media_url`,
-  `is_emergency_detected`, `current_state`, `is_exempt`, `emergency_inbound_logged`) is the
+  `is_emergency_detected`, `current_state`, `is_exempt`, `emergency_inbound_logged`,
+  `replayed_held_messages`) is the
   shared mutable state. A guard that clears state **re-reads `ctx.current_state`** for the
   guards after it — see how the zero-touch and reset guards do it.
 - `GuardDeps` carries the injected collaborators (`whatsapp`, `state_manager`,

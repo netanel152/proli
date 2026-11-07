@@ -274,6 +274,15 @@ class WhatsAppFacade:
     async def get_state(self) -> str | None:
         return await self.get_state_instance()
 
+    async def get_quality(self) -> dict[str, Any] | None:
+        """Number quality reading. Not gated by the breaker, for the same reason
+        as the state probe: a halted number still has to be watched."""
+        try:
+            return await self._provider.get_quality()
+        except Exception as e:
+            logger.warning(f"Quality probe failed: {e}")
+            return None
+
     def parse_webhook(self, payload: Any) -> NormalizedMessage | None:
         return self._provider.parse_webhook(payload)
 
