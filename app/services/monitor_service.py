@@ -254,6 +254,7 @@ async def reassign_lead(
         issue_type=lead.get("issue_type"),
         location=raw_location,
         excluded_pro_ids=excluded_ids,
+        customer_chat_id=chat_id,
     )
 
     if new_pro:
