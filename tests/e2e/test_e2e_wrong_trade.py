@@ -642,3 +642,125 @@ async def test_electrical_issue_routing(world, trade, flag, gets_the_job):
     else:
         assert lead["pro_id"] is None
         assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+
+
+# --- PRO-225: the current message's trade, and never the dropped pro again ---
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offered", [False, True])
+async def test_a_message_naming_the_pros_trade_keeps_them(world, offered):
+    """The staging sequence: a lead stored as "קצר במטבח", held by a plumber, and
+    the customer now writes about a leaking sink. The plumber fits what they say
+    now, so nothing moves and nobody is told anything moved."""
+    plumber = await _plumber(world)
+    await _electrician(world)
+    await world.grant_consent()
+    if offered:
+        await world.awaiting_approval_job(plumber, issue_type="קצר במטבח")
+        await world.set_state(UserStates.IDLE)
+    else:
+        await _contacted_lead(world, plumber)
+    world.ai.script(reply("שלום, כאן אבי."))
+
+    await world.send("יש לי נזילה בכיור בתל אביב")
+
+    lead = await world.lead()
+    assert lead["pro_id"] == plumber["_id"]
+    assert lead["issue_type"] == "תקלה (אינסטלטור)"
+    assert not lead.get("excluded_pro_ids")
+    pro_bodies = world.recorder.bodies_to(world.pro_chat(R.PRO_PRIMARY))
+    for notice in (
+        Messages.Pro.LEAD_OUTSIDE_TRADE,
+        Messages.Pro.LEAD_OUTSIDE_TRADE_OFFER,
+    ):
+        assert notice.format(issue="קצר במטבח") not in pro_bodies
+    assert Messages.Customer.MOVING_TO_FITTING_PRO not in world.recorder.bodies_to(
+        world.customer
+    )
+
+
+@pytest.mark.asyncio
+async def test_an_electrical_message_still_moves_the_lead_and_never_back(world):
+    plumber = await _plumber(world)
+    electrician = await _electrician(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber)
+    world.ai.script(
+        reply("רגע.", city="תל אביב", issue="קצר במטבח"),
+        reply("שלום, כאן דני החשמלאי."),
+    )
+
+    await world.send("יש קצר חשמלי במטבח")
+
+    lead = await world.lead()
+    assert lead["pro_id"] == electrician["_id"]
+    assert lead["issue_type"] == "קצר במטבח"
+    assert lead["excluded_pro_ids"] == [plumber["_id"]]
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.MOVING_TO_FITTING_PRO
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_dropped_pro_is_not_matched_straight_back(world):
+    """The dispatcher re-extracts a plumbing issue after the drop. Matching used to
+    find the plumber it had just dropped, and the customer heard "אעביר…" and then
+    the same plumber."""
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    await _contacted_lead(world, plumber)
+    world.ai.script(
+        reply("רגע.", city="תל אביב", issue="נזילה בכיור"),
+        reply("שלום, כאן אבי."),
+    )
+
+    await world.send("מתי אתה מגיע?")
+
+    lead = await world.lead()
+    assert lead["pro_id"] is None
+    assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW
+    assert Messages.Pro.EARLY_LEAD_HEADER not in "".join(
+        world.recorder.bodies_to(world.pro_chat(R.PRO_PRIMARY))
+    )
+    bodies = world.recorder.bodies_to(world.customer)
+    assert not any("כאן אבי" in body for body in bodies)
+    # It went to review, which says so itself; "אעביר…" would promise a pro.
+    assert Messages.Customer.MOVING_TO_FITTING_PRO not in bodies
+
+
+@pytest.mark.asyncio
+async def test_reassignment_never_picks_a_pro_dropped_for_trade(world):
+    from app.services import monitor_service
+
+    plumber = await _plumber(world)
+    await world.grant_consent()
+    lead = await _contacted_lead(
+        world,
+        plumber,
+        pro_id=None,
+        issue_type="נזילה בכיור",
+        excluded_pro_ids=[plumber["_id"]],
+    )
+
+    assert not await monitor_service.reassign_lead(lead, announce=False)
+
+    assert (await world.lead())["pro_id"] is None
+    world.recorder.assert_silent(world.pro_chat(R.PRO_PRIMARY), "dropped for trade")
+
+
+@pytest.mark.asyncio
+async def test_a_pro_dropped_for_trade_cannot_claim_the_lead_back(world):
+    """`מצא` reads this predicate."""
+    from app.services.matching_service import is_pro_eligible_for_lead
+
+    plumber = await _plumber(world)
+    lead = {
+        "chat_id": world.customer,
+        "issue_type": "נזילה בכיור",
+        "city": "תל אביב",
+    }
+    assert await is_pro_eligible_for_lead(plumber, lead)
+
+    lead["excluded_pro_ids"] = [plumber["_id"]]
+    assert not await is_pro_eligible_for_lead(plumber, lead)

@@ -246,8 +246,12 @@ async def reassign_lead(
 
     # 2. Find replacement — exclude the current pro AND everyone who already
     # explicitly rejected this lead (PRO-117: excluding only the current pro
-    # lets the reject chain ping-pong A→B→A within MAX_REASSIGNMENTS).
+    # lets the reject chain ping-pong A→B→A within MAX_REASSIGNMENTS), and
+    # everyone dropped from it for trade (PRO-225).
     excluded_ids = list(lead.get("rejected_by") or [])
+    excluded_ids += [
+        pid for pid in lead.get("excluded_pro_ids") or [] if pid not in excluded_ids
+    ]
     if current_pro_id and current_pro_id not in excluded_ids:
         excluded_ids.append(current_pro_id)
     new_pro = await matching_service.determine_best_pro(
