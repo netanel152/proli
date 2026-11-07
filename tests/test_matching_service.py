@@ -1,17 +1,24 @@
 import pytest
+from functools import partial
 from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
 from datetime import datetime, timezone
 from app.core.constants import ISRAEL_CITIES_COORDS
+from app.services import matching_service
 from app.services.matching_service import (
-    determine_best_pro,
     get_coordinates,
     WorkerConstants,
     is_pro_eligible_for_lead,
     required_profession,
     probable_trade,
     pro_trades,
+    issue_update,
+    trade_named_in_chat,
+    trade_fits,
 )
+
+# These pin location, load and rating. The trade rule has its own tests below.
+determine_best_pro = partial(matching_service.determine_best_pro, require_trade=False)
 
 
 def _mock_leads_aggregate(load_map):
@@ -505,12 +512,11 @@ async def test_is_pro_eligible_for_lead_location_gate(eligible_env):
 
 @pytest.mark.asyncio
 async def test_is_pro_eligible_for_lead_profession_gate(eligible_env):
-    """A lead that names a specific profession blocks a mismatched pro, but
-    'general'/'handyman' pros and a pro with no declared profession at all
-    are never constrained by it -- and a lead that names no profession
-    imposes no constraint on anyone."""
+    """A lead naming a trade blocks a mismatched pro. General and handyman pros and
+    a pro with no declared trade aren't constrained by it, except on electrical work
+    (`test_pro_search_follows_the_same_rule`). A lead naming no trade is nobody's."""
     pro_location = {"type": "Point", "coordinates": [34.7818, 32.0853]}
-    lead = _lead(issue_type="צריך חשמלאי דחוף")  # names "electrician"
+    lead = _lead(issue_type="צריך מנעולן דחוף")  # names "locksmith"
 
     mismatched = _pro(location=pro_location, profession_type="plumber")
     assert await is_pro_eligible_for_lead(mismatched, lead) is False
@@ -524,12 +530,9 @@ async def test_is_pro_eligible_for_lead_profession_gate(eligible_env):
     unspecified = _pro(location=pro_location)  # no profession_type at all
     assert await is_pro_eligible_for_lead(unspecified, lead) is True
 
-    # Careful: not "בעיה כללית" -- "כללית" contains "כללי" (TYPE_MAP's
-    # "general" key) as a substring, which would make this its own mismatch
-    # case rather than the "no profession named" one it's meant to be.
     generic_lead = _lead(issue_type="יש לי תקלה בבית")  # no profession named
     plumber = _pro(location=pro_location, profession_type="plumber")
-    assert await is_pro_eligible_for_lead(plumber, generic_lead) is True
+    assert await is_pro_eligible_for_lead(plumber, generic_lead) is False
 
 
 def test_required_profession_ignores_type_map_digit_keys():
@@ -554,6 +557,55 @@ def test_required_profession_ignores_type_map_digit_keys():
         ("נשבר לי המנעול בדלת", "locksmith"),
         ("קצר במטבח", "electrician"),  # the phrasing from the PRO-215 staging test
         ("הפחת קפץ", "electrician"),
+        ("אין אור בסלון", "electrician"),
+        ("הפקקים קפצו", "electrician"),
+        ("נפל הזרם בבית", "electrician"),
+        ("הלוח קפץ", "electrician"),
+        ("נזילה אצל משפחת לוי", "plumber"),  # "פחת" inside "משפחת"
+        ("נזילה שהתחילה לפני זמן קצר", "plumber"),
+        ("נזילה קצרה מהברז", "plumber"),
+        ("הברז נוזלת", "plumber"),
+        ("שתי נזילות במטבח", "plumber"),
+        ("הצינורות סתומים", "plumber"),
+        ("הברז מטפטף", "plumber"),
+        ("דלת ברזל שבורה", None),  # "ברז" inside "ברזל"
+        ("אין אורחים בבית", None),  # "אין אור" inside "אורחים"
+        ("ננעלתי מחוץ לבית", "locksmith"),
+        ("סדק בטיח", "painter"),
+        ("הבטיח לתקן את הדלת", None),
+        ("פגיעה באצבע", None),
+        ("השקעה בדירה", None),
+        ("המזגן לא מקרר", None),  # no trade covers air conditioning
+        ("פגיעה באצבעי", None),  # "צבעי" as a substring
+        ("נפל הפחת", "electrician"),
+        ("פחת קופץ כל הזמן", "electrician"),
+        ("הברז נוזל", "plumber"),
+        ("התקרה מטפטפת", "plumber"),
+        ("טפטוף מהתקרה", "plumber"),
+        ("הכיור סתום", "plumber"),
+        ("צינור התפוצץ", "plumber"),
+        ("אין מים בדירה", "plumber"),
+        ("אין מים חמים", "plumber"),
+        ("רטיבות בקיר", "plumber"),
+        ("המרתף מוצף", "plumber"),
+        ("הבית הוצף", "plumber"),
+        ("הצפה במטבח", "plumber"),
+        ("הדלת נעולה", "locksmith"),
+        ("הדלת ננעלה", "locksmith"),
+        ("צביעת סלון", "painter"),
+        ("הקיר צבוע בכתמים", "painter"),
+        ("ניקוי דירה", "cleaner"),
+        ("התקנת מדף", "handyman"),
+        ("הרכבת ארון", "handyman"),
+        ("תיקון דלת", "handyman"),
+        ("תריס תקוע", "handyman"),
+        ("תיקון קצר בברז", "plumber"),
+        ("מנעול בכניסה הצפונית", "locksmith"),
+        ("צביעה מושקעת", "painter"),
+        ("מנעול תקוע, דוד המלך 10", "locksmith"),
+        ("הדוד לא מחמם", "plumber"),
+        ("דוד שמש נוזל", "plumber"),
+        ("דוד המלך 10", None),
         ("קצר ליד הכיור", "electrician"),  # electrical wins the tie-break
         ("התקרה דולפת", "plumber"),
         ("המפתח נתקע במנעול", "locksmith"),  # "נתקע" is not a plug ("תקע")
@@ -568,6 +620,128 @@ def test_probable_trade_reads_customer_phrasing(issue, expected):
     `required_profession` only matches a profession noun, so "השקע לא עובד"
     resolved to None and the gate fell back to whoever finished last."""
     assert probable_trade(issue) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "משפחת לוי",
+        "זמן קצר",
+        "דוד המלך 10",
+        "דלת ברזל",
+        "הבטיח",
+        "אצבע",
+        "השקעה",
+        "",
+        None,
+    ],
+)
+def test_chat_text_innocent_words_name_no_trade(text):
+    """PRO-118's rule: chat text is never read by substring."""
+    assert trade_named_in_chat(text) is None
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("יש בעיה בחשמל", "electrician"),
+        ("הפחת קפץ", "electrician"),
+        ("אין אור בסלון", "electrician"),
+        ("יש נזילה", "plumber"),
+        ("נזילות בכל הבית", "plumber"),
+        ("סתימה באמבטיה", "plumber"),
+        ("המנעול נשבר", "locksmith"),
+    ],
+)
+def test_chat_text_plain_words_name_their_trade(text, expected):
+    assert trade_named_in_chat(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("זה לא חשמל, זו נזילה", "plumber"),
+        ("זה לא בחשמל, זו נזילה", "plumber"),
+        ("החשמלאי אמר שיש נזילה", "plumber"),
+        ("חשמלאי אמר שיש נזילה", "plumber"),
+        ("נזילה ליד השקע", None),  # two trades: not plainly either
+        ("זה לא מהחשמל", None),
+        ("לא חשמלאי", None),
+        ("אין נזילה", None),
+        ("אין נזילה, זו בעיה בחשמל", "electrician"),
+    ],
+)
+def test_chat_text_reads_negation_and_refuses_two_trades(text, expected):
+    assert trade_named_in_chat(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["לא עובד החשמל", "החשמל לא עובד", "אין חשמל בבית", "אין אור בסלון"],
+)
+def test_chat_text_a_fault_worded_with_a_negative_still_names_the_trade(text):
+    assert trade_named_in_chat(text) == "electrician"
+
+
+def test_no_hot_water_reads_as_it_did():
+    """The chat list has no water-supply word; the stored-issue table does."""
+    assert trade_named_in_chat("אין מים חמים") is None
+    assert probable_trade("אין מים חמים") == "plumber"
+
+
+@pytest.mark.parametrize(
+    "fresh",
+    [
+        "נזילה 050-1234567",
+        "נזילה 0501234567",
+        "נזילה a@b.co",
+        "https://x.co נזילה",
+        "נזילה 050.123.4567",
+        "נזילה (050) 1234567",
+        "נזילה 050–1234567",
+        "נזילה 050 - 1234567",
+        "נזילה 03-1234567",
+        "נזילה +972-50-1234567",
+        "נזילה 050-1234567: דחוף",
+        "נזילה www.x.co.il",
+    ],
+)
+def test_issue_update_drops_contact_details(fresh):
+    assert issue_update(fresh, None) is None
+    assert issue_update(fresh, "נזילה") is None
+
+
+@pytest.mark.parametrize(
+    "fresh",
+    [
+        "נזילה בדירה 12",
+        "נזילה בדוד דגם WH-1000",
+        "נזילה בדוד דגם 12345678",
+        "נזילה, הצעת מחיר 350",
+        "נזילה, הצעת מחיר 350-450",
+        "נזילה בדיזנגוף 50",
+        "נזילה מאז 12.10.2026",
+        "נזילה מאז 12/10/2026",
+        "נזילה מאז 12.10.2026 14:30",
+    ],
+)
+def test_issue_update_keeps_ordinary_numbers(fresh):
+    assert issue_update(fresh, None) == fresh
+
+
+@pytest.mark.parametrize(
+    "fresh,known,expected",
+    [
+        ("תקלה במטבח", "קצר במטבח", None),  # would lose the trade
+        (None, "קצר במטבח", None),
+        ("נזילה בכיור", "קצר במטבח", "נזילה בכיור"),  # a real change of trade
+        ("קצר במטבח", "תקלה במטבח", "קצר במטבח"),
+        ("תקלה בבית", "תקלה במטבח", "תקלה בבית"),  # neither names a trade
+        ("תקלה בבית", None, "תקלה בבית"),
+    ],
+)
+def test_issue_update_never_loses_a_classified_trade(fresh, known, expected):
+    assert issue_update(fresh, known) == expected
 
 
 def _text_search_pros(mock_users, direct, everyone):
@@ -592,12 +766,14 @@ async def test_text_routing_does_not_fall_back_to_another_trade(
     }
     _text_search_pros(mock_users, [plumber], [plumber])
 
-    assert await determine_best_pro("קצר במטבח", "Unknown City") is None
+    assert (
+        await matching_service.determine_best_pro("קצר במטבח", "Unknown City") is None
+    )
 
 
 @pytest.mark.asyncio
 async def test_text_routing_takes_a_pro_whose_trade_fits(mock_matching_dependencies):
-    """A general pro fits any trade; the better-rated plumber does not fit this one."""
+    """A general pro who does electrical work fits; the better-rated plumber doesn't."""
     mock_users, _ = mock_matching_dependencies
     plumber = {
         "_id": ObjectId(),
@@ -607,11 +783,15 @@ async def test_text_routing_takes_a_pro_whose_trade_fits(mock_matching_dependenc
     general = {
         "_id": ObjectId(),
         "type": "general",
+        "handles_electrical": True,
         "social_proof": {"rating": 3.0},
     }
     _text_search_pros(mock_users, [plumber, general], [])
 
-    assert await determine_best_pro("קצר במטבח", "Unknown City") == general
+    assert (
+        await matching_service.determine_best_pro("קצר במטבח", "Unknown City")
+        == general
+    )
 
 
 @pytest.mark.asyncio
@@ -627,8 +807,92 @@ async def test_geo_routing_filters_by_trade_when_a_radius_has_only_the_wrong_one
 
     mock_users.aggregate = MagicMock(side_effect=only_the_plumber)
 
-    assert await determine_best_pro("קצר במטבח", "Tel Aviv") is None
+    assert await matching_service.determine_best_pro("קצר במטבח", "Tel Aviv") is None
     assert mock_users.aggregate.call_count == len(WorkerConstants.GEO_RADIUS_STEPS)
+
+
+@pytest.mark.parametrize(
+    "pro,fits",
+    [
+        ({"type": "electrician"}, True),
+        ({"type": "handyman", "handles_electrical": True}, True),
+        ({"type": "general", "handles_electrical": True}, True),
+        ({"type": "handyman"}, False),
+        ({"type": "general"}, False),
+        ({"type": "handyman", "handles_electrical": False}, False),
+        ({"type": "plumber", "handles_electrical": True}, False),
+        ({}, False),  # a pro with no trade on record isn't an electrician
+    ],
+)
+def test_electrical_work_needs_an_electrician_or_the_explicit_flag(pro, fits):
+    assert trade_fits(pro, "electrician") is fits
+
+
+@pytest.mark.parametrize(
+    "pro,fits",
+    [
+        ({"type": "handyman"}, True),
+        ({"type": "general"}, True),
+        ({"type": "plumber"}, False),
+    ],
+)
+def test_a_held_lead_is_exempt_only_from_the_electrical_rule(pro, fits):
+    assert trade_fits(pro, "electrician", held=True) is fits
+
+
+@pytest.mark.parametrize("trade", ["plumber", "locksmith", "painter", "cleaner"])
+def test_general_and_handyman_still_fit_every_other_trade(trade):
+    assert trade_fits({"type": "handyman"}, trade)
+    assert trade_fits({"type": "general"}, trade)
+
+
+@pytest.mark.asyncio
+async def test_unknown_trade_gets_no_pro(mock_matching_dependencies):
+    """The owner's rule: an issue the classifier can't place reaches a human."""
+    mock_users, _ = mock_matching_dependencies
+    cursor = MagicMock()
+    cursor.to_list = AsyncMock(return_value=[{"_id": ObjectId(), "type": "general"}])
+    mock_users.find.return_value = cursor
+
+    assert (
+        await matching_service.determine_best_pro("המזגן לא מקרר", "Unknown City")
+        is None
+    )
+    mock_users.find.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_human_can_still_list_pros_for_an_unknown_trade(
+    mock_matching_dependencies,
+):
+    """The admin wizard's list, for the issues that reach them because of this rule."""
+    mock_users, _ = mock_matching_dependencies
+    pro = {"_id": ObjectId(), "type": "general"}
+    cursor = MagicMock()
+    cursor.to_list = AsyncMock(return_value=[pro])
+    mock_users.find.return_value = cursor
+
+    assert (
+        await matching_service.determine_best_pro(
+            "המזגן לא מקרר", "Unknown City", require_trade=False
+        )
+        == pro
+    )
+
+
+@pytest.mark.asyncio
+async def test_pro_search_follows_the_same_rule(eligible_env):
+    """`מצא` must not be a way round either rule."""
+    coords = {"type": "Point", "coordinates": [34.7818, 32.0853]}
+    electrical = _lead(issue_type="קצר במטבח")
+    unknown = _lead(issue_type="המזגן לא מקרר")
+
+    handyman = _pro(type="handyman", location=coords)
+    flagged = _pro(type="handyman", handles_electrical=True, location=coords)
+
+    assert not await is_pro_eligible_for_lead(handyman, electrical)
+    assert await is_pro_eligible_for_lead(flagged, electrical)
+    assert not await is_pro_eligible_for_lead(flagged, unknown)
 
 
 @pytest.mark.asyncio

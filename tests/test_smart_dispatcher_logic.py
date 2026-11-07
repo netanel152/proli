@@ -138,7 +138,7 @@ async def test_handover_to_pro_success(mock_workflow_dependencies):
     dispatcher_resp = AIResponse(
         reply_to_user="Finding pro...",
         extracted_data=ExtractedData(
-            city="Tel Aviv", issue="Leak", full_address=None, appointment_time=None
+            city="Tel Aviv", issue="נזילה", full_address=None, appointment_time=None
         ),
         transcription=None,
         is_deal=False,
@@ -148,7 +148,7 @@ async def test_handover_to_pro_success(mock_workflow_dependencies):
     pro_resp = AIResponse(
         reply_to_user="Hello, I am Mario the Plumber.",
         extracted_data=ExtractedData(
-            city="Tel Aviv", issue="Leak", full_address=None, appointment_time=None
+            city="Tel Aviv", issue="נזילה", full_address=None, appointment_time=None
         ),
         transcription=None,
         is_deal=False,
@@ -201,7 +201,7 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
     dispatcher_resp = AIResponse(
         reply_to_user="...",
         extracted_data=ExtractedData(
-            city="Tel Aviv", issue="Leak", appointment_time=None
+            city="Tel Aviv", issue="נזילה", appointment_time=None
         ),
         transcription="Water is flowing everywhere",
         is_deal=False,
@@ -212,7 +212,7 @@ async def test_audio_transcription_flow(mock_workflow_dependencies):
         reply_to_user="[DEAL: Now | Tel Aviv | Leak]",
         extracted_data=ExtractedData(
             city="Tel Aviv",
-            issue="Leak",
+            issue="נזילה",
             street="Rothschild",
             street_number="10",
             floor="3",

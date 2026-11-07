@@ -257,9 +257,9 @@ pipeline = [
 ]
 ```
 
-Candidates are also filtered by trade (`probable_trade(issue_type)` + `trade_fits`, PRO-215) inside each radius, so the radius widens past a wrong-trade pro; an issue naming no trade imposes no constraint. Breaks on first non-empty result set. If all three radii return empty, the lead goes to admin review (`None`).
+Candidates are also filtered by trade (`probable_trade(issue_type)` + `trade_fits`, PRO-215) inside each radius, so the radius widens past a wrong-trade pro; an issue naming no trade gets no pro (`None`) unless `require_trade=False`, which only the admin wizard's pro list passes. Electrical work fits only an electrician or a general/handyman pro with `handles_electrical`. The load filter also runs per radius, so a radius whose fitting pros are all at `MAX_PRO_LOAD` widens too. Breaks on the first radius with an available pro. If all three leave nobody, the lead goes to admin review (`None`).
 
-**Step 2 — Text fallback (no coordinates or geo empty):**
+**Step 2 — Text fallback (no coordinates):**
 
 Regex match on `service_areas` field, sorted by rating.
 
@@ -267,7 +267,7 @@ Regex match on `service_areas` field, sorted by rating.
 
 Checks if the city name appears in any pro's `service_areas` string (broader fuzzy match).
 
-**Load balancing:** Before returning a pro, the service queries `leads_collection` for each candidate's active lead count. Skips any pro with `count >= WorkerConstants.MAX_PRO_LOAD` (default: 3).
+**Load balancing:** For each radius (or the text-match result), the service queries `leads_collection` for each candidate's active lead count. Skips any pro with `count >= WorkerConstants.MAX_PRO_LOAD` (default: 3).
 
 **No-pro outcome:** Returns `None`. Caller sets lead to `PENDING_ADMIN_REVIEW` and sends `Messages.Customer.PENDING_REVIEW`.
 

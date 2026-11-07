@@ -686,9 +686,8 @@ async def inject_load(pros: list[dict], ids: dict[str, object], scenario: str) -
 
     ``load-balance`` (S02) loads the three highest-rated S01 pros, so a Tel Aviv
     customer must fall through to the fourth. ``overload-shfela`` (S03) loads every
-    S04 pro, so a Modiin customer gets nobody — note that `determine_best_pro`
-    stops at the first radius that returns documents and never widens again after
-    the load filter empties the candidate list.
+    S04 pro, so a Modiin customer falls through to the 30 km step, because
+    `determine_best_pro` widens when the load filter empties a radius.
     """
     if scenario == "load-balance":
         targets = sorted(

@@ -41,6 +41,7 @@ from app.services.conversation_pipeline import run_customer_pipeline
 # cannot see that and reports it unused; deleting it on that advice breaks
 # matching at runtime, not at import. Same for `detect_and_fetch_media` below.
 from app.services.matching_service import determine_best_pro  # noqa: F401
+from app.services.matching_service import issue_update
 
 # The next few imports look unused since PRO-180 moved the holding-state
 # cluster into dispatch_guards, but they are load-bearing: the guards resolve
@@ -948,7 +949,7 @@ async def _finalize_deal(
             "city": ed.city or extracted_city,
             "floor": ed.floor,
             "apartment": ed.apartment,
-            "issue_type": ed.issue or extracted_issue,
+            "issue_type": issue_update(ed.issue, extracted_issue) or extracted_issue,
         }
         partial_update = {k: v for k, v in partial_update.items() if v}
         if current_lead_id and partial_update:
@@ -989,7 +990,9 @@ async def _finalize_deal(
         d_address = ed.city or extracted_city
 
     d_issue = (
-        final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
+        issue_update(final_response.extracted_data.issue, extracted_issue)
+        or extracted_issue
+        or Defaults.UNKNOWN_ISSUE
     )
 
     d_name = final_response.extracted_data.customer_name or extracted_name

@@ -494,6 +494,8 @@ async def test_action_show_pros_lists_and_enters_pro_selection(
     )
 
     assert mock_state.set_state.call_args.args[1] == UserStates.ADMIN_SELECTING_PRO
+    # An unknown trade is what reaches a human, so the list must still fill.
+    assert fake.call_args_list[0].kwargs["require_trade"] is False
     saved_meta = mock_state.set_metadata.call_args.args[1]
     assert "admin_pros_context" in saved_meta
     assert "יוסי" in _sent_text(mock_whatsapp)

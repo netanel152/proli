@@ -252,7 +252,7 @@ can reach a subscriber. Remove them with `--purge` (deletes only
 |----|----------|------------------|----------------------|----------------|
 | **TC-19** | S01 · rating sort | `תל אביב` | `[S01] אינסטלציה תל אביב 01` (4.8) | Rating sort inside a dense cluster — **and** that the +10 availability bonus outweighs rating, since `[FILL] חשמל חולון 01` is rated 5.0, is 7.8 km away, and must still lose because it has no slots |
 | **TC-20** | S02 · load balancing | `תל אביב`, after `--scenario load-balance` | `[S01] מנעולן תל אביב 04` (4.5) | The three best are at `MAX_PRO_LOAD` and are skipped |
-| **TC-21** | S03 · everyone overloaded | `מודיעין`, after `--scenario overload-shfela` | *none* → `PENDING_ADMIN_REVIEW` | Routing stops at the first radius that returns documents; it does **not** widen again once the load filter empties the list |
+| **TC-21** | S03 · nearest radius overloaded | `מודיעין`, after `--scenario overload-shfela` | `[S01] אינסטלציה רמת גן 05` | Every S04 pro in the 20 km step is at `MAX_PRO_LOAD`, so routing widens and `GEO_RADIUS_STEPS[2]` answers |
 | **TC-22** | S04 · expand to 20 km | `מודיעין` | `[S04] אינסטלציה לוד 01` (4.8) | Nothing within 10 km → `GEO_RADIUS_STEPS[1]` answers |
 | **TC-23** | S05 · expand to 30 km | `נתניה` | `[S01] אינסטלציה תל אביב 01` | Steps 1 and 2 empty → `GEO_RADIUS_STEPS[2]` catches the TA cluster |
 | **TC-24** | S06 · coverage gap | `חדרה` | *none* → `PENDING_ADMIN_REVIEW` | Nobody inside 30 km. Check the log says **warning**, not critical (PRO-77) |
@@ -280,10 +280,11 @@ can reach a subscriber. Remove them with `--purge` (deletes only
   deliberately the highest-rated pro in the Tel Aviv ring (5.0) with no slots, so
   TC-19 only produces its documented answer if that bonus is working.
 * **Routing filters on the trade the issue names (PRO-215).** `determine_best_pro`
-  keeps only pros whose trade fits `probable_trade(issue_type)`; an issue that names
-  no trade imposes no constraint. The expected winners above span all trades, so
-  these cases must be sent with an issue that names no trade — an issue like
-  "נזילה" now restricts routing to plumbers (and general/handyman pros).
+  keeps only pros whose trade fits `probable_trade(issue_type)`, and an issue that
+  names no trade goes to `PENDING_ADMIN_REVIEW` with no pro. Send each case above
+  with an issue naming the expected pro's trade (or the case's other pros are not
+  what you are testing). `tests/test_seed_coverage_matrix.py` skips the trade rule
+  with `require_trade=False`, which a phone test cannot do.
 
 All ten are also asserted automatically in `tests/test_seed_coverage_matrix.py`,
 which runs the real routing engine against the same matrix — so a routing

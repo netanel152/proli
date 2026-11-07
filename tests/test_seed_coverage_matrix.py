@@ -295,8 +295,10 @@ async def seeded(mock_db, monkeypatch):
 async def _route(location: str):
     from app.services.matching_service import determine_best_pro
 
-    # Names no trade: this matrix pins geography, and its winners span every trade.
-    return await determine_best_pro(issue_type="תקלה בבית", location=location)
+    # This matrix pins geography, and its winners span every trade.
+    return await determine_best_pro(
+        issue_type="תקלה בבית", location=location, require_trade=False
+    )
 
 
 async def _overload(seeded, scenario: str):
@@ -342,9 +344,9 @@ async def test_s02_load_balancing_skips_the_top_three(seeded):
 
 
 @pytest.mark.asyncio
-async def test_s03_everyone_overloaded_returns_none(seeded):
-    """TC-21 — `determine_best_pro` stops at the first radius that returns
-    documents; it does not widen again once the load filter empties the list."""
+async def test_s03_overloaded_radius_widens_to_the_next(seeded):
+    """TC-21 — every S04 pro in Modiin's 20 km step is at MAX_PRO_LOAD, so the
+    30 km step answers. With a trade filter, an emptied radius is routine."""
     await _overload(seeded, "S04")
 
     # Positive control first: `determine_best_pro` swallows every exception and
@@ -352,7 +354,20 @@ async def test_s03_everyone_overloaded_returns_none(seeded):
     # pass for entirely the wrong reason.
     assert await _route("תל אביב") is not None
 
-    assert await _route("מודיעין") is None
+    chosen = await _route("מודיעין")
+    assert chosen is not None
+    assert chosen["business_name"] == "[S01] אינסטלציה רמת גן 05"
+
+
+@pytest.mark.asyncio
+async def test_a_named_trade_routes_to_that_trade(seeded):
+    """PRO-215 on the real matrix, where the top-scored Tel Aviv pro is a plumber."""
+    from app.services.matching_service import determine_best_pro
+
+    chosen = await determine_best_pro("קצר במטבח", "תל אביב")
+
+    assert chosen is not None
+    assert chosen["type"] == "electrician"
 
 
 @pytest.mark.asyncio

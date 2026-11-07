@@ -1138,6 +1138,11 @@ def view_leads_dashboard(T):
                             "appointment_time": AdminDefaults.MANUAL_LABEL,
                             "source": AdminDefaults.MANUAL_SOURCE,
                         }
+                        if assigned_pro_id:
+                            # PRO-215: a human's choice of pro, not for the bot to undo.
+                            new_lead_doc["assigned_by_admin_at"] = new_lead_doc[
+                                "created_at"
+                            ]
 
                         leads_collection.insert_one(new_lead_doc)
                         log_audit(

@@ -120,7 +120,9 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
         )
 
 
-async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
+async def reassign_lead(
+    lead, notify_old_pro: bool = True, announce: bool = True
+) -> bool:
     """Reassign one lead to the next-best pro, excluding its current pro.
 
     Notifies the customer, the new pro, and the old pro; escalates to
@@ -134,7 +136,9 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
     reassignment offer (customer chose "find someone else"), and the PRO-117
     pro-reject handoff. ``notify_old_pro=False`` skips the ``PRO_LOST_LEAD``
     message ("הועברה עקב חוסר מענה") — wrong for a pro who explicitly rejected
-    and already got the reject acknowledgement.
+    and already got the reject acknowledgement. ``announce=False`` skips
+    ``CUSTOMER_REASSIGNING``, whose apology for the wait is false for a caller that
+    moved the lead for another reason and told the customer so itself.
     """
     lead_id = lead["_id"]
     chat_id = lead["chat_id"]
@@ -234,10 +238,11 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
         return False
 
     # 1. Notify customer
-    try:
-        await whatsapp.send_message(chat_id, Messages.SOS.CUSTOMER_REASSIGNING)
-    except Exception as e:
-        logger.error(f"Failed to notify customer ...{chat_id[-8:]}: {e}")
+    if announce:
+        try:
+            await whatsapp.send_message(chat_id, Messages.SOS.CUSTOMER_REASSIGNING)
+        except Exception as e:
+            logger.error(f"Failed to notify customer ...{chat_id[-8:]}: {e}")
 
     # 2. Find replacement — exclude the current pro AND everyone who already
     # explicitly rejected this lead (PRO-117: excluding only the current pro
