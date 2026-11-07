@@ -555,8 +555,11 @@ async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:
     if pro.get("phone_number") in customer_phones(lead.get("chat_id")):
         return False
 
-    # A pro who already rejected this lead must not be able to claim it back.
+    # A pro who already rejected this lead, or was dropped from it for trade
+    # (PRO-225), must not be able to claim it back.
     if pro["_id"] in (lead.get("rejected_by") or []):
+        return False
+    if pro["_id"] in (lead.get("excluded_pro_ids") or []):
         return False
 
     # PRO-45: nor may the pro the customer just reported for not showing up.

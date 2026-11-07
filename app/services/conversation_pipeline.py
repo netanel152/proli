@@ -233,17 +233,22 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     # A human's explicit assignment stands. An unoffered lead falls through to the
     # dispatcher and matching below; one the pro was already offered goes through
     # the reassignment path.
-    rematch_notice_sent = False
+    rematch_pending = False
     if existing_pro and not active_lead.get("assigned_by_admin_at"):
         issue = active_lead.get("issue_type") or ""
         wanted = probable_trade(issue)
-        if not wanted:
-            # The dispatcher is skipped from here on, so a vague issue can only
-            # be refined from this message. `issue_type` reaches unapproved pros,
-            # logs and pages, so it records the trade, never the words (PRO-59).
-            wanted = trade_named_in_chat(user_text)
-            if wanted:
-                base = issue
+        if not wanted or not trade_fits(existing_pro, wanted, held=True):
+            # The dispatcher is skipped from here on, so an issue that is vague,
+            # or names a trade this pro doesn't do, can only be refined from this
+            # message (PRO-225: the conversation moved on from "קצר" to a leak).
+            # A pro who fits the stored issue keeps it, whatever else is
+            # mentioned in passing. `issue_type` reaches unapproved pros, logs
+            # and pages, so it records the trade, never the words (PRO-59).
+            named = trade_named_in_chat(user_text)
+            if named and named != wanted:
+                # The stored words describe the other trade, so they go.
+                base = Messages.Fallbacks.ISSUE if wanted else issue
+                wanted = named
                 if base in ("", Defaults.UNKNOWN_ISSUE):
                     base = Messages.Fallbacks.ISSUE
                 label = Messages.Onboarding.TYPE_LABELS[wanted]
@@ -268,6 +273,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     "$set": {"pro_id": None},
                     # That pro's estimate, not the next one's.
                     "$unset": {"quoted_price": ""},
+                    # Read by every matcher, so no path offers it back to them.
+                    # Not `rejected_by`: that counts as the pro's own rejection.
+                    "$addToSet": {"excluded_pro_ids": existing_pro["_id"]},
                 },
             )
             if not dropped.modified_count:
@@ -276,6 +284,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 )
                 return
             active_lead.pop("quoted_price", None)
+            excluded = active_lead.get("excluded_pro_ids") or []
+            if existing_pro["_id"] not in excluded:
+                active_lead["excluded_pro_ids"] = [*excluded, existing_pro["_id"]]
 
             # True on every outcome below, so it goes first. Without it a pro
             # holding the offer answers "אשר" and finds nothing, or books the
@@ -359,10 +370,8 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     )
                 return
 
-            await whatsapp.send_message(
-                chat_id, Messages.Customer.MOVING_TO_FITTING_PRO
-            )
-            rematch_notice_sent = True
+            # "אעביר…" waits for matching below to actually find another pro.
+            rematch_pending = True
             existing_pro = None
 
     # PRO-116 Q3: a customer with a CONFIRMED (BOOKED) job who writes about
@@ -435,10 +444,6 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     if media_fetch_failed:
         await lead_manager.log_message(
             chat_id, "model", Messages.Errors.MEDIA_FETCH_FAILED
-        )
-    if rematch_notice_sent:
-        await lead_manager.log_message(
-            chat_id, "model", Messages.Customer.MOVING_TO_FITTING_PRO
         )
 
     # --- OPTIMIZATION 1: Skip dispatcher if pro already assigned ---
@@ -776,6 +781,10 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 .limit(WorkerConstants.LOYALTY_HISTORY_SCAN_LIMIT)
             )
             async for past_lead in past_leads:
+                if past_lead["pro_id"] in (
+                    current_lead_doc.get("excluded_pro_ids") or []
+                ):
+                    continue
                 candidate = await users_collection.find_one(
                     {
                         "_id": past_lead["pro_id"],
@@ -830,6 +839,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             best_pro = await determine_best_pro(
                 issue_type=extracted_issue,
                 location=extracted_city,
+                excluded_pro_ids=(active_lead or {}).get("excluded_pro_ids"),
                 customer_chat_id=chat_id,
             )
         except Exception as e:
@@ -895,6 +905,15 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     is_new_assignment = True
             else:
                 is_new_assignment = True
+
+            # The pro dropped for trade is excluded above, so this is a new one.
+            if rematch_pending:
+                await whatsapp.send_message(
+                    chat_id, Messages.Customer.MOVING_TO_FITTING_PRO
+                )
+                await lead_manager.log_message(
+                    chat_id, "model", Messages.Customer.MOVING_TO_FITTING_PRO
+                )
 
             # Build the persona response FIRST so we know whether this same turn
             # already closes the deal — PRO-116 Q1: if it does, sending the pro
