@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>פרולי: התאמה בוואטסאפ בין לקוחות לבעלי מקצוע</title>
+<meta name="description" content="כותבים בוואטסאפ מה צריך לתקן, ופרולי מחברת אתכם לבעל מקצוע מתאים. השירות בשלב פיילוט.">
+<meta name="theme-color" content="#f6c31c" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1b2e" media="(prefers-color-scheme: dark)">
+<meta property="og:type" content="website">
+<meta property="og:locale" content="he_IL">
+<meta property="og:site_name" content="פרולי">
+<meta property="og:title" content="פרולי: התאמה בוואטסאפ בין לקוחות לבעלי מקצוע">
+<meta property="og:description" content="כותבים בוואטסאפ מה צריך לתקן, ופרולי מחברת אתכם לבעל מקצוע מתאים. השירות בשלב פיילוט.">
+<meta property="og:url" content="https://proli.me/">
+<link rel="canonical" href="https://proli.me/">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f6c31c'/%3E%3Cpath d='M7 8h18v13H14l-6 5v-5H7z' fill='%2310243e'/%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: light dark;
+    --page: #f7f8f6; --text: #10243e; --quiet: #44546a; --rule: #cfd5da; --link: #0f4c9c;
+    --sign: #f6c31c; --on-sign: #10243e;
+    --band: #10243e; --on-band: #f7f8f6; --band-link: #f6c31c;
+    --bubble: #e7ebee; --on-bubble: #10243e; --bubble-proli: #f6c31c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --page: #0e1b2e; --text: #eef1f4; --quiet: #b3bfcc; --rule: #33445c; --link: #f6c31c;
+      --sign: #0e1b2e; --on-sign: #f6c31c;
+      --band: #182a44; --on-band: #eef1f4; --band-link: #f6c31c;
+      --bubble: #22354f; --on-bubble: #eef1f4; --bubble-proli: #f6c31c;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--page); color: var(--text);
+    font: 400 1.0625rem/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans Hebrew", Roboto, Arial, sans-serif;
+  }
+  a { color: var(--link); text-underline-offset: .18em; }
+  a:focus-visible { outline: 3px solid currentColor; outline-offset: 3px; border-radius: 2px; }
+  h1, h2, h3, p, ol { margin: 0; }
+  .wrap { max-width: 62rem; margin-inline: auto; padding-inline: 1.25rem; }
+
+  /* The hero is signwriting on a work van; the tape-measure edge is the page's one ornament. */
+  .hero { position: relative; background: var(--sign); color: var(--on-sign); padding-block: 1.5rem 4rem; }
+  .hero::after {
+    content: ""; position: absolute; inset: auto 0 0; height: 1.1rem; opacity: .85;
+    background:
+      repeating-linear-gradient(to left, currentColor 0 2px, transparent 2px 60px) bottom / 100% 100% no-repeat,
+      repeating-linear-gradient(to left, currentColor 0 1px, transparent 1px 12px) bottom / 100% 45% no-repeat;
+  }
+  .mark { font-size: 1.375rem; font-weight: 800; margin-block-end: 2.5rem; }
+  h1 {
+    font-size: clamp(2.25rem, 10.4vw, 4.75rem); font-weight: 900; line-height: 1.08;
+    max-width: 15em; text-wrap: balance;
+  }
+  .lede { max-width: 36rem; margin-block-start: 1.5rem; font-size: 1.125rem; }
+  .hero a { display: inline-block; margin-block-start: 1.25rem; padding-block: .25rem; color: inherit; font-weight: 700; }
+
+  section { padding-block: 3.5rem; }
+  h2 { font-size: clamp(1.75rem, 6vw, 2.5rem); font-weight: 800; line-height: 1.15; }
+  .note { color: var(--quiet); margin-block-start: .5rem; }
+
+  .steps { list-style: none; padding: 0; margin-block-start: 2rem; }
+  .steps li { display: grid; gap: .25rem 1rem; grid-template-columns: 3rem 1fr; padding-block: 1.75rem; border-block-start: 1px solid var(--rule); }
+  .num { font-size: 2.75rem; font-weight: 900; line-height: 1; }
+  h3 { font-size: 1.375rem; font-weight: 800; line-height: 1.25; }
+  .step-text p { margin-block-start: .35rem; max-width: 34rem; }
+  .msg {
+    grid-column: 2; justify-self: start; max-width: 22rem; margin-block-start: .85rem; padding: .6rem .9rem;
+    background: var(--bubble); color: var(--on-bubble); border-radius: 1rem; border-start-start-radius: .2rem; line-height: 1.5;
+  }
+  .msg-proli { background: var(--bubble-proli); color: #10243e; }
+
+  .band { background: var(--band); color: var(--on-band); }
+  .band a { color: var(--band-link); }
+  .band p { max-width: 36rem; margin-block-start: 1rem; }
+  .band h3 { margin-block-start: 2.25rem; }
+  .band h3 + p { margin-block-start: .5rem; }
+
+  .about p { max-width: 36rem; margin-block-start: 1rem; }
+
+  footer { border-block-start: 1px solid var(--rule); padding-block: 1.5rem 2rem; }
+  footer .wrap { display: flex; flex-wrap: wrap; gap: .5rem 2rem; justify-content: space-between; }
+  footer a { display: inline-block; padding-block: .25rem; }
+  footer p { padding-block: .25rem; font-weight: 800; }
+
+  @media (min-width: 48rem) {
+    .hero { padding-block: 2rem 6rem; }
+    .mark { margin-block-end: 4rem; }
+    section { padding-block: 5rem; }
+    .steps li { grid-template-columns: 5rem minmax(0, 1fr) minmax(0, 1fr); column-gap: 1.5rem; align-items: start; }
+    .num { font-size: 3.75rem; }
+    .msg { grid-column: 3; margin-block-start: 0; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="wrap">
+    <p class="mark">פרולי</p>
+    <h1>כותבים בוואטסאפ מה צריך לתקן, ופרולי מחברת אתכם לבעל מקצוע מתאים.</h1>
+    <p class="lede">פרולי היא עוזרת בינה מלאכותית בוואטסאפ, שמתאימה בין לקוחות לבעלי מקצוע כמו אינסטלטורים וחשמלאים. השירות בשלב פיילוט ועדיין לא פתוח לכולם.</p>
+    <a href="#pros">מידע לבעלי מקצוע</a>
+  </div>
+</header>
+
+<main>
+  <section aria-labelledby="how">
+    <div class="wrap">
+      <h2 id="how">איך זה עובד</h2>
+      <p class="note">ההודעות כאן הן דוגמה להמחשה.</p>
+      <ol class="steps">
+        <li>
+          <span class="num" aria-hidden="true">1</span>
+          <div class="step-text">
+            <h3>לקוח כותב</h3>
+            <p>מתארים את התקלה בטקסט, בתמונה, בהודעה קולית או בסרטון. בפנייה הראשונה פרולי מבקשת את אישורכם, והשירות מתחיל רק אחריו.</p>
+          </div>
+          <p class="msg">יש לי נזילה מתחת לכיור במטבח. אפשר להגיע מחר בבוקר?</p>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">2</span>
+          <div class="step-text">
+            <h3>פרולי מתאימה</h3>
+            <p>פרולי מבינה מה צריך ובאיזה אזור, ומחפשת בעל מקצוע מתאים וקרוב. אם היא נותנת הערכת מחיר, זו הערכה בלבד.</p>
+          </div>
+          <p class="msg msg-proli">פניתי לבעל מקצוע עם הפרטים, ואעדכן אותך ברגע שיאשר.</p>
+        </li>
+        <li>
+          <span class="num" aria-hidden="true">3</span>
+          <div class="step-text">
+            <h3>בעל מקצוע מאשר</h3>
+            <p>הפרטים מגיעים אליו בוואטסאפ, והוא מחליט אם לקבל את העבודה. המחיר הסופי והעבודה עצמה נסגרים ישירות ביניכם.</p>
+          </div>
+          <p class="msg"><strong>אשר</strong> — לקבלת העבודה<br><strong>דחה</strong> — לדחייה</p>
+        </li>
+      </ol>
+      <p class="note"><strong>פרולי אינה שירות חירום.</strong> בסכנה מיידית התקשרו למשטרה 100, למד״א 101 או לכבאות 102.</p>
+    </div>
+  </section>
+
+  <section class="band" id="pros" aria-labelledby="pros-title">
+    <div class="wrap">
+      <h2 id="pros-title">לבעלי מקצוע</h2>
+      <p>העבודות מגיעות לוואטסאפ, בלי אפליקציה נוספת. בכל פנייה רואים את הפרטים ובוחרים אם לקבל או לדחות.</p>
+      <h3>הפיילוט</h3>
+      <p>הפיילוט נפתח למספר קטן של בעלי מקצוע. בתקופת הפיילוט שסוכמה איתכם השימוש ללא תשלום. התמחור יכול להשתנות בהודעה של 30 יום מראש.</p>
+      <p>פרולי מתווכת בלבד ואינה צד לעבודה. רישוי, תמחור ואיכות העבודה באחריותכם.</p>
+      <p>רוצים להצטרף? פרטי הקשר בסעיף <a href="#about">מי אנחנו</a>.</p>
+      <!-- The wa.me button to the production number goes here once that number exists. -->
+    </div>
+  </section>
+
+  <section class="about" id="about" aria-labelledby="about-title">
+    <div class="wrap">
+      <h2 id="about-title">מי אנחנו</h2>
+      <p>פרולי היא שירות בשלב פיילוט. מי שעומד מאחוריו: נתנאל אקנין.</p>
+      <p>ליצירת קשר: <a href="mailto:info@proli.me">info@proli.me</a></p>
+      <p>לשאלות על המידע שלכם ולבקשות עיון או מחיקה: <a href="/privacy">מדיניות הפרטיות</a></p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>פרולי</p>
+    <a href="/privacy">מדיניות פרטיות</a>
+    <!-- The /terms link stays out until the owner approves the text: the route answers 404 until then. -->
+  </div>
+</footer>
+</body>
+</html>
