@@ -418,6 +418,7 @@ def probable_trade(issue: str) -> Optional[str]:
 #: Whole tokens that name a trade in what a customer writes in chat (PRO-118's
 #: rule: chat text is never read by substring). Deliberately only unambiguous
 #: inflections, so "דוד", "קצר" and "ברז" stay out: "דוד המלך 10", "זמן קצר".
+#: "קצר" is in only behind "יש": "יש זמן קצר" doesn't contain "יש קצר".
 CHAT_TRADE_WORDS = {
     "electrician": (
         "חשמל",
@@ -430,6 +431,8 @@ CHAT_TRADE_WORDS = {
         "בשקע",
         "שקעים",
         "קצר חשמלי",
+        "יש קצר",
+        "יש לי קצר",
         "אין אור",
         "הפקקים",
         "נפל הזרם",
@@ -474,6 +477,14 @@ CHAT_TRADE_NEGATIONS = (
 #: wanted as often as the job ("שלחתם אינסטלטור אבל יש קצר"), so a fault word
 #: outranks it.
 CHAT_TRADE_TITLES = frozenset({"חשמלאי", "אינסטלטור", "שרברב", "מנעולן", "צבעי"})
+
+#: Not a negation directly before the title, so built here: "אני לא צריך
+#: אינסטלטור" must not name a plumber even when no fault word does.
+CHAT_TRADE_NEGATIONS += tuple(
+    f"{lead_in} {title}"
+    for title in sorted(CHAT_TRADE_TITLES)
+    for lead_in in ("לא צריך", "לא רוצה", "שלחתם", "שלחת")
+)
 
 
 def _trades_named(text: str, titles: bool) -> list:
