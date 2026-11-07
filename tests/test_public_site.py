@@ -71,6 +71,12 @@ def test_page_is_hebrew_rtl(path):
 
 
 @pytest.mark.parametrize("path", PAGES, ids=lambda p: p.name)
+def test_page_ships_no_placeholder(path):
+    text = path.read_text(encoding="utf-8")
+    assert "להשלים" not in text and "data-draft" not in text
+
+
+@pytest.mark.parametrize("path", PAGES, ids=lambda p: p.name)
 def test_page_loads_nothing_from_anywhere_else(path):
     for tag, attrs in Page(path).tags:
         assert tag != "script", "no scripts: the CSP would block them anyway"
