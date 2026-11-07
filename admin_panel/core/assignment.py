@@ -36,6 +36,13 @@ ASSIGN_SENT = "sent"
 #: NOT told a pro was found: that is the false success this state exists to
 #: surface rather than hide.
 ASSIGN_NOT_SENT = "not_sent"
+#: ``ASSIGN_NOT_SENT``, for one reason the operator must hear: this environment's
+#: provider cannot transmit, so the core's "sent" reached no handset. The lead is
+#: left exactly as ``ASSIGN_NOT_SENT`` leaves it, and calling the pro is still the
+#: next step. Kept separate because retrying cannot help until the service's
+#: variables change. Decided here and not in ``notify_pro_new_lead``, so a dry-run
+#: worker's flows behave as they always have.
+ASSIGN_NOT_SENT_MUTED = "not_sent_muted"
 #: Assigned, but the post-write lead lookup came back empty, so the offer was
 #: never attempted. Distinct from ``ASSIGN_NOT_SENT`` because conflating them
 #: would blame the pro's 24h window for a database problem.
@@ -100,15 +107,17 @@ def assign_pending_lead_sync(
     a Redis client or a provider.
     """
     try:
+        whatsapp = whatsapp_factory()
         offer_sent, pro_name = run(
             assign(
                 lead_id,
                 pro,
-                whatsapp_factory(),
+                whatsapp,
                 expected_status=LeadStatus.PENDING_ADMIN_REVIEW,
             ),
             timeout,
         )
+        transmits = whatsapp.provider.transmits
     except concurrent.futures.TimeoutError:
         # Distinct from the generic failure below, because the situations differ
         # and so does what the operator must do. `run_blocking` cancels the
@@ -129,7 +138,7 @@ def assign_pending_lead_sync(
     if offer_sent is LEAD_ALREADY_TAKEN:
         return ASSIGN_STALE, pro_name
     if offer_sent:
-        return ASSIGN_SENT, pro_name
+        return (ASSIGN_SENT if transmits else ASSIGN_NOT_SENT_MUTED), pro_name
     if offer_sent is None:
         return ASSIGN_LOOKUP_MISSED, pro_name
     return ASSIGN_NOT_SENT, pro_name
