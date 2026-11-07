@@ -12,6 +12,8 @@ Three operations:
   * ``to_chat_id(raw)``   → ``"972XXXXXXXXX@c.us"`` — for sending / keying.
   * ``strip_suffix(raw)`` → ``"972XXXXXXXXX"``      — bare intl digits, for DB lookups.
   * ``to_local_phone(raw)`` → ``"0XXXXXXXXX"``      — Israeli local display.
+  * ``to_il_mobile(raw)``   → ``"9725XXXXXXXX"`` or ``""`` — a pro's stored phone
+    (PRO-224); ``""`` when the input cannot be an Israeli mobile.
 
 All are idempotent and None-safe (return ``""`` for falsy input).
 """
@@ -82,3 +84,24 @@ def to_local_phone(raw) -> str:
     if digits.startswith("972"):
         return "0" + digits[3:]
     return digits
+
+
+def to_il_mobile(raw) -> str:
+    """The bare ``9725XXXXXXXX`` form onboarding stores as a pro's
+    ``phone_number``, or ``""`` when ``raw`` cannot be an Israeli mobile.
+
+    Accepts every shape ``to_chat_id`` does, plus ``00972`` and ``+972 0…``
+    (PRO-224: the admin panel stored whatever was typed, so the bot never
+    found the pro).
+    """
+    if not raw:
+        return ""
+    s = str(raw).strip()
+    if s.startswith("00"):
+        s = s[2:]
+    digits = _to_intl_digits(s)
+    if digits.startswith("9720"):  # the trunk 0 typed after the country code
+        digits = "972" + digits[4:]
+    if digits.isdigit() and len(digits) == 12 and digits.startswith("9725"):
+        return digits
+    return ""

@@ -58,6 +58,17 @@ Exit `0` when every checked pro resolves, `1` when some pro needs a correction (
 
 Against staging or production, run it through the **`🗺️ Check pro service areas`** workflow rather than by hand: the branch picks the environment (`dev` → staging, `production` → production), the connection settings come from repo secrets, the job exits with the script's own code, and the report is written to the run's job summary — which is the artifact to paste onto the issue. It also prints the database name it connected to, so a `Checked 0 pros` result can be told apart from a run that reached the wrong database.
 
+### `normalize_pro_phones.py`
+
+PRO-224 backfill. Reports every pro whose `phone_number` is not the bare `9725…` form the bot looks a pro up by (phones masked to the last four digits), and with `--apply` rewrites it via `app.core.phone.to_il_mobile`. A phone that cannot be an Israeli mobile is reported as `INVALID` and never touched. Refuses to write anything if two users would end up with the same number (`phone_number` is unique). Dry run by default.
+
+```bash
+python scripts/normalize_pro_phones.py           # report only
+python scripts/normalize_pro_phones.py --apply   # write the normalised phones
+```
+
+Exit `0` when every pro is already in the stored form, `1` when some need fixing (dry run) or are invalid, `2` on a would-be duplicate (nothing written), `3` when there is no pro on record.
+
 ### `create_indexes.py`
 
 Creates MongoDB indexes for query performance. Run once when setting up a new environment.
