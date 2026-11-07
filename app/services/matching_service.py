@@ -5,6 +5,7 @@ from app.core.database import users_collection, leads_collection, slots_collecti
 from app.core.logger import logger
 from app.core.constants import LeadStatus, WorkerConstants, ISRAEL_CITIES_COORDS
 from app.core.messages import Messages
+from app.core.phone import strip_suffix, to_chat_id, to_local_phone
 from app.core.text_matching import contains_keyword
 from app.services.geocoding_service import resolve_city_to_coords
 from app.services.scheduling_service import check_pro_availability
@@ -42,6 +43,15 @@ APPROVED_PRO_FILTER = {
     "role": "professional",
     "pending_approval": {"$ne": True},
 }
+
+
+def customer_phones(chat_id) -> list:
+    """Every form a pro's ``phone_number`` may hold for this customer (PRO-223).
+
+    A pro can write in as a customer, and must never be offered their own lead.
+    """
+    chat = to_chat_id(chat_id)
+    return [strip_suffix(chat), chat, to_local_phone(chat)] if chat else []
 
 
 async def _available_candidates(pros: list) -> list:
@@ -105,6 +115,7 @@ async def determine_best_pro(
     location: str = None,
     excluded_pro_ids: list = None,
     require_trade: bool = True,
+    customer_chat_id: str = None,
 ) -> dict:
     """
     Intelligent Routing Engine with Progressive Geo-Spatial Search:
@@ -127,6 +138,9 @@ async def determine_best_pro(
 
         if excluded_pro_ids:
             base_filter["_id"] = {"$nin": [ObjectId(pid) for pid in excluded_pro_ids]}
+        if customer_chat_id:
+            # Every path below, $geoNear's `query` included, reads base_filter.
+            base_filter["phone_number"] = {"$nin": customer_phones(customer_chat_id)}
 
         # 2. Location Filtering
         # Resolve via the full pipeline: static dict → Redis cache →
@@ -537,6 +551,8 @@ async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:
     if not pro.get("is_active", True):
         return False
     if pro.get("pending_approval") is True:
+        return False
+    if pro.get("phone_number") in customer_phones(lead.get("chat_id")):
         return False
 
     # A pro who already rejected this lead must not be able to claim it back.
