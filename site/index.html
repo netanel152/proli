@@ -22,7 +22,6 @@
     --sign: #f6c31c; --on-sign: #10243e;
     --band: #10243e; --on-band: #f7f8f6; --band-link: #f6c31c;
     --bubble: #e7ebee; --on-bubble: #10243e; --bubble-proli: #f6c31c;
-    --draft: #fff1b8; --on-draft: #10243e;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -30,7 +29,6 @@
       --sign: #0e1b2e; --on-sign: #f6c31c;
       --band: #182a44; --on-band: #eef1f4; --band-link: #f6c31c;
       --bubble: #22354f; --on-bubble: #eef1f4; --bubble-proli: #f6c31c;
-      --draft: #f6c31c; --on-draft: #10243e;
     }
   }
   * { box-sizing: border-box; }
@@ -82,7 +80,6 @@
   .band h3 + p { margin-block-start: .5rem; }
 
   .about p { max-width: 36rem; margin-block-start: 1rem; }
-  [data-draft] { background: var(--draft); color: var(--on-draft); padding: .1rem .4rem; font-weight: 700; outline: 2px dashed currentColor; outline-offset: -2px; }
 
   footer { border-block-start: 1px solid var(--rule); padding-block: 1.5rem 2rem; }
   footer .wrap { display: flex; flex-wrap: wrap; gap: .5rem 2rem; justify-content: space-between; }
@@ -143,6 +140,7 @@
           <p class="msg"><strong>אשר</strong> — לקבלת העבודה<br><strong>דחה</strong> — לדחייה</p>
         </li>
       </ol>
+      <p class="note"><strong>פרולי אינה שירות חירום.</strong> בסכנה מיידית התקשרו למשטרה 100, למד״א 101 או לכבאות 102.</p>
     </div>
   </section>
 
@@ -161,7 +159,8 @@
   <section class="about" id="about" aria-labelledby="about-title">
     <div class="wrap">
       <h2 id="about-title">מי אנחנו</h2>
-      <p>פרולי היא שירות בשלב פיילוט. מי שעומד מאחוריו: <span data-draft>[להשלים: שם ואיש קשר]</span></p>
+      <p>פרולי היא שירות בשלב פיילוט. מי שעומד מאחוריו: נתנאל אקנין.</p>
+      <p>ליצירת קשר: <a href="mailto:info@proli.me">info@proli.me</a></p>
       <p>לשאלות על המידע שלכם ולבקשות עיון או מחיקה: <a href="/privacy">מדיניות הפרטיות</a></p>
     </div>
   </section>
