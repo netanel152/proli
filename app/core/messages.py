@@ -467,6 +467,10 @@ class Messages:
             "לא יגיעו אליך הצעות עבודה חדשות עד שתכתוב *זמין*."
         )
         STATUS_RESUMED = "🚀 *הסטטוס שלך שונה ל'זמין'.*\nחזרת לקבל הצעות עבודה!"
+        # PRO-212: is_active False without self_paused is not a break the pro took.
+        RESUME_NEEDS_ADMIN = (
+            "החשבון שלך לא פעיל כרגע, ורק צוות פרולי יכול להפעיל אותו מחדש."
+        )
         NO_PENDING_APPROVALS = "אין לך כרגע עבודות שממתינות לאישור."
         NO_ACTIVE_JOBS = "אין לך עבודות פעילות כרגע שניתן לסיים."
         SELECT_JOB_TO_FINISH = (
@@ -536,7 +540,7 @@ class Messages:
             "*דחה* — לדחייה"
         )
         PAUSE_ACK = (
-            "⏸️ הבוט הושהה ואפשר לדבר עם הלקוח ישירות.\n"
+            "⏸️ הבוט הושהה בשיחה הזו, ואפשר לדבר ישירות עם {customer_name}.\n"
             "הבוט יחזור לפעולה אוטומטית בעוד שעתיים, או מיד עם *המשך*."
         )
         # PRO-212: the pause needs a customer the pro can actually reach.
@@ -662,6 +666,16 @@ class Messages:
             "{jobs_list}\n"
             "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
         )
+        SELECT_JOB_TO_RESUME = (
+            "▶️ באיזו עבודה להחזיר את הבוט?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
+        )
+        SELECT_JOB_TO_PAUSE = (
+            "⏸️ באיזו עבודה להשהות את הבוט?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
+        )
         CANCEL_SUCCESS = "✅ העבודה בוטלה. הלקוח עודכן."
         SUMMARY_BODY = (
             "📊 *סיכום ביצועים*\n\n"
@@ -763,6 +777,12 @@ class Messages:
             "*אשר* — אישור עבודה שממתינה לך\n"
             "*דחה* — דחיית עבודה שממתינה לך"
         )
+        SELECTION_RESUME_LIST_CHANGED = (
+            "הרשימה השתנתה מאז שהוצגה, אז ביטלתי את הבחירה.\n" "*המשך* — רשימה מעודכנת"
+        )
+        SELECTION_PAUSE_LIST_CHANGED = (
+            "הרשימה השתנתה מאז שהוצגה, אז ביטלתי את הבחירה.\n" "*השהה* — רשימה מעודכנת"
+        )
         HISTORY_HEADER = "📋 *10 העבודות האחרונות שהושלמו*\n"
         RATING_NONE = "אין עדיין"
 
@@ -860,21 +880,14 @@ class Messages:
         # — so a customer typing נציג while waiting on approval used to hand
         # their number to a pro who could then reject in-bot and call them.
         # This variant carries the cry for help without the number, and says
-        # plainly how to earn it.
+        # plainly how to earn it. PRO-212: without the customer's words too, since
+        # they can type their number. A CONTACTED lead gets no alert at all: it
+        # was never offered, so *אשר* would find nothing.
         PRO_ALERT_PENDING = (
             "⚠️ *הלקוח שממתין לתשובתך ביקש עזרה*\n\n"
-            "*הודעה:* {last_message}\n\n"
             "כדי לקבל את פרטי הקשר שלו:\n"
             "*אשר* — לאישור העבודה\n"
             "*דחה* — לדחייה"
-        )
-        # PRO-212: a CONTACTED lead was never offered, so אשר finds nothing to
-        # approve. No keyword here, and no promise of contact details.
-        PRO_ALERT_NOT_OFFERED = (
-            "⚠️ *לקוח בשיחה בתהליך ביקש עזרה*\n\n"
-            "*הודעה:* {last_message}\n\n"
-            "הפנייה עדיין לא מוכנה לאישור, ואין צורך לעשות כרגע דבר.\n"
-            "אם היא תגיע לאישור שלך, ההצעה תישלח לכאן."
         )
         PRO_ALERT = (
             "⚠️ *הלקוח שלך צריך עזרה*\n\n"

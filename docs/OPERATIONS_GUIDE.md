@@ -173,15 +173,18 @@ A customer sending "אני צריך נציג" (or similar):
 When a deal is finalized by the AI:
 
 1. Customer enters `AWAITING_PRO_APPROVAL` state (1h TTL) — bot replies with "still waiting" if they message again
-2. Pro receives a text-based approval request (reply "אשר" or "1"):
-   - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared. System enforces strict scoping (pro must have a pending lead assigned). With more than one pending lead, the pro picks from a numbered list first; the same goes for **Reject**.
-   - **Pause Bot** (reply "השהה") → on a `BOOKED` lead only: customer enters `PAUSED_FOR_HUMAN` (15m rolling) and the pro calls or writes from their own number. With only a pending lead the pro is told to approve first, because the contact details arrive with the approval.
-   - **Reject** (reply "2" or "דחה") → lead becomes `REJECTED` then immediately handed to `reassign_lead`: reassigned → `NEW` under the next pro (customer told, approval SLA re-armed); no replacement, or a found pro whose offer fails to send → `PENDING_ADMIN_REVIEW` (admin paged, customer told)
+2. Pro receives a text-based approval request (reply "אשר"). A bare digit (`1`, `2`, `3`) never acts directly: it opens the numbered list, even of one job, so a second tap can't take the job left over.
+   - **Approve** (reply "אשר") → lead becomes `BOOKED`, customer state cleared. System enforces strict scoping (pro must have a pending lead assigned). With more than one pending lead, the pro picks from a numbered list first; the same goes for **Reject**.
+   - **Pause Bot** (reply "השהה") → on a `BOOKED` lead only: customer enters `PAUSED_FOR_HUMAN` (15m rolling) and the pro calls or writes from their own number. With more than one booked job the pro picks from a numbered list, and **המשך** does the same with more than one paused chat. With only a pending lead the pro is told to approve first, because the contact details arrive with the approval.
+   - **Reject** (reply "דחה") → lead becomes `REJECTED` then immediately handed to `reassign_lead`: reassigned → `NEW` under the next pro (customer told, approval SLA re-armed); no replacement, or a found pro whose offer fails to send → `PENDING_ADMIN_REVIEW` (admin paged, customer told)
 3. Pro can manage availability:
-   - **Vacation Mode** (reply "חופשה" or "הפסקה") → sets `is_active: False`, pro stops receiving new leads.
-   - **Resume** (reply "זמין" or "חזרתי") → sets `is_active: True`. Works on break with no `PRO_MODE`, as do the approve, reject, finish and still-working replies. An application awaiting review (`pending_approval: True`) does not get this. A pro the admin deactivated with the same `is_active` toggle does, because the field does not record who set it.
+   - **Vacation Mode** (reply "חופשה" or "הפסקה") → sets `is_active: False` and `self_paused: True`, pro stops receiving new leads.
+   - **Resume** (reply "זמין" or "חזרתי") → sets `is_active: True` and clears `self_paused`. Works on a break with no `PRO_MODE`, as do the approve, reject, finish and still-working replies.
+   - **Deactivated by the admin** (`is_active: False` with no `self_paused`) → the pro can't reactivate themselves. With `PRO_MODE` still live, every command gets `RESUME_NEEDS_ADMIN`; without it, `זמין`/`חזרתי`/`פעיל` get the same answer and anything else reaches the customer side. They get no SOS alerts. The approval SLA moves their NEW offers to another pro in business hours, or to admin review if no pro fits, unless the customer is paused for a human. A BOOKED job stays with them until the admin moves it or the customer closes it or reports a no-show on the completion check, and the form warns with the count when Active goes off. The professionals form writes `self_paused: False` on every save, so saving the form with Active unticked turns a pro's own break into this.
+   - **Pros already on a break when this shipped** have no `self_paused`, so they count as deactivated. Reactivate them with the Active box in the professionals form.
 4. Finishing Jobs:
-   - **Finish** (reply "סיימתי" or "3") → if single job, marks as `COMPLETED`. If multiple, pro picks from a numbered list.
+   - **Finish** (reply "סיימתי") → if single job, marks as `COMPLETED`. If multiple, pro picks from a numbered list.
+   - **Cancel** (reply "ביטול") → always opens the numbered list, even for one job, and the job's number cancels it. In a list, "ביטול" leaves the list. Every numbered list expires after 10 minutes and acts on nothing.
 5. **Dynamic Dashboard:** Any unknown command or "תפריט" sends the pro a real-time status summary (rating, active jobs, status).
 
 ---

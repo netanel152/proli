@@ -93,3 +93,13 @@ def test_admin_mutations_are_gated_on_the_write():
     assert 'if update_admin_role(admin["username"], new_role):' in source
     assert 'if delete_admin(admin["username"]):' in source
     assert "confirm_deladmin_" in source
+
+
+def test_the_pro_form_marks_its_active_box_as_the_admins_decision():
+    """PRO-212: `self_paused` is what lets a pro's *חזרתי* end a break. A form save
+    that left it set would let a pro undo the admin's Active box."""
+    source = _source("views/professionals.py")
+    payload = source[source.index("pro_payload = {") :]
+    payload = payload[: payload.index("}")]
+    assert '"is_active": active' in payload
+    assert '"self_paused": False' in payload

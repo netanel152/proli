@@ -195,27 +195,50 @@ async def test_sos_alert_with_pro_and_lead(notif_mocks, pages):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "status, expected",
-    [
-        (LeadStatus.NEW, Messages.SOS.PRO_ALERT_PENDING),
-        (LeadStatus.CONTACTED, Messages.SOS.PRO_ALERT_NOT_OFFERED),
-    ],
-)
-async def test_sos_alert_pre_approval_lead_gets_a_phone_free_alert(
-    notif_mocks, pages, status, expected
+async def test_sos_alert_offered_lead_carries_no_phone_and_no_customer_words(
+    notif_mocks, pages
 ):
-    """A pro offered (NEW) or barely-briefed (CONTACTED) on the lead has not
-    approved it, so the alert carries no phone in either form, and the operator
-    page is unaffected. PRO-212: only NEW has anything for *אשר* to approve, so
-    CONTACTED gets the variant that does not offer it."""
+    """A pro offered a NEW lead has not approved it, so the alert carries no phone
+    in either form. PRO-212: nor what the customer wrote, since they can type their
+    number there."""
     mock_wa, db = notif_mocks
     pro_id = ObjectId()
     await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
     await db.leads.insert_one(
         {
             "chat_id": "972501111111@c.us",
-            "status": status,
+            "status": LeadStatus.NEW,
+            "issue_type": "נזילה",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    await send_sos_alert("972501111111@c.us", "תתקשרו אלי 0509876543", pro_id)
+
+    calls = {c.args[0]: c.args[1] for c in mock_wa.send_message.call_args_list}
+    pro_msg = calls["972500000000@c.us"]
+    assert pro_msg == Messages.SOS.PRO_ALERT_PENDING
+    assert "0509876543" not in pro_msg
+    assert to_local_phone("972501111111@c.us") not in pro_msg
+    assert "972501111111" not in pro_msg
+
+    assert len(pages) == 1
+    assert "pro_notified=True" in pages[0]
+
+
+@pytest.mark.asyncio
+async def test_sos_alert_early_lead_sends_the_pro_nothing_and_pages_truthfully(
+    notif_mocks, pages
+):
+    """PRO-212: a CONTACTED lead was never offered, so the pro has nothing to do
+    about it. The operator is still paged, and told the pro was not."""
+    mock_wa, db = notif_mocks
+    pro_id = ObjectId()
+    await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
+    await db.leads.insert_one(
+        {
+            "chat_id": "972501111111@c.us",
+            "status": LeadStatus.CONTACTED,
             "issue_type": "נזילה",
             "created_at": datetime.now(timezone.utc),
         }
@@ -223,33 +246,50 @@ async def test_sos_alert_pre_approval_lead_gets_a_phone_free_alert(
 
     await send_sos_alert("972501111111@c.us", "אני צריך עזרה", pro_id)
 
-    calls = {c.args[0]: c.args[1] for c in mock_wa.send_message.call_args_list}
-    pro_msg = calls["972500000000@c.us"]
-    assert static_prefix(expected) in pro_msg
-    assert to_local_phone("972501111111@c.us") not in pro_msg
-    assert "972501111111" not in pro_msg
+    mock_wa.send_message.assert_not_called()
+    assert len(pages) == 1
+    assert "pro_notified=False" in pages[0]
 
-    assert len(pages) == 1  # admin/operator page unaffected either way
+
+@pytest.mark.asyncio
+async def test_sos_alert_page_says_so_when_the_send_to_the_pro_was_blocked(
+    notif_mocks, pages
+):
+    """A None from send_message means the breaker or a closed window stopped it."""
+    mock_wa, db = notif_mocks
+    mock_wa.send_message.return_value = None
+    pro_id = ObjectId()
+    await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
+    await db.leads.insert_one(
+        {
+            "chat_id": "972501111111@c.us",
+            "status": LeadStatus.NEW,
+            "issue_type": "נזילה",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    await send_sos_alert("972501111111@c.us", "אני צריך עזרה", pro_id)
+
+    assert "pro_notified=False" in pages[0]
 
 
 @pytest.mark.asyncio
 async def test_sos_alert_missing_lead_takes_phone_free_branch(notif_mocks, pages):
     """No active lead at all for this chat_id (re-read comes back None) — the
-    gate fails closed: not BOOKED, so no phone."""
+    gate fails closed: not BOOKED, so no phone, and not NEW, so nothing to answer."""
     mock_wa, db = notif_mocks
     pro_id = ObjectId()
     await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
-    # No lead inserted — active_lead re-read returns None.
+    # No lead for this chat — active_lead re-read returns None. The module-scoped
+    # db still holds earlier tests' leads for it.
+    await db.leads.delete_many({"chat_id": "972501111111@c.us"})
 
     await send_sos_alert("972501111111@c.us", "אני צריך עזרה", pro_id)
 
-    calls = {c.args[0]: c.args[1] for c in mock_wa.send_message.call_args_list}
-    pro_msg = calls["972500000000@c.us"]
-    assert static_prefix(Messages.SOS.PRO_ALERT_NOT_OFFERED) in pro_msg
-    assert to_local_phone("972501111111@c.us") not in pro_msg
-    assert "972501111111" not in pro_msg
-
+    mock_wa.send_message.assert_not_called()
     assert len(pages) == 1
+    assert "pro_notified=False" in pages[0]
 
 
 @pytest.mark.asyncio
@@ -338,6 +378,14 @@ async def test_sos_alert_pro_whatsapp_failure_does_not_block_admin_page(
     mock_wa, db = notif_mocks
     pro_id = ObjectId()
     await db.users.insert_one({"_id": pro_id, "phone_number": "972500000000"})
+    await db.leads.insert_one(
+        {
+            "chat_id": "972501111111@c.us",
+            "status": LeadStatus.BOOKED,
+            "issue_type": "נזילה",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
 
     async def send_side_effect(chat_id, message):
         raise Exception("WhatsApp down entirely")
@@ -348,4 +396,4 @@ async def test_sos_alert_pro_whatsapp_failure_does_not_block_admin_page(
 
     assert mock_wa.send_message.call_count == 1  # attempted the pro, failed
     assert len(pages) == 1  # operator paged regardless
-    assert "pro_notified=True" in pages[0]
+    assert "pro_notified=False" in pages[0]  # PRO-212: the send failed

@@ -34,7 +34,7 @@ the first real test.
 Keywords used below (from `app/core/messages.py`, exact): emergency `הצפה`/`דחוף` · SOS
 `נציג`/`אנושי`/`מנהל` · status `סטטוס`/`?` · cancel `בטל` · reschedule `מועד אחר` ·
 register `הרשמה` · reset `התחלה` · rating `1`–`5` · admin wizard `ניהול`. Pro approval is
-**text, not buttons** — nothing may send an interactive message (the PRO-89 transport exists, but no template is approved and adopting buttons is a product decision not yet made — see CLAUDE.md) — the pro replies per the prompt (e.g. `1`/`אשר`).
+**text, not buttons** — nothing may send an interactive message (the PRO-89 transport exists, but no template is approved and adopting buttons is a product decision not yet made — see CLAUDE.md) — the pro replies per the prompt (e.g. `אשר`). A bare `1` only opens a numbered list, whose own `1` then approves.
 
 ### Pre-flight (must all be green before starting)
 
@@ -75,7 +75,7 @@ For each: run the steps on the real devices, compare to **Expected**, tick Pass 
 **Steps (C):** send a first message **with a photo** (e.g. "נזילה מתחת לכיור" + image) → accept
 consent (`כן`) → the dispatcher answers that message without it being repeated, and the photo
 reaches the lead as a Cloudinary URL → provide full address when asked (street, number, city,
-floor, apartment) → provide a time → receive the AI estimate → **(P)** approve with `1`/`אשר` →
+floor, apartment) → provide a time → receive the AI estimate → **(P)** approve with `אשר` →
 **(C)** confirm the booking → after the job, complete + rate `5`.
 **Expected:**
 - Bot asks for exactly the missing address parts; only proceeds when all five (street, number, city, floor, apartment) are present.
@@ -121,8 +121,10 @@ at that moment (no AI hallucination, no stale state).
 
 ### 7. SOS / human handoff
 **Steps (C):** mid-flow, send **`נציג`** (or `אנושי` / `מנהל`).
-**Expected:** the bot **pauses for 15 min** (`PAUSED_FOR_HUMAN`); the admin (and assigned pro, if
-any) receives an SOS alert; further C messages within the window are held for a human, not
+**Expected:** the bot **pauses for 15 min** (`PAUSED_FOR_HUMAN`); the admin is paged via Sentry.
+The assigned pro gets an alert only if the lead is **BOOKED** (with the customer's phone and words,
+plus the pause notice) or **NEW** (no phone and no words, offering `אשר`/`דחה`). On a CONTACTED lead,
+or if the admin deactivated the pro, the pro gets nothing. Further C messages within the window are held for a human, not
 auto-answered. After ~15 min the pause auto-expires.
 - [ ] Pass  · [ ] File: ______
 
