@@ -28,6 +28,7 @@ closure over function locals.
 
 import asyncio
 from dataclasses import dataclass
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
@@ -1309,8 +1310,22 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         await wf.leads_collection.update_one(
             {"_id": active_lead_await["_id"]}, {"$set": {"full_address": full}}
         )
+        # Read before clear_state, which drops the metadata with the state.
+        loyalty_pro_id = (await deps.state_manager.get_metadata(ctx.chat_id) or {}).get(
+            "loyalty_pro_id"
+        )
         await deps.state_manager.clear_state(ctx.chat_id)
         await deps.whatsapp.send_message(ctx.chat_id, Messages.Customer.ADDRESS_SAVED)
+        try:
+            await _continue_after_address(
+                ctx, active_lead_await["_id"], loyalty_pro_id, follow_up
+            )
+        except Exception as e:
+            # Same as the pipeline's finalize call sites: the address is saved
+            # and the next turn routes normally, so log rather than crash.
+            logger.error(
+                f"Dispatch after address failed for {mask_chat_id(ctx.chat_id)}: {e}"
+            )
         logger.info(
             # The address itself is not logged. PRO-173 settled this for the
             # paging path — masking the phone and then printing the street has
@@ -1327,6 +1342,63 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
             f"⏳ AWAITING_ADDRESS still missing parts for {mask_chat_id(ctx.chat_id)}: {reason}"
         )
         return HANDLED
+
+
+async def _continue_after_address(ctx, lead_id, loyalty_pro_id, follow_up):
+    """PRO-227: run the step the incomplete address was blocking.
+
+    AWAITING_ADDRESS has two writers, both of which leave a CONTACTED lead with
+    `pro_id` set: the loyalty accept (which also stores `loyalty_pro_id` in the
+    FSM metadata) and `_finalize_deal`'s address gate. The loyalty one gets its
+    dispatch; the gate one gets the deal it rejected, finalized with the time
+    the gate persisted. A lead that moved on, or a pro no longer active, is left
+    to the next turn's normal routing, as before.
+    """
+    from app.services import workflow_service as wf
+
+    lead = await wf.leads_collection.find_one(
+        {"_id": lead_id, "status": LeadStatus.CONTACTED}
+    )
+    if not lead or not lead.get("pro_id"):
+        return
+    pro = await wf.users_collection.find_one({"_id": lead["pro_id"], "is_active": True})
+    if not pro:
+        return
+    if loyalty_pro_id == str(pro["_id"]):
+        await wf._dispatch_loyalty_lead(ctx.chat_id, pro, lead)
+        return
+    ed = follow_up.extracted_data
+    saved_time = lead.get("appointment_time")
+    if saved_time == wf.Defaults.PENDING_TIME:
+        saved_time = None  # the intake sentinel, never a time anyone agreed to
+    saved_dt = lead.get("appointment_datetime")
+    if saved_dt and saved_dt.tzinfo is None:
+        saved_dt = saved_dt.replace(tzinfo=timezone.utc)  # Mongo returns naive UTC
+    deal = SimpleNamespace(
+        extracted_data=SimpleNamespace(
+            **{
+                f: lead.get(f)
+                for f in ("street", "street_number", "city", "floor", "apartment")
+            },
+            # A time stated in this reply wins over the one the gate saved.
+            appointment_time=ed.appointment_time or saved_time,
+            appointment_datetime=ed.appointment_datetime
+            or (saved_dt.isoformat() if saved_dt else None),
+            issue=None,
+            customer_name=lead.get("customer_name"),
+            quoted_price=None,
+        )
+    )
+    await wf._finalize_deal(
+        ctx.chat_id,
+        pro,
+        deal,
+        lead.get("city"),
+        lead.get("issue_type"),
+        None,
+        lead["_id"],
+        extracted_name=lead.get("customer_name"),
+    )
 
 
 async def guard_pro_registration_keyword(ctx: DispatchContext, deps: GuardDeps):
