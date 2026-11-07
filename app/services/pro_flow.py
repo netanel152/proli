@@ -732,7 +732,7 @@ async def _handle_pause_bot(pro, whatsapp, chat_id):
             {"pro_id": pro["_id"], "status": LeadStatus.NEW}
         ):
             return Messages.Pro.PAUSE_NEEDS_APPROVAL
-        return Messages.Pro.NO_PENDING_APPROVALS
+        return Messages.Pro.NO_ACTIVE_JOBS_LIST
     if total > 1:
         return await _prompt_job_selection(
             chat_id, leads, total, state=UserStates.PRO_SELECTING_JOB_TO_PAUSE

@@ -415,6 +415,10 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
         await leads_collection.update_one(
             {"_id": active_lead["_id"]}, {"$set": {"pro_id": past_pro["_id"]}}
         )
+        # PRO-227: tells guard_awaiting_address this wait is the loyalty one, so
+        # a completed address dispatches to this pro instead of finalizing a deal.
+        meta["loyalty_pro_id"] = str(past_pro["_id"])
+        await StateManager.set_metadata(chat_id, meta)
         # AWAITING_ADDRESS, not IDLE: the ack below *is* the address gate's own
         # missing-parts question, and that state owns the re-extract/merge/
         # compose answer path. Routed through IDLE the reply would land on the
@@ -431,6 +435,25 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
         )
         return True
 
+    return await _dispatch_loyalty_lead(chat_id, past_pro, active_lead)
+
+
+async def _dispatch_loyalty_lead(chat_id, past_pro, active_lead):
+    """Hand a CONTACTED lead whose address is dispatchable to the customer's
+    previous pro: lead → NEW, offer sent, AWAITING_PRO_APPROVAL armed,
+    LOYALTY_ACCEPTED_NOTIFYING to the customer. Returns True, or None when the
+    lead left CONTACTED under us.
+
+    Shared by `_accept_loyalty_offer` (address already complete) and
+    `guard_awaiting_address` (address completed after the accept, PRO-227).
+    """
+    pro_name = past_pro.get("business_name", Defaults.EXPERT_NAME)
+    probe = SimpleNamespace(
+        **{
+            field: active_lead.get(field)
+            for field in ("street", "street_number", "city", "floor", "apartment")
+        }
+    )
     # Dispatchable: hand the lead to the chosen pro for real, arming the PRO-56
     # approval SLA (and therefore PRO-117's rematch) exactly like the initial
     # assignment path does. Actor.CUSTOMER (not SYSTEM, as _finalize_deal uses
@@ -950,6 +973,10 @@ async def _finalize_deal(
             "floor": ed.floor,
             "apartment": ed.apartment,
             "issue_type": issue_update(ed.issue, extracted_issue) or extracted_issue,
+            # PRO-227: guard_awaiting_address finalizes this deal once the
+            # address is complete, and needs the agreed time to do it.
+            "appointment_time": ed.appointment_time,
+            "appointment_datetime": parse_iso_to_utc(ed.appointment_datetime),
         }
         partial_update = {k: v for k, v in partial_update.items() if v}
         if current_lead_id and partial_update:

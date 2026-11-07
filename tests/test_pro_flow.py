@@ -1328,6 +1328,17 @@ async def test_pause_on_an_unapproved_lead_changes_nothing(
 
 
 @pytest.mark.asyncio
+async def test_pause_with_no_jobs_says_no_active_jobs(pro_setup, mock_wa, mock_lm):
+    """PRO-227: with nothing to pause, 'השהה' answers that there are no active
+    jobs — not "nothing awaiting approval", which is the approve command's copy."""
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "השהה", mock_wa, mock_lm
+    )
+
+    assert result == Messages.Pro.NO_ACTIVE_JOBS_LIST
+
+
+@pytest.mark.asyncio
 async def test_reject_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     """Pro types 'דחה' -> lead rejected and reassigned, customer SLA re-armed.
 

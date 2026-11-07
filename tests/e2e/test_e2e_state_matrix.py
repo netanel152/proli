@@ -29,7 +29,7 @@ Input classes
 | `idle` | "🛠️ אני העוזר החכם של פרולי." | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | silent | N/A[race] |
 | `awaiting_consent` | → idle, "אפשר להתחיל" | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "🙏 הבנתי, לא נשמור את תוכן ההודעות שלך. אם תשנה/י את דעתך — פשוט לשלוח הודעה." | N/A[race] |
 | `customer_mode` | "מה הכתובת" | "מאיפה בדיוק" | "במה אפשר לעזור" | "ראיתי את התמונה" | "לעזור" | N/A[ttl-class] | → pro_mode | N/A[race] |
-| `awaiting_address` | → idle, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "כדי שאיש המקצוע יגיע למקום המדויק נשאר רק להשלים לכתובת:" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
+| `awaiting_address` | → awaiting_pro_approval, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "כדי שאיש המקצוע יגיע למקום המדויק נשאר רק להשלים לכתובת:" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
 | `awaiting_pro_approval` | → awaiting_pro_approval, "⏳ מתנצל על ההמתנה — אני מאתר עבורך איש מקצוע זמין יותר כעת." | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | TTL ≤ 3600s | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
 | `paused_for_human` | silent | silent | N/A[same-reprompt] | silent | N/A[same-reprompt] | TTL ≤ 900s | "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
 | `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "אנא לבחור מספר תור מהרשימה." | N/A[same-reprompt] | "אנא לבחור מספר תור מהרשימה." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
@@ -544,7 +544,7 @@ MATRIX: dict[str, dict] = {
                     apartment="12",
                 )
             ],
-            expect_state=UserStates.IDLE,
+            expect_state=UserStates.AWAITING_PRO_APPROVAL,  # PRO-227: the deal goes out
             expect=("הכתובת עודכנה בהצלחה",),
         ),
         "free": Cell(

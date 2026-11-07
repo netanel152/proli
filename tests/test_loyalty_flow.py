@@ -721,8 +721,10 @@ async def test_loyalty_accept_clears_the_reprompt_flag(loyalty_mocks):
 
     await process_incoming_message(chat_id, "1")
 
+    # The incomplete-address accept also stores the PRO-227 loyalty marker.
     mock_state.set_metadata.assert_awaited_with(
-        chat_id, {"past_pro_id": str(past_pro_id)}
+        chat_id,
+        {"past_pro_id": str(past_pro_id), "loyalty_pro_id": str(past_pro_id)},
     )
 
 
