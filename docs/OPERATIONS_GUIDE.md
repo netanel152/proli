@@ -180,10 +180,11 @@ When a deal is finalized by the AI:
 3. Pro can manage availability:
    - **Vacation Mode** (reply "חופשה" or "הפסקה") → sets `is_active: False` and `self_paused: True`, pro stops receiving new leads.
    - **Resume** (reply "זמין" or "חזרתי") → sets `is_active: True` and clears `self_paused`. Works on a break with no `PRO_MODE`, as do the approve, reject, finish and still-working replies.
-   - **Deactivated by the admin** (`is_active: False` with no `self_paused`) → the pro can't reactivate themselves. With `PRO_MODE` still live, every command gets `RESUME_NEEDS_ADMIN`; without it, they reach the customer side. The professionals form writes `self_paused: False` on every save, so saving the form with Active unticked turns a pro's own break into this.
+   - **Deactivated by the admin** (`is_active: False` with no `self_paused`) → the pro can't reactivate themselves. With `PRO_MODE` still live, every command gets `RESUME_NEEDS_ADMIN`; without it, `זמין`/`חזרתי`/`פעיל` get the same answer and anything else reaches the customer side. They get no SOS alerts. The approval SLA moves their NEW offers to another pro in business hours. A BOOKED job stays with them until the admin moves it or the customer closes it or reports a no-show on the completion check, and the form warns with the count when Active goes off. The professionals form writes `self_paused: False` on every save, so saving the form with Active unticked turns a pro's own break into this.
    - **Pros already on a break when this shipped** have no `self_paused`, so they count as deactivated. Reactivate them with the Active box in the professionals form.
 4. Finishing Jobs:
    - **Finish** (reply "סיימתי") → if single job, marks as `COMPLETED`. If multiple, pro picks from a numbered list.
+   - **Cancel** (reply "ביטול") → always opens the numbered list, even for one job, and the job's number cancels it. In a list, "ביטול" leaves the list. Every numbered list expires after 10 minutes and acts on nothing.
 5. **Dynamic Dashboard:** Any unknown command or "תפריט" sends the pro a real-time status summary (rating, active jobs, status).
 
 ---

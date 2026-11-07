@@ -91,10 +91,6 @@ _OFFER_SELECTION_STATES = (
     UserStates.PRO_SELECTING_JOB_TO_APPROVE,
     UserStates.PRO_SELECTING_JOB_TO_REJECT,
 )
-_TIMED_SELECTION_STATES = _OFFER_SELECTION_STATES + (
-    UserStates.PRO_SELECTING_JOB_TO_PAUSE,
-    UserStates.PRO_SELECTING_JOB_TO_RESUME,
-)
 
 
 def _is_pro_command(text: str) -> bool:
@@ -174,8 +170,11 @@ async def handle_pro_text_command(
 
     # Availability Toggles (Vacation Mode)
     if text in Messages.Keywords.PAUSE_COMMANDS:
+        # The filter stops a deactivation landing since the read above from being
+        # recorded as this pro's own break.
         await users_collection.update_one(
-            {"_id": pro["_id"]}, {"$set": {"is_active": False, "self_paused": True}}
+            {"_id": pro["_id"], "is_active": {"$ne": False}},
+            {"$set": {"is_active": False, "self_paused": True}},
         )
         return Messages.Pro.STATUS_PAUSED
 
@@ -215,7 +214,7 @@ async def handle_pro_text_command(
         return await _handle_details(pro, chat_id)
 
     if text in Messages.Keywords.CANCEL_BOOKED_COMMANDS:
-        return await _handle_cancel(pro, whatsapp, chat_id)
+        return await _handle_cancel(pro, chat_id)
 
     if text in Messages.Keywords.ACTIVE_JOBS_COMMANDS:
         return await _handle_active_jobs(pro, chat_id)
@@ -263,16 +262,13 @@ async def handle_pro_text_command(
             )
 
     # Dynamic Timeout Reset
-    latest_lead = await leads_collection.find_one(
-        {
-            "pro_id": pro["_id"],
-            "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]},
-            "is_paused": True,
-        },
-        sort=[("created_at", -1)],
+    paused_leads, _ = await _fetch_jobs_chronological(
+        pro, [LeadStatus.BOOKED], is_paused=True
     )
-    if latest_lead and latest_lead.get("chat_id"):
-        customer_chat_id = latest_lead["chat_id"]
+    for paused_lead in paused_leads:
+        customer_chat_id = paused_lead.get("chat_id")
+        if not customer_chat_id:
+            continue
         customer_state = await StateManager.get_state(customer_chat_id)
         if customer_state == UserStates.PAUSED_FOR_HUMAN:
             await StateManager.set_state(
@@ -282,7 +278,7 @@ async def handle_pro_text_command(
             )
             # Update paused_at for SLA monitor
             await leads_collection.update_one(
-                {"_id": latest_lead["_id"]},
+                {"_id": paused_lead["_id"]},
                 {"$set": {"paused_at": datetime.now(timezone.utc)}},
             )
             logger.info(
@@ -411,6 +407,8 @@ async def _handle_job_selection(
             return Messages.Pro.SELECTION_PAUSE_LIST_CHANGED
         return await _pause_lead(lead, pro, whatsapp)
     if current_state == UserStates.PRO_SELECTING_JOB_TO_RESUME:
+        if not lead.get("is_paused") or lead.get("status") != LeadStatus.BOOKED:
+            return Messages.Pro.SELECTION_RESUME_LIST_CHANGED
         return await _resume_lead(lead, pro)
     if current_state == UserStates.PRO_SELECTING_JOB_TO_CANCEL:
         await _execute_cancel(lead, pro, whatsapp)
@@ -770,10 +768,12 @@ async def _handle_resume(pro, chat_id):
     PRO-212: only a lead that is paused. The newest lead of any kind could be a
     different customer, and the answer "already active" was then about the wrong one.
     With more than one chat actually paused it asks which. is_paused can outlive the
-    state's TTL, so the flag alone does not make a chat one to choose from.
+    state's TTL, so the flag alone does not make a chat one to choose from. BOOKED
+    only: a pro who hasn't approved can't reach that customer, so the pause isn't
+    theirs to lift. It still ends by itself, or when they approve.
     """
     flagged, _ = await _fetch_jobs_chronological(
-        pro, [LeadStatus.NEW, LeadStatus.BOOKED], is_paused=True
+        pro, [LeadStatus.BOOKED], is_paused=True
     )
     if not flagged:
         return Messages.Pro.NO_PAUSED_CONVERSATION
@@ -1127,12 +1127,9 @@ async def _prompt_job_selection(
         total=total,
     )
 
-    if state in _TIMED_SELECTION_STATES:
-        await StateManager.set_state(
-            chat_id, state, ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS
-        )
-    else:
-        await StateManager.set_state(chat_id, state)
+    await StateManager.set_state(
+        chat_id, state, ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS
+    )
     meta = {context_key: mapping}
     if next_offset is not None:
         meta[_PAGE_META_KEY] = {"kind": context_key, "offset": next_offset}
@@ -1187,15 +1184,14 @@ async def _selection_next_page(chat_id, pro, meta, mapping, state):
     )
 
 
-async def _handle_cancel(pro, whatsapp, chat_id):
+async def _handle_cancel(pro, chat_id):
+    """PRO-212: always asks, even with one job. *ביטול* is also how a pro leaves a
+    numbered prompt, so sent after that prompt expired it must not cancel a real job.
+    """
     leads, total = await _fetch_jobs_chronological(pro, [LeadStatus.BOOKED])
 
     if not leads:
         return Messages.Pro.NO_ACTIVE_JOBS_LIST
-
-    if total == 1:
-        await _execute_cancel(leads[0], pro, whatsapp)
-        return Messages.Pro.CANCEL_SUCCESS
 
     return await _prompt_job_selection(
         chat_id,

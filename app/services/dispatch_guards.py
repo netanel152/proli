@@ -513,10 +513,14 @@ async def guard_sos_human_handoff(ctx: DispatchContext, deps: GuardDeps):
     await wf.send_sos_alert(ctx.chat_id, ctx.user_text, pro_id)
 
     # Notify the pro about the pause. PRO-212: only a pro who has the customer's
-    # number can step into the conversation.
+    # number can step into the conversation, and not one the admin deactivated.
     if pro_id and active_lead.get("status") == LeadStatus.BOOKED:
         pro = await deps.users_collection.find_one({"_id": pro_id})
-        if pro and pro.get("phone_number"):
+        if (
+            pro
+            and pro.get("phone_number")
+            and (pro.get("is_active", True) or pro.get("self_paused"))
+        ):
             pro_phone = to_chat_id(pro["phone_number"])
             await deps.whatsapp.send_message(pro_phone, Messages.Pro.PAUSE_NOTIFICATION)
 
@@ -1074,25 +1078,23 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
     customer side. Matching never reads this, so they stay out of it. But a pro on
     break is often writing as a customer, and auto-detect leaves them there: a bare
     digit may answer "which floor?", and with their own request open so may any
-    word, except the one that ends the break.
+    word, except the one that ends the break. An active pro with their own request
+    open keeps their digits for it too. A pro the admin deactivated is sent to the
+    refusal when they try to come back, rather than to the customer AI.
     """
     from app.services import workflow_service as wf
 
     if ctx.normalized_text in wf.PRO_BUSINESS_KEYWORDS:
         is_pro_doc = await wf._is_registered_pro(ctx.chat_id, include_on_break=True)
-        if (
-            is_pro_doc
-            and not is_pro_doc.get("is_active", True)
-            and (
-                ctx.normalized_text.isdigit()
-                or (
-                    ctx.normalized_text not in Messages.Keywords.RESUME_COMMANDS
-                    and await wf._get_active_customer_lead(ctx.chat_id)
-                )
-            )
-        ):
-            is_pro_doc = None
+        is_resume = ctx.normalized_text in Messages.Keywords.RESUME_COMMANDS
         if is_pro_doc and ctx.current_state not in wf.PRO_DISPATCH_STATES:
+            own_lead = await wf._get_active_customer_lead(ctx.chat_id)
+            on_break = not is_pro_doc.get("is_active", True)
+            digit = ctx.normalized_text.isdigit()
+            if (digit and (on_break or own_lead)) or (
+                on_break and own_lead and not is_resume
+            ):
+                return None
             defer_to_customer_flow = (
                 ctx.normalized_text in wf.AMBIGUOUS_PRO_KEYWORDS
                 and (await wf._customer_prompt_pending(ctx.chat_id, ctx.current_state))
@@ -1105,6 +1107,14 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
             else:
                 await deps.state_manager.set_state(ctx.chat_id, UserStates.PRO_MODE)
                 ctx.current_state = UserStates.PRO_MODE
+        elif (
+            not is_pro_doc
+            and is_resume
+            and await wf._is_deactivated_pro(ctx.chat_id)
+            and not await wf._get_active_customer_lead(ctx.chat_id)
+        ):
+            # Routing's gate in pro_flow answers RESUME_NEEDS_ADMIN and clears this.
+            ctx.current_state = UserStates.PRO_MODE
     return None
 
 

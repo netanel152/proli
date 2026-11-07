@@ -321,7 +321,11 @@ async def arrange_pro_selecting_finish(world):
     pro_chat = world.pro_chat(R.PRO_PRIMARY)
     first = await world.booked_job(world.pros[R.PRO_PRIMARY])
     await world.booked_job(world.pros[R.PRO_PRIMARY], chat_id=R.chat(R.CUSTOMER_B))
-    await world.set_state(UserStates.PRO_SELECTING_JOB_TO_FINISH, chat_id=pro_chat)
+    await world.set_state(
+        UserStates.PRO_SELECTING_JOB_TO_FINISH,
+        chat_id=pro_chat,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
+    )
     await world.set_metadata(
         {"finishing_jobs_context": {"1": str(first["_id"])}}, chat_id=pro_chat
     )
@@ -333,7 +337,11 @@ async def arrange_pro_selecting_cancel(world):
     pro_chat = world.pro_chat(R.PRO_PRIMARY)
     first = await world.booked_job(world.pros[R.PRO_PRIMARY])
     await world.booked_job(world.pros[R.PRO_PRIMARY], chat_id=R.chat(R.CUSTOMER_B))
-    await world.set_state(UserStates.PRO_SELECTING_JOB_TO_CANCEL, chat_id=pro_chat)
+    await world.set_state(
+        UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+        chat_id=pro_chat,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
+    )
     await world.set_metadata(
         {"cancelling_jobs_context": {"1": str(first["_id"])}}, chat_id=pro_chat
     )
@@ -772,7 +780,7 @@ MATRIX: dict[str, dict] = {
         "offtopic": Cell(send="מה קורה", expect=(_INVALID_JOB_SELECTION,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
         "emoji": Cell(send="👍", expect=(_INVALID_JOB_SELECTION,)),
-        "silence": Cell(max_ttl=14400),
+        "silence": Cell(max_ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS),
         # PRO-186's escape hatch: an unrelated pro command abandons the prompt
         # and runs, instead of bouncing off INVALID_JOB_SELECTION forever.
         "interrupt": Cell(
@@ -792,7 +800,7 @@ MATRIX: dict[str, dict] = {
         "offtopic": Cell(send="מה קורה", expect=(_INVALID_JOB_SELECTION,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
         "emoji": Cell(send="👍", expect=(_INVALID_JOB_SELECTION,)),
-        "silence": Cell(max_ttl=14400),
+        "silence": Cell(max_ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS),
         "interrupt": Cell(
             send="הפסקה",
             expect_state=UserStates.IDLE,

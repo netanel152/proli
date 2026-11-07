@@ -241,6 +241,22 @@ async def _is_registered_pro(chat_id: str, include_on_break: bool = False):
     )
 
 
+async def _is_deactivated_pro(chat_id: str) -> bool:
+    """True for a pro the admin deactivated: not a break they took, not an application."""
+    phone = strip_suffix(chat_id)
+    return bool(
+        await users_collection.find_one(
+            {
+                "phone_number": {"$in": [phone, chat_id]},
+                "role": "professional",
+                "is_active": False,
+                "pending_approval": {"$ne": True},
+                "self_paused": {"$ne": True},
+            }
+        )
+    )
+
+
 async def _get_active_customer_lead(chat_id: str):
     """Return this chat's own open lead (as a customer), or None.
 

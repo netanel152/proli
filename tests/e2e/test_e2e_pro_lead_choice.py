@@ -11,6 +11,7 @@ import pytest
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
 from app.core.phone import to_local_phone
+from app.services import pro_flow as pro_flow_module, workflow_service
 from app.services.matching_service import APPROVED_PRO_FILTER
 from tests.copy_util import static_prefix
 from tests.e2e import reserved_numbers as R
@@ -26,6 +27,7 @@ PAUSE_WORD = Messages.Keywords.PAUSE_COMMANDS[0]
 PAUSE_BOT_WORD = Messages.Keywords.BOT_PAUSE_COMMANDS[0]
 BOT_RESUME_WORD = Messages.Keywords.BOT_RESUME_COMMANDS[0]
 SOS_WORD = "נציג"
+CANCEL_WORD = Messages.Keywords.CANCEL_BOOKED_COMMANDS[0]
 CUSTOMER_A = R.chat(R.CUSTOMER)
 CUSTOMER_B = R.chat(R.CUSTOMER_B)
 
@@ -251,7 +253,7 @@ async def test_picker_answer_on_a_lead_that_left_new_reveals_nothing(world):
 async def test_the_claim_is_atomic_when_the_lead_moves_after_it_was_read(world):
     """The window between the picker's read and the write: only the conditional
     update stands between this pro and the customer's phone number."""
-    from app.services import pro_flow, workflow_service
+    from app.services import pro_flow
 
     _, pro_chat, older, _ = await _pro_with_two_offers(world)
     pro = world.pros[R.PRO_PRIMARY]
@@ -478,12 +480,14 @@ async def test_pro_on_break_answering_which_floor_does_not_finish_a_job(world):
         }
     )
     await world.set_state(UserStates.AWAITING_ADDRESS, chat_id=pro_chat)
-    world.ai.script(reply("תודה", floor="3"))
 
     await world.send("3", chat_id=pro_chat)
 
     assert (await world.lead_by_id(job["_id"]))["status"] == LeadStatus.BOOKED
-    assert await world.state(pro_chat) != UserStates.PRO_MODE
+    assert await world.state(pro_chat) not in workflow_service.PRO_DISPATCH_STATES
+    # The address step's own answer: a reply this short never reaches the AI there.
+    world.recorder.assert_text_to(pro_chat, Messages.Customer.ADDRESS_INVALID)
+    assert world.ai.pending_script == 0
 
 
 @pytest.mark.asyncio
@@ -495,7 +499,8 @@ async def test_pro_on_break_with_a_bare_digit_and_no_request_stays_a_customer(wo
     await world.send("3", chat_id=pro_chat)
 
     assert (await world.lead_by_id(job["_id"]))["status"] == LeadStatus.BOOKED
-    assert await world.state(pro_chat) != UserStates.PRO_MODE
+    assert await world.state(pro_chat) not in workflow_service.PRO_DISPATCH_STATES
+    assert world.ai.pending_script == 0
 
 
 @pytest.mark.asyncio
@@ -943,3 +948,339 @@ async def test_resume_picker_answer_on_a_chat_that_left_this_pro_changes_nothing
 
     world.recorder.assert_text_to(pro_chat, Messages.Pro.SELECTION_RESUME_LIST_CHANGED)
     await world.assert_state(UserStates.PAUSED_FOR_HUMAN, chat_id=CUSTOMER_A)
+
+
+@pytest.mark.asyncio
+async def test_resume_on_an_unapproved_lead_is_not_the_pros_to_lift(world):
+    """They can't reach this customer. The pause ends by itself or when they approve."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    await world.awaiting_approval_job(pro, chat_id=CUSTOMER_A, is_paused=True)
+    await world.set_state(UserStates.PAUSED_FOR_HUMAN, chat_id=CUSTOMER_A, ttl=900)
+
+    await world.send(BOT_RESUME_WORD, chat_id=pro_chat)
+
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.NO_PAUSED_CONVERSATION)
+    await world.assert_state(UserStates.PAUSED_FOR_HUMAN, chat_id=CUSTOMER_A)
+    assert 0 < await world.state_ttl(CUSTOMER_A) <= WorkerConstants.PAUSE_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_approving_lifts_a_pause_on_an_unapproved_lead(world):
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    await world.awaiting_approval_job(pro, chat_id=CUSTOMER_A, is_paused=True)
+    await world.set_state(UserStates.PAUSED_FOR_HUMAN, chat_id=CUSTOMER_A, ttl=900)
+
+    await world.send(APPROVE_WORD, chat_id=pro_chat)
+
+    assert await world.state(CUSTOMER_A) != UserStates.PAUSED_FOR_HUMAN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fields",
+    [{"is_paused": False}, {"status": LeadStatus.COMPLETED}],
+    ids=["no-longer-paused", "left-booked"],
+)
+async def test_resume_picker_answer_on_a_stale_row_changes_nothing(world, fields):
+    pro_chat, first, _ = await _pro_with_two_paused_chats(world)
+
+    await world.send(BOT_RESUME_WORD, chat_id=pro_chat)
+    number = await _number_of(world, pro_chat, "resuming_jobs_context", first)
+    await world.db.leads.update_one({"_id": first["_id"]}, {"$set": fields})
+    await world.send(number, chat_id=pro_chat)
+
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.SELECTION_RESUME_LIST_CHANGED)
+    await world.assert_state(UserStates.PAUSED_FOR_HUMAN, chat_id=CUSTOMER_A)
+
+
+@pytest.mark.asyncio
+async def test_a_message_from_the_pro_extends_every_paused_job(world):
+    pro_chat, *_ = await _pro_with_two_paused_chats(world)
+    await world.set_state(UserStates.PAUSED_FOR_HUMAN, chat_id=CUSTOMER_A, ttl=100)
+    await world.set_state(UserStates.PAUSED_FOR_HUMAN, chat_id=CUSTOMER_B, ttl=100)
+    await world.set_state(UserStates.PRO_MODE, chat_id=pro_chat)
+
+    await world.send("שלום", chat_id=pro_chat)
+
+    assert await world.state_ttl(CUSTOMER_A) > 100
+    assert await world.state_ttl(CUSTOMER_B) > 100
+
+
+# ===========================================================================
+# ביטול is also how a pro leaves a prompt, so it must not cancel by itself
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_exit_word_after_an_expired_prompt_does_not_cancel_a_job(world):
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    await world.awaiting_approval_job(pro, chat_id=CUSTOMER_B)
+    job = await world.booked_job(pro, chat_id=CUSTOMER_A)
+
+    await world.send("1", chat_id=pro_chat)
+    await world.assert_state(UserStates.PRO_SELECTING_JOB_TO_APPROVE, chat_id=pro_chat)
+    await world.set_state(UserStates.IDLE, chat_id=pro_chat)
+    world.recorder.clear()
+
+    await world.send(CANCEL_WORD, chat_id=pro_chat)
+
+    assert (await world.lead_by_id(job["_id"]))["status"] == LeadStatus.BOOKED
+    world.recorder.assert_silent(CUSTOMER_A, "nothing was cancelled")
+    await world.assert_state(UserStates.PRO_SELECTING_JOB_TO_CANCEL, chat_id=pro_chat)
+
+
+@pytest.mark.asyncio
+async def test_a_second_exit_word_leaves_the_prompt_and_cancels_nothing(world):
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    job = await world.booked_job(pro, chat_id=CUSTOMER_A)
+
+    await world.send(CANCEL_WORD, chat_id=pro_chat)
+    await world.send(CANCEL_WORD, chat_id=pro_chat)
+
+    assert (await world.lead_by_id(job["_id"]))["status"] == LeadStatus.BOOKED
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.ACTION_CANCELLED)
+    world.recorder.assert_silent(CUSTOMER_A, "nothing was cancelled")
+
+
+@pytest.mark.asyncio
+async def test_a_second_exit_word_after_expiry_only_opens_the_prompt_again(world):
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    job = await world.booked_job(pro, chat_id=CUSTOMER_A)
+
+    await world.send(CANCEL_WORD, chat_id=pro_chat)
+    await world.set_state(UserStates.IDLE, chat_id=pro_chat)
+    await world.send(CANCEL_WORD, chat_id=pro_chat)
+
+    assert (await world.lead_by_id(job["_id"]))["status"] == LeadStatus.BOOKED
+    await world.assert_state(UserStates.PRO_SELECTING_JOB_TO_CANCEL, chat_id=pro_chat)
+    world.recorder.assert_silent(CUSTOMER_A, "nothing was cancelled")
+
+
+@pytest.mark.asyncio
+async def test_cancelling_the_only_job_takes_the_listed_number(world):
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    job = await world.booked_job(pro, chat_id=CUSTOMER_A)
+
+    await world.send(CANCEL_WORD, chat_id=pro_chat)
+    await world.send("1", chat_id=pro_chat)
+
+    assert (await world.lead_by_id(job["_id"]))["status"] == LeadStatus.CANCELLED
+    world.recorder.assert_text_to(CUSTOMER_A, Messages.Customer.PRO_CANCELLED_BOOKING)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "word, state",
+    [
+        (FINISH_WORD, UserStates.PRO_SELECTING_JOB_TO_FINISH),
+        (CANCEL_WORD, UserStates.PRO_SELECTING_JOB_TO_CANCEL),
+    ],
+)
+async def test_finish_and_cancel_prompts_expire_quickly_too(world, word, state):
+    pro_chat, *_ = await _pro_with_two_jobs(world)
+
+    await world.send(word, chat_id=pro_chat)
+
+    await world.assert_state(state, chat_id=pro_chat)
+    assert (
+        0
+        < await world.state_ttl(pro_chat)
+        <= (WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS)
+    )
+
+
+# ===========================================================================
+# An active pro with their own request open keeps their digits for it
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_active_pro_with_their_own_request_open_keeps_a_digit(world):
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    job = await world.booked_job(pro, chat_id=CUSTOMER_A)
+    await world.db.leads.insert_one(
+        {
+            "chat_id": pro_chat,
+            "status": LeadStatus.CONTACTED,
+            "pro_id": world.pros[R.PRO_SECONDARY]["_id"],
+            "issue_type": "נזילה",
+            "city": "תל אביב",
+            "street": "דיזנגוף",
+            "street_number": "50",
+            "created_at": world.anchor,
+        }
+    )
+    await world.set_state(UserStates.AWAITING_ADDRESS, chat_id=pro_chat)
+
+    await world.send("3", chat_id=pro_chat)
+
+    assert (await world.lead_by_id(job["_id"]))["status"] == LeadStatus.BOOKED
+    assert await world.state(pro_chat) not in workflow_service.PRO_DISPATCH_STATES
+    # The address step's own answer: a reply this short never reaches the AI there.
+    world.recorder.assert_text_to(pro_chat, Messages.Customer.ADDRESS_INVALID)
+    assert world.ai.pending_script == 0
+
+
+@pytest.mark.asyncio
+async def test_active_pro_with_their_own_request_open_can_still_use_words(world):
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    job = await world.booked_job(pro, chat_id=CUSTOMER_A)
+    await world.booked_job(world.pros[R.PRO_SECONDARY], chat_id=pro_chat)
+
+    await world.send(FINISH_WORD, chat_id=pro_chat)
+
+    assert (await world.lead_by_id(job["_id"]))["status"] == LeadStatus.COMPLETED
+
+
+# ===========================================================================
+# A pro the admin deactivated: the refusal, the SOS, and their open leads
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_deactivated_pro_trying_to_come_back_is_told_why(world):
+    """After PRO_MODE expired this used to reach the customer AI."""
+    pro, pro_chat = await _deactivated_pro(world)
+
+    await world.send(RESUME_WORD, chat_id=pro_chat)
+
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.RESUME_NEEDS_ADMIN)
+    assert await world.state(pro_chat) not in workflow_service.PRO_DISPATCH_STATES
+    assert (await world.pro_doc(R.PRO_PRIMARY))["is_active"] is False
+    assert not await _is_matchable(world, pro)
+
+
+@pytest.mark.asyncio
+async def test_deactivated_pro_with_their_own_request_open_stays_a_customer(world):
+    _, pro_chat = await _deactivated_pro(world)
+    await world.booked_job(world.pros[R.PRO_SECONDARY], chat_id=pro_chat)
+
+    await world.send(RESUME_WORD, chat_id=pro_chat)
+
+    assert Messages.Pro.RESUME_NEEDS_ADMIN not in _bodies(world, pro_chat)
+    assert await world.state(pro_chat) not in workflow_service.PRO_DISPATCH_STATES
+    # Their booked request's own question, asked before any AI turn.
+    await world.assert_state(UserStates.AWAITING_NEW_OR_EXISTING, chat_id=pro_chat)
+
+
+@pytest.mark.asyncio
+async def test_sos_on_a_booked_lead_tells_a_deactivated_pro_nothing(world):
+    pro, pro_chat = await _deactivated_pro(world)
+    await world.booked_job(pro, chat_id=CUSTOMER_A)
+
+    await world.send(f"{SOS_WORD} 0509876543", chat_id=CUSTOMER_A)
+
+    world.recorder.assert_silent(pro_chat, "the admin deactivated this pro")
+    world.assert_paged("SOS from customer", "pro_notified=False")
+
+
+@pytest.mark.asyncio
+async def test_sos_on_a_booked_lead_still_reaches_a_pro_on_break(world):
+    pro, pro_chat = await _pro_on_break(world)
+    await world.booked_job(pro, chat_id=CUSTOMER_A)
+
+    await world.send(SOS_WORD, chat_id=CUSTOMER_A)
+
+    sent = _bodies(world, pro_chat)
+    assert to_local_phone(CUSTOMER_A) in sent
+    assert Messages.Pro.PAUSE_NOTIFICATION in sent
+    world.assert_paged("SOS from customer", "pro_notified=True")
+
+
+async def _run_approval_sla(world, inside_hours=True):
+    from app.services.monitor_service import check_pro_approval_sla
+
+    world.set_business_hours(inside_hours)
+    await check_pro_approval_sla()
+    await world.settle()
+
+
+@pytest.mark.asyncio
+async def test_sla_moves_an_offer_off_a_deactivated_pro(world):
+    pro, pro_chat = await _deactivated_pro(world)
+    lead = await world.awaiting_approval_job(pro, chat_id=CUSTOMER_A)
+
+    await _run_approval_sla(world)
+
+    moved = await world.lead_by_id(lead["_id"])
+    assert moved["pro_id"] != pro["_id"]
+    assert moved["status"] == LeadStatus.NEW
+    world.recorder.assert_silent(pro_chat, "the admin deactivated this pro")
+
+
+@pytest.mark.asyncio
+async def test_sla_waits_for_business_hours_to_move_an_offer(world):
+    pro, pro_chat = await _deactivated_pro(world)
+    lead = await world.awaiting_approval_job(pro, chat_id=CUSTOMER_A)
+    await world.age(lead["_id"], 60, "pro_notified_at")
+
+    await _run_approval_sla(world, inside_hours=False)
+
+    still = await world.lead_by_id(lead["_id"])
+    assert still["pro_id"] == pro["_id"]
+    assert not still.get("approval_nudged")
+    world.recorder.assert_silent(CUSTOMER_A, "not at this hour")
+    world.recorder.assert_silent(pro_chat, "the admin deactivated this pro")
+
+
+@pytest.mark.asyncio
+async def test_sla_leaves_an_offer_with_a_pro_on_break(world):
+    pro, _ = await _pro_on_break(world)
+    lead = await world.awaiting_approval_job(pro, chat_id=CUSTOMER_A)
+
+    await _run_approval_sla(world)
+
+    assert (await world.lead_by_id(lead["_id"]))["pro_id"] == pro["_id"]
+
+
+@pytest.mark.asyncio
+async def test_sla_leaves_a_booked_job_with_a_deactivated_pro(world):
+    pro, _ = await _deactivated_pro(world)
+    job = await world.booked_job(pro, chat_id=CUSTOMER_A)
+
+    await _run_approval_sla(world)
+
+    kept = await world.lead_by_id(job["_id"])
+    assert kept["status"] == LeadStatus.BOOKED
+    assert kept["pro_id"] == pro["_id"]
+
+
+@pytest.mark.asyncio
+async def test_pause_does_not_turn_a_deactivation_into_the_pros_own_break(world):
+    """The read above the write can be stale. The write's filter is what holds."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    await world.set_state(UserStates.PRO_MODE, chat_id=pro_chat)
+    real_find_one = pro_flow_module.users_collection.find_one
+
+    async def read_then_deactivate(*args, **kwargs):
+        doc = await real_find_one(*args, **kwargs)
+        await world.db.users.update_one(
+            {"_id": pro["_id"]}, {"$set": {"is_active": False}}
+        )
+        return doc
+
+    world.monkeypatch.setattr(
+        pro_flow_module.users_collection, "find_one", read_then_deactivate
+    )
+
+    await world.send(PAUSE_WORD, chat_id=pro_chat)
+
+    assert not (await world.db.users.find_one({"_id": pro["_id"]})).get("self_paused")

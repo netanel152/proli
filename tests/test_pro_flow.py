@@ -837,7 +837,9 @@ async def test_finish_multiple_jobs_selection(pro_setup, mock_wa, mock_lm, monke
 
     assert static_prefix(Messages.Pro.SELECT_JOB_TO_FINISH) in result
     mock_state.set_state.assert_called_with(
-        chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH
+        chat_id,
+        UserStates.PRO_SELECTING_JOB_TO_FINISH,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
     )
     mock_state.set_metadata.assert_called_once()
 
@@ -2032,6 +2034,7 @@ async def test_cancel_single_booked_immediate(pro_setup, mock_wa, mock_lm, monke
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
     mock_state.set_state = AsyncMock()
+    mock_state.set_metadata = AsyncMock()
     mock_state.clear_state = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
@@ -2040,6 +2043,19 @@ async def test_cancel_single_booked_immediate(pro_setup, mock_wa, mock_lm, monke
     monkeypatch.setattr(app.services.pro_flow, "ContextManager", mock_ctx)
 
     result = await handle_pro_text_command(chat_id, "ביטול", mock_wa, mock_lm)
+
+    # PRO-212: even one job takes a second step.
+    assert static_prefix(Messages.Pro.SELECT_JOB_TO_CANCEL) in result
+    assert (await db.leads.find_one({"_id": lead_id}))["status"] == LeadStatus.BOOKED
+    mock_wa.send_message.assert_not_called()
+
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.PRO_SELECTING_JOB_TO_CANCEL
+    )
+    mock_state.get_metadata = AsyncMock(
+        return_value={"cancelling_jobs_context": {"1": str(lead_id)}}
+    )
+    result = await handle_pro_text_command(chat_id, "1", mock_wa, mock_lm)
 
     assert result == Messages.Pro.CANCEL_SUCCESS
     updated = await db.leads.find_one({"_id": lead_id})
@@ -2081,7 +2097,9 @@ async def test_cancel_multiple_booked_enters_selection(
     result = await handle_pro_text_command(chat_id, "ביטול", mock_wa, mock_lm)
 
     mock_state.set_state.assert_called_with(
-        chat_id, UserStates.PRO_SELECTING_JOB_TO_CANCEL
+        chat_id,
+        UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
     )
     assert "1." in result
     assert "2." in result
@@ -2653,7 +2671,9 @@ async def test_cancel_selection_more_shows_next_page_and_keeps_the_prompt_open(
         in result
     )
     mock_state.set_state.assert_called_with(
-        chat_id, UserStates.PRO_SELECTING_JOB_TO_CANCEL
+        chat_id,
+        UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
     )
     mock_state.clear_state.assert_not_called()
     # PRO-147: a continuation page passes the stored mapping straight back —

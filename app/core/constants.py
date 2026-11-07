@@ -252,10 +252,10 @@ class WorkerConstants:
     # 10–20 rows; now every row is reachable and a longer list says how many
     # rows it is showing out of how many, with *עוד* for the next page.
     PRO_LIST_PAGE_SIZE = 10
-    # PRO-212: how long an אשר/דחה/השהה/המשך numbered prompt stays answerable. Its numbers
-    # act on a customer, and approving one hands over their phone, so a digit sent
-    # hours later must not count. Expiry drops the prompt and acts on nothing: the
-    # next digit opens a fresh list.
+    # PRO-212: how long a pro's numbered job prompt stays answerable. Its numbers act
+    # on a customer, and approving one hands over their phone, so a digit sent hours
+    # later must not count. Expiry drops the prompt and acts on nothing: the next
+    # digit opens a fresh list.
     PRO_ACTION_PICKER_TTL_SECONDS = 600
     # PRO-33 monetization: platform take-rate applied to a recorded final_price to
     # derive commission_amount. GMV = sum(final_price); commission = sum(commission_amount).

@@ -159,7 +159,8 @@ process_incoming_message(chat_id, text, media_url)
         │            │      no replacement, or a found pro whose offer send fails → PENDING_ADMIN_REVIEW,
         │            │      admin paged, customer told (strict scope check)
         │            ├─ "סיימתי" → finish job (selection if several, or on a bare "3")
-        │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN on the paused chat
+        │            ├─ "ביטול" → numbered prompt, even for one job; its number cancels (PRO-212)
+        │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN on a paused BOOKED chat
         │            │      (more than one → numbered prompt first, PRO-212)
         │            ├─ "הפסקה" / "חופשה" → set pro is_active=False, self_paused=True
         │            ├─ "זמין" / "חזרתי" → set pro is_active=True, unset self_paused
@@ -196,7 +197,9 @@ process_incoming_message(chat_id, text, media_url)
         │      └─ a pro on break counts (self_paused True, not pending_approval), so
         │         "חזרתי" and answers to reminders work once PRO_MODE has expired (PRO-212),
         │         except a bare digit, or any word but the resume ones while their own
-        │         request is open: those stay on the customer side
+        │         request is open: those stay on the customer side. An active pro with
+        │         their own request open keeps their digits too. A deactivated pro's
+        │         resume word goes to RESUME_NEEDS_ADMIN, unless their own request is open
         │
         ├─ Phone matches active pro? → set PRO_MODE, handle pro flow
         │      └─ unless the pro has an open lead of their own (_get_active_customer_lead)

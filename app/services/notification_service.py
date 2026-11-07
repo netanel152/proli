@@ -304,7 +304,12 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
             if isinstance(pro_id, str):
                 pro_id = ObjectId(pro_id)
             pro = await users_collection.find_one({"_id": pro_id})
-            if pro and pro.get("phone_number"):
+            # PRO-212: a pro the admin deactivated gets neither number nor words.
+            if (
+                pro
+                and pro.get("phone_number")
+                and (pro.get("is_active", True) or pro.get("self_paused"))
+            ):
                 pro_chat_id = to_chat_id(pro["phone_number"])
                 # PRO-59: the number only goes to a pro who has taken the job.
                 # The lead re-read above uses the same three-status query the

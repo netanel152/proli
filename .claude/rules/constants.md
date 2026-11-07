@@ -34,7 +34,7 @@ file is audited by the docs-syncer subagent.
 - `WorkerConstants.CONSENT_HOLD_MAX_MESSAGES = 5`: how many pre-consent messages that hold keeps; later ones are dropped
 - `WorkerConstants.PRO_SEARCH_RATE_LIMIT_SECONDS = 600`: 10-minute per-pro cool-down on the `מצא` proactive stuck-lead search
 - `WorkerConstants.PRO_LIST_PAGE_SIZE = 10`: rows per page in the pro's job lists (`עבודות`/`פרטים` and the `סיימתי`/`ביטול` selection prompts); a longer list states how many rows it is showing out of how many, with `עוד` for the next page (PRO-147)
-- `WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS = 600`: how long an `אשר`/`דחה`/`השהה`/`המשך` numbered prompt stays answerable; its numbers act on a customer, so a digit sent hours later must not count. Expiry acts on nothing and the next digit opens a fresh list (PRO-212)
+- `WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS = 600`: how long a pro's numbered job prompt stays answerable (`סיימתי`, `ביטול`, `אשר`, `דחה`, `השהה`, `המשך`); its numbers act on a customer, so a digit sent hours later must not count. Expiry acts on nothing and the next digit opens a fresh list (PRO-212)
 - `WorkerConstants.COMMISSION_RATE = 0.10`: platform take-rate applied to a recorded `final_price` → `commission_amount` (PRO-33; GMV/commission surfaced in the admin analytics Revenue tab)
 - `WorkerConstants.FINAL_PRICE_TTL_SECONDS = 600`: 10-minute window for the pro to answer the post-completion "how much did you charge?" prompt (skippable, never gates COMPLETED)
 - `WorkerConstants.APPROVAL_NUDGE_MINUTES = 10`: nudge a silent pro this long after a lead was offered (emergency leads: half)

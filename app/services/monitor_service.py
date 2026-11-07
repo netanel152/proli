@@ -991,6 +991,18 @@ async def check_pro_approval_sla():
             ):
                 continue
 
+            # PRO-212: a pro the admin deactivated can't answer this offer, so don't
+            # wait for them. Moving it messages the customer, hence the PRO-73 gate.
+            owner = await users_collection.find_one({"_id": lead.get("pro_id")})
+            if (
+                owner
+                and not owner.get("is_active", True)
+                and not owner.get("self_paused")
+            ):
+                if within_business_hours():
+                    await reassign_lead(lead, notify_old_pro=False)
+                continue
+
             notified_at = lead.get("pro_notified_at")
             if not notified_at:
                 continue
