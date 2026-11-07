@@ -559,10 +559,12 @@ EMERGENCY_HOLDING_STATES = (
 )
 
 
-def _inbound_log_text(user_text, media_url) -> str:
+def _inbound_log_text(user_text, media_url, file_lost=False) -> str:
     """The single rendering of an inbound turn for the chat history."""
     if media_url:
         return f"{user_text or ''} [MEDIA: {media_url}]"
+    if file_lost and not (user_text or "").strip():
+        return "[MEDIA: lost]"
     return user_text
 
 
@@ -808,6 +810,7 @@ async def _build_pro_response(
     media_data=None,
     media_mime=None,
     media_url=None,
+    media_lost=False,
 ):
     """Build the pro persona AI response."""
     pro_name = best_pro.get("business_name", Defaults.PROLI_PRO_NAME)
@@ -852,6 +855,7 @@ async def _build_pro_response(
         media_data=media_data,
         media_mime_type=media_mime,
         media_url=media_url,
+        media_lost=media_lost,
         require_json=True,
         pro_id=str(best_pro["_id"]),
     )
@@ -907,13 +911,11 @@ async def _finalize_deal(
     ok, reason = is_address_complete(ed)
 
     # Task 3: Bypass for emergency
-    bypass_address_logic = False
     if not ok and is_emergency and (ed.city or extracted_city):
         logger.info(
             f"🚑 EMERGENCY BYPASS: allowing incomplete address for {mask_chat_id(chat_id)} (city={ed.city or extracted_city})"
         )
         ok = True
-        bypass_address_logic = True
 
     if not ok:
         # Persist whatever partial address parts we already have so the sticky
@@ -948,10 +950,21 @@ async def _finalize_deal(
     # nudger. None when the customer gave no concrete time; read paths tolerate that.
     d_datetime = parse_iso_to_utc(final_response.extracted_data.appointment_datetime)
 
-    if bypass_address_logic and not (ed.street and ed.street_number):
-        d_address = ed.city or extracted_city
+    # Parts this turn didn't extract come from the lead, so a turn that extracted
+    # nothing can't shrink a known address to a bare city.
+    lead_facts = active_lead_doc or {}
+    street = ed.street or lead_facts.get("street")
+    street_number = ed.street_number or lead_facts.get("street_number")
+    if street and street_number:
+        d_address = compose_full_address(
+            SimpleNamespace(
+                street=street,
+                street_number=street_number,
+                city=ed.city or lead_facts.get("city") or extracted_city,
+            )
+        )
     else:
-        d_address = compose_full_address(ed)
+        d_address = ed.city or extracted_city
 
     d_issue = (
         final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
@@ -982,6 +995,11 @@ async def _finalize_deal(
         lead_update["quoted_price"] = quoted_price
 
     if current_lead_id:
+        # A turn that extracted nothing (a failed file on an emergency lead reaches
+        # here with an empty response) must not erase what the lead already has.
+        for field in ("street", "street_number", "city", "floor", "apartment"):
+            if not lead_update[field]:
+                del lead_update[field]
         # CONTACTED -> NEW once the routing engine has matched a pro. Goes
         # through set_lead_status so the transition lands in status_history.
         lead = await set_lead_status(

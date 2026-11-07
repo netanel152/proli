@@ -601,6 +601,39 @@ async def test_only_the_first_held_media_survives(world, cloudinary):
 
 
 @pytest.mark.asyncio
+async def test_held_media_lost_on_accept_with_no_text_gets_the_notice(
+    world, cloudinary
+):
+    fetch, _uploads = cloudinary
+    fetch.return_value = (None, None)
+    await workflow_service.process_incoming_message(
+        world.customer, "", "meta-media://M1"
+    )
+    await world.send("כן")
+
+    assert world.recorder.bodies_to(world.customer)[-1] == (
+        Messages.Errors.MEDIA_UPLOAD_FAILED_TEXT_ONLY
+    )
+    assert world.ai.calls == []
+    assert await _user_rows(world, "[MEDIA: lost]") == 1
+    assert await _user_rows(world, "") == 0
+
+
+@pytest.mark.asyncio
+async def test_held_media_lost_on_accept_with_text_answers_the_text(world, cloudinary):
+    fetch, _uploads = cloudinary
+    fetch.return_value = (None, None)
+    await workflow_service.process_incoming_message(
+        world.customer, OPENING, "meta-media://M1"
+    )
+    world.ai.script(reply("באיזו עיר?"))
+    await world.send("כן")
+
+    assert world.ai.calls[-1]["media_lost"] is True
+    assert world.ai.calls[-1]["user_text"] == OPENING
+
+
+@pytest.mark.asyncio
 async def test_a_consented_customers_media_is_still_rehosted(world, cloudinary):
     await world.grant_consent()
     fetch, uploads = cloudinary

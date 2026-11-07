@@ -25,13 +25,11 @@ async def resolve_inbound_media(media_url: str | None) -> str | None:
     media_id = media_url[len(META_MEDIA_SCHEME) :]
     data, _mime = await fetch_meta_media(media_id)
     if data is None:
-        logger.warning(f"Could not fetch Meta media {media_id} — processing text only.")
+        logger.error(f"Could not fetch Meta media {media_id} — processing text only.")
         return None
     hosted_url = await asyncio.to_thread(upload_media_bytes, data)
     if hosted_url is None:
-        logger.warning(
-            f"Could not re-host Meta media {media_id} — processing text only."
-        )
+        logger.error(f"Could not re-host Meta media {media_id} — processing text only.")
     return hosted_url
 
 
