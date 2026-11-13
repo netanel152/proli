@@ -556,6 +556,13 @@ async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
         response_text += Messages.Pro.CONTACT_CARD_EXTRA.format(
             extra_info=notification_service.format_lead_extra_info(lead)
         )
+    # Only set when the offer went out as a template, which cannot carry these.
+    if lead.get("offer_withheld_details"):
+        response_text += lead["offer_withheld_details"]
+        await leads_collection.update_one(
+            {"_id": lead["_id"]}, {"$unset": {"offer_withheld_details": ""}}
+        )
+    response_text += Messages.Pro.CONTACT_CARD_CLOSING
 
     pro_name = pro.get("business_name", Defaults.EXPERT_NAME)
     raw_phone = pro.get("phone_number", "")
@@ -602,7 +609,19 @@ async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
         price_line=price_line,
         rating_line=rating_line,
     )
-    await whatsapp.send_message(lead["chat_id"], customer_msg)
+    await whatsapp.send_message(
+        lead["chat_id"],
+        customer_msg,
+        template_key="pro_found",
+        params={
+            "pro_name": pro_name,
+            "issue_type": lead.get("issue_type", ""),
+            "full_address": lead.get("full_address", ""),
+            "appointment_time": lead.get("appointment_time", ""),
+            "price_estimate": notification_service.price_estimate_param(quoted_price),
+            "pro_phone": pro_phone,
+        },
+    )
     # Clear AWAITING_PRO_APPROVAL state so customer can continue normally
     await StateManager.clear_state(lead["chat_id"])
 
@@ -708,7 +727,12 @@ async def _escalate_rejected_lead(lead, whatsapp):
         chat_id = lead.get("chat_id")
         if chat_id:
             try:
-                await whatsapp.send_message(chat_id, Messages.Customer.PENDING_REVIEW)
+                await whatsapp.send_message(
+                    chat_id,
+                    Messages.Customer.PENDING_REVIEW,
+                    template_key="pending_review",
+                    params={"issue_type": notification_service.issue_param(lead)},
+                )
             except Exception as notify_err:
                 logger.error(
                     f"Failed to notify customer of pending review after reject "
@@ -754,7 +778,15 @@ async def _pause_lead(lead, pro, whatsapp):
         {"$set": {"is_paused": True, "paused_at": datetime.now(timezone.utc)}},
     )
 
-    await whatsapp.send_message(customer_chat_id, Messages.Customer.BOT_PAUSED_BY_PRO)
+    # The pause is already set. A send that fails must still answer the pro.
+    try:
+        await whatsapp.send_message(
+            customer_chat_id,
+            Messages.Customer.BOT_PAUSED_BY_PRO,
+            template_key="bot_paused_by_pro",
+        )
+    except Exception as e:
+        logger.error(f"Customer not told lead {lead['_id']} was paused: {e}")
     logger.info(
         f"Pro {pro['_id']} paused bot for customer {mask_chat_id(customer_chat_id)}"
     )
@@ -888,7 +920,16 @@ async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
     pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME)
     feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
     if ask_for_rating:
-        await whatsapp.send_message(lead["chat_id"], feedback_msg)
+        # COMPLETED is written. A send that fails must not stop the price ask.
+        try:
+            await whatsapp.send_message(
+                lead["chat_id"],
+                feedback_msg,
+                template_key="rate_service",
+                params={"pro_name": pro_name or Defaults.GENERIC_PRO_NAME},
+            )
+        except Exception as e:
+            logger.error(f"Rating prompt for lead {lead['_id']} not sent: {e}")
     else:
         # The customer still hears the job closed; its first line says only that.
         # The number is already degraded, so a rejection here is likely, and it
@@ -1237,9 +1278,16 @@ async def _execute_cancel(lead, pro, whatsapp) -> bool:
     if lead.get("chat_id"):
         await ContextManager.clear_context(lead["chat_id"])
         await StateManager.clear_state(lead["chat_id"])
-        await whatsapp.send_message(
-            lead["chat_id"], Messages.Customer.PRO_CANCELLED_BOOKING
-        )
+        # The cancellation is written and the slot is free. A send that fails
+        # must not report the cancel as not done.
+        try:
+            await whatsapp.send_message(
+                lead["chat_id"],
+                Messages.Customer.PRO_CANCELLED_BOOKING,
+                template_key="pro_cancelled_booking",
+            )
+        except Exception as e:
+            logger.error(f"Customer not told lead {lead['_id']} was cancelled: {e}")
 
     logger.info(f"Pro {pro['_id']} cancelled BOOKED lead {lead['_id']}")
     return True
@@ -1463,7 +1511,12 @@ async def _handle_search(pro, chat_id: str, whatsapp):
             },
             # PRO-45: a fresh owner re-arms the no-show report, exactly as on
             # the `reassign_lead` and admin-assignment paths.
-            extra_unset={"escalation_reason": "", "no_show_reported_at": ""},
+            extra_unset={
+                "escalation_reason": "",
+                "no_show_reported_at": "",
+                # Kept for whoever was offered it by template before.
+                "offer_withheld_details": "",
+            },
             expected_status=LeadStatus.PENDING_ADMIN_REVIEW,
         )
         if claimed is not None:

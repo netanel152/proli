@@ -1,4 +1,4 @@
-"""PRO-89 — outbound delivery bookkeeping and the 131047 retry path.
+"""PRO-89 — outbound delivery bookkeeping and what a failed status means.
 
 Delivery statuses live in their own ``wa_delivery`` collection, deliberately
 **not** in ``messages``: ``lead_manager_service.get_chat_history`` rehydrates
@@ -8,11 +8,12 @@ conversation.
 
 Flow: ``CloudAPIProvider`` records every accepted send here (wamid → chat_id +
 kind); the ``/webhook/meta`` route feeds ``statuses`` events back through
-``apply_status_event``, which updates the record and — for a ``failed`` with
-error 131047 (send rejected because the 24h service window was closed) —
-drives the template-retry path: an approved fallback template is re-sent
-through the facade, and when none is registered the operator is paged. Either
-way the failure is never silent, which is the acceptance criterion.
+``apply_status_event``, which updates the record and pages for two failures: a
+template Meta accepted and later failed, and a free-form send rejected with error
+131047 (the 24h service window was closed). Nothing is re-sent. A free-form send
+stores no content to rebuild a template from, and ``freeform_fallback`` registers
+none, so the message is lost and the page says so. The failure is never silent,
+which is the acceptance criterion.
 """
 
 from datetime import datetime, timezone
@@ -29,6 +30,9 @@ from app.providers.whatsapp.quality import record_business_initiated
 # get_whatsapp import further down is deferred for a different reason —
 # that name is defined in __init__ itself, so it has no submodule fallback.
 from app.providers.whatsapp.window import claim_window_page, is_service_window_open
+
+# `claim_window_page`'s condition for a template Meta accepted and then failed.
+TEMPLATE_LOST = "template-lost"
 
 
 async def record_outbound(wa_message_id: str, chat_id: str, kind: str) -> None:
@@ -91,6 +95,20 @@ async def apply_status_event(event: dict[str, Any]) -> None:
     chat_id = (record or {}).get("chat_id") or event.get("chat_id") or ""
     error_code = event.get("error_code")
 
+    if (record or {}).get("kind") == "template":
+        # Accepted at send time, so the caller was told it went out and nothing
+        # else will notice. A budget of its own, or a window page for the same
+        # recipient earlier in the day would demote a lost offer to a log line.
+        # The numeric code is Meta's and says nothing about anyone; the title
+        # stays on the `wa_delivery` record.
+        claimed = await claim_window_page(chat_id, condition=TEMPLATE_LOST)
+        log = page_critical if claimed else logger.error
+        log(
+            f"WhatsApp template to {_mask(chat_id)} was accepted and then failed "
+            f"(code={error_code}). The message is LOST (wamid {wa_message_id})."
+        )
+        return
+
     if error_code == META_ERROR_WINDOW_CLOSED:
         await _retry_as_template(wa_message_id, chat_id, record or {})
         return
@@ -106,8 +124,9 @@ async def _retry_as_template(
     wa_message_id: str, chat_id: str, record: dict[str, Any]
 ) -> None:
     """A send died on a closed window after we thought it was open (window
-    tracker fail-open, or the window expired in flight). Re-engage via the
-    registered fallback template, or page — never a silent drop."""
+    tracker fail-open, or the window expired in flight). Page, or re-engage
+    if ``freeform_fallback`` ever registers a template, which today it does not.
+    Never a silent drop."""
     kind = record.get("kind") or "text"
     fallback = template_registry.freeform_fallback(kind)
     if fallback is None:

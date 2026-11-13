@@ -387,7 +387,7 @@ async def test_sos_alert_pro_whatsapp_failure_does_not_block_admin_page(
         }
     )
 
-    async def send_side_effect(chat_id, message):
+    async def send_side_effect(chat_id, message, **template):
         raise Exception("WhatsApp down entirely")
 
     mock_wa.send_message.side_effect = send_side_effect

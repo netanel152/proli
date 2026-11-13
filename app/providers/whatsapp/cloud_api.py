@@ -39,6 +39,7 @@ from app.providers.whatsapp.base import (
     NormalizedMessage,
     ServiceWindowClosedError,
     TemplateNotRegisteredError,
+    TemplateParamsError,
     WhatsAppProvider,
 )
 from app.providers.whatsapp.window import claim_window_page, is_service_window_open
@@ -192,7 +193,8 @@ class CloudAPIProvider(WhatsAppProvider):
         A returned fallback is sent with **no params**, so only a
         parameterless re-engagement template may ever be registered as one —
         body variables cannot be reconstructed from a rendered Hebrew string.
-        Enforce that when PRO-87 arms ``freeform_fallback``.
+        A send with variables names its template instead: see
+        :meth:`send_business_initiated`.
         """
         if await is_service_window_open(chat_id):
             return None
@@ -227,6 +229,10 @@ class CloudAPIProvider(WhatsAppProvider):
         fallback = await self._window_fallback(chat_id, "text")
         if fallback is not None:
             return await self.send_template(chat_id, fallback.key)
+        return await self._post_text(chat_id, text)
+
+    async def _post_text(self, chat_id: str, text: str) -> dict[str, Any] | None:
+        """Transmit ``text``. The caller has already answered for the window."""
         # This sentinel must never survive the loop. ``_split_text`` is total —
         # it returns at least one chunk for any input, ``[""]`` included — and
         # PRO-159 made that load-bearing: the facade and its callers now read a
@@ -294,25 +300,64 @@ class CloudAPIProvider(WhatsAppProvider):
             raise TemplateNotRegisteredError(
                 f"template {template_name!r} is not registered as approved"
             )
+        params = params or {}
+        if set(params) != set(spec.params):
+            page_critical(
+                f"WhatsApp template send to {_mask(chat_id)} blocked: "
+                f"{template_name!r} declares {spec.params} but was given "
+                f"{tuple(params)}. The message was NOT sent."
+            )
+            raise TemplateParamsError(
+                f"template {template_name!r} was given the wrong variables"
+            )
         template: dict[str, Any] = {
             "name": spec.meta_name,
             "language": {"code": spec.language},
         }
-        if params:
-            # Positional body variables, in the dict's insertion order — the
-            # caller owns matching the template's {{1}}..{{n}} ordering.
+        if spec.params:
+            # Positional body variables, in the order the spec declares for the
+            # template's {{1}}..{{n}}.
             template["components"] = [
                 {
                     "type": "body",
                     "parameters": [
-                        {"type": "text", "text": str(value)}
-                        for value in params.values()
+                        {
+                            "type": "text",
+                            "text": template_registry.sanitize_param(
+                                params[name], name
+                            ),
+                        }
+                        for name in spec.params
                     ],
                 }
             ]
         return await self._post_message(
             chat_id, {"type": "template", "template": template}, "template"
         )
+
+    async def send_business_initiated(
+        self,
+        chat_id: str,
+        text: str,
+        template_key: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """The template when the window is closed and it is approved, else text.
+
+        An unapproved template returns before the window is even read, so the
+        send is exactly ``send_text``: open window sends, closed window pages and
+        raises. ``sent_as_template`` tells the caller the text did not go out,
+        for whatever only the text could carry.
+        """
+        if template_registry.resolve(template_key) is None:
+            return await self.send_text(chat_id, text)
+        if await is_service_window_open(chat_id):
+            # Straight to the wire: `send_text` would read the window again, and
+            # a window that closed between the two reads would page and drop a
+            # message whose template is approved.
+            return await self._post_text(chat_id, text)
+        result = await self.send_template(chat_id, template_key, params)
+        return {**result, "sent_as_template": template_key}
 
     async def send_interactive(
         self,
@@ -325,8 +370,8 @@ class CloudAPIProvider(WhatsAppProvider):
         Reply IDs are ``"1"``, ``"2"``, … — exactly the strings a user types in
         the numeric text menus — so to the FSM a button tap and a typed digit
         are the same inbound and no transition changes (the PRO-89 AC).
-        Remember CLAUDE.md: no *flow* may call this until PRO-88/89 templates
-        land; this is the transport half only.
+        Remember CLAUDE.md: no *flow* may call this. Buttons come after the pilot
+        (PRO-103); this is the transport half only.
         """
         options = list(options)
         title_limit = (

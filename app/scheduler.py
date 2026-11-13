@@ -91,7 +91,16 @@ async def send_daily_reminders():
             if chat_id:
                 chat_id = to_chat_id(chat_id)
                 try:
-                    await whatsapp.send_message(chat_id, msg)
+                    await whatsapp.send_message(
+                        chat_id,
+                        msg,
+                        template_key="daily_agenda",
+                        params={
+                            "pro_name": pro["business_name"],
+                            "date": today_start.strftime("%d/%m"),
+                            "job_count": len(booked_jobs),
+                        },
+                    )
                 except Exception as e:
                     logger.error(f"❌ Failed to send to {pro['business_name']}: {e}")
 

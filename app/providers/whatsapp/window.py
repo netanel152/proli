@@ -15,7 +15,7 @@ Redis error, deliberately mirroring the facade's Redis-error posture (PRO-82):
 a monitoring/bookkeeping dependency going down must not take the send path
 with it. The backstop is real — a send Meta rejects for a closed window comes
 back as a ``failed`` delivery status with error 131047, which the status
-handler routes through the template-retry path. Failing *closed* here would
+handler pages as a lost message. Failing *closed* here would
 instead silently convert a Redis blip into dropped customer replies, which is
 the exact failure mode PRO-89 forbids.
 
@@ -85,8 +85,13 @@ def _claim_locally(chat_id: str) -> bool:
     return True
 
 
-async def claim_window_page(chat_id: str) -> bool:
+async def claim_window_page(chat_id: str, *, condition: str = "") -> bool:
     """True at most once per recipient per 24h — the caller may page CRITICAL.
+
+    ``condition`` names a different thing to page about, with a budget of its
+    own. The default is "the window is closed and nothing could be sent". A
+    template Meta accepted and then failed is not that: the caller was told it
+    went out, so a window page earlier in the day must not demote it.
 
     With every registry entry still DRAFT, a closed window is the *expected*
     state for business-initiated sends, so paging on each occurrence would bury
@@ -115,13 +120,14 @@ async def claim_window_page(chat_id: str) -> bool:
         # and these are the least diagnosable losses there are — so fall back
         # to the same bounded local claim an unreadable Redis gets.
         return _claim_locally("")
+    subject = f"{condition}:{chat_id}" if condition else chat_id
     try:
         redis = await get_redis_client()
         return bool(
-            await redis.set(_page_key(chat_id), "1", ex=_PAGE_TTL_SECONDS, nx=True)
+            await redis.set(_page_key(subject), "1", ex=_PAGE_TTL_SECONDS, nx=True)
         )
     except Exception:
-        return _claim_locally(chat_id)
+        return _claim_locally(subject)
 
 
 async def open_service_window(chat_id: str) -> None:
@@ -148,7 +154,7 @@ async def is_service_window_open(chat_id: str) -> bool:
     """True when a free-form send to ``chat_id`` is deliverable.
 
     Fail-open: an unreadable Redis reports the window as open and lets Meta be
-    the judge (131047 → template-retry path), per the module docstring.
+    the judge (131047 → operator page), per the module docstring.
     """
     try:
         redis = await get_redis_client()

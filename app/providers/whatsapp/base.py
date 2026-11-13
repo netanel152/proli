@@ -44,8 +44,15 @@ class TemplateNotRegisteredError(Exception):
     unapproved fallback raises from inside an ordinary free-form send and would
     kill ``process_message_task`` mid-flow exactly as the window error did.
     Unreachable today only because ``freeform_fallback()`` returns ``None`` for
-    every kind — PRO-87 arming it is what removes that accident, and a template
-    left ``DRAFT`` during the flip triggers this immediately.
+    every kind; registering a fallback there that is still ``DRAFT`` triggers it.
+    """
+
+
+class TemplateParamsError(Exception):
+    """An approved template was asked for with variables other than the ones its
+    spec declares. Nothing is transmitted, since Meta would reject a wrong count
+    and a wrong name would put a value in the wrong place. Reported before it is
+    raised and translated by the facade like the two errors above.
     """
 
 
@@ -119,6 +126,20 @@ class WhatsAppProvider(ABC):
         The template catalog itself is PRO-88; this is the transport half.
         """
 
+    async def send_business_initiated(
+        self,
+        chat_id: str,
+        text: str,
+        template_key: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Deliver ``text``, or the approved template when only that can arrive.
+
+        The default is for a provider with no service window to respect, which
+        always sends the text. Same window contract as :meth:`send_text`.
+        """
+        return await self.send_text(chat_id, text)
+
     @abstractmethod
     async def send_interactive(
         self,
@@ -130,9 +151,8 @@ class WhatsAppProvider(ABC):
 
         The legacy vendor could not do this at all, which is why the project convention
         was numeric text menus. The PRO-89 transport exists now, but no *flow*
-        calls this yet: adopting buttons over numeric menus is an explicit
-        product decision still to be made (see CLAUDE.md and the PRO-88
-        catalog §"numbered-reply menus"), not a door PRO-89 opened by default.
+        calls this: the owner decided on 2026-11-06 that the pilot runs on text
+        menus and buttons come after it (PRO-103, and see CLAUDE.md).
 
         Same window contract as :meth:`send_text` — report, then raise.
         """

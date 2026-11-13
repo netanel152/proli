@@ -39,7 +39,7 @@ from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.legal_links import consent_request_text
 from app.core.logger import logger
 from app.core.messages import Messages
-from app.core.phone import to_chat_id, strip_suffix, mask_chat_id
+from app.core.phone import to_chat_id, to_local_phone, strip_suffix, mask_chat_id
 from app.core.text_matching import contains_keyword
 
 
@@ -538,7 +538,15 @@ async def guard_sos_human_handoff(ctx: DispatchContext, deps: GuardDeps):
             and (pro.get("is_active", True) or pro.get("self_paused"))
         ):
             pro_phone = to_chat_id(pro["phone_number"])
-            await deps.whatsapp.send_message(pro_phone, Messages.Pro.PAUSE_NOTIFICATION)
+            await deps.whatsapp.send_message(
+                pro_phone,
+                Messages.Pro.PAUSE_NOTIFICATION,
+                template_key="bot_paused",
+                params={
+                    "issue_type": active_lead.get("issue_type")
+                    or Messages.Fallbacks.ISSUE_UNKNOWN
+                },
+            )
 
     await deps.whatsapp.send_message(
         ctx.chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER
@@ -898,8 +906,13 @@ async def guard_new_or_existing(ctx: DispatchContext, deps: GuardDeps):
         booked_lead_id = meta.get("booked_lead_id")
         pro_name = "איש המקצוע"
         try:
+            # PRO-59: re-read as BOOKED. The gate was armed up to
+            # NEW_OR_EXISTING_TTL_SECONDS ago, and a lead reassigned or re-offered
+            # since then belongs to a pro who has not earned the number.
             booked_lead = (
-                await wf.leads_collection.find_one({"_id": ObjectId(booked_lead_id)})
+                await wf.leads_collection.find_one(
+                    {"_id": ObjectId(booked_lead_id), "status": LeadStatus.BOOKED}
+                )
                 if booked_lead_id
                 else None
             )
@@ -918,6 +931,14 @@ async def guard_new_or_existing(ctx: DispatchContext, deps: GuardDeps):
                                 issue=booked_lead.get("issue_type") or "העבודה",
                                 customer_phone=strip_suffix(ctx.chat_id),
                             ),
+                            template_key="customer_existing_job_query",
+                            params={
+                                "customer_name": booked_lead.get("customer_name")
+                                or Messages.Fallbacks.CUSTOMER_NAME,
+                                "issue_type": booked_lead.get("issue_type")
+                                or Messages.Fallbacks.ISSUE_UNKNOWN,
+                                "phone": to_local_phone(ctx.chat_id),
+                            },
                         )
         except Exception as e:
             logger.error(

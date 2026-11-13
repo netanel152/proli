@@ -1288,7 +1288,9 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     )
     # Customer notified
     mock_wa.send_message.assert_called_with(
-        "972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_PRO
+        "972501111111@c.us",
+        Messages.Customer.BOT_PAUSED_BY_PRO,
+        template_key="bot_paused_by_pro",
     )
 
 
@@ -2073,7 +2075,9 @@ async def test_cancel_single_booked_immediate(pro_setup, mock_wa, mock_lm, monke
     assert updated["status"] == LeadStatus.CANCELLED
     assert updated["cancel_reason"] == "pro_cancelled"
     mock_wa.send_message.assert_called_once_with(
-        customer_chat, Messages.Customer.PRO_CANCELLED_BOOKING
+        customer_chat,
+        Messages.Customer.PRO_CANCELLED_BOOKING,
+        template_key="pro_cancelled_booking",
     )
 
 
@@ -2160,7 +2164,9 @@ async def test_cancel_selection_executes_cancel(
     assert updated["status"] == LeadStatus.CANCELLED
     mock_state.clear_state.assert_any_call(chat_id)
     mock_wa.send_message.assert_called_once_with(
-        customer_chat, Messages.Customer.PRO_CANCELLED_BOOKING
+        customer_chat,
+        Messages.Customer.PRO_CANCELLED_BOOKING,
+        template_key="pro_cancelled_booking",
     )
 
 
