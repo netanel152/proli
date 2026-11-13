@@ -23,7 +23,7 @@
 - **Self-Service Rescheduling** — Customers with confirmed bookings can reschedule by picking from the professional's live available slots directly in WhatsApp.
 - **Progressive Geo Routing** — Finds the best pro within 10 km, expanding to 20 km then 30 km if needed. Falls back to city-name matching for non-geo queries.
 - **Rating + Load Balancing** — Prioritizes highest-rated pros; skips any pro carrying 3 or more active leads.
-- **Pro Approval Flow** — Every deal requires explicit pro consent via text reply. Customers wait in a soft-hold state (`AWAITING_PRO_APPROVAL`) while the pro reviews and approves, pauses, or rejects.
+- **Pro Approval Flow** — Every deal requires explicit pro consent via text reply. Customers wait in a soft-hold state (`AWAITING_PRO_APPROVAL`) while the pro reviews and approves or rejects.
 - **Transparent Approval** — Customers see the name of the professional being contacted, reducing uncertainty during the wait.
 - **Live Handoff (SOS)** — Customer can request a human representative. The bot pauses for a **15-Minute Dynamic Idle Timeout** that resets on every message.
 - **SLA Deflection** — If a Pro remains silent for 15 minutes during a handoff, the bot proactively "wakes up" to offer the customer a direct phone call escalation.
@@ -219,7 +219,7 @@ tests and linters run there without any manual setup.
 - **שינוי מועד עצמאי** — לקוחות יכולים לשנות מועד לביקור קיים על ידי בחירה מתוך רשימת תורים פנויים של איש המקצוע ישירות בוואטסאפ.
 - **שקיפות מלאה** — הלקוח רואה את שם איש המקצוע אליו הועברה הפנייה, מה שמפחית את חוסר הוודאות בזמן ההמתנה.
 - **ניתוב גיאוגרפי פרוגרסיבי** — מחפש איש מקצוע ברדיוס 10 ק"מ, ומרחיב ל-20 ו-30 ק"מ בהתאם לצורך.
-- **אישור איש מקצוע** — כל עסקה מחייבת אישור מפורש של איש המקצוע דרך תשובת טקסט (אשר/השהה/דחה).
+- **אישור איש מקצוע** — כל עסקה מחייבת אישור מפורש של איש המקצוע דרך תשובת טקסט (אשר/דחה).
 - **מעבר אנושי (SOS)** — לקוח יכול לבקש מענה אנושי. הבוט מושהה לחלון זמן דינמי של 15 דקות שמתאפס עם כל הודעה.
 - **SLA Deflection** — אם איש המקצוע לא עונה תוך 15 דקות בזמן שיחה ישירה, הבוט חוזר לטפל בפנייה ומאפשר ללקוח להמשיך לכתוב, בלי להבטיח שיחה טלפונית שהמערכת אינה קובעת בפועל.
 - **AI מולטי-מודאלי** — ניתוח תמונות, תמלול הודעות קוליות, צפייה בסרטונים.

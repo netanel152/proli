@@ -1,0 +1,17 @@
+[build]
+  # The base is site/, not the root, because Netlify pip-installs a requirements.txt it finds in the base: the API's stack has no place in a static deploy.
+  base = "site"
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # 30 days and no preload while the domain is new: a mistake here locks browsers out for max-age, and preload is hard to undo.
+    Strict-Transport-Security = "max-age=2592000"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
+    X-Frame-Options = "DENY"
+    Permissions-Policy = "camera=(), geolocation=(), microphone=(), payment=(), usb=()"
+    # Hashes rather than 'unsafe-inline': each page's <style> is the only style allowed, and tests/test_public_site.py fails when a CSS edit outdates one.
+    # Netlify does not apply these headers to proxied responses, so /privacy and /terms keep their own inline styles.
+    Content-Security-Policy = "default-src 'none'; style-src 'sha256-MvEPRpmZDVtYfOSIN7YkaJiul4U7+bxI7yBazQsW88o=' 'sha256-+dN53o5bMCgUNOqCYTl7A81ml7syPbfBu0xhmVRSa9g='; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"

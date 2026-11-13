@@ -3,10 +3,13 @@ import uuid
 from types import SimpleNamespace
 from app.providers.whatsapp import get_whatsapp
 from app.services.ai_engine_service import AIEngine
-from app.services.lead_manager_service import (
+from app.services.lead_manager_service import (  # noqa: F401 — the guards read the address helpers off this module
+    ADDRESS_PARTS,
     LeadManager,
     is_address_complete,
     compose_full_address,
+    parts_from_other_city,
+    stated_in,
 )
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
@@ -41,6 +44,7 @@ from app.services.conversation_pipeline import run_customer_pipeline
 # cannot see that and reports it unused; deleting it on that advice breaks
 # matching at runtime, not at import. Same for `detect_and_fetch_media` below.
 from app.services.matching_service import determine_best_pro  # noqa: F401
+from app.services.matching_service import issue_update
 
 # The next few imports look unused since PRO-180 moved the holding-state
 # cluster into dispatch_guards, but they are load-bearing: the guards resolve
@@ -187,6 +191,10 @@ PRO_ONLY_KEYWORDS = PRO_BUSINESS_KEYWORDS - AMBIGUOUS_PRO_KEYWORDS
 PRO_HOLDING_STATES = (
     UserStates.PRO_SELECTING_JOB_TO_FINISH,
     UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+    UserStates.PRO_SELECTING_JOB_TO_APPROVE,
+    UserStates.PRO_SELECTING_JOB_TO_REJECT,
+    UserStates.PRO_SELECTING_JOB_TO_PAUSE,
+    UserStates.PRO_SELECTING_JOB_TO_RESUME,
     UserStates.PRO_AWAITING_FINAL_PRICE,
 )
 
@@ -212,15 +220,44 @@ CUSTOMER_ACTIVE_STATUSES = [
 ]
 
 
-async def _is_registered_pro(chat_id: str):
-    """Return the professional doc for this chat, or None."""
+async def _is_registered_pro(chat_id: str, include_on_break: bool = False):
+    """Return the professional doc for this chat, or None.
+
+    ``include_on_break`` also admits a pro who took a break themselves (PRO-212), for
+    the keyword bypass and the לקוח switch. is_active False alone also describes an
+    application awaiting review and a pro the admin deactivated, and neither may
+    reach the handler that sets is_active True.
+    """
     phone = strip_suffix(chat_id)
     return await users_collection.find_one(
         {
             "phone_number": {"$in": [phone, chat_id]},
             "role": "professional",
-            "is_active": True,
+            **(
+                {
+                    "pending_approval": {"$ne": True},
+                    "$or": [{"is_active": True}, {"self_paused": True}],
+                }
+                if include_on_break
+                else {"is_active": True}
+            ),
         }
+    )
+
+
+async def _is_deactivated_pro(chat_id: str) -> bool:
+    """True for a pro the admin deactivated: not a break they took, not an application."""
+    phone = strip_suffix(chat_id)
+    return bool(
+        await users_collection.find_one(
+            {
+                "phone_number": {"$in": [phone, chat_id]},
+                "role": "professional",
+                "is_active": False,
+                "pending_approval": {"$ne": True},
+                "self_paused": {"$ne": True},
+            }
+        )
     )
 
 
@@ -381,6 +418,10 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
         await leads_collection.update_one(
             {"_id": active_lead["_id"]}, {"$set": {"pro_id": past_pro["_id"]}}
         )
+        # PRO-227: tells guard_awaiting_address this wait is the loyalty one, so
+        # a completed address dispatches to this pro instead of finalizing a deal.
+        meta["loyalty_pro_id"] = str(past_pro["_id"])
+        await StateManager.set_metadata(chat_id, meta)
         # AWAITING_ADDRESS, not IDLE: the ack below *is* the address gate's own
         # missing-parts question, and that state owns the re-extract/merge/
         # compose answer path. Routed through IDLE the reply would land on the
@@ -397,6 +438,25 @@ async def _accept_loyalty_offer(chat_id, past_pro_id, active_lead, meta) -> bool
         )
         return True
 
+    return await _dispatch_loyalty_lead(chat_id, past_pro, active_lead)
+
+
+async def _dispatch_loyalty_lead(chat_id, past_pro, active_lead):
+    """Hand a CONTACTED lead whose address is dispatchable to the customer's
+    previous pro: lead → NEW, offer sent, AWAITING_PRO_APPROVAL armed,
+    LOYALTY_ACCEPTED_NOTIFYING to the customer. Returns True, or None when the
+    lead left CONTACTED under us.
+
+    Shared by `_accept_loyalty_offer` (address already complete) and
+    `guard_awaiting_address` (address completed after the accept, PRO-227).
+    """
+    pro_name = past_pro.get("business_name", Defaults.EXPERT_NAME)
+    probe = SimpleNamespace(
+        **{
+            field: active_lead.get(field)
+            for field in ("street", "street_number", "city", "floor", "apartment")
+        }
+    )
     # Dispatchable: hand the lead to the chosen pro for real, arming the PRO-56
     # approval SLA (and therefore PRO-117's rematch) exactly like the initial
     # assignment path does. Actor.CUSTOMER (not SYSTEM, as _finalize_deal uses
@@ -551,10 +611,12 @@ EMERGENCY_HOLDING_STATES = (
 )
 
 
-def _inbound_log_text(user_text, media_url) -> str:
+def _inbound_log_text(user_text, media_url, file_lost=False) -> str:
     """The single rendering of an inbound turn for the chat history."""
     if media_url:
         return f"{user_text or ''} [MEDIA: {media_url}]"
+    if file_lost and not (user_text or "").strip():
+        return "[MEDIA: lost]"
     return user_text
 
 
@@ -800,6 +862,7 @@ async def _build_pro_response(
     media_data=None,
     media_mime=None,
     media_url=None,
+    media_lost=False,
 ):
     """Build the pro persona AI response."""
     pro_name = best_pro.get("business_name", Defaults.PROLI_PRO_NAME)
@@ -844,6 +907,7 @@ async def _build_pro_response(
         media_data=media_data,
         media_mime_type=media_mime,
         media_url=media_url,
+        media_lost=media_lost,
         require_json=True,
         pro_id=str(best_pro["_id"]),
     )
@@ -899,13 +963,11 @@ async def _finalize_deal(
     ok, reason = is_address_complete(ed)
 
     # Task 3: Bypass for emergency
-    bypass_address_logic = False
     if not ok and is_emergency and (ed.city or extracted_city):
         logger.info(
             f"🚑 EMERGENCY BYPASS: allowing incomplete address for {mask_chat_id(chat_id)} (city={ed.city or extracted_city})"
         )
         ok = True
-        bypass_address_logic = True
 
     if not ok:
         # Persist whatever partial address parts we already have so the sticky
@@ -916,7 +978,11 @@ async def _finalize_deal(
             "city": ed.city or extracted_city,
             "floor": ed.floor,
             "apartment": ed.apartment,
-            "issue_type": ed.issue or extracted_issue,
+            "issue_type": issue_update(ed.issue, extracted_issue) or extracted_issue,
+            # PRO-227: guard_awaiting_address finalizes this deal once the
+            # address is complete, and needs the agreed time to do it.
+            "appointment_time": ed.appointment_time,
+            "appointment_datetime": parse_iso_to_utc(ed.appointment_datetime),
         }
         partial_update = {k: v for k, v in partial_update.items() if v}
         if current_lead_id and partial_update:
@@ -940,13 +1006,28 @@ async def _finalize_deal(
     # nudger. None when the customer gave no concrete time; read paths tolerate that.
     d_datetime = parse_iso_to_utc(final_response.extracted_data.appointment_datetime)
 
-    if bypass_address_logic and not (ed.street and ed.street_number):
-        d_address = ed.city or extracted_city
+    # Parts this turn didn't extract come from the lead, so a turn that extracted
+    # nothing can't shrink a known address to a bare city.
+    lead_facts = active_lead_doc or {}
+    if parts_from_other_city(lead_facts, ed.city):
+        lead_facts = {}  # PRO-228: another city's street is not this address
+    street = ed.street or lead_facts.get("street")
+    street_number = ed.street_number or lead_facts.get("street_number")
+    if street and street_number:
+        d_address = compose_full_address(
+            SimpleNamespace(
+                street=street,
+                street_number=street_number,
+                city=ed.city or lead_facts.get("city") or extracted_city,
+            )
+        )
     else:
-        d_address = compose_full_address(ed)
+        d_address = ed.city or extracted_city
 
     d_issue = (
-        final_response.extracted_data.issue or extracted_issue or Defaults.UNKNOWN_ISSUE
+        issue_update(final_response.extracted_data.issue, extracted_issue)
+        or extracted_issue
+        or Defaults.UNKNOWN_ISSUE
     )
 
     d_name = final_response.extracted_data.customer_name or extracted_name
@@ -974,6 +1055,11 @@ async def _finalize_deal(
         lead_update["quoted_price"] = quoted_price
 
     if current_lead_id:
+        # A turn that extracted nothing (a failed file on an emergency lead reaches
+        # here with an empty response) must not erase what the lead already has.
+        for field in ("street", "street_number", "city", "floor", "apartment"):
+            if not lead_update[field]:
+                del lead_update[field]
         # CONTACTED -> NEW once the routing engine has matched a pro. Goes
         # through set_lead_status so the transition lands in status_history.
         lead = await set_lead_status(

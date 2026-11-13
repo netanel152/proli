@@ -1,0 +1,3 @@
+# One source of truth for the legal text: the API serves it, this domain proxies it.
+/privacy  https://api-production-d95db.up.railway.app/privacy  200
+/terms    https://api-production-d95db.up.railway.app/terms    200

@@ -121,7 +121,9 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
         )
 
 
-async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
+async def reassign_lead(
+    lead, notify_old_pro: bool = True, announce: bool = True
+) -> bool:
     """Reassign one lead to the next-best pro, excluding its current pro.
 
     Notifies the customer, the new pro, and the old pro; escalates to
@@ -135,7 +137,9 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
     reassignment offer (customer chose "find someone else"), and the PRO-117
     pro-reject handoff. ``notify_old_pro=False`` skips the ``PRO_LOST_LEAD``
     message ("הועברה עקב חוסר מענה") — wrong for a pro who explicitly rejected
-    and already got the reject acknowledgement.
+    and already got the reject acknowledgement. ``announce=False`` skips
+    ``CUSTOMER_REASSIGNING``, whose apology for the wait is false for a caller that
+    moved the lead for another reason and told the customer so itself.
     """
     lead_id = lead["_id"]
     chat_id = lead["chat_id"]
@@ -245,26 +249,32 @@ async def reassign_lead(lead, notify_old_pro: bool = True) -> bool:
         return False
 
     # 1. Notify customer
-    try:
-        await whatsapp.send_message(
-            chat_id,
-            Messages.SOS.CUSTOMER_REASSIGNING,
-            template_key="reassigning",
-            params={"issue_type": issue_param(lead)},
-        )
-    except Exception as e:
-        logger.error(f"Failed to notify customer ...{chat_id[-8:]}: {e}")
+    if announce:
+        try:
+            await whatsapp.send_message(
+                chat_id,
+                Messages.SOS.CUSTOMER_REASSIGNING,
+                template_key="reassigning",
+                params={"issue_type": issue_param(lead)},
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify customer ...{chat_id[-8:]}: {e}")
 
     # 2. Find replacement — exclude the current pro AND everyone who already
     # explicitly rejected this lead (PRO-117: excluding only the current pro
-    # lets the reject chain ping-pong A→B→A within MAX_REASSIGNMENTS).
+    # lets the reject chain ping-pong A→B→A within MAX_REASSIGNMENTS), and
+    # everyone dropped from it for trade (PRO-225).
     excluded_ids = list(lead.get("rejected_by") or [])
+    excluded_ids += [
+        pid for pid in lead.get("excluded_pro_ids") or [] if pid not in excluded_ids
+    ]
     if current_pro_id and current_pro_id not in excluded_ids:
         excluded_ids.append(current_pro_id)
     new_pro = await matching_service.determine_best_pro(
         issue_type=lead.get("issue_type"),
         location=raw_location,
         excluded_pro_ids=excluded_ids,
+        customer_chat_id=chat_id,
     )
 
     if new_pro:
@@ -998,6 +1008,11 @@ async def check_pro_approval_sla():
       * T+APPROVAL_REASSIGN_OFFER_MINUTES → offer the customer a reassignment once
         (``reassign_offered`` flag); the 1/2 reply is handled in workflow_service.
     Emergency leads use half the thresholds. Idempotent via the boolean flags.
+
+    PRO-212: an offer held by a pro the admin deactivated moves to another pro in
+    business hours, whatever the flags or the customer's state, unless the customer
+    is with a human. Waiting overnight outlasts AWAITING_PRO_APPROVAL, so neither
+    can be required of it, which is why the query no longer filters on the flags.
     """
     logger.info("⏰ [Approval SLA] Checking leads awaiting pro approval...")
     now = datetime.now(timezone.utc)
@@ -1006,10 +1021,6 @@ async def check_pro_approval_sla():
             "status": LeadStatus.NEW,
             "pro_id": {"$ne": None},
             "pro_notified_at": {"$ne": None},
-            "$or": [
-                {"approval_nudged": {"$ne": True}},
-                {"reassign_offered": {"$ne": True}},
-            ],
         }
         leads = await leads_collection.find(query).to_list(
             length=WorkerConstants.DB_QUERY_LIMIT
@@ -1021,11 +1032,23 @@ async def check_pro_approval_sla():
     for lead in leads:
         try:
             chat_id = lead["chat_id"]
-            # Only act while the customer is genuinely waiting for approval.
+            customer_state = await StateManager.get_state(chat_id)
+
+            # PRO-212: a pro the admin deactivated can't answer this offer, so don't
+            # wait for them. Moving it messages the customer, hence the PRO-73 gate.
+            owner = await users_collection.find_one({"_id": lead.get("pro_id")})
             if (
-                await StateManager.get_state(chat_id)
-                != UserStates.AWAITING_PRO_APPROVAL
+                owner
+                and not owner.get("is_active", True)
+                and not owner.get("self_paused")
+                and customer_state != UserStates.PAUSED_FOR_HUMAN
             ):
+                if within_business_hours():
+                    await reassign_lead(lead, notify_old_pro=False)
+                continue
+
+            # Only act while the customer is genuinely waiting for approval.
+            if customer_state != UserStates.AWAITING_PRO_APPROVAL:
                 continue
 
             notified_at = lead.get("pro_notified_at")

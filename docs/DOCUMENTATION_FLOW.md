@@ -15,12 +15,12 @@ CONTACTED → NEW → BOOKED → COMPLETED → CLOSED
 |--------|----------|------------|
 | `contacted` | AI extracts city + issue, opens conversation | Dispatcher (Phase 1) |
 | `new` | Pro matched and approval message sent | `_finalize_deal` |
-| `booked` | Pro approves via text ("אשר"/"1") — also not terminal: a customer reporting a no-show (option *3* on the completion check, PRO-45) claims the lead and hands it to `reassign_lead`, which reopens it as `new` under the next pro or escalates it | `_handle_approve` in `pro_flow.py` |
+| `booked` | Pro approves via text ("אשר", or a number in the list a bare "1" opens) — also not terminal: a customer reporting a no-show (option *3* on the completion check, PRO-45) claims the lead and hands it to `reassign_lead`, which reopens it as `new` under the next pro or escalates it | `_handle_approve` in `pro_flow.py` |
 | `completed` | Pro or customer confirms work done | `customer_flow.py` |
-| `rejected` | Pro rejects via text ("דחה"/"2") — a way-station, not terminal: `_handle_reject` claims it then hands off to `monitor_service.reassign_lead`, which reopens the lead as `new` under the next pro or escalates it (PRO-117) | `_handle_reject` in `pro_flow.py` |
+| `rejected` | Pro rejects via text ("דחה", or a number in the list a bare "2" opens) — a way-station, not terminal: `_handle_reject` claims it then hands off to `monitor_service.reassign_lead`, which reopens the lead as `new` under the next pro or escalates it (PRO-117) | `_handle_reject` in `pro_flow.py` |
 | `cancelled` | Customer cancels — a cancel keyword on a BOOKED job first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit | `workflow_service.py` |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h | `admin_flow.py` / `monitor_service.py` |
-| `pending_admin_review` | No replacement pro found at any radius, `MAX_REASSIGNMENTS` exhausted, or a rejected/no-show lead's rematch itself fails (PRO-45: `escalation_reason: "no_show_reassign_failed"`) | `monitor_service.py` / `workflow_service.py` / `pro_flow.py` / `customer_flow.py` |
+| `pending_admin_review` | No replacement pro found at any radius, an issue naming no known trade (`escalation_reason: "unknown_trade"`), `MAX_REASSIGNMENTS` exhausted, or a rejected/no-show/wrong-trade lead's rematch itself fails (PRO-45: `escalation_reason: "no_show_reassign_failed"`; `"wrong_trade_rematch_failed"`) | `monitor_service.py` / `conversation_pipeline.py` / `workflow_service.py` / `pro_flow.py` / `customer_flow.py` |
 
 Each transition is appended to the lead's `status_history` array (`{status, at, by}`) via `set_lead_status()`, the single writer for lead status in `lead_manager_service.py`.
 
@@ -34,7 +34,7 @@ Activated when no pro is assigned to the active lead.
 
 - Receives the last **5 conversational turns** (10 messages max — centrally trimmed in `ai_engine_service.py`)
 - Extracts `city`, `issue`, `street`, `street_number`, `floor`, `apartment`, `appointment_time`, `appointment_datetime` (ISO 8601, resolved from relative expressions; left null for open-ended times like "בהקדם") from the conversation
-- If `city` + `issue` are found → calls `matching_service.determine_best_pro()`
+- If `city` + `issue` are found (an emergency needs only the city) → calls `matching_service.determine_best_pro()`
 - If `city` or `issue` missing → sends a clarifying reply, waits for next message
 - If pro found → calls Phase 2 immediately
 - If no pro found after all radius steps → escalates lead to `PENDING_ADMIN_REVIEW`, sends `Messages.Customer.PENDING_REVIEW`
@@ -54,7 +54,7 @@ Activated when a pro is assigned (either from Phase 1 or an existing `pro_id` on
 
 ### Phase Skip Optimization
 
-If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatcher) is skipped entirely and the message goes directly to Phase 2. This eliminates a full AI call per message during ongoing conversations.
+If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatcher) is skipped entirely and the message goes directly to Phase 2 — unless that pro doesn't fit the lead's trade and no admin assigned them: the pipeline's wrong-trade check then drops them, a CONTACTED lead goes back through Phase 1 and matching, and a NEW one goes to `reassign_lead`. This eliminates a full AI call per message during ongoing conversations.
 
 ---
 
@@ -65,7 +65,7 @@ When Phase 2 returns `is_deal=True` (or the lead is flagged `is_emergency` and a
 1. Create or update lead with `status=new`, `pro_id`, `full_address` (composed), `street`, `street_number`, `city`, `floor`, `apartment`, `issue_type`, `appointment_time`, `appointment_datetime` (parsed to a BSON UTC date via `parse_iso_to_utc`), `media_url`
 2. Set customer state to `AWAITING_PRO_APPROVAL` (customer sees a soft-hold message on next message)
 3. Send customer `Messages.Customer.AWAITING_APPROVAL`
-4. Send pro a text-based approval request (e.g., "Reply 'אשר' or '1' to approve")
+4. Send pro a text-based approval request (`*אשר*` / `*דחה*`). With more than one NEW lead, or on a bare digit, the pro picks from a numbered list first
 
 If the customer is themselves a registered pro, they are **not** returned to `PRO_MODE` here — they stay on the customer side until their own lead closes, so follow-ups like "מתי הוא מגיע?" aren't answered with the pro dashboard. The ways back are a pro business keyword (Safety Bypass) or the IDLE auto-detect once the lead is done.
 
@@ -81,14 +81,14 @@ If the customer is themselves a registered pro, they are **not** returned to `PR
 | `AWAITING_INTENT_CONFIRMATION` | AI detects pro needs service | Prompt pro to switch modes; `1`/`כן` accepts, `2`/`לא` declines, anything else re-prompts once |
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI — unless the sender is a pro using an unambiguous business keyword, or an emergency keyword arrives (PRO-121: `EMERGENCY_WHILE_WAITING`, state kept, once per lead) |
 | `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged, 15m rolling TTL resets. An emergency keyword here flags the lead and pages the operator once, without un-pausing or replying (PRO-121) |
-| `AWAITING_ADDRESS` | Address missing parts | AI re-extracts parts from next message, state cleared if complete. An emergency keyword with a known city releases the gate early instead (PRO-121) |
+| `AWAITING_ADDRESS` | Address missing parts | AI re-extracts parts from next message; once complete the blocked step runs on the same turn — the loyalty dispatch (`loyalty_pro_id` in the FSM metadata) or the deal the address gate rejected, with the time the gate saved (PRO-227). An emergency keyword with a known city releases the gate early instead (PRO-121) |
 
 ### SOS / Human Handoff
 
 When the customer sends a trigger phrase (e.g., "אני צריך נציג"):
 
 1. Customer state set to `PAUSED_FOR_HUMAN` with `ttl=900` (15 min)
-2. `send_sos_alert()` sends alerts to both the assigned pro (if any) and admin
+2. `send_sos_alert()` always pages the admin. It alerts the assigned pro only on a BOOKED lead (with the customer's phone and words) or a NEW one (neither, offering `*אשר*`/`*דחה*`), and never a pro the admin deactivated. The page's `pro_notified` says whether a send to the pro succeeded. A BOOKED lead's pro also gets `PAUSE_NOTIFICATION`
 3. Customer receives `Messages.Customer.BOT_PAUSED_BY_CUSTOMER`
 4. All subsequent messages reset the 15-minute TTL.
 5. If 15 minutes of silence pass, the **SLA Monitor** triggers `SLA_DEFLECTION_MESSAGE` (PRO-73: business hours + `sla_monitor_active` toggle, default OFF).

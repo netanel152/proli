@@ -163,6 +163,10 @@ async def _handle_action_selection(chat_id, text, state_manager, whatsapp):
                 issue_type=issue,
                 location=location,
                 excluded_pro_ids=excluded,
+                # A human picks from this list, and an unclassified issue is
+                # exactly what reaches them. The trade rule still holds when named.
+                require_trade=False,
+                customer_chat_id=lead.get("chat_id"),
             )
             if not pro:
                 break

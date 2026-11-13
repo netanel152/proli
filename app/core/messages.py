@@ -175,8 +175,8 @@ class Messages:
             "🙏 אין בעיה, ממשיכים להמתין לאישור. אעדכן אותך ברגע שיש תשובה."
         )
         BOT_PAUSED_BY_PRO = (
-            "📞 איש המקצוע ביקש לדבר איתך ישירות.\n"
-            "אני מושהה כרגע — ההודעות הבאות יגיעו ממנו."
+            "📞 איש המקצוע ביקש לדבר איתך ישירות, ויפנה אליך מהמספר שלו.\n"
+            "אני מושהה בינתיים."
         )
         BOT_PAUSED_BY_CUSTOMER = "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת."
         # PRO-121: this fires on a keyword, before any pro is matched — and
@@ -242,6 +242,9 @@ class Messages:
         LOYALTY_ALREADY_UPDATED = (
             "🙏 הפנייה שלך כבר עודכנה במערכת — ממשיכים לטפל בה ואעדכן אותך."
         )
+        # PRO-215: the lead left a pro outside its trade. "אעביר" stays true when
+        # nobody fits: PENDING_REVIEW then says the team assigns a suitable pro.
+        MOVING_TO_FITTING_PRO = "👍 אעביר את הפנייה לאיש מקצוע שמתאים לתקלה הזו."
         LOYALTY_DECLINED = "בסדר גמור, אחפש עבורך את איש המקצוע הפנוי והמתאים ביותר."
         LOYALTY_REPROMPT = (
             "🙂 לא בטוח שהבנתי. לבדוק מול איש המקצוע הקודם?\n"
@@ -410,6 +413,12 @@ class Messages:
             "אם סיימת אותה — אפשר לכתוב *סיימתי* כדי לשחרר מקום לעבודות חדשות."
         )
         CUSTOMER_REPORTED_COMPLETION = "👍 הלקוח דיווח שהעבודה הסתיימה. הסטטוס עודכן."
+        # PRO-215: also not `SOS.PRO_LOST_LEAD` — nobody failed to answer. Says
+        # nothing about where the lead went, since that may be a human's queue.
+        LEAD_OUTSIDE_TRADE = (
+            "ℹ️ הפנייה על {issue} כבר לא אצלך, כי היא מחוץ לתחום המקצוע שלך."
+        )
+        LEAD_OUTSIDE_TRADE_OFFER = LEAD_OUTSIDE_TRADE + "\nאין צורך לאשר או לדחות אותה."
         # PRO-45: replaces `SOS.PRO_LOST_LEAD` ("הועברה עקב חוסר מענה") for this
         # path — the lead is taken away for a reason the pro is entitled to be
         # told accurately, and "no response" is not that reason.
@@ -470,6 +479,10 @@ class Messages:
             "לא יגיעו אליך הצעות עבודה חדשות עד שתכתוב *זמין*."
         )
         STATUS_RESUMED = "🚀 *הסטטוס שלך שונה ל'זמין'.*\nחזרת לקבל הצעות עבודה!"
+        # PRO-212: is_active False without self_paused is not a break the pro took.
+        RESUME_NEEDS_ADMIN = (
+            "החשבון שלך לא פעיל כרגע, ורק צוות פרולי יכול להפעיל אותו מחדש."
+        )
         NO_PENDING_APPROVALS = "אין לך כרגע עבודות שממתינות לאישור."
         NO_ACTIVE_JOBS = "אין לך עבודות פעילות כרגע שניתן לסיים."
         SELECT_JOB_TO_FINISH = (
@@ -539,8 +552,15 @@ class Messages:
             "*דחה* — לדחייה"
         )
         PAUSE_ACK = (
-            "⏸️ הבוט הושהה ואפשר לדבר עם הלקוח ישירות.\n"
+            "⏸️ הבוט הושהה בשיחה הזו, ואפשר לדבר ישירות עם {customer_name}.\n"
             "הבוט יחזור לפעולה אוטומטית בעוד רבע שעה, או מיד עם *המשך*."
+        )
+        # PRO-212: the pause needs a customer the pro can actually reach.
+        PAUSE_NEEDS_APPROVAL = (
+            "אפשר להשהות את הבוט רק בעבודה מאושרת, כי פרטי הלקוח נשלחים אחרי האישור.\n"
+            + CMD_APPROVE
+            + "\n"
+            + CMD_REJECT
         )
         PAUSE_NOTIFICATION = (
             "🚨 הלקוח מבקש מענה אנושי.\n" "הבוט יחזור לפעולה אוטומטית בעוד רבע שעה."
@@ -645,6 +665,28 @@ class Messages:
             "{jobs_list}\n"
             "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
         )
+        # PRO-212: אשר/דחה with more than one NEW lead. Rows are JOB_SELECT_ROW,
+        # which carries nothing the offer itself did not (PRO-59).
+        SELECT_JOB_TO_APPROVE = (
+            "📋 איזו עבודה לאשר?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
+        )
+        SELECT_JOB_TO_REJECT = (
+            "🚫 איזו עבודה לדחות?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
+        )
+        SELECT_JOB_TO_RESUME = (
+            "▶️ באיזו עבודה להחזיר את הבוט?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
+        )
+        SELECT_JOB_TO_PAUSE = (
+            "⏸️ באיזו עבודה להשהות את הבוט?\n"
+            "{jobs_list}\n"
+            "אפשר להשיב במספר העבודה, או *ביטול* ליציאה."
+        )
         CANCEL_SUCCESS = "✅ העבודה בוטלה. הלקוח עודכן."
         SUMMARY_BODY = (
             "📊 *סיכום ביצועים*\n\n"
@@ -739,6 +781,18 @@ class Messages:
             "הרשימה השתנתה מאז שהוצגה, אז ביטלתי את הבחירה.\n"
             "*סיימתי* — רשימה מעודכנת לסיום עבודה\n"
             "*ביטול* — רשימה מעודכנת לביטול עבודה"
+        )
+        # The same, in an אשר/דחה prompt, where other offers are still waiting.
+        SELECTION_OFFER_LIST_CHANGED = (
+            "הרשימה השתנתה מאז שהוצגה, אז ביטלתי את הבחירה.\n"
+            "*אשר* — אישור עבודה שממתינה לך\n"
+            "*דחה* — דחיית עבודה שממתינה לך"
+        )
+        SELECTION_RESUME_LIST_CHANGED = (
+            "הרשימה השתנתה מאז שהוצגה, אז ביטלתי את הבחירה.\n" "*המשך* — רשימה מעודכנת"
+        )
+        SELECTION_PAUSE_LIST_CHANGED = (
+            "הרשימה השתנתה מאז שהוצגה, אז ביטלתי את הבחירה.\n" "*השהה* — רשימה מעודכנת"
         )
         HISTORY_HEADER = "📋 *10 העבודות האחרונות שהושלמו*\n"
         RATING_NONE = "אין עדיין"
@@ -836,10 +890,11 @@ class Messages:
         # — so a customer typing נציג while waiting on approval used to hand
         # their number to a pro who could then reject in-bot and call them.
         # This variant carries the cry for help without the number, and says
-        # plainly how to earn it.
+        # plainly how to earn it. PRO-212: without the customer's words too, since
+        # they can type their number. A CONTACTED lead gets no alert at all: it
+        # was never offered, so *אשר* would find nothing.
         PRO_ALERT_PENDING = (
             "⚠️ *הלקוח שממתין לתשובתך ביקש עזרה*\n\n"
-            "*הודעה:* {last_message}\n\n"
             "כדי לקבל את פרטי הקשר שלו:\n"
             "*אשר* — לאישור העבודה\n"
             "*דחה* — לדחייה"
@@ -1227,6 +1282,7 @@ class Messages:
         # message. All lead-offer fallbacks come from here.
         CUSTOMER_NAME = "לקוח"
         UNKNOWN = "לא ידוע"
+        ISSUE = "תקלה"
         TIME_ASAP = "בהקדם"
         # PRO-168: the pro-facing job lists and the admin wizard hand-rolled
         # these inline. §9 — a value that can be empty formats through a
@@ -1315,10 +1371,10 @@ class Messages:
             "כדאי ליצור קשר בהקדם האפשרי."
         )
         # A body of its own because the pro has not approved yet and must not get
-        # the phone number (PRO-59).
+        # the phone number (PRO-59), nor the customer's words, where they can type
+        # that number (PRO-212). So it has no variable at all.
         SOS_ALERT_PENDING = (
             "⚠️ *הלקוח שממתין לתשובתך ביקש עזרה*\n\n"
-            "*הודעה:* {last_message}\n\n"
             "פרטי הקשר יישלחו אחרי האישור.\n"
             "*אשר* — לאישור העבודה\n"
             "*דחה* — לדחיית העבודה"
@@ -1411,12 +1467,21 @@ class Messages:
             "🙏 לא הצלחתי לפתוח את הקובץ ששלחת.\n"
             "אפשר לשלוח שוב, או פשוט לתאר במילים."
         )
-        # PRO-204: the file reached us but not the model, so this turn's reply
-        # cannot speak to it. Sent alone on a media-only turn, and ahead of the
-        # AI's reply when there was text to answer. Infinitives, as above.
+        # The model never saw the file and there was no text to answer. Infinitives,
+        # as above. TEXT_ONLY is for a failed recording, or a file of unknown type:
+        # offering a voice note after one failed can send them round again.
         MEDIA_UPLOAD_FAILED = (
             "🙏 לא הצלחתי לעבד את הקובץ ששלחת.\n"
             "אפשר לתאר את הבעיה בטקסט או בהודעה קולית?"
+        )
+        MEDIA_UPLOAD_FAILED_TEXT_ONLY = (
+            "🙏 לא הצלחתי לעבד את הקובץ ששלחת.\nאפשר לתאר את הבעיה בטקסט?"
+        )
+        # The model never saw the file but there was text, which they already wrote,
+        # so this asks for nothing. Also sent ahead of LOYALTY_OFFER and
+        # PENDING_REVIEW, so it says "התייחסתי", not "עניתי".
+        MEDIA_FAILED_TEXT_ANSWERED = (
+            "🙏 לא הצלחתי לעבד את הקובץ ששלחת, אז התייחסתי רק למה שכתבת."
         )
         DAILY_AI_CAP_REACHED = (
             "🙏 הגעת למכסת הפניות היומית. אפשר לנסות שוב מחר — "

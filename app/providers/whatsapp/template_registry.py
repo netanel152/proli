@@ -171,8 +171,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
             "proli_sos_alert_pending",
             source="Messages.SOS.PRO_ALERT_PENDING",
             body=Messages.Templates.SOS_ALERT_PENDING,
-            params=("last_message",),
-        ),  # P11, not approved yet: no phone (PRO-59)
+        ),  # P11, lead NEW: no phone (PRO-59) and no customer text (PRO-212)
         TemplateSpec(
             "customer_cancelled",
             "proli_customer_cancelled",
@@ -192,6 +191,14 @@ TEMPLATES: dict[str, TemplateSpec] = {
             source="Messages.Onboarding.REJECTED_NOTIFICATION",
             body=Messages.Templates.ONBOARDING_REJECTED,
         ),  # P13
+        # P14 (PRO-215) arrived after the owner reviewed the bodies, so it has
+        # none yet. Its free-form send stays as it is until one is approved.
+        TemplateSpec(
+            "pro_lead_outside_trade",
+            "proli_pro_lead_outside_trade",
+            source="Messages.Pro.LEAD_OUTSIDE_TRADE",
+            submit=False,
+        ),  # P14
         # Customer-facing
         TemplateSpec(
             "pro_found",

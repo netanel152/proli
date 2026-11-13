@@ -157,10 +157,16 @@ class ReplayAIEngine:
         require_json: bool = True,
         media_url: str = None,
         pro_id: str = None,
+        media_lost: bool = False,
     ):
         key = fixture_key(custom_system_prompt, user_text, media_mime_type)
         self.calls.append(
-            {"key": key, "user_text": user_text, "media_mime": media_mime_type}
+            {
+                "key": key,
+                "user_text": user_text,
+                "media_mime": media_mime_type,
+                "media_lost": media_lost,
+            }
         )
 
         if self._scripted:

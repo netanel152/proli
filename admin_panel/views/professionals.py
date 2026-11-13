@@ -10,8 +10,10 @@ from admin_panel.core.utils import (
 )
 from admin_panel.core.auth import log_audit, get_current_role
 from admin_panel.core.labels import PROFESSION_TYPES, profession_label
+from admin_panel.core.pro_phone import ERR_TAKEN, check_pro_phone
 from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from admin_panel.core.rbac import can_edit, has_permission
+from app.core.constants import LeadStatus
 from app.services.geocoding_service import (
     ServiceAreaResolution,
     parse_service_areas,
@@ -116,11 +118,12 @@ def render_pro_list(T):
             with c_info:
                 # Status + Name + Verified
                 # Icon + text, never colour alone (PRO-61).
-                status_txt = (
-                    f"🟢 {T['status_active']}"
-                    if is_active
-                    else f"🔴 {T['status_inactive']}"
-                )
+                if is_active:
+                    status_txt = f"🟢 {T['status_active']}"
+                elif p.get("self_paused"):
+                    status_txt = f"☕ {T['status_self_paused']}"
+                else:
+                    status_txt = f"🔴 {T['status_inactive']}"
                 verified_badge = (
                     f" · ✅ {T['verified']}" if p.get("is_verified") else ""
                 )
@@ -256,6 +259,11 @@ def render_pro_form(T, pro_data=None):
                     T.get("verified", "Verified"),
                     value=pro_data.get("is_verified", False) if is_edit else False,
                 )
+            handles_electrical = st.checkbox(
+                T["handles_electrical"],
+                value=pro_data.get("handles_electrical", False) if is_edit else False,
+                help=T["handles_electrical_help"],
+            )
 
         # Image Upload
         existing_image_url = pro_data.get("profile_image_url", "") if is_edit else ""
@@ -302,6 +310,18 @@ def render_pro_form(T, pro_data=None):
         submit_label = T["btn_create"] if not is_edit else T["save_btn"]
         if st.form_submit_button(submit_label, type="primary"):
             if name and phone and st.session_state.pro_areas:
+                # Stored in the bare 972… form the bot looks a pro up by (PRO-224).
+                phone, phone_error = check_pro_phone(
+                    users_collection,
+                    phone,
+                    exclude_id=ObjectId(pro_id) if is_edit else None,
+                )
+                if phone_error == ERR_TAKEN:
+                    st.error(T["pro_phone_taken"])
+                    return
+                if phone_error:
+                    st.error(T["invalid_pro_phone"])
+                    return
 
                 # Handle Image Upload
                 final_image_url = existing_image_url
@@ -350,7 +370,13 @@ def render_pro_form(T, pro_data=None):
                     "business_name": name,
                     "phone_number": phone,
                     "type": ptype,
+                    # Routing reads these, so a changed type can't leave a stale one.
+                    "categories": [ptype],
+                    "handles_electrical": handles_electrical,
                     "is_active": active,
+                    # This form is the admin's decision, so the pro's own *חזרתי*
+                    # can't undo it (PRO-212).
+                    "self_paused": False,
                     "is_verified": is_verified,
                     "license_number": license_number,
                     "profile_image_url": final_image_url,
@@ -369,7 +395,26 @@ def render_pro_form(T, pro_data=None):
                         {"_id": ObjectId(pro_id)}, {"$set": pro_payload}
                     )
                     log_audit("edit_pro", {"pro_id": pro_id, "name": name})
-                    set_flash("pro_flash", T["success_update"])
+                    open_jobs = (
+                        leads_collection.count_documents(
+                            {
+                                "pro_id": ObjectId(pro_id),
+                                "status": {
+                                    "$in": [LeadStatus.NEW, LeadStatus.BOOKED],
+                                },
+                            }
+                        )
+                        if pro_data.get("is_active", True) and not active
+                        else 0
+                    )
+                    if open_jobs:
+                        set_flash(
+                            "pro_flash",
+                            T["deactivated_with_open_jobs"].format(count=open_jobs),
+                            "warning",
+                        )
+                    else:
+                        set_flash("pro_flash", T["success_update"])
                 else:
                     pro_payload.update(
                         {
@@ -473,12 +518,16 @@ def render_pending_approvals(T):
                     log_audit(
                         "reject_pro", {"pro_id": pro_id, "name": p.get("business_name")}
                     )
-                    _notify_pro_rejected(p.get("phone_number"))
-                    set_flash(
-                        "pro_flash",
-                        T["pro_rejected"].replace(
+                    notified = _notify_pro_rejected(p.get("phone_number"))
+                    rejected = (
+                        T["pro_rejected"] if notified else T["pro_rejected_untold"]
+                    )
+                    _flash_pro_result(
+                        T,
+                        rejected.replace(
                             "{name}", str(p.get("business_name") or T["unnamed_pro"])
                         ),
+                        notified,
                     )
                     del st.session_state[f"confirm_reject_{pro_id}"]
                     st.session_state.pop(_geo_check_key(pro_id), None)
@@ -545,23 +594,24 @@ def _approve_pending_pro(p: dict, T, resolution: ServiceAreaResolution) -> None:
             "service_areas_geocode_pending": resolution.needs_recheck,
         },
     )
-    _notify_pro_approved(p.get("phone_number"))
+    notified = _notify_pro_approved(p.get("phone_number"))
 
     shown_name = name or T["unnamed_pro"]
     if resolution.unresolved:
-        set_flash(
-            "pro_flash",
+        _flash_pro_result(
+            T,
             T["geo_approved_flagged"].format(
                 name=shown_name, areas=", ".join(resolution.unresolved)
             ),
+            notified,
             "warning",
         )
     elif resolution.needs_recheck:
-        set_flash(
-            "pro_flash", T["geo_approved_recheck"].format(name=shown_name), "warning"
+        _flash_pro_result(
+            T, T["geo_approved_recheck"].format(name=shown_name), notified, "warning"
         )
     else:
-        set_flash("pro_flash", T["approved_ok"].format(name=shown_name))
+        _flash_pro_result(T, T["approved_ok"].format(name=shown_name), notified)
     st.session_state.pop(_geo_check_key(pro_id), None)
     st.cache_data.clear()
     st.rerun()
@@ -642,24 +692,44 @@ def _render_service_area_correction(
         st.rerun()
 
 
-def _notify_pro_approved(phone_number: str):
+def _flash_pro_result(T, message: str, notified, level: str = "success") -> None:
+    """A pro action's confirmation, saying so when the pro's message did not go.
+
+    ``notified`` is None when no send was attempted, for a pro with no phone.
+    Unmuting would not help that pro, so it gets the plain sentence.
+    """
+    if notified:
+        set_flash("pro_flash", message, level)
+        return
+    from app.providers.whatsapp import sync
+
+    muted = notified is False and not sync.can_transmit()
+    note = T["pro_not_told_muted"] if muted else T["pro_not_told"]
+    set_flash("pro_flash", f"{message} {note}", "warning")
+
+
+def _notify_pro_approved(phone_number: str) -> bool | None:
     # PRO-86: was a raw httpx.post straight at the legacy vendor, bypassing the circuit
     # breaker and kill switch entirely. Now goes through the one egress.
     if not phone_number:
-        return
+        return None
     from app.core.messages import Messages
     from app.core.phone import to_chat_id
     from app.providers.whatsapp.sync import send_text_sync
 
-    send_text_sync(to_chat_id(phone_number), Messages.Onboarding.APPROVED_NOTIFICATION)
+    return send_text_sync(
+        to_chat_id(phone_number), Messages.Onboarding.APPROVED_NOTIFICATION
+    )
 
 
-def _notify_pro_rejected(phone_number: str):
+def _notify_pro_rejected(phone_number: str) -> bool | None:
     # PRO-86: see _notify_pro_approved — same bypass, same fix.
     if not phone_number:
-        return
+        return None
     from app.core.messages import Messages
     from app.core.phone import to_chat_id
     from app.providers.whatsapp.sync import send_text_sync
 
-    send_text_sync(to_chat_id(phone_number), Messages.Onboarding.REJECTED_NOTIFICATION)
+    return send_text_sync(
+        to_chat_id(phone_number), Messages.Onboarding.REJECTED_NOTIFICATION
+    )

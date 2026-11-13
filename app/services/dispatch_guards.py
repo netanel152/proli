@@ -28,6 +28,7 @@ closure over function locals.
 
 import asyncio
 from dataclasses import dataclass
+from types import SimpleNamespace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional, Tuple
 
@@ -81,6 +82,9 @@ class DispatchContext:
     emergency_inbound_logged: bool = False
     #: This turn is the messages held from before consent, replayed by the gate.
     replayed_held_messages: bool = False
+    #: The customer sent a file and re-hosting lost it, so `media_url` is None
+    #: and nothing below can tell. The pipeline passes it to the AI engine.
+    file_lost: bool = False
 
     async def refresh_state(self, state_manager) -> Optional[str]:
         """Re-read the FSM state after a guard may have changed it.
@@ -303,6 +307,16 @@ async def _hold_pre_consent_message(ctx: DispatchContext, deps: GuardDeps) -> No
         await deps.state_manager.hold_message(ctx.chat_id, ctx.user_text, ctx.media_url)
 
 
+async def _resolve_media(ctx: DispatchContext, media_url: Optional[str]) -> None:
+    from app.services import workflow_service as wf
+
+    ctx.media_url = await wf.resolve_inbound_media(media_url)
+    # Only ever set: a replayed turn comes through here twice, the second time
+    # with the None the first pass left.
+    if media_url and not ctx.media_url:
+        ctx.file_lost = True
+
+
 async def _replay_held_messages(
     ctx: DispatchContext, deps: GuardDeps, retrying_accept: bool
 ) -> bool:
@@ -323,11 +337,13 @@ async def _replay_held_messages(
         if not held:
             return False
         ctx.user_text = held["text"]
-        ctx.media_url = await wf.resolve_inbound_media(held["media_url"])
+        await _resolve_media(ctx, held["media_url"])
         ctx.normalized_text = held["text"].strip().lower()
         ctx.is_emergency_detected = wf.is_emergency_text(ctx.normalized_text)
         await wf.lead_manager.log_message(
-            ctx.chat_id, "user", wf._inbound_log_text(ctx.user_text, ctx.media_url)
+            ctx.chat_id,
+            "user",
+            wf._inbound_log_text(ctx.user_text, ctx.media_url, ctx.file_lost),
         )
     except BaseException as e:
         if held:
@@ -427,7 +443,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
                 )
                 return HANDLED
 
-    ctx.media_url = await wf.resolve_inbound_media(ctx.media_url)
+    await _resolve_media(ctx, ctx.media_url)
 
     # Refresh state after potential consent state changes
     await ctx.refresh_state(deps.state_manager)
@@ -512,10 +528,15 @@ async def guard_sos_human_handoff(ctx: DispatchContext, deps: GuardDeps):
     pro_id = active_lead["pro_id"] if active_lead and "pro_id" in active_lead else None
     await wf.send_sos_alert(ctx.chat_id, ctx.user_text, pro_id)
 
-    # Notify the pro about the pause (if assigned)
-    if pro_id:
+    # Notify the pro about the pause. PRO-212: only a pro who has the customer's
+    # number can step into the conversation, and not one the admin deactivated.
+    if pro_id and active_lead.get("status") == LeadStatus.BOOKED:
         pro = await deps.users_collection.find_one({"_id": pro_id})
-        if pro and pro.get("phone_number"):
+        if (
+            pro
+            and pro.get("phone_number")
+            and (pro.get("is_active", True) or pro.get("self_paused"))
+        ):
             pro_phone = to_chat_id(pro["phone_number"])
             await deps.whatsapp.send_message(
                 pro_phone,
@@ -1043,7 +1064,7 @@ async def guard_customer_mode_switch(ctx: DispatchContext, deps: GuardDeps):
         ctx.normalized_text in Messages.Keywords.CUSTOMER_MODE_COMMANDS
         and ctx.current_state in (UserStates.PRO_MODE, UserStates.IDLE)
     ):
-        if await wf._is_registered_pro(ctx.chat_id):
+        if await wf._is_registered_pro(ctx.chat_id, include_on_break=True):
             await deps.state_manager.set_state(ctx.chat_id, UserStates.CUSTOMER_MODE)
             await deps.context_manager.clear_context(ctx.chat_id)
             await deps.whatsapp.send_message(
@@ -1075,12 +1096,29 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
     PRO_SELECTING_JOB_TO_FINISH here is what made the job list unanswerable —
     pro_flow re-reads the state and saw PRO_MODE, so "1" ran approve. Hence
     PRO_DISPATCH_STATES rather than PRO_MODE alone.
+
+    PRO-212: a pro on break counts. PRO_MODE lasts 4 hours and a break lasts days,
+    so a reminder's answer, and the *חזרתי* that ends the break, used to reach the
+    customer side. Matching never reads this, so they stay out of it. But a pro on
+    break is often writing as a customer, and auto-detect leaves them there: a bare
+    digit may answer "which floor?", and with their own request open so may any
+    word, except the one that ends the break. An active pro with their own request
+    open keeps their digits for it too. A pro the admin deactivated is sent to the
+    refusal when they try to come back, rather than to the customer AI.
     """
     from app.services import workflow_service as wf
 
     if ctx.normalized_text in wf.PRO_BUSINESS_KEYWORDS:
-        is_pro_doc = await wf._is_registered_pro(ctx.chat_id)
+        is_pro_doc = await wf._is_registered_pro(ctx.chat_id, include_on_break=True)
+        is_resume = ctx.normalized_text in Messages.Keywords.RESUME_COMMANDS
         if is_pro_doc and ctx.current_state not in wf.PRO_DISPATCH_STATES:
+            own_lead = await wf._get_active_customer_lead(ctx.chat_id)
+            on_break = not is_pro_doc.get("is_active", True)
+            digit = ctx.normalized_text.isdigit()
+            if (digit and (on_break or own_lead)) or (
+                on_break and own_lead and not is_resume
+            ):
+                return None
             defer_to_customer_flow = (
                 ctx.normalized_text in wf.AMBIGUOUS_PRO_KEYWORDS
                 and (await wf._customer_prompt_pending(ctx.chat_id, ctx.current_state))
@@ -1093,6 +1131,14 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
             else:
                 await deps.state_manager.set_state(ctx.chat_id, UserStates.PRO_MODE)
                 ctx.current_state = UserStates.PRO_MODE
+        elif (
+            not is_pro_doc
+            and is_resume
+            and await wf._is_deactivated_pro(ctx.chat_id)
+            and not await wf._get_active_customer_lead(ctx.chat_id)
+        ):
+            # Routing's gate in pro_flow answers RESUME_NEEDS_ADMIN and clears this.
+            ctx.current_state = UserStates.PRO_MODE
     return None
 
 
@@ -1230,15 +1276,19 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         await deps.whatsapp.send_message(ctx.chat_id, Messages.Errors.AI_OVERLOAD)
         return HANDLED
 
+    ed = follow_up.extracted_data
+    stored_parts = {f: lead_facts.get(f) for f in wf.ADDRESS_PARTS}
+    new_parts = {f: getattr(ed, f, None) for f in wf.ADDRESS_PARTS}
+    moved = wf.parts_from_other_city(lead_facts, ed.city)
+    if moved:
+        # PRO-228: never join parts to another city. Drop the stored ones, and
+        # keep of this reply's only those the customer actually wrote in it.
+        stored_parts = dict.fromkeys(wf.ADDRESS_PARTS)
+        new_parts = wf.stated_in(new_parts, ctx.user_text)
     merged = {
-        "customer_name": follow_up.extracted_data.customer_name
-        or lead_facts.get("customer_name"),
-        "street": follow_up.extracted_data.street or lead_facts.get("street"),
-        "street_number": follow_up.extracted_data.street_number
-        or lead_facts.get("street_number"),
-        "city": follow_up.extracted_data.city or lead_facts.get("city"),
-        "floor": follow_up.extracted_data.floor or lead_facts.get("floor"),
-        "apartment": follow_up.extracted_data.apartment or lead_facts.get("apartment"),
+        "customer_name": ed.customer_name or lead_facts.get("customer_name"),
+        **{f: new_parts.get(f) or stored_parts[f] for f in wf.ADDRESS_PARTS},
+        "city": ed.city or lead_facts.get("city"),
     }
     logger.info(
         f"🔍 AWAITING_ADDRESS re-extraction for {mask_chat_id(ctx.chat_id)}: "
@@ -1251,10 +1301,12 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         f"merged_present={sorted(k for k, v in merged.items() if v)}"
     )
     non_empty = {k: v for k, v in merged.items() if v}
-    if non_empty:
-        await wf.leads_collection.update_one(
-            {"_id": active_lead_await["_id"]}, {"$set": non_empty}
-        )
+    if any(merged[f] for f in wf.ADDRESS_PARTS):
+        non_empty["address_city"] = merged["city"]
+    gone = {f: "" for f in wf.ADDRESS_PARTS if moved and not merged[f]}
+    update = {op: v for op, v in (("$set", non_empty), ("$unset", gone)) if v}
+    if update:
+        await wf.leads_collection.update_one({"_id": active_lead_await["_id"]}, update)
 
     class _AddrProbe:
         pass
@@ -1272,8 +1324,22 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         await wf.leads_collection.update_one(
             {"_id": active_lead_await["_id"]}, {"$set": {"full_address": full}}
         )
+        # Read before clear_state, which drops the metadata with the state.
+        loyalty_pro_id = (await deps.state_manager.get_metadata(ctx.chat_id) or {}).get(
+            "loyalty_pro_id"
+        )
         await deps.state_manager.clear_state(ctx.chat_id)
         await deps.whatsapp.send_message(ctx.chat_id, Messages.Customer.ADDRESS_SAVED)
+        try:
+            await _continue_after_address(
+                ctx, active_lead_await["_id"], loyalty_pro_id, follow_up
+            )
+        except Exception as e:
+            # Same as the pipeline's finalize call sites: the address is saved
+            # and the next turn routes normally, so log rather than crash.
+            logger.error(
+                f"Dispatch after address failed for {mask_chat_id(ctx.chat_id)}: {e}"
+            )
         logger.info(
             # The address itself is not logged. PRO-173 settled this for the
             # paging path — masking the phone and then printing the street has
@@ -1290,6 +1356,63 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
             f"⏳ AWAITING_ADDRESS still missing parts for {mask_chat_id(ctx.chat_id)}: {reason}"
         )
         return HANDLED
+
+
+async def _continue_after_address(ctx, lead_id, loyalty_pro_id, follow_up):
+    """PRO-227: run the step the incomplete address was blocking.
+
+    AWAITING_ADDRESS has two writers, both of which leave a CONTACTED lead with
+    `pro_id` set: the loyalty accept (which also stores `loyalty_pro_id` in the
+    FSM metadata) and `_finalize_deal`'s address gate. The loyalty one gets its
+    dispatch; the gate one gets the deal it rejected, finalized with the time
+    the gate persisted. A lead that moved on, or a pro no longer active, is left
+    to the next turn's normal routing, as before.
+    """
+    from app.services import workflow_service as wf
+
+    lead = await wf.leads_collection.find_one(
+        {"_id": lead_id, "status": LeadStatus.CONTACTED}
+    )
+    if not lead or not lead.get("pro_id"):
+        return
+    pro = await wf.users_collection.find_one({"_id": lead["pro_id"], "is_active": True})
+    if not pro:
+        return
+    if loyalty_pro_id == str(pro["_id"]):
+        await wf._dispatch_loyalty_lead(ctx.chat_id, pro, lead)
+        return
+    ed = follow_up.extracted_data
+    saved_time = lead.get("appointment_time")
+    if saved_time == wf.Defaults.PENDING_TIME:
+        saved_time = None  # the intake sentinel, never a time anyone agreed to
+    saved_dt = lead.get("appointment_datetime")
+    if saved_dt and saved_dt.tzinfo is None:
+        saved_dt = saved_dt.replace(tzinfo=timezone.utc)  # Mongo returns naive UTC
+    deal = SimpleNamespace(
+        extracted_data=SimpleNamespace(
+            **{
+                f: lead.get(f)
+                for f in ("street", "street_number", "city", "floor", "apartment")
+            },
+            # A time stated in this reply wins over the one the gate saved.
+            appointment_time=ed.appointment_time or saved_time,
+            appointment_datetime=ed.appointment_datetime
+            or (saved_dt.isoformat() if saved_dt else None),
+            issue=None,
+            customer_name=lead.get("customer_name"),
+            quoted_price=None,
+        )
+    )
+    await wf._finalize_deal(
+        ctx.chat_id,
+        pro,
+        deal,
+        lead.get("city"),
+        lead.get("issue_type"),
+        None,
+        lead["_id"],
+        extracted_name=lead.get("customer_name"),
+    )
 
 
 async def guard_pro_registration_keyword(ctx: DispatchContext, deps: GuardDeps):

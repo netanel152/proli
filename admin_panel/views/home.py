@@ -23,6 +23,7 @@ from admin_panel.core.assignment import (
     ASSIGN_TIMED_OUT,
     ASSIGN_LOOKUP_MISSED,
     ASSIGN_NOT_SENT,
+    ASSIGN_NOT_SENT_MUTED,
     ASSIGN_PRO_GONE,
     ASSIGN_PRO_LOOKUP_FAILED,
     ASSIGN_SENT,
@@ -53,12 +54,14 @@ from admin_panel.core.lead_queries import (
     audit_change,
     build_edit_form_payload,
     build_lead_row,
+    end_conversation_sync,
     new_save_report,
     record_change,
     report_acted,
     save_lead_edits,
 )
 from admin_panel.core.rbac import can_edit, has_permission
+from app.providers.whatsapp.sync import can_transmit
 from app.services.matching_service import APPROVED_PRO_FILTER
 import pytz
 import os
@@ -155,6 +158,17 @@ def _assign_feedback(T, outcome, pro_name):
                 T,
                 "assign_offer_failed",
                 "Assigned to {pro}, but the offer did not reach them.",
+                pro=pro_name,
+            ),
+            "warning",
+        )
+    if outcome == ASSIGN_NOT_SENT_MUTED:
+        return (
+            _t(
+                T,
+                "assign_muted",
+                "Assigned to {pro}, but this environment is muted: the WhatsApp "
+                "message was not sent. Call them.",
                 pro=pro_name,
             ),
             "warning",
@@ -1016,6 +1030,7 @@ def view_leads_dashboard(T):
                                 status_by_label=status_by_label(T),
                                 offer_pending=_offer_pending,
                                 report=result,
+                                end_conversation=end_conversation_sync,
                             )
                             # A stale refusal too: the retry needs a fresh frame.
                             if report_acted(result) or any(
@@ -1138,6 +1153,11 @@ def view_leads_dashboard(T):
                             "appointment_time": AdminDefaults.MANUAL_LABEL,
                             "source": AdminDefaults.MANUAL_SOURCE,
                         }
+                        if assigned_pro_id:
+                            # PRO-215: a human's choice of pro, not for the bot to undo.
+                            new_lead_doc["assigned_by_admin_at"] = new_lead_doc[
+                                "created_at"
+                            ]
 
                         leads_collection.insert_one(new_lead_doc)
                         log_audit(
@@ -1271,6 +1291,14 @@ def _render_selected_lead_actions(
                     log_audit("send_completion_check", {"lead_id": lid, "sent": sent})
                     if sent:
                         st.success(T.get("check_sent", "Check sent!"))
+                    elif not can_transmit():
+                        st.warning(
+                            T.get(
+                                "check_muted",
+                                "This environment is muted: the WhatsApp message "
+                                "was not sent. Call the customer.",
+                            )
+                        )
                     else:
                         st.warning(
                             T.get(
@@ -1425,6 +1453,7 @@ def _render_selected_lead_actions(
                                     if isinstance(frame_pro_id, str)
                                     else None
                                 ),
+                                end_conversation=end_conversation_sync,
                             )
                             if change["found"]:
                                 # PRO-161: the st.success here was discarded by the

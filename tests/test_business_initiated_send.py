@@ -214,17 +214,18 @@ async def test_the_messaging_limit_counter_counts_a_template_and_not_the_text(
 async def test_a_4000_char_sos_is_cut_and_still_sent(
     facade, graph, fake_redis, monkeypatch
 ):
-    _approve(monkeypatch, "sos_alert_pending")
+    _approve(monkeypatch, "sos_alert")
 
     await facade.send_message(
         CHAT_ID,
         "טקסט",
-        template_key="sos_alert_pending",
-        params={"last_message": "א" * 4000},
+        template_key="sos_alert",
+        params={"phone": "0501234567", "last_message": "א" * 4000},
     )
 
-    sent = graph[0]["template"]["components"][0]["parameters"][0]["text"]
-    assert sent == "א" * 700
+    phone, last_message = graph[0]["template"]["components"][0]["parameters"]
+    assert phone["text"] == "0501234567"
+    assert last_message["text"] == "א" * 700
 
 
 @pytest.mark.asyncio
@@ -667,19 +668,57 @@ def sos_pages(monkeypatch):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "status, expected_key",
-    [
-        (LeadStatus.BOOKED, "sos_alert"),
-        (LeadStatus.NEW, "sos_alert_pending"),
-        (LeadStatus.CONTACTED, "sos_alert_pending"),
-        (None, "sos_alert_pending"),
-    ],
-    ids=["booked", "new", "contacted", "no-lead"],
-)
-async def test_send_sos_alert_template_and_phone(
-    wf, mock_db, monkeypatch, sos_pages, status, expected_key
+async def test_sos_alert_on_a_booked_lead_names_the_template_with_the_phone(
+    wf, mock_db, monkeypatch, sos_pages
 ):
+    whatsapp = MagicMock()
+    whatsapp.send_message = AsyncMock(return_value={"idMessage": "x"})
+    monkeypatch.setattr(notification_service, "whatsapp", whatsapp)
+    pro_id = await _pro(mock_db)
+    await _lead(mock_db, pro_id=pro_id, status=LeadStatus.BOOKED)
+
+    await notification_service.send_sos_alert(CHAT_ID, "עזרה", str(pro_id))
+
+    call = whatsapp.send_message.call_args
+    assert call.kwargs["template_key"] == "sos_alert"
+    assert call.kwargs["params"] == {"phone": "0501234567", "last_message": "עזרה"}
+    assert "0501234567" in call.args[1]
+    assert "pro_notified=True" in sos_pages.call_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_sos_alert_on_an_unapproved_offer_carries_no_phone_and_no_words(
+    wf, mock_db, monkeypatch, sos_pages
+):
+    """PRO-59 and PRO-212: a customer can type their number, so a pro who has not
+    approved gets neither it nor the message. The template has no variable to
+    carry either in."""
+    whatsapp = MagicMock()
+    whatsapp.send_message = AsyncMock(return_value={"idMessage": "x"})
+    monkeypatch.setattr(notification_service, "whatsapp", whatsapp)
+    pro_id = await _pro(mock_db)
+    await _lead(mock_db, pro_id=pro_id, status=LeadStatus.NEW)
+
+    await notification_service.send_sos_alert(
+        CHAT_ID, "תתקשרו אליי 0501234567", str(pro_id)
+    )
+
+    call = whatsapp.send_message.call_args
+    assert call.args[1] == Messages.SOS.PRO_ALERT_PENDING
+    assert call.kwargs == {"template_key": "sos_alert_pending"}
+    assert template_registry.TEMPLATES["sos_alert_pending"].params == ()
+    assert "0501234567" not in call.args[1]
+    assert "pro_notified=True" in sos_pages.call_args.args[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status", [LeadStatus.CONTACTED, None], ids=["contacted", "no-lead"]
+)
+async def test_sos_alert_sends_the_pro_nothing_for_a_lead_never_offered(
+    wf, mock_db, monkeypatch, sos_pages, status
+):
+    """PRO-212: אשר would find nothing, so no template is reached either."""
     whatsapp = MagicMock()
     whatsapp.send_message = AsyncMock(return_value={"idMessage": "x"})
     monkeypatch.setattr(notification_service, "whatsapp", whatsapp)
@@ -689,15 +728,8 @@ async def test_send_sos_alert_template_and_phone(
 
     await notification_service.send_sos_alert(CHAT_ID, "עזרה", str(pro_id))
 
-    call = whatsapp.send_message.call_args
-    assert call.kwargs["template_key"] == expected_key
-    spec = template_registry.TEMPLATES[expected_key]
-    assert set(call.kwargs["params"]) == set(spec.params)
-    assert call.kwargs["params"]["last_message"] == "עזרה"
-    has_phone = status == LeadStatus.BOOKED
-    assert ("phone" in call.kwargs["params"]) is has_phone
-    assert ("0501234567" in call.args[1]) is has_phone
-    assert "pro_notified=True" in sos_pages.call_args.args[0]
+    whatsapp.send_message.assert_not_called()
+    assert "pro_notified=False" in sos_pages.call_args.args[0]
 
 
 @pytest.mark.asyncio
@@ -708,7 +740,9 @@ async def test_send_sos_alert_reports_a_blocked_send_as_not_notified(
     whatsapp.send_message = AsyncMock(return_value=None)
     monkeypatch.setattr(notification_service, "whatsapp", whatsapp)
     pro_id = await _pro(mock_db)
+    await _lead(mock_db, pro_id=pro_id, status=LeadStatus.BOOKED)
 
     await notification_service.send_sos_alert(CHAT_ID, "א" * 4000, str(pro_id))
 
+    whatsapp.send_message.assert_called_once()
     assert "pro_notified=False" in sos_pages.call_args.args[0]

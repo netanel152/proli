@@ -140,21 +140,30 @@ process_incoming_message(chat_id, text, media_url)
         │
         ├─ State == PRO_MODE, or a prompt pro_flow itself is holding open
         │  (PRO_SELECTING_JOB_TO_FINISH / PRO_SELECTING_JOB_TO_CANCEL /
+        │  PRO_SELECTING_JOB_TO_APPROVE / PRO_SELECTING_JOB_TO_REJECT /
+        │  PRO_SELECTING_JOB_TO_PAUSE / PRO_SELECTING_JOB_TO_RESUME /
         │  PRO_AWAITING_FINAL_PRICE — PRO_DISPATCH_STATES, PRO-186)?
         │      └─ handle_pro_text_command(pro, text)
         │            (a real pro command typed mid-prompt abandons the prompt —
         │             checked after the selection mapping, since "1"/"2"/"3"
         │             are themselves pro commands — and dispatches normally)
-        │            ├─ "אשר" / "1" → lead BOOKED, clear customer state (strict scope check)
-        │            ├─ "השהה" / "pause" → customer PAUSED_FOR_HUMAN (TTL 900 s)
-        │            ├─ "דחה" / "2" → lead REJECTED (way-station) then handed to reassign_lead:
+        │            ├─ is_active False and no self_paused → RESUME_NEEDS_ADMIN, clear state,
+        │            │      nothing else runs (PRO-212)
+        │            ├─ "אשר" → lead BOOKED, clear customer state (strict scope check);
+        │            │      more than one NEW lead, or a bare "1" → numbered prompt first (PRO-212)
+        │            ├─ "השהה" / "pause" → BOOKED lead: customer PAUSED_FOR_HUMAN (TTL 900 s);
+        │            │      more than one → numbered prompt first;
+        │            │      only a NEW lead: PAUSE_NEEDS_APPROVAL, nothing paused (PRO-212)
+        │            ├─ "דחה" → (same prompt rule, and a bare "2") lead REJECTED (way-station) then handed to reassign_lead:
         │            │      reassigned → lead NEW under the next pro, customer told, SLA re-armed;
         │            │      no replacement, or a found pro whose offer send fails → PENDING_ADMIN_REVIEW,
         │            │      admin paged, customer told (strict scope check)
-        │            ├─ "סיימתי" / "3" → finish job (multi-job selection if needed)
-        │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN
-        │            ├─ "הפסקה" / "חופשה" → set pro is_active=False
-        │            ├─ "זמין" / "חזרתי" → set pro is_active=True
+        │            ├─ "סיימתי" → finish job (selection if several, or on a bare "3")
+        │            ├─ "ביטול" → numbered prompt, even for one job; its number cancels (PRO-212)
+        │            ├─ "המשך" / "resume" → clear PAUSED_FOR_HUMAN on a paused BOOKED chat
+        │            │      (more than one → numbered prompt first, PRO-212)
+        │            ├─ "הפסקה" / "חופשה" → set pro is_active=False, self_paused=True
+        │            ├─ "זמין" / "חזרתי" → set pro is_active=True, unset self_paused
         │            ├─ other commands (4-7) → status/history/etc.
         │            ├─ "מצא" / "search" → claim oldest PENDING_ADMIN_REVIEW lead
         │            │     (rate-limited 10 min per pro via Redis rate_limit:pro_search:*)
@@ -168,7 +177,9 @@ process_incoming_message(chat_id, text, media_url)
         │         second miss → clear state and fall through. SOS keywords skip the
         │         re-prompt so a cry for a human gets out on the first try.
         │
-        ├─ State == AWAITING_ADDRESS? → re-extract missing address parts, save, clear state if complete
+        ├─ State == AWAITING_ADDRESS? → re-extract missing address parts, save; once complete, continue the blocked step (loyalty dispatch or the rejected deal, PRO-227)
+        │      └─ a reply naming another city than the stored parts' `address_city` drops them,
+        │         keeping only parts written in that reply, and asks again (PRO-228)
         │
         ├─ Registered pro types "לקוח" (from PRO_MODE or IDLE)?
         │      └─ set CUSTOMER_MODE, clear context, send SWITCHED_TO_CUSTOMER, return
@@ -185,6 +196,12 @@ process_incoming_message(chat_id, text, media_url)
         │         stranded, so the bypass must not fire there (PRO-186) — it used
         │         to overwrite PRO_SELECTING_JOB_TO_FINISH, making "1" run approve
         │         instead of finishing job 1
+        │      └─ a pro on break counts (self_paused True, not pending_approval), so
+        │         "חזרתי" and answers to reminders work once PRO_MODE has expired (PRO-212),
+        │         except a bare digit, or any word but the resume ones while their own
+        │         request is open: those stay on the customer side. An active pro with
+        │         their own request open keeps their digits too. A deactivated pro's
+        │         resume word goes to RESUME_NEEDS_ADMIN, unless their own request is open
         │
         ├─ Phone matches active pro? → set PRO_MODE, handle pro flow
         │      └─ unless the pro has an open lead of their own (_get_active_customer_lead)
@@ -198,8 +215,10 @@ process_incoming_message(chat_id, text, media_url)
                ├─ media handling (image bytes / audio+video URL)
                │
                ├─ Phase 1 — Dispatcher AI (last 5 turns = 10 messages)
-               │      extracts city + issue
-               │      if city+issue found → matching_service.determine_best_pro()
+               │      extracts city + issue (a new lead stores the city as `city`, PRO-228)
+               │      address parts are saved with the city they came with (`address_city`);
+               │      a new city unsets them, keeping only parts written this turn (PRO-228)
+               │      if city+issue found (emergency: city alone) → matching_service.determine_best_pro()
                │
                ├─ Phase 2 — Pro Persona AI (if pro assigned)
                │      adopts pro's system prompt, pricing, social proof
@@ -222,7 +241,7 @@ process_incoming_message(chat_id, text, media_url)
 
 ## 4. Matching Service
 
-`matching_service.determine_best_pro(location, issue_type, excluded_pro_ids)`
+`matching_service.determine_best_pro(issue_type, location, excluded_pro_ids, require_trade, customer_chat_id)` — `customer_chat_id` drops any pro whose `phone_number` is that customer, so a pro writing in as a customer is never offered their own lead
 
 **Step 1 — Geo search (if city has coordinates):**
 
@@ -242,9 +261,9 @@ pipeline = [
 ]
 ```
 
-Breaks on first non-empty result set. If all three radii return empty, falls through to step 2.
+Candidates are also filtered by trade (`probable_trade(issue_type)` + `trade_fits`, PRO-215) inside each radius, so the radius widens past a wrong-trade pro; an issue naming no trade gets no pro (`None`) unless `require_trade=False`, which only the admin wizard's pro list passes. Electrical work fits only an electrician or a general/handyman pro with `handles_electrical`. The load filter also runs per radius, so a radius whose fitting pros are all at `MAX_PRO_LOAD` widens too. Breaks on the first radius with an available pro. If all three leave nobody, the lead goes to admin review (`None`).
 
-**Step 2 — Text fallback (no coordinates or geo empty):**
+**Step 2 — Text fallback (no coordinates):**
 
 Regex match on `service_areas` field, sorted by rating.
 
@@ -252,7 +271,7 @@ Regex match on `service_areas` field, sorted by rating.
 
 Checks if the city name appears in any pro's `service_areas` string (broader fuzzy match).
 
-**Load balancing:** Before returning a pro, the service queries `leads_collection` for each candidate's active lead count. Skips any pro with `count >= WorkerConstants.MAX_PRO_LOAD` (default: 3).
+**Load balancing:** For each radius (or the text-match result), the service queries `leads_collection` for each candidate's active lead count. Skips any pro with `count >= WorkerConstants.MAX_PRO_LOAD` (default: 3).
 
 **No-pro outcome:** Returns `None`. Caller sets lead to `PENDING_ADMIN_REVIEW` and sends `Messages.Customer.PENDING_REVIEW`.
 
@@ -273,10 +292,14 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `AWAITING_PRO_APPROVAL` | Deal sent to pro, customer on soft hold (1h TTL) |
 | `PRO_SELECTING_JOB_TO_FINISH` | Pro has multiple active jobs and is picking which one to finish |
 | `PRO_SELECTING_JOB_TO_CANCEL` | Pro has multiple booked jobs and is picking which one to cancel |
+| `PRO_SELECTING_JOB_TO_APPROVE` | Pro has multiple NEW leads and is picking which one *אשר* is about (PRO-212) |
+| `PRO_SELECTING_JOB_TO_REJECT` | Pro has multiple NEW leads and is picking which one *דחה* is about (PRO-212) |
+| `PRO_SELECTING_JOB_TO_PAUSE` | Pro has multiple booked jobs and is picking which customer's chat *השהה* pauses (PRO-212) |
+| `PRO_SELECTING_JOB_TO_RESUME` | Pro has multiple paused chats and is picking which one *המשך* resumes (PRO-212) |
 | `PRO_AWAITING_FINAL_PRICE` | Post-completion prompt asking the pro what they charged (skippable, never gates COMPLETED) |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
 | `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |
-| `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro (5m TTL, PRO-119); accept dispatches to the pro and parks the customer in `AWAITING_PRO_APPROVAL` if the address is complete, otherwise saves the pro as a preference and continues via `AWAITING_ADDRESS` |
+| `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro (5m TTL, PRO-119); accept dispatches to the pro and parks the customer in `AWAITING_PRO_APPROVAL` if the address is complete, otherwise saves the pro as a preference and continues via `AWAITING_ADDRESS`, which dispatches to that pro the moment the address is complete (PRO-227) |
 | `AWAITING_NEW_OR_EXISTING` | A customer with a confirmed BOOKED job messages about something else; asked whether it's a new request or about the existing job |
 | `AWAITING_CANCEL_CONFIRMATION` | A cancel keyword on a confirmed BOOKED job; waiting for an explicit '1'/'2' before acting (5m TTL, PRO-118) |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
@@ -317,8 +340,8 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | Collection | Purpose |
 |-----------|---------|
 | `users` | Professionals and customers. Pros have `location` (2dsphere), `service_areas`, `price_list`, `social_proof`, `total_tokens_used` |
-| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `customer_name` (AI-extracted from the conversation), `display_name` (optional, admin-set label from the admin panel's Edit-Lead form; falls back to `customer_name`, then the phone), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count` |
-| `messages` | Chat history log per `chat_id` |
+| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `customer_name` (AI-extracted from the conversation), `display_name` (optional, admin-set label from the admin panel's Edit-Lead form; falls back to `customer_name`, then the phone), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `address_city` (the city the street/number/floor/apartment were given with, PRO-228), `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count` |
+| `messages` | Chat history log per `chat_id`. When the Redis context is empty, `LeadManager.get_chat_history` rebuilds it from here, starting after the latest end of any terminal lead of that chat (its last terminal `status_history` entry), so a cancelled lead's messages never reach a new lead (PRO-228) |
 | `slots` | Appointment slots per pro with atomic locking (`is_taken`) |
 | `settings` | Scheduler config toggles (`sos_healer_active`, `lead_janitor_active`, `sla_monitor_active`, etc. — the three cold customer-facing toggles default OFF, PRO-73) |
 | `reviews` | Customer ratings and text reviews |

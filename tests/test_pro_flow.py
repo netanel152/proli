@@ -23,6 +23,11 @@ PRO_PHONE = "972500000000"
 @pytest_asyncio.fixture
 async def pro_setup(mock_db):
     """Create a pro and return (pro_doc, mock_db)."""
+    # mock_db is module-scoped. Since PRO-212 another test's leftover NEW lead would
+    # turn this test's single offer into a picker. Through the patched collection
+    # because each `mock_db.leads` access stacks another mongomock_motor wrapper,
+    # and one more per test here is enough to overflow the recursion limit.
+    await app.services.pro_flow.leads_collection.delete_many({"pro_id": PRO_ID})
     pro_doc = {
         "_id": PRO_ID,
         "phone_number": PRO_PHONE,
@@ -315,7 +320,8 @@ async def test_approve_no_pending(mock_db, mock_wa, mock_lm):
 
 @pytest.mark.asyncio
 async def test_approve_with_number_command(pro_setup, mock_wa, mock_lm, monkeypatch):
-    """'1' is an alias for approve."""
+    """PRO-212: a bare '1' only opens the list, even of one, and the list's own
+    '1' is what approves."""
     pro_doc, db = pro_setup
     await db.leads.insert_one(
         {
@@ -333,6 +339,11 @@ async def test_approve_with_number_command(pro_setup, mock_wa, mock_lm, monkeypa
     monkeypatch.setattr(
         app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=None)
     )
+
+    result = await handle_pro_text_command("972500000000@c.us", "1", mock_wa, mock_lm)
+    assert Messages.Pro.APPROVE_SUCCESS not in result
+    assert static_prefix(Messages.Pro.SELECT_JOB_TO_APPROVE) in result
+    mock_lm.update_lead_status.assert_not_called()
 
     result = await handle_pro_text_command("972500000000@c.us", "1", mock_wa, mock_lm)
     assert Messages.Pro.APPROVE_SUCCESS in result
@@ -826,7 +837,9 @@ async def test_finish_multiple_jobs_selection(pro_setup, mock_wa, mock_lm, monke
 
     assert static_prefix(Messages.Pro.SELECT_JOB_TO_FINISH) in result
     mock_state.set_state.assert_called_with(
-        chat_id, UserStates.PRO_SELECTING_JOB_TO_FINISH
+        chat_id,
+        UserStates.PRO_SELECTING_JOB_TO_FINISH,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
     )
     mock_state.set_metadata.assert_called_once()
 
@@ -1027,16 +1040,17 @@ async def test_final_price_prompt_ambiguous_number_dispatches_command_not_price(
         }
     )
     mock_state = _mock_price_state(monkeypatch, completed_lead_id)
+    mock_state.set_state = AsyncMock()
+    mock_state.set_metadata = AsyncMock()
     monkeypatch.setattr(
         app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=None)
     )
 
     result = await handle_pro_text_command("972500000000@c.us", "1", mock_wa, mock_lm)
 
-    assert Messages.Pro.APPROVE_SUCCESS in result
-    # Two chats get cleared on this path: the pro's, because the price prompt
-    # was abandoned, and the customer's, by the approve handler. Assert the one
-    # this test is about by chat_id rather than by call count.
+    # PRO-212: a bare digit opens the list rather than approving outright.
+    assert static_prefix(Messages.Pro.SELECT_JOB_TO_APPROVE) in result
+    mock_lm.update_lead_status.assert_not_called()
     cleared = [c.args[0] for c in mock_state.clear_state.await_args_list]
     assert "972500000000@c.us" in cleared
     completed_lead = await db.leads.find_one({"_id": completed_lead_id})
@@ -1249,7 +1263,7 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
         {
             "_id": lead_id,
             "pro_id": pro_doc["_id"],
-            "status": LeadStatus.NEW,
+            "status": LeadStatus.BOOKED,
             "chat_id": "972501111111@c.us",
             "issue_type": "נזילה",
             "full_address": "רחוב הרצל 5",
@@ -1263,7 +1277,9 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
         f"{PRO_PHONE}@c.us", "השהה", mock_wa, mock_lm
     )
 
-    assert result == Messages.Pro.PAUSE_ACK
+    assert result == Messages.Pro.PAUSE_ACK.format(
+        customer_name=Messages.Fallbacks.CUSTOMER_NAME
+    )
     # Customer state should be set with TTL
     mock_state.set_state.assert_called_with(
         "972501111111@c.us",
@@ -1274,6 +1290,52 @@ async def test_pause_via_text_command(pro_setup, mock_wa, mock_lm, monkeypatch):
     mock_wa.send_message.assert_called_with(
         "972501111111@c.us", Messages.Customer.BOT_PAUSED_BY_PRO
     )
+
+
+@pytest.mark.asyncio
+async def test_pause_on_an_unapproved_lead_changes_nothing(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """PRO-212: a pro with only a NEW lead has no contact details (PRO-59), so
+    'השהה' must not silence that customer's chat or tell them the pro will call."""
+    pro_doc, db = pro_setup
+
+    mock_state = MagicMock()
+    mock_state.get_state = AsyncMock(return_value=None)
+    mock_state.set_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
+
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "השהה", mock_wa, mock_lm
+    )
+
+    assert result == Messages.Pro.PAUSE_NEEDS_APPROVAL
+    assert "972501111111" not in result
+    mock_state.set_state.assert_not_called()
+    mock_wa.send_message.assert_not_called()
+    assert not (await db.leads.find_one({"_id": lead_id})).get("is_paused")
+
+
+@pytest.mark.asyncio
+async def test_pause_with_no_jobs_says_no_active_jobs(pro_setup, mock_wa, mock_lm):
+    """PRO-227: with nothing to pause, 'השהה' answers that there are no active
+    jobs — not "nothing awaiting approval", which is the approve command's copy."""
+    result = await handle_pro_text_command(
+        f"{PRO_PHONE}@c.us", "השהה", mock_wa, mock_lm
+    )
+
+    assert result == Messages.Pro.NO_ACTIVE_JOBS_LIST
 
 
 @pytest.mark.asyncio
@@ -1342,6 +1404,7 @@ async def test_resume_clears_pause(pro_setup, mock_wa, mock_lm, monkeypatch):
             "pro_id": pro_doc["_id"],
             "status": LeadStatus.BOOKED,
             "chat_id": "972501111111@c.us",
+            "is_paused": True,
             "issue_type": "נזילה",
             "full_address": "רחוב הרצל 5",
             "appointment_time": "10:00",
@@ -1982,6 +2045,7 @@ async def test_cancel_single_booked_immediate(pro_setup, mock_wa, mock_lm, monke
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
     mock_state.set_state = AsyncMock()
+    mock_state.set_metadata = AsyncMock()
     mock_state.clear_state = AsyncMock()
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
@@ -1990,6 +2054,19 @@ async def test_cancel_single_booked_immediate(pro_setup, mock_wa, mock_lm, monke
     monkeypatch.setattr(app.services.pro_flow, "ContextManager", mock_ctx)
 
     result = await handle_pro_text_command(chat_id, "ביטול", mock_wa, mock_lm)
+
+    # PRO-212: even one job takes a second step.
+    assert static_prefix(Messages.Pro.SELECT_JOB_TO_CANCEL) in result
+    assert (await db.leads.find_one({"_id": lead_id}))["status"] == LeadStatus.BOOKED
+    mock_wa.send_message.assert_not_called()
+
+    mock_state.get_state = AsyncMock(
+        return_value=UserStates.PRO_SELECTING_JOB_TO_CANCEL
+    )
+    mock_state.get_metadata = AsyncMock(
+        return_value={"cancelling_jobs_context": {"1": str(lead_id)}}
+    )
+    result = await handle_pro_text_command(chat_id, "1", mock_wa, mock_lm)
 
     assert result == Messages.Pro.CANCEL_SUCCESS
     updated = await db.leads.find_one({"_id": lead_id})
@@ -2031,7 +2108,9 @@ async def test_cancel_multiple_booked_enters_selection(
     result = await handle_pro_text_command(chat_id, "ביטול", mock_wa, mock_lm)
 
     mock_state.set_state.assert_called_with(
-        chat_id, UserStates.PRO_SELECTING_JOB_TO_CANCEL
+        chat_id,
+        UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
     )
     assert "1." in result
     assert "2." in result
@@ -2479,13 +2558,18 @@ async def test_dashboard_shows_resume_command_when_pro_is_paused(
     """A paused pro sees CMD_RESUME (the way back in), not CMD_PAUSE."""
     pro_doc, db = pro_setup
     chat_id = f"{PRO_PHONE}@c.us"
-    await db.users.update_one({"_id": PRO_ID}, {"$set": {"is_active": False}})
+    await db.users.update_one(
+        {"_id": PRO_ID}, {"$set": {"is_active": False, "self_paused": True}}
+    )
 
     mock_state = MagicMock()
     mock_state.get_state = AsyncMock(return_value=None)
     monkeypatch.setattr(app.services.pro_flow, "StateManager", mock_state)
 
     result = await handle_pro_text_command(chat_id, "תפריט", mock_wa, mock_lm)
+    await db.users.update_one(
+        {"_id": PRO_ID}, {"$set": {"is_active": True}, "$unset": {"self_paused": ""}}
+    )
 
     assert Messages.Pro.CMD_RESUME in result
     assert Messages.Pro.CMD_PAUSE not in result
@@ -2598,7 +2682,9 @@ async def test_cancel_selection_more_shows_next_page_and_keeps_the_prompt_open(
         in result
     )
     mock_state.set_state.assert_called_with(
-        chat_id, UserStates.PRO_SELECTING_JOB_TO_CANCEL
+        chat_id,
+        UserStates.PRO_SELECTING_JOB_TO_CANCEL,
+        ttl=WorkerConstants.PRO_ACTION_PICKER_TTL_SECONDS,
     )
     mock_state.clear_state.assert_not_called()
     # PRO-147: a continuation page passes the stored mapping straight back —

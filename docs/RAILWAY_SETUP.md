@@ -35,7 +35,8 @@ All 3 services point to the **same GitHub repo** and are intended to use the **s
 - **Start Command:** `streamlit run admin_panel/main.py --server.port $PORT --server.address 0.0.0.0`
 - **Port:** Automatically detected
 - **Public Domain:** Yes (admin dashboard URL)
-- **Required setting:** `runner.fastReruns` must be off, or the operator can lose the outcome of an offer (`.claude/rules/admin-panel.md`). `.streamlit/config.toml` sets it, and Streamlit reads that file from the working directory, so keep the relative `admin_panel/main.py` path above. A `--runner.fastReruns` flag or a `STREAMLIT_RUNNER_FAST_RERUNS` variable outranks the file, so neither may be set to true. To confirm, look for `runner.fastReruns=False` in this service's logs after a deploy, which appears when the first page loads. `runner.fastReruns is ON` at ERROR means it is wrong.
+- **Required setting:** `runner.fastReruns` must be off, or the operator can lose the outcome of an offer (`.claude/rules/admin-panel.md`). `.streamlit/config.toml` sets it, and Streamlit reads that file from the working directory, so keep the relative `admin_panel/main.py` path above. A `--runner.fastReruns` flag or a `STREAMLIT_RUNNER_FAST_RERUNS` variable outranks the file, so neither may be set to true. To confirm, load a page after a deploy, then read this service's logs: `runner.fastReruns is ON` at ERROR means it is wrong. The correct state logs `runner.fastReruns=False` at INFO, which doesn't show at `LOG_LEVEL=WARNING` (every Railway service, measured 2026-11-06), so there the absence of that ERROR after a page load is the check.
+- **To send WhatsApp messages:** see [What `admin` needs in order to send](#what-admin-needs-in-order-to-send). Without it the panel still works, and every send says it was not sent.
 
 ## Which branch deploys where
 
@@ -162,8 +163,8 @@ how the two silently re-merge.
 | `ADMIN_PASSWORD_HASH` | **distinct** | one admin credential must not open both panels |
 | `SENTRY_DSN` | **distinct** | separate Sentry project per environment, so staging noise cannot pollute production ingest and a leaked staging DSN is worthless |
 | `GEMINI_API_KEY` | **distinct** | a staging leak or quota burn must not affect production |
-| `META_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_PHONE_NUMBER_ID` | **distinct** | production holds the real pilot number. Staging runs `WHATSAPP_DRY_RUN=true` until it has its **own** test number / test WABA — never point staging at production's phone-number id with dry-run off, because staging sends are then production sends (same number, same Meta quality rating) |
-| `WHATSAPP_DRY_RUN` | **distinct** *(same value today)* | Both `true` today — **production is muted until the PRO-102 cutover**, and goes `false` there, not before. Measured on 2026-09-16; this row previously read "Production `false`" and was wrong in the direction that matters, since it is the row an operator reads while configuring an environment |
+| `META_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_PHONE_NUMBER_ID` | **distinct** | production holds the real pilot number. Staging's `api` and `worker` send live from Meta's Test Number, its **own** test number — never point staging at production's phone-number id with dry-run off, because staging sends are then production sends (same number, same Meta quality rating) |
+| `WHATSAPP_DRY_RUN` | **distinct** | Measured on 2026-11-06: Staging `api` and `worker` are `false` with `WHATSAPP_PROVIDER=cloud`; Production `api`, `worker` and `admin` are `true`. **Production is muted until the PRO-102 cutover**, and goes `false` there, not before. This row once read "Production `false`" and was wrong in the direction that matters, since it is the row an operator reads while configuring an environment |
 | `CLOUDINARY_*` | shared *(pilot decision)* | media is non-sensitive and a second account is friction with little pilot-stage payoff; revisit post-pilot |
 | `GOOGLE_MAPS_API_KEY` | shared *(pilot decision)* | geocoding only; restrict by API + quota in the Google console; revisit post-pilot |
 | `ADMIN_PHONE`, `ONCALL_PHONE` | shared | not secrets — the same operator is paged from both |
@@ -173,6 +174,41 @@ how the two silently re-merge.
 Railway's **Shared Variables** feature is scoped *within* one environment. It is
 the right tool for "define once, inherit in `api`/`worker`/`admin`" — it cannot
 and must not be used to share values across Staging and Production.
+
+### What `admin` needs in order to send
+
+Each service builds its WhatsApp provider from its **own** variables, so `api` and `worker` sending says nothing about `admin`. The panel sends lead offers, pro approval and rejection messages, and customer completion checks itself, through the facade in its own process.
+
+Set these on the `admin` service, with the same values as that environment's `worker`:
+
+| variable | value | why |
+|---|---|---|
+| `WHATSAPP_PROVIDER` | `cloud` | Unset means `dryrun`, which transmits nothing |
+| `WHATSAPP_DRY_RUN` | `false` | `true` overrides `WHATSAPP_PROVIDER` unconditionally |
+| `META_ACCESS_TOKEN` | same as `worker` | `require_cloud_provider_config` refuses to boot `cloud` without it unless `WHATSAPP_DRY_RUN=true` |
+| `META_PHONE_NUMBER_ID` | same as `worker` | Same rule as `META_ACCESS_TOKEN` |
+| `META_APP_SECRET` | same as `worker` | Required for `cloud` in staging and production, muted or not. `admin` serves no webhook; the boot check does not distinguish services |
+| `META_VERIFY_TOKEN` | same as `worker` | Same rule as `META_APP_SECRET` |
+| `META_GRAPH_API_VERSION` | same as `worker` | Not a boot requirement. Copy it anyway: unset, it takes the config default `v23.0`, which can differ from `worker`'s value |
+
+`REDIS_URL` and `MONGO_URI` must also be the same instances as `worker`'s. The worker's watchdog writes the `wa:instance:state` key the facade's breaker reads, and the absent key blocks every send. The 24h window keys and `wa_delivery` are shared the same way.
+
+Set them together, in the Railway dashboard, as one staged change. `cloud` with any of the four `META_*` values missing refuses to boot, and that includes `cloud` with `WHATSAPP_DRY_RUN=true` missing `META_APP_SECRET` or `META_VERIFY_TOKEN`. Any later trim of `admin`'s secrets has to keep these four for as long as the panel sends from its own process.
+
+**How to tell:** nothing is logged until a page loads, so load one first, then read this service's logs. A panel that can send logs `WhatsApp egress using provider 'cloud'` at INFO. That line only shows at `LOG_LEVEL=INFO`, and staging and production run `WARNING` (measured 2026-11-06), so its absence proves nothing there: use a real send from the panel as the evidence instead. A panel that cannot send logs `WhatsApp provider 'dryrun' cannot transmit` at WARNING, once per server process. A send on such a panel reports "this environment is muted: the WhatsApp message was not sent", and an offer is recorded in the audit log with outcome `not_sent_muted`.
+
+**A staging panel test proves nothing about delivery until `admin` has these.** A muted panel can still assign a lead correctly, and a passing assignment there is not evidence that a pro was told.
+
+**While a panel is muted:** if `sos_healer_active` is on, the healer can move a lead an operator arranged by phone once 60 minutes have passed, because the lead looks like an offer the pro ignored. Follow-up on this is tracked separately.
+
+### The PRO-102 cutover covers all three services
+
+`api`, `worker` **and `admin`** all go live at the cutover. Production `admin` has `WHATSAPP_DRY_RUN=true` and no `WHATSAPP_PROVIDER` or `META_*` values today, so flipping only `api` and `worker` leaves the panel silent. Muted, it says so on every send, so the gap is visible but operators would be phoning every pro.
+
+- [ ] `api` and `worker`: `WHATSAPP_PROVIDER=cloud`, `WHATSAPP_DRY_RUN=false`, Production's own `META_*` values.
+- [ ] `admin`: everything in the table above, with Production's values.
+- [ ] After the redeploy, load a panel page, then check `admin`'s logs for `WhatsApp egress using provider 'cloud'`. It is an INFO line: at `LOG_LEVEL=WARNING` it will not appear, and the real offer below is the evidence.
+- [ ] One offer from the production panel reaches a real phone, and the panel reports it as sent.
 
 ### `ENVIRONMENT` per Railway environment (PRO-34)
 
@@ -264,3 +300,4 @@ https://api-production-XXXX.up.railway.app/webhook?token=YOUR_WEBHOOK_TOKEN
 - Each service is meant to build from the same Dockerfile (Railway caches the build layer so only the first service triggers a full build) — see the Railpack warning in Step 3 for why that is not what is happening today.
 - Build config lives in **`railway.json` only**. A second `railway.toml` declaring the same builder was deleted in PRO-128: two sources of build config made it impossible to tell from the repo which one Railway was honouring, and the answer turned out to be neither.
 - To scale: only the API and Worker services can safely have `numReplicas > 1`. The Worker requires distributed locking for scheduler jobs before scaling (see `docs/SCALING_GUIDE.md`).
+- The public one-pager is not on Railway: `site/` and `netlify.toml` deploy as static files on Netlify, and its `/privacy` and `/terms` proxy to this production API, so those routes must stay up for the site to serve them.

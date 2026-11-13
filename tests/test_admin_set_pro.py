@@ -159,6 +159,39 @@ def test_pro_on_any_other_lead_is_record_only_and_says_so(leads, status):
     assert result["record_only"] == [{"client": "Yossi", "pro": "Dana"}]
 
 
+def test_record_only_pro_change_stamps_the_human_choice(leads):
+    """PRO-215: the bot's wrong-trade check must not rematch this pro away. The
+    stamp isn't an edit the operator made, so it stays out of what is reported."""
+    lead_id = _lead(leads, status="contacted")
+
+    _save_row(leads, lead_id, {"professional": "Dana"}, _Offer())
+
+    assert leads.find_one({"_id": lead_id})["assigned_by_admin_at"]
+
+
+def test_save_without_a_pro_change_stamps_nothing(leads):
+    lead_id = _lead(leads, status="contacted", pro_id=PRO_ID)
+
+    _save_row(leads, lead_id, {"details_summary": "new text"}, _Offer())
+
+    assert "assigned_by_admin_at" not in leads.find_one({"_id": lead_id})
+
+
+def test_pro_form_saves_the_electrical_flag_and_current_type():
+    """View bodies never run in the suite, so this reads the source."""
+    source = Path("admin_panel/views/professionals.py").read_text(encoding="utf-8")
+
+    assert '"handles_electrical": handles_electrical,' in source
+    assert '"categories": [ptype],' in source
+
+
+def test_create_lead_form_stamps_a_chosen_pro():
+    """View bodies never run in the suite, so this reads the source."""
+    source = Path("admin_panel/views/home.py").read_text(encoding="utf-8")
+
+    assert 'new_lead_doc["assigned_by_admin_at"]' in source
+
+
 def test_waiting_lead_moved_out_with_a_pro_is_record_only(leads):
     """An explicit status choice wins: the operator asked for this record."""
     lead_id = _lead(leads)

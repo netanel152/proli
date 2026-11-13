@@ -173,15 +173,18 @@ A customer sending "אני צריך נציג" (or similar):
 When a deal is finalized by the AI:
 
 1. Customer enters `AWAITING_PRO_APPROVAL` state (1h TTL) — bot replies with "still waiting" if they message again
-2. Pro receives a text-based approval request (reply "אשר" or "1"):
-   - **Approve** (reply "1" or "אשר") → lead becomes `BOOKED`, customer state cleared. System enforces strict scoping (pro must have a pending lead assigned).
-   - **Pause Bot** (reply "השהה") → customer enters `PAUSED_FOR_HUMAN` (15m rolling), direct chat begins
-   - **Reject** (reply "2" or "דחה") → lead becomes `REJECTED` then immediately handed to `reassign_lead`: reassigned → `NEW` under the next pro (customer told, approval SLA re-armed); no replacement, or a found pro whose offer fails to send → `PENDING_ADMIN_REVIEW` (admin paged, customer told)
+2. Pro receives a text-based approval request (reply "אשר"). A bare digit (`1`, `2`, `3`) never acts directly: it opens the numbered list, even of one job, so a second tap can't take the job left over.
+   - **Approve** (reply "אשר") → lead becomes `BOOKED`, customer state cleared. System enforces strict scoping (pro must have a pending lead assigned). With more than one pending lead, the pro picks from a numbered list first; the same goes for **Reject**.
+   - **Pause Bot** (reply "השהה") → on a `BOOKED` lead only: customer enters `PAUSED_FOR_HUMAN` (15m rolling) and the pro calls or writes from their own number. With more than one booked job the pro picks from a numbered list, and **המשך** does the same with more than one paused chat. With only a pending lead the pro is told to approve first, because the contact details arrive with the approval.
+   - **Reject** (reply "דחה") → lead becomes `REJECTED` then immediately handed to `reassign_lead`: reassigned → `NEW` under the next pro (customer told, approval SLA re-armed); no replacement, or a found pro whose offer fails to send → `PENDING_ADMIN_REVIEW` (admin paged, customer told)
 3. Pro can manage availability:
-   - **Vacation Mode** (reply "חופשה" or "הפסקה") → sets `is_active: False`, pro stops receiving new leads.
-   - **Resume** (reply "זמין") → sets `is_active: True`.
+   - **Vacation Mode** (reply "חופשה" or "הפסקה") → sets `is_active: False` and `self_paused: True`, pro stops receiving new leads.
+   - **Resume** (reply "זמין" or "חזרתי") → sets `is_active: True` and clears `self_paused`. Works on a break with no `PRO_MODE`, as do the approve, reject, finish and still-working replies.
+   - **Deactivated by the admin** (`is_active: False` with no `self_paused`) → the pro can't reactivate themselves. With `PRO_MODE` still live, every command gets `RESUME_NEEDS_ADMIN`; without it, `זמין`/`חזרתי`/`פעיל` get the same answer and anything else reaches the customer side. They get no SOS alerts. The approval SLA moves their NEW offers to another pro in business hours, or to admin review if no pro fits, unless the customer is paused for a human. A BOOKED job stays with them until the admin moves it or the customer closes it or reports a no-show on the completion check, and the form warns with the count when Active goes off. The professionals form writes `self_paused: False` on every save, so saving the form with Active unticked turns a pro's own break into this.
+   - **Pros already on a break when this shipped** have no `self_paused`, so they count as deactivated. Reactivate them with the Active box in the professionals form.
 4. Finishing Jobs:
-   - **Finish** (reply "סיימתי" or "3") → if single job, marks as `COMPLETED`. If multiple, pro picks from a numbered list.
+   - **Finish** (reply "סיימתי") → if single job, marks as `COMPLETED`. If multiple, pro picks from a numbered list.
+   - **Cancel** (reply "ביטול") → always opens the numbered list, even for one job, and the job's number cancels it. In a list, "ביטול" leaves the list. Every numbered list expires after 10 minutes and acts on nothing.
 5. **Dynamic Dashboard:** Any unknown command or "תפריט" sends the pro a real-time status summary (rating, active jobs, status).
 
 ---
@@ -357,8 +360,8 @@ The routing engine found no matching pro.
 ### Bot doesn't respond to images / audio / video
 
 - Check: is the media URL publicly accessible?
-- The customer is told the file could not be read (`Messages.Errors.MEDIA_UPLOAD_FAILED`) whenever a media link was passed and nothing was attached for the model.
-- Check logs for: `Error downloading media`, `Gemini File Processing Failed`, `Error handling media URL for Gemini`, `Media for this turn was not fetched` or `Failed to download media for Gemini`
+- The customer is told (`MEDIA_UPLOAD_FAILED`, `MEDIA_UPLOAD_FAILED_TEXT_ONLY` or `MEDIA_FAILED_TEXT_ANSWERED`) when a file doesn't reach the model on a turn the customer pipeline handles: lost re-hosting it, failed download or upload, or refused by every model. A refusal is a 4xx other than 429 on the last model tried, or every model returning unparseable JSON. They are not told when an emergency dispatches on that turn (the reply is withheld), when a guard, the completion/rating/review step or the booked-job question answers the turn first, when the wrong-trade check reassigns a lead already offered to a pro (that exit returns before any AI call, so it covers every file on that turn, not only a lost one; a file that re-hosted is still saved on the lead for the next pro, and a lost file with no text has already had its notice), when the daily AI cap stops the turn, or when an attached file meets anything else from the models, such as a 429 or a 5xx: that is an outage, and they get `AI_OVERLOAD` only, with no second round of calls.
+- Check logs for: `Error downloading media`, `Gemini File Processing Failed`, `Error handling media URL for Gemini`, `Media for this turn was not fetched`, `Failed to download media for Gemini`, `Could not fetch Meta media` or `Could not re-host Meta media`
 - For video: Gemini waits up to 120 s for processing — timeouts are logged as errors.
 
 ### Leads not appearing in the dashboard
@@ -419,7 +422,7 @@ python scripts/generate_admin_hash.py
 | `ADMIN_PASSWORD` | — | Plain-text password (hashed on startup) |
 | `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts. Leaving it unset (or empty) in a prod-like environment is reported at ERROR on every api/worker boot — PRO-48; the default is a real number, so an unconfigured deploy pages whoever it names |
 | `WEBHOOK_TOKEN` | — | Enables `?token=<value>` webhook auth. **Required** (boot fails without it) when `ENVIRONMENT` is `staging`/`production` — PRO-86 removed the other half of webhook authentication (the sender instance-id check) |
-| `WHATSAPP_PROVIDER` | `dryrun` | Outbound transport: `dryrun` (logs, never transmits) or `cloud` (the PRO-89 `CloudAPIProvider` — Meta Graph API, code-complete but not yet onboarded, see PRO-87). An unrecognised value falls back to `dryrun` |
+| `WHATSAPP_PROVIDER` | `dryrun` | Read per service, so `admin` needs its own: see "What `admin` needs in order to send" in `docs/RAILWAY_SETUP.md`. Outbound transport: `dryrun` (logs, never transmits) or `cloud` (the PRO-89 `CloudAPIProvider` — Meta Graph API, code-complete but not yet onboarded, see PRO-87). An unrecognised value falls back to `dryrun` |
 | `META_ACCESS_TOKEN` | — | Secret. Meta Graph API System User token; required once `WHATSAPP_PROVIDER=cloud` and `WHATSAPP_DRY_RUN` is not `true` |
 | `META_APP_SECRET` | — | Secret. Signs inbound `/webhook/meta` (`X-Hub-Signature-256`); required for `cloud` in staging/production |
 | `META_VERIFY_TOKEN` | — | Secret. Echoed back during the Meta subscription handshake (`GET /webhook/meta`); required for `cloud` in staging/production |
