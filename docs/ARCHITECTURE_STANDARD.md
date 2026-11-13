@@ -146,8 +146,8 @@ network, no Mongo and no Redis. New handlers follow the same shape.
 `"Reply '1' to approve, '2' to reject"` — never interactive buttons.
 `send_interactive` exists on the provider ABC and the PRO-89 `CloudAPIProvider`
 transport can send it, but nothing in any flow may call it: no template is
-approved yet (PRO-87 onboarding is still open) and adopting buttons is an
-explicit product decision not yet made (PRO-88 catalog). This is a
+approved yet (PRO-150 owns approval), and the owner decided on 2026-11-06 that
+the pilot runs on text menus and buttons come after it (PRO-103). This is a
 CLAUDE.md-level rule and reviewers enforce it.
 
 **6. Every safety check states its failure direction.** Rate limiting fails
@@ -323,8 +323,8 @@ Rules:
 - Nothing outside `app/providers/whatsapp/` constructs a provider. Ever.
 - No HTTP client at a vendor messaging endpoint anywhere in the repo.
 - `send_interactive` is defined on the ABC and MUST NOT be called from any
-  flow — the PRO-89 transport exists, but no template is approved (PRO-87)
-  and adopting buttons is a product decision not yet made (PRO-88).
+  flow — the PRO-89 transport exists, but no template is approved (PRO-150)
+  and buttons come after the pilot, by the owner's decision (PRO-103).
 - Two CI guards enforce this mechanically (the "Guard" steps in
   `.github/workflows/tests.yml`): the build fails on any reference to the
   old vendor's domain **in code** — `*.md` is excluded, so prose may name the

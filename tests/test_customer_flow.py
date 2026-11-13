@@ -325,7 +325,9 @@ async def test_no_show_digit_reports_and_drives_every_side_effect(
     assert slot["is_taken"] is False
 
     mock_whatsapp.send_message.assert_called_once_with(
-        to_chat_id("972509999999"), Messages.Pro.CUSTOMER_REPORTED_NO_SHOW
+        to_chat_id("972509999999"),
+        Messages.Pro.CUSTOMER_REPORTED_NO_SHOW,
+        template_key="customer_reported_no_show",
     )
 
     mock_reassign.assert_awaited_once()

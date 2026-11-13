@@ -199,7 +199,12 @@ def send_completion_check_sync(lead_id: str):
     )
 
     message_text = Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name)
-    sent = send_text_sync(to_chat_id(customer_chat_id), message_text)
+    sent = send_text_sync(
+        to_chat_id(customer_chat_id),
+        message_text,
+        template_key="completion_check",
+        params={"pro_name": pro_name},
+    )
 
     # Stamp the lead exactly like the async path does. An operator send bypasses
     # the cap (it is a deliberate human action) but must still restart the

@@ -13,7 +13,8 @@ query/label/refresh/assignment seams do — so `tests/test_admin_view_call_arity
 statically checks every call in `admin_panel/` against its target's signature. Hebrew
 is the primary language: every string goes through `TRANS` / `labels.py`, never a
 silent `.capitalize()` fallback (`tests/test_admin_translations.py`). Synchronous
-WhatsApp sends use `app.providers.whatsapp.sync.send_text_sync`, never a provider.
+WhatsApp sends use `app.providers.whatsapp.sync.send_text_sync`, never a provider; a
+business-initiated one passes `template_key` and `params` (pinned by `tests/test_template_bodies.py`).
 The panel builds its provider from `admin`'s own variables, so a send can be muted while
 the worker transmits. `send_text_sync` returns False on a provider with `transmits=False`,
 `assign_pending_lead_sync` turns the core's "sent" into `ASSIGN_NOT_SENT_MUTED`, and

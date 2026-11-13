@@ -308,6 +308,7 @@ async def test_send_template_approved_key_posts_positional_params_no_window_need
         meta_name="proli_test_template",
         status=template_registry.TemplateStatus.APPROVED,
         language="he",
+        params=("name", "city"),
     )
     monkeypatch.setattr(
         template_registry,
@@ -319,7 +320,7 @@ async def test_send_template_approved_key_posts_positional_params_no_window_need
 
     provider = CloudAPIProvider()
     await provider.send_template(
-        CHAT_ID, "test_template", params={"name": "Dana", "city": "Tel Aviv"}
+        CHAT_ID, "test_template", params={"city": "Tel Aviv", "name": "Dana"}
     )
 
     assert len(recorder.requests) == 1
@@ -328,7 +329,7 @@ async def test_send_template_approved_key_posts_positional_params_no_window_need
     assert body["template"]["name"] == "proli_test_template"
     assert body["template"]["language"] == {"code": "he"}
     params = body["template"]["components"][0]["parameters"]
-    assert [p["text"] for p in params] == ["Dana", "Tel Aviv"]  # insertion order
+    assert [p["text"] for p in params] == ["Dana", "Tel Aviv"]  # the spec's order
 
 
 # ---------------------------------------------------------------------------

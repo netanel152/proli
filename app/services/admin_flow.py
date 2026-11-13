@@ -294,6 +294,7 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp, expected_status=None):
             "escalation_reason": "",
             "admin_reported_at": "",
             "no_show_reported_at": "",
+            "offer_withheld_details": "",
         },
         # Opt-in, so the wizard keeps its unconditional write. The panel passes
         # PENDING_ADMIN_REVIEW because its button acts on a lead_id captured
@@ -338,6 +339,8 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp, expected_status=None):
                     Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
                         pro_name=pro_name
                     ),
+                    template_key="awaiting_approval",
+                    params={"pro_name": pro_name},
                 )
             except Exception as e:
                 logger.error(

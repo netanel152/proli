@@ -21,9 +21,10 @@ guide it points at; nothing here is a value to trust over them.
   — never inline at a call site (`docs/ARCHITECTURE_STANDARD.md` §10).
 - **Keywords and digits** the bot accepts in `Messages.Keywords`; **empty-value fallbacks**
   in `Messages.Fallbacks`; **AI example utterances** in `app/core/prompts.py`.
-- A message the *business* initiates (outside the customer's 24h window) also needs a
-  template entry in `app/providers/whatsapp/template_registry.py` and the same wording in
-  `docs/WHATSAPP_TEMPLATE_CATALOG.md`.
+- A message the *business* initiates (outside the customer's 24h window) also needs a body in
+  `Messages.Templates`, an entry in `app/providers/whatsapp/template_registry.py`, a row in
+  `docs/WHATSAPP_TEMPLATE_CATALOG.md`, and `template_key`/`params` at its send site.
+  `tests/test_template_bodies.py` holds it to Meta's review rules.
 
 ## Procedure
 
@@ -44,7 +45,7 @@ guide it points at; nothing here is a value to trust over them.
 4. **Placeholders**: `str.format` names that describe the value, formatted at the send site;
    any value that can be empty goes through `Messages.Fallbacks` first.
 5. **Menus are text-only.** Nothing may call `send_interactive` (CLAUDE.md, CRITICAL). Buttons
-   are a product decision not yet made.
+   come after the pilot (PRO-103).
 
 ## Tests that pin this
 

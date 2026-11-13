@@ -12,6 +12,8 @@ It is a bridge, not a second egress: everything still goes through
 :class:`~app.providers.whatsapp.facade.WhatsAppFacade`, breaker included.
 """
 
+from typing import Any
+
 from app.core.logger import logger
 from app.core.sync_bridge import run_blocking
 from app.providers.whatsapp import get_whatsapp
@@ -36,8 +38,19 @@ def can_transmit() -> bool:
     return get_whatsapp().provider.transmits
 
 
-def send_text_sync(chat_id: str, text: str) -> bool:
+def send_text_sync(
+    chat_id: str,
+    text: str,
+    *,
+    template_key: str | None = None,
+    params: dict[str, Any] | None = None,
+) -> bool:
     """Send one text message from sync code.
+
+    A panel send is business-initiated, since an operator's click is what
+    triggers it, so it names its template as the worker's sends do: a recipient
+    whose 24h window is closed gets that template once it is approved. A send
+    that names none is exactly the call it was before.
 
     Returns True only when the facade actually handed the message to a provider.
     A suppressed send — breaker engaged, kill switch set, or (PRO-159) a closed
@@ -58,8 +71,13 @@ def send_text_sync(chat_id: str, text: str) -> bool:
                 f"{facade.provider.name!r} cannot transmit."
             )
             return False
+        template = (
+            {}
+            if template_key is None
+            else {"template_key": template_key, "params": params}
+        )
         result = _run_blocking(
-            facade.send_message(chat_id, text), _SEND_TIMEOUT_SECONDS
+            facade.send_message(chat_id, text, **template), _SEND_TIMEOUT_SECONDS
         )
     except Exception as e:
         logger.error(f"Admin-panel send to ...{chat_id[-4:]} failed: {e}")

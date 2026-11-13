@@ -15,6 +15,7 @@ from app.core.messages import Messages
 from app.core.prompts import Prompts
 from tests.e2e import reserved_numbers as R
 from tests.e2e.ai_replay import deal, reply
+from tests.e2e.recorder import RecordingProvider
 from tests.e2e.world import media_url_for
 
 
@@ -900,3 +901,41 @@ async def test_a_pro_dropped_for_trade_cannot_claim_the_lead_back(world):
 
     lead["excluded_pro_ids"] = [plumber["_id"]]
     assert not await is_pro_eligible_for_lead(plumber, lead)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("offered", [False, True], ids=["early", "offered"])
+async def test_the_wrong_trade_notice_names_its_template(world, monkeypatch, offered):
+    """PRO-210: it fires on the customer's next message, so the pro's 24h window
+    is usually closed. Both notices name the one template, and an open window
+    still reads the free-form wording."""
+    named = []
+
+    async def spy(self, chat_id, text, template_key, params=None):
+        named.append((chat_id, text, template_key, params))
+        return await self.send_text(chat_id, text)
+
+    monkeypatch.setattr(RecordingProvider, "send_business_initiated", spy)
+    plumber = await _plumber(world)
+    await _electrician(world)
+    await world.grant_consent()
+    if offered:
+        await world.awaiting_approval_job(plumber, issue_type="קצר במטבח")
+        await world.set_state(UserStates.IDLE)
+        notice = Messages.Pro.LEAD_OUTSIDE_TRADE_OFFER
+    else:
+        await _contacted_lead(world, plumber)
+        world.ai.script(
+            reply("רגע.", city="תל אביב", issue="קצר במטבח"),
+            reply("שלום, כאן דני החשמלאי."),
+        )
+        notice = Messages.Pro.LEAD_OUTSIDE_TRADE
+
+    await world.send("מתי אתה מגיע?")
+
+    assert (
+        world.pro_chat(R.PRO_PRIMARY),
+        notice.format(issue="קצר במטבח"),
+        "pro_lead_outside_trade",
+        {"issue_type": "קצר במטבח"},
+    ) in named

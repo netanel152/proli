@@ -34,14 +34,19 @@ from app.providers.whatsapp.base import (
     NormalizedMessage,
     ServiceWindowClosedError,
     TemplateNotRegisteredError,
+    TemplateParamsError,
     WhatsAppProvider,
 )
 
-# The two ways a send can be *blocked* by policy rather than fail in transit.
-# Both are already reported by the provider before they are raised, and both
-# must end as a ``None`` return rather than an exception — see PRO-159 and
-# ``_note_blocked`` below.
-_BLOCKED_BY_POLICY = (ServiceWindowClosedError, TemplateNotRegisteredError)
+# The ways a send can be *blocked* by policy rather than fail in transit. All are
+# already reported by the provider before they are raised, and all must end as a
+# ``None`` return rather than an exception — see PRO-159 and ``_note_blocked``
+# below.
+_BLOCKED_BY_POLICY = (
+    ServiceWindowClosedError,
+    TemplateNotRegisteredError,
+    TemplateParamsError,
+)
 
 # PRO-71: presence of EITHER key halts all outbound.
 #   * wa:instance:paused        — auto, set by the deauth monitor while the
@@ -154,6 +159,9 @@ class WhatsAppFacade:
         if isinstance(error, TemplateNotRegisteredError):
             reason = "fallback template is not registered as approved"
             hint = "Check the PRO-88 registry — an entry is still DRAFT."
+        elif isinstance(error, TemplateParamsError):
+            reason = "template variables do not match its spec"
+            hint = "A call site and the PRO-88 registry disagree."
         else:
             reason = "24h service window closed, no approved fallback template"
             hint = "Reported by the provider; see PRO-87/PRO-150 for templates."
@@ -166,11 +174,29 @@ class WhatsAppFacade:
     # Outbound — legacy names, unchanged signatures
     # ------------------------------------------------------------------
 
-    async def send_message(self, chat_id: str, text: str):
+    async def send_message(
+        self,
+        chat_id: str,
+        text: str,
+        *,
+        template_key: str | None = None,
+        params: dict[str, Any] | None = None,
+    ):
+        """Send ``text``. A business-initiated send also names its template.
+
+        With ``template_key``, a recipient whose window is closed gets that
+        template with ``params``, if it is approved. Otherwise nothing differs
+        from a send that named no template.
+        """
         if not await self._guard("message", chat_id):
             return None
         try:
-            result = await self._provider.send_text(chat_id, text)
+            if template_key is None:
+                result = await self._provider.send_text(chat_id, text)
+            else:
+                result = await self._provider.send_business_initiated(
+                    chat_id, text, template_key, params
+                )
             logger.info(f"Message sent to ...{chat_id[-4:]}")
             return result
         except _BLOCKED_BY_POLICY as e:

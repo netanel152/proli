@@ -718,7 +718,9 @@ def _notify_pro_approved(phone_number: str) -> bool | None:
     from app.providers.whatsapp.sync import send_text_sync
 
     return send_text_sync(
-        to_chat_id(phone_number), Messages.Onboarding.APPROVED_NOTIFICATION
+        to_chat_id(phone_number),
+        Messages.Onboarding.APPROVED_NOTIFICATION,
+        template_key="onboarding_approved",
     )
 
 
@@ -731,5 +733,7 @@ def _notify_pro_rejected(phone_number: str) -> bool | None:
     from app.providers.whatsapp.sync import send_text_sync
 
     return send_text_sync(
-        to_chat_id(phone_number), Messages.Onboarding.REJECTED_NOTIFICATION
+        to_chat_id(phone_number),
+        Messages.Onboarding.REJECTED_NOTIFICATION,
+        template_key="onboarding_rejected",
     )
