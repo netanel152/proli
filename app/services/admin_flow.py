@@ -339,6 +339,8 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp, expected_status=None):
                     Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
                         pro_name=pro_name
                     ),
+                    template_key="awaiting_approval",
+                    params={"pro_name": pro_name},
                 )
             except Exception as e:
                 logger.error(

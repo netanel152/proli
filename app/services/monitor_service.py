@@ -393,11 +393,14 @@ async def reassign_lead(
         # מקצוע" (CUSTOMER_REASSIGNING) earlier — tell them who was found so the
         # thread doesn't go silent until the new pro engages. Fail-open.
         try:
+            new_pro_name = new_pro.get("business_name", "איש המקצוע")
             await whatsapp.send_message(
                 chat_id,
                 Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
-                    pro_name=new_pro.get("business_name", "איש המקצוע")
+                    pro_name=new_pro_name
                 ),
+                template_key="awaiting_approval",
+                params={"pro_name": new_pro_name or "איש המקצוע"},
             )
         except Exception as e:
             logger.error(
@@ -1092,7 +1095,9 @@ async def check_pro_approval_sla():
                 )
                 if claimed.modified_count == 1:
                     await whatsapp.send_message(
-                        chat_id, Messages.Customer.REASSIGN_OFFER
+                        chat_id,
+                        Messages.Customer.REASSIGN_OFFER,
+                        template_key="reassign_offer",
                     )
                     logger.info(
                         f"⏰ [Approval SLA] Offered reassignment to ...{chat_id[-8:]} "

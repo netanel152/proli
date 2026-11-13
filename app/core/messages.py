@@ -1440,6 +1440,56 @@ class Messages:
             "הצוות של פרולי בוחן אותה ידנית ומשבץ איש מקצוע מתאים.\n"
             "אעדכן אותך כאן ברגע שיש חדש."
         )
+        # Nine notices one party's message or a scheduler sends the *other* party,
+        # whose own 24h window may be closed (approved 2026-11-14). Each free-form
+        # original keeps its wording for an open window.
+        PRO_CANCELLED_BOOKING = (
+            "⚠️ *עדכון מפרולי:* איש המקצוע ביטל את העבודה שנקבעה.\n"
+            "אפשר לכתוב לי כאן ואפתח פנייה חדשה מיד.\n"
+            "*נציג* — לשיחה עם הצוות"
+        )
+        CUSTOMER_RESCHEDULED = (
+            "📅 *עדכון יומן מפרולי:* מועד העבודה השתנה.\n"
+            "*לקוח:* {customer_name}\n"
+            "*כתובת:* {full_address}\n"
+            "*מועד ישן:* {old_time}\n"
+            "*מועד חדש:* {new_time}\n\n"
+            "היומן שלך עודכן אוטומטית."
+        )
+        # Sent on a BOOKED lead only, so this pro already holds the number (PRO-59).
+        CUSTOMER_EXISTING_JOB_QUERY = (
+            "💬 *עדכון מפרולי:* הלקוח/ה רוצה לעדכן או לשאול לגבי העבודה הקיימת.\n"
+            "*לקוח:* {customer_name}\n"
+            "*תקלה:* {issue_type}\n"
+            "*טלפון:* {phone}\n\n"
+            "כדאי ליצור קשר בהקדם האפשרי."
+        )
+        RATE_SERVICE = (
+            "🙌 העבודה עם {pro_name} סומנה כהושלמה.\n"
+            "איך היה השירות?\n"
+            "אפשר לענות במספר בין *1* (גרוע) ל-*5* (מצוין), או *דלג* לדילוג."
+        )
+        CUSTOMER_REPORTED_NO_SHOW = (
+            "⚠️ עדכון מפרולי: הלקוח דיווח שלא הגעת לעבודה שנקבעה.\n"
+            "הבקשה הועברה להמשך טיפול והדיווח נרשם."
+        )
+        REASSIGN_OFFER = (
+            "🕐 עדכון מפרולי: איש המקצוע עדיין לא אישר את הפנייה שלך. מה עושים?\n"
+            "*1* — לחפש איש מקצוע אחר\n"
+            "*2* — להמתין עוד קצת"
+        )
+        AWAITING_APPROVAL = (
+            "✅ עדכון מפרולי: העברתי את הפנייה שלך אל {pro_name}.\n"
+            "אעדכן אותך כאן ברגע שהעבודה תאושר."
+        )
+        CUSTOMER_REPORTED_COMPLETION = (
+            "👍 עדכון מפרולי: הלקוח/ה {customer_name} דיווח/ה שהעבודה הסתיימה.\n"
+            "הסטטוס עודכן, ואין צורך לפעול."
+        )
+        BOT_PAUSED_BY_PRO = (
+            "📞 עדכון מפרולי: איש המקצוע ביקש לדבר איתך ישירות, ויפנה אליך מהמספר שלו.\n"
+            "המענה האוטומטי בשיחה הזו מושהה בינתיים."
+        )
         # One sample per variable name, sent with the submission and never to a
         # recipient. Meta requires a sample for every variable. All invented: no
         # real person, business, address or phone number.
@@ -1457,6 +1507,8 @@ class Messages:
             "phone": "050-0000000",
             "pro_phone": "050-0000001",
             "last_message": "יש נזילה חזקה ואני צריך עזרה",
+            "old_time": "15/11/2026 09:00",
+            "new_time": "16/11/2026 14:00",
         }
 
     class Errors:

@@ -985,14 +985,22 @@ async def test_a_rejected_completion_line_does_not_abort_the_finish(
 
 
 @pytest.mark.asyncio
-async def test_a_rejected_rating_prompt_still_propagates_when_green(
+async def test_a_rejected_rating_prompt_does_not_abort_the_finish_when_green(
     production, poll, monkeypatch
 ):
-    """The guard is for the paused line only; the normal send is unchanged."""
+    """Owner's decision of 2026-11-14 (PRO-210): COMPLETED is already written, so
+    a rejected prompt must not cost the pro their reply. It used to propagate."""
     await poll()
 
-    with pytest.raises(RuntimeError):
-        await _finish_job(monkeypatch, send_error=RuntimeError("Meta rejected it"))
+    whatsapp, extra_set = await _finish_job(
+        monkeypatch, send_error=RuntimeError("Meta rejected it")
+    )
+
+    whatsapp.send_message.assert_awaited_once()
+    assert whatsapp.send_message.await_args.kwargs["template_key"] == "rate_service"
+    # As when the facade blocks it: the prompt's 48h window is the only bound.
+    assert extra_set["waiting_for_rating"] is True
+    assert extra_set["completed_at"] is not None
 
 
 def test_the_gate_has_exactly_one_call_in_each_allowed_file():

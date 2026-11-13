@@ -778,7 +778,15 @@ async def _pause_lead(lead, pro, whatsapp):
         {"$set": {"is_paused": True, "paused_at": datetime.now(timezone.utc)}},
     )
 
-    await whatsapp.send_message(customer_chat_id, Messages.Customer.BOT_PAUSED_BY_PRO)
+    # The pause is already set. A send that fails must still answer the pro.
+    try:
+        await whatsapp.send_message(
+            customer_chat_id,
+            Messages.Customer.BOT_PAUSED_BY_PRO,
+            template_key="bot_paused_by_pro",
+        )
+    except Exception as e:
+        logger.error(f"Customer not told lead {lead['_id']} was paused: {e}")
     logger.info(
         f"Pro {pro['_id']} paused bot for customer {mask_chat_id(customer_chat_id)}"
     )
@@ -912,7 +920,16 @@ async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
     pro_name = pro.get("business_name", Defaults.GENERIC_PRO_NAME)
     feedback_msg = Messages.Customer.RATE_SERVICE.format(pro_name=pro_name)
     if ask_for_rating:
-        await whatsapp.send_message(lead["chat_id"], feedback_msg)
+        # COMPLETED is written. A send that fails must not stop the price ask.
+        try:
+            await whatsapp.send_message(
+                lead["chat_id"],
+                feedback_msg,
+                template_key="rate_service",
+                params={"pro_name": pro_name or Defaults.GENERIC_PRO_NAME},
+            )
+        except Exception as e:
+            logger.error(f"Rating prompt for lead {lead['_id']} not sent: {e}")
     else:
         # The customer still hears the job closed; its first line says only that.
         # The number is already degraded, so a rejection here is likely, and it
@@ -1261,9 +1278,16 @@ async def _execute_cancel(lead, pro, whatsapp) -> bool:
     if lead.get("chat_id"):
         await ContextManager.clear_context(lead["chat_id"])
         await StateManager.clear_state(lead["chat_id"])
-        await whatsapp.send_message(
-            lead["chat_id"], Messages.Customer.PRO_CANCELLED_BOOKING
-        )
+        # The cancellation is written and the slot is free. A send that fails
+        # must not report the cancel as not done.
+        try:
+            await whatsapp.send_message(
+                lead["chat_id"],
+                Messages.Customer.PRO_CANCELLED_BOOKING,
+                template_key="pro_cancelled_booking",
+            )
+        except Exception as e:
+            logger.error(f"Customer not told lead {lead['_id']} was cancelled: {e}")
 
     logger.info(f"Pro {pro['_id']} cancelled BOOKED lead {lead['_id']}")
     return True

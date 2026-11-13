@@ -60,7 +60,9 @@ async def test_detect_stale_lead(mock_db, monkeypatch, mock_whatsapp, mock_match
         )
 
         # Verify customer notification
-        mock_whatsapp.send_message.assert_any_call("customer@c.us", ANY)
+        mock_whatsapp.send_message.assert_any_call(
+            "customer@c.us", ANY, template_key="reassigning", params=ANY
+        )
 
         # Verify pro matching
         mock_matching.determine_best_pro.assert_called_once()

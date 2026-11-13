@@ -155,6 +155,8 @@ async def test_successful_reassignment_tells_customer_who_was_found(
         Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
             pro_name="אבי אינסטלציה"
         ),
+        template_key="awaiting_approval",
+        params={"pro_name": "אבי אינסטלציה"},
     )
 
 

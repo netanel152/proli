@@ -2,7 +2,7 @@
 
 **Status:** inventory complete, template bodies written, send path wired. Nothing here has been submitted to Meta. The machine-readable half of this catalog is `app/providers/whatsapp/template_registry.py` (PRO-89), with every entry `DRAFT`. The bodies live in `Messages.Templates` (`app/core/messages.py`), the one home for copy. Each `TemplateSpec` points at its body, declares its ordered `params` and its category, and carries a `source` (PRO-168) naming the free-form `Messages.*` constant it was worded from.
 
-**Flipping an entry to `APPROVED`**, with the exact name Meta approved, arms it for every call site that passes `template_key` to the facade's `send_message`. Until then those sends behave exactly as they did before the path existed. The admin panel's sends (P13 and C2's operator button) pass one too, through `send_text_sync`'s `template_key` and `params`. See [What is wired](#what-is-wired).
+**Flipping an entry to `APPROVED`**, with the exact name Meta approved, arms it for every call site that passes `template_key` to the facade's `send_message`. Until then those sends deliver exactly what they did before the path existed (five of them no longer abort their handler if the send raises, see [Settled, and still to do](#settled-and-still-to-do)). The admin panel's sends (P13 and C2's operator button) pass one too, through `send_text_sync`'s `template_key` and `params`. See [What is wired](#what-is-wired).
 
 ## What this document is
 
@@ -57,6 +57,22 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 | **C2** | Completion check | `admin_panel/core/utils.py:190` (operator) · `customer_flow.py:send_customer_completion_check` (scheduler) | **Operator clicks a button**, or stale-job monitor Tier 2 | Arbitrary timing by construction. Capped at `MAX_CUSTOMER_COMPLETION_CHECKS` per booking (PRO-45: `reassign_lead` resets the counter for a fresh owner) with a `CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS` gap; an operator send bypasses the cap but still restarts the cooldown. |
 | **C3** | Reassignment notices (`CUSTOMER_REASSIGNING`, `MAX_REASSIGNMENTS_REACHED`, `PENDING_REVIEW`) | `monitor_service.py:180, 129, 284` | `SOS_TIMEOUT_MINUTES=60` path → in-window; `STALE_BOOKED_LEAD_HOURS=24` path → **on the boundary**; PRO-117 pro-reject rematch failure → also in-window | Same code, multiple triggers (including the PRO-117 reject-rematch fallback), different window answers. Must be treated as template-required. Three bodies, so three registry entries (`reassigning`, `max_reassignments`, `pending_review`). |
 
+### Sent to the other party of a conversation
+
+One party's message, or a scheduler, triggers a send to the *other* party. The sender is inside their window by construction; the recipient may not have written in days. These had no row until the 2026-11-14 audit (an AST pass over every send in `app/` and `admin_panel/`).
+
+| Send | Call site | To | Trigger |
+|---|---|---|---|
+| Pro cancelled the booking (`Customer.PRO_CANCELLED_BOOKING`) | `pro_flow._execute_cancel` | customer | The pro's *ביטול* |
+| Customer rescheduled (`Pro.CUSTOMER_RESCHEDULED_SUCCESS`) | `customer_flow.handle_reschedule_selection` | pro | The customer picks a new slot |
+| Customer asks about the existing job (`Pro.CUSTOMER_EXISTING_JOB_QUERY`) | `dispatch_guards.guard_new_or_existing` | pro | The customer answers *2* to "new request or the existing job?". The customer is told the pro will get back to them, so a lost send here is a broken promise. The lead is re-read as BOOKED before the send, so the phone it carries is already that pro's to have (PRO-59). |
+| Rating prompt (`Customer.RATE_SERVICE`) | `pro_flow._execute_finish` | customer | The pro's *סיימתי* |
+| Customer reported a no-show (`Pro.CUSTOMER_REPORTED_NO_SHOW`) | `customer_flow._handle_no_show_report` | pro | The customer answers *3* to the completion check |
+| Reassignment offer (`Customer.REASSIGN_OFFER`) | `monitor_service.check_pro_approval_sla` | customer | Scheduler, the pro silent for `APPROVAL_REASSIGN_OFFER_MINUTES`. In-window after the customer's own intake, but `reassign_lead` re-arms the same timer (and the `AWAITING_PRO_APPROVAL` state it needs), when the customer may not have written for a day. An admin assignment does not arm it. |
+| Awaiting approval (`Customer.AWAITING_APPROVAL_TRANSPARENT`) | `monitor_service.reassign_lead`, `admin_flow.assign_lead_to_pro` | customer | A reassignment or an admin assignment found a pro. The same text from `_finalize_deal` answers the customer's own message and names no template. |
+| Customer reported completion (`Pro.CUSTOMER_REPORTED_COMPLETION`) | `customer_flow.handle_customer_completion_text` | pro | The customer answers *1* to the completion check |
+| Bot paused by the pro (`Customer.BOT_PAUSED_BY_PRO`) | `pro_flow._pause_lead` | customer | The pro's *השהה* on a BOOKED lead |
+
 ### Operator-facing — ✅ **resolved, no templates needed**
 
 | # | Send | Call site | Status |
@@ -81,14 +97,13 @@ One behaviour change worth knowing: an SOS with no assigned pro now produces **z
 
 ## Safe without templates
 
-Everything reached from the inbound dispatcher — `workflow_service` replies, `customer_flow`, `pro_flow`, `admin_flow`, and `pro_onboarding_service` — is a direct response to a message the recipient just sent. That is inside the window by construction. It is also the bulk of the 131 call sites, which is why the template count is manageable.
+Everything reached from the inbound dispatcher — `workflow_service` replies, `customer_flow`, `pro_flow`, `admin_flow`, and `pro_onboarding_service` — that goes back to **the person who just wrote** is a direct response to their message. That is inside the window by construction. What the same flows send to the *other* party is not, and is listed above. It is also the bulk of the 131 call sites, which is why the template count is manageable.
 
-Two scheduler jobs are also safe, and it is worth recording *why* rather than rediscovering it:
+One scheduler job is left free-form on purpose, and it is worth recording *why* rather than rediscovering it:
 
-- **SLA deflection** (`check_sla_deflection`, 5-min interval) fires on ~15 minutes of customer silence — always well inside 24h.
-- **Customer reassignment offer** (`check_pro_approval_sla`, `APPROVAL_REASSIGN_OFFER_MINUTES=25`) fires ~25 minutes after the customer's intake.
+- **SLA deflection** (`check_sla_deflection`, 5-min interval, `Customer.SLA_DEFLECTION_MESSAGE`) fires after `PAUSE_TTL_SECONDS` of silence in a paused chat. The owner left it free-form on 2026-11-14 because it follows a pause the customer started minutes earlier, so their window is open. The one case that reasoning does not cover: the query matches any `is_paused` lead, and `pro_flow._pause_lead` (the pro's *השהה*) sets that flag too. A customer paused by the pro who has not written in 24h and does not answer the `bot_paused_by_pro` template loses this message. The pause still ends; they are just not told the bot is back.
 
-Both are gated to business hours by PRO-73, which narrows them further.
+The customer reassignment offer used to be listed here as safe. It is, ~25 minutes after the customer's own intake, but not after a reassignment, so it now names `reassign_offer`.
 
 ---
 
@@ -118,9 +133,18 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | C3 | `reassigning` | `issue_type` | `REASSIGNING` | `monitor_service.reassign_lead` |
 | C3 | `max_reassignments` | `issue_type` | `MAX_REASSIGNMENTS` | `monitor_service.reassign_lead` |
 | C3 | `pending_review` | `issue_type` | `PENDING_REVIEW` | `monitor_service.reassign_lead` (three branches), `pro_flow._escalate_rejected_lead` |
+| — | `pro_cancelled_booking` | none | `PRO_CANCELLED_BOOKING` | `pro_flow._execute_cancel` |
+| — | `customer_rescheduled` | `customer_name`, `full_address`, `old_time`, `new_time` | `CUSTOMER_RESCHEDULED` | `customer_flow.handle_reschedule_selection` |
+| — | `customer_existing_job_query` | `customer_name`, `issue_type`, `phone` | `CUSTOMER_EXISTING_JOB_QUERY` | `dispatch_guards.guard_new_or_existing` |
+| — | `rate_service` | `pro_name` | `RATE_SERVICE` | `pro_flow._execute_finish`, the full prompt only |
+| — | `customer_reported_no_show` | none | `CUSTOMER_REPORTED_NO_SHOW` | `customer_flow._handle_no_show_report` |
+| — | `reassign_offer` | none | `REASSIGN_OFFER` | `monitor_service.check_pro_approval_sla` |
+| — | `awaiting_approval` | `pro_name` | `AWAITING_APPROVAL` | `monitor_service.reassign_lead`, `admin_flow.assign_lead_to_pro` |
+| — | `customer_reported_completion` | `customer_name` | `CUSTOMER_REPORTED_COMPLETION` | `customer_flow.handle_customer_completion_text` |
+| — | `bot_paused_by_pro` | none | `BOT_PAUSED_BY_PRO` | `pro_flow._pause_lead` |
 | P4 | `early_lead` | — | none | **Not submitted, send left free-form**, see below |
 
-That is **20 templates to submit** and one registry entry left out (`early_lead`), against the 15 the registry used to list: P11 and P13 were each two bodies under one key, C3 was three, `pro_found` had no row, and P14 came with PRO-215.
+That is **29 templates to submit** and one registry entry left out (`early_lead`), against the 15 the registry used to list: P11 and P13 were each two bodies under one key, C3 was three, `pro_found` had no row, P14 came with PRO-215, and the nine notices to the other party of a conversation had no row at all.
 
 `tests/test_template_bodies.py` fails if a call site's `params` stop matching its spec, if a submitted template has no call site, if a call site names a template that is not submitted, or if one of the admin panel's sends names none. It scans `admin_panel/` as well as `app/`, with no exception list.
 
@@ -148,6 +172,14 @@ That is **20 templates to submit** and one registry entry left out (`early_lead`
 
 The owner settled these on 2026-11-06: the loyalty header is lost on template offers, a closed-window pro decides without media, an emergency reassignment goes through `lead_offer`, and `early_lead` is not submitted (it would need a media template and is not load-bearing), so its free-form send stays. On 2026-11-14 the owner approved a body for `pro_lead_outside_trade` (P14, PRO-215): one template for the offered and the not-yet-offered case, because "אין צורך לפעול" is true of both, and its free-form wording for an open window stays as it was.
 
+On 2026-11-14 the owner approved bodies for the nine notices to the other party of a conversation, and named what stays free-form on purpose:
+
+- **`early_lead` (P4).** The 2026-11-06 decision stands: it would need a media template and is not load-bearing.
+- **SLA deflection.** It follows a pause the customer started minutes earlier (see [Safe without templates](#safe-without-templates) for the one case that does not cover).
+- **The short rating line** (`pro_flow._execute_finish`, when `non_essential_sends_paused()`). It is sent instead of the rating prompt while the number's quality is degraded, to say only that the job closed. A template there would be one more business-initiated conversation at exactly the moment the number can least afford it.
+
+Five of the nine sends used to be the last, unguarded statement after a write: the pro's cancel, the customer's reschedule, the pro's finish (rating prompt), the customer's reported completion, and the pro's pause. A refused or failed send there would have aborted the handler after the state change was already written, so each is now wrapped the way the no-show send already was: the failure is logged at ERROR and the handler carries on. The other four were already inside a `try`. Four older sends that name a template are still unguarded (`pro_found`, `bot_paused`, `pro_lost_lead`, `customer_cancelled`) and are tracked in PRO-232.
+
 A template Meta accepted and then failed pages the operator under its own once-per-recipient-per-day budget (`delivery.TEMPLATE_LOST`), separate from the "window closed, nothing sent" page, and the page carries Meta's numeric error code.
 
 ## Open questions
@@ -155,4 +187,4 @@ A template Meta accepted and then failed pages the operator under its own once-p
 - Whether the sandbox number's 5-recipient limit applies to template sends as well as free-form (determines whether PRO-64 can exercise the template path at all).
 - Whether Meta accepts each body as UTILITY. Only review can answer that, and `--status` reports the result.
 - Whether a parameter value may contain a newline, `#`, `$` or `%`. Meta's pages list those characters as a problem with a template's variables without saying whether a runtime value counts. `sanitize_param` flattens the whitespace and leaves the characters in place, so a customer's message containing `%` still goes out as written.
-- **Sends with no row here.** The claim above that everything from the inbound dispatcher is in-window holds for the *sender*, not the other party. A customer's or pro's message can trigger a send to someone whose window is closed: `Pro.CUSTOMER_RESCHEDULED_SUCCESS`, `Pro.CUSTOMER_EXISTING_JOB_QUERY`, `Pro.CUSTOMER_REPORTED_COMPLETION`, `Pro.CUSTOMER_REPORTED_NO_SHOW`, `Customer.PRO_CANCELLED_BOOKING`, `Customer.RATE_SERVICE`, `Customer.AWAITING_APPROVAL_TRANSPARENT`, `Customer.BOT_PAUSED_BY_PRO` (`pro_flow._pause_lead`) and the early-lead notification (P4). None has a template. On a closed window they page and drop, as they always have. `AWAITING_APPROVAL_TRANSPARENT` is deliberately left that way: on the reassignment and admin paths it is only a progress note, and `pro_found`, `reassigning` or `pending_review` carries the outcome.
+- **Whether the reassignment offer's *1*/*2* can always be answered.** `guard_pro_approval_soft_hold` reads those digits only while the customer is `AWAITING_PRO_APPROVAL` (`PRO_APPROVAL_TTL_SECONDS`, an hour, re-armed by a reassignment). The offer is only sent while that state is alive, so a prompt reply works, but a customer who answers the `reassign_offer` template after the state has lapsed reaches the ordinary pipeline instead. The free-form offer has the same limit.

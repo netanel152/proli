@@ -203,6 +203,8 @@ async def test_reject_with_replacement_reassigns_and_notifies_customer(
         Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
             pro_name=new_pro["business_name"]
         ),
+        template_key="awaiting_approval",
+        params={"pro_name": new_pro["business_name"]},
     )
 
     # the rejecting pro must never receive PRO_LOST_LEAD -- that copy is for

@@ -142,7 +142,9 @@ async def test_reassign_offer_fires_at_t_plus_25_non_emergency(
     # Customer gets the reassignment offer; the pro is never nudged for this tick
     # (the offer branch `continue`s before the nudge check runs).
     mock_whatsapp.send_message.assert_called_once_with(
-        "customer_sla@c.us", Messages.Customer.REASSIGN_OFFER
+        "customer_sla@c.us",
+        Messages.Customer.REASSIGN_OFFER,
+        template_key="reassign_offer",
     )
 
     updated = await mock_db.leads.find_one({"_id": lead_id})

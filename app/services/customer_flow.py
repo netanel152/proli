@@ -319,6 +319,7 @@ async def _handle_no_show_report(
                 await whatsapp.send_message(
                     to_chat_id(pro["phone_number"]),
                     Messages.Pro.CUSTOMER_REPORTED_NO_SHOW,
+                    template_key="customer_reported_no_show",
                 )
             except Exception as e:
                 logger.error(f"Failed to notify pro {pro_id} of no-show report: {e}")
@@ -475,9 +476,20 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
 
     if pro and pro.get("phone_number"):
         pro_chat_id = to_chat_id(pro["phone_number"])
-        await whatsapp.send_message(
-            pro_chat_id, Messages.Pro.CUSTOMER_REPORTED_COMPLETION
-        )
+        # COMPLETED is written. A send that fails must not cost the customer
+        # their acknowledgement.
+        try:
+            await whatsapp.send_message(
+                pro_chat_id,
+                Messages.Pro.CUSTOMER_REPORTED_COMPLETION,
+                template_key="customer_reported_completion",
+                params={
+                    "customer_name": lead.get("customer_name")
+                    or Messages.Fallbacks.CUSTOMER_NAME
+                },
+            )
+        except Exception as e:
+            logger.error(f"Pro not told lead {lead['_id']} was completed: {e}")
 
     pro_name = (
         pro.get("business_name", Defaults.EXPERT_NAME) if pro else Defaults.EXPERT_NAME
@@ -860,15 +872,29 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
     pro = await users_collection.find_one({"_id": lead["pro_id"]})
     if pro and pro.get("phone_number"):
         pro_phone = to_chat_id(pro["phone_number"])
-        await whatsapp.send_message(
-            pro_phone,
-            Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS.format(
-                customer_name=lead.get("customer_name") or "הלקוח",
-                address=lead.get("full_address") or "לא ידועה",
-                old_time=old_time,
-                new_time=new_time,
-            ),
-        )
+        customer_name = lead.get("customer_name") or "הלקוח"
+        address = lead.get("full_address") or "לא ידועה"
+        # The new time is written and the customer has their answer. A send that
+        # fails must not undo that.
+        try:
+            await whatsapp.send_message(
+                pro_phone,
+                Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS.format(
+                    customer_name=customer_name,
+                    address=address,
+                    old_time=old_time,
+                    new_time=new_time,
+                ),
+                template_key="customer_rescheduled",
+                params={
+                    "customer_name": customer_name,
+                    "full_address": address,
+                    "old_time": old_time,
+                    "new_time": new_time,
+                },
+            )
+        except Exception as e:
+            logger.error(f"Pro not told lead {lead['_id']} was rescheduled: {e}")
     logger.success(
         f"📅 Lead {lead['_id']} rescheduled to {new_time} by customer {mask_chat_id(chat_id)}"
     )

@@ -251,6 +251,69 @@ TEMPLATES: dict[str, TemplateSpec] = {
             body=Messages.Templates.PENDING_REVIEW,
             params=("issue_type",),
         ),  # C3
+        # What one party's message, or a scheduler, sends the other party. The
+        # sender is in-window by construction and the recipient is not, so these
+        # had no catalog row until the 2026-11-14 audit. To the professional:
+        TemplateSpec(
+            "customer_rescheduled",
+            "proli_customer_rescheduled",
+            source="Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS",
+            body=Messages.Templates.CUSTOMER_RESCHEDULED,
+            params=("customer_name", "full_address", "old_time", "new_time"),
+        ),
+        TemplateSpec(
+            "customer_existing_job_query",
+            "proli_customer_existing_job_query",
+            source="Messages.Pro.CUSTOMER_EXISTING_JOB_QUERY",
+            body=Messages.Templates.CUSTOMER_EXISTING_JOB_QUERY,
+            params=("customer_name", "issue_type", "phone"),
+        ),  # lead BOOKED, so the phone is already this pro's to have (PRO-59)
+        TemplateSpec(
+            "customer_reported_no_show",
+            "proli_customer_reported_no_show",
+            source="Messages.Pro.CUSTOMER_REPORTED_NO_SHOW",
+            body=Messages.Templates.CUSTOMER_REPORTED_NO_SHOW,
+        ),
+        TemplateSpec(
+            "customer_reported_completion",
+            "proli_customer_reported_completion",
+            source="Messages.Pro.CUSTOMER_REPORTED_COMPLETION",
+            body=Messages.Templates.CUSTOMER_REPORTED_COMPLETION,
+            params=("customer_name",),
+        ),
+        # To the customer:
+        TemplateSpec(
+            "pro_cancelled_booking",
+            "proli_pro_cancelled_booking",
+            source="Messages.Customer.PRO_CANCELLED_BOOKING",
+            body=Messages.Templates.PRO_CANCELLED_BOOKING,
+        ),
+        TemplateSpec(
+            "rate_service",
+            "proli_rate_service",
+            source="Messages.Customer.RATE_SERVICE",
+            body=Messages.Templates.RATE_SERVICE,
+            params=("pro_name",),
+        ),  # the short line sent while the number is degraded stays free-form
+        TemplateSpec(
+            "reassign_offer",
+            "proli_reassign_offer",
+            source="Messages.Customer.REASSIGN_OFFER",
+            body=Messages.Templates.REASSIGN_OFFER,
+        ),
+        TemplateSpec(
+            "awaiting_approval",
+            "proli_awaiting_approval",
+            source="Messages.Customer.AWAITING_APPROVAL_TRANSPARENT",
+            body=Messages.Templates.AWAITING_APPROVAL,
+            params=("pro_name",),
+        ),  # after a reassignment or an admin assignment; the first offer's is a reply
+        TemplateSpec(
+            "bot_paused_by_pro",
+            "proli_bot_paused_by_pro",
+            source="Messages.Customer.BOT_PAUSED_BY_PRO",
+            body=Messages.Templates.BOT_PAUSED_BY_PRO,
+        ),
     )
 }
 

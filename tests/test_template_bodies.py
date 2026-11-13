@@ -81,7 +81,7 @@ def test_early_lead_is_the_one_entry_left_out_of_submission():
         "early_lead"
     ]
     assert not TEMPLATES["early_lead"].body
-    assert len(SUBMITTED) == 20
+    assert len(SUBMITTED) == 29
 
 
 def test_the_wrong_trade_notice_is_one_template_for_both_free_form_notices():
@@ -184,17 +184,23 @@ ADVERTISED = {
     "עבודות": _K.ACTIVE_JOBS_COMMANDS,
     "נציג": _K.SOS_COMMANDS,
 }
-# customer_flow's completion menu reads these digits, not a Keywords list.
-COMPLETION_DIGITS = {"1", "2", "3"}
+# Numbered menus are read as digits by their own handler, not a Keywords list:
+# customer_flow's completion menu, and `guard_pro_approval_soft_hold` for the
+# reassignment offer (while the customer is still AWAITING_PRO_APPROVAL).
+DIGIT_MENUS = {
+    "completion_check": ["1", "2", "3"],
+    "reassign_offer": ["1", "2"],
+}
 
 
 @pytest.mark.parametrize("spec", SUBMITTED, ids=lambda s: s.key)
 def test_every_advertised_reply_is_a_real_keyword(spec):
     # `*token* — text` is the menu format. A bold label ends in a colon instead.
-    for token in re.findall(r"^\*([^*:]+)\* —", spec.body, flags=re.M):
-        if token in COMPLETION_DIGITS:
-            assert spec.key == "completion_check"
-            continue
+    tokens = re.findall(r"^\*([^*:]+)\* —", spec.body, flags=re.M)
+    if spec.key in DIGIT_MENUS:
+        assert tokens == DIGIT_MENUS[spec.key]
+        return
+    for token in tokens:
         assert token in ADVERTISED, f"{spec.key} advertises {token!r}"
         assert token in ADVERTISED[token]
 
@@ -363,3 +369,41 @@ def test_the_largest_body_fits_with_every_variable_at_its_limit():
 @pytest.mark.parametrize("raw", ["", "   ", "\n\t\n", None])
 def test_sanitize_param_never_returns_an_empty_value(raw):
     assert sanitize_param(raw) == Messages.Fallbacks.UNKNOWN
+
+
+# ---------------------------------------------------------------------------
+# The nine cross-party notices approved on 2026-11-14
+# ---------------------------------------------------------------------------
+
+CROSS_PARTY = {
+    "pro_cancelled_booking": (),
+    "customer_rescheduled": ("customer_name", "full_address", "old_time", "new_time"),
+    "customer_existing_job_query": ("customer_name", "issue_type", "phone"),
+    "rate_service": ("pro_name",),
+    "customer_reported_no_show": (),
+    "reassign_offer": (),
+    "awaiting_approval": ("pro_name",),
+    "customer_reported_completion": ("customer_name",),
+    "bot_paused_by_pro": (),
+}
+
+
+@pytest.mark.parametrize("key, params", CROSS_PARTY.items(), ids=list(CROSS_PARTY))
+def test_a_cross_party_notice_is_submitted_with_its_variables_in_body_order(
+    key, params
+):
+    spec = TEMPLATES[key]
+    assert spec.submit and spec.params == params
+    found = re.findall(r"\{(\w+)\}", spec.body)
+    assert tuple(found) == params
+
+
+def test_the_rating_template_is_the_free_form_prompt_word_for_word():
+    """Its digits and *דלג* are read by the same handler either way."""
+    assert Messages.Templates.RATE_SERVICE == Messages.Customer.RATE_SERVICE
+
+
+def test_only_two_templates_carry_the_customers_phone():
+    """PRO-59: both go to the pro of a BOOKED lead. A third needs the same proof."""
+    with_phone = sorted(k for k, spec in TEMPLATES.items() if "phone" in spec.params)
+    assert with_phone == ["customer_existing_job_query", "sos_alert"]
