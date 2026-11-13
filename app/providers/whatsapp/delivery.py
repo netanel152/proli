@@ -31,6 +31,9 @@ from app.providers.whatsapp.quality import record_business_initiated
 # that name is defined in __init__ itself, so it has no submodule fallback.
 from app.providers.whatsapp.window import claim_window_page, is_service_window_open
 
+# `claim_window_page`'s condition for a template Meta accepted and then failed.
+TEMPLATE_LOST = "template-lost"
+
 
 async def record_outbound(wa_message_id: str, chat_id: str, kind: str) -> None:
     """Remember an accepted send so its status callbacks can be attributed.
@@ -94,11 +97,15 @@ async def apply_status_event(event: dict[str, Any]) -> None:
 
     if (record or {}).get("kind") == "template":
         # Accepted at send time, so the caller was told it went out and nothing
-        # else will notice. The code and title stay on the `wa_delivery` record.
-        log = page_critical if await claim_window_page(chat_id) else logger.error
+        # else will notice. A budget of its own, or a window page for the same
+        # recipient earlier in the day would demote a lost offer to a log line.
+        # The numeric code is Meta's and says nothing about anyone; the title
+        # stays on the `wa_delivery` record.
+        claimed = await claim_window_page(chat_id, condition=TEMPLATE_LOST)
+        log = page_critical if claimed else logger.error
         log(
-            f"WhatsApp template to {_mask(chat_id)} was accepted and then failed. "
-            f"The message is LOST (wamid {wa_message_id})."
+            f"WhatsApp template to {_mask(chat_id)} was accepted and then failed "
+            f"(code={error_code}). The message is LOST (wamid {wa_message_id})."
         )
         return
 

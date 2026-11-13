@@ -110,8 +110,8 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
             # then paging the customer's street address in the same event
             # undoes the masking; `page_safe_city` cannot emit free-form text.
             f"city={page_safe_city(lead)}, "
-            f"lead={lead.get('_id')}. Customer was promised a callback within "
-            "the hour."
+            f"lead={lead.get('_id')}. Customer was promised a callback soon, in "
+            "business hours."
         )
         logger.info(f"📣 [Reassign] Admin paged for escalated lead {lead.get('_id')}")
     except Exception as e:

@@ -25,10 +25,14 @@ LIVE_WABA = "111"
 
 
 class FakeGraph:
-    def __init__(self, name="Proli", templates=None, post_status=200):
+    def __init__(
+        self, name="Proli", templates=None, post_status=200, post_category=None
+    ):
         self.name = name
         self.templates = templates or []
         self.post_status = post_status
+        self.post_category = post_category
+        self.next_page = None
         self.requests = []
 
     def _handle(self, request):
@@ -38,9 +42,15 @@ class FakeGraph:
                 return httpx.Response(
                     self.post_status, json={"error": {"code": 100, "message": "bad"}}
                 )
-            return httpx.Response(200, json={"id": "1", "status": "PENDING"})
+            created = {"id": "1", "status": "PENDING"}
+            if self.post_category:
+                created["category"] = self.post_category
+            return httpx.Response(200, json=created)
         if request.url.path.endswith("/message_templates"):
-            return httpx.Response(200, json={"data": self.templates})
+            page = {"data": self.templates}
+            if self.next_page:
+                page["paging"] = {"next": self.next_page}
+            return httpx.Response(200, json=page)
         return httpx.Response(200, json={"name": self.name})
 
     def client(self):
@@ -87,10 +97,13 @@ def test_early_lead_is_not_submitted():
 def test_waba_id_must_be_explicit(flag):
     graph = FakeGraph()
 
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as stopped:
         submit.main([flag], client=graph.client())
 
     assert graph.requests == []
+    # argparse's own code. The category check must not share it, or a mistyped
+    # command line reads as "Meta holds a template as MARKETING".
+    assert stopped.value.code == 2 != submit.EXIT_NOT_UTILITY
 
 
 @pytest.mark.parametrize(
@@ -347,7 +360,7 @@ def test_status_exits_2_when_meta_holds_one_template_as_marketing(status, capsys
 
     code, printed = _status(templates, capsys)
 
-    assert code == submit.EXIT_NOT_UTILITY == 2
+    assert code == submit.EXIT_NOT_UTILITY == 3
     assert f"{first.meta_name}: Meta={status}, category=MARKETING" in printed.out
     assert f"{first.meta_name}: MARKETING on Meta, do not flip" in printed.err
     assert "1 template(s) Meta does not hold as UTILITY" in printed.err
@@ -403,3 +416,64 @@ def test_a_utility_template_in_any_letter_case_passes():
     spec = submit.to_submit()[0]
 
     assert submit.not_utility([spec], [_meta(spec, category="utility")]) == []
+
+
+def test_apply_prints_the_category_meta_created_each_template_in(capsys):
+    graph = FakeGraph(post_category="UTILITY")
+
+    code = submit.main(
+        ["--apply", "--waba-id", LIVE_WABA, "--confirm-name", "Proli"],
+        client=graph.client(),
+    )
+
+    assert code == 0
+    printed = capsys.readouterr()
+    for spec in submit.to_submit():
+        assert f"{spec.meta_name}: PENDING, category=UTILITY" in printed.out
+    assert "outside UTILITY" not in printed.err
+
+
+def test_apply_says_so_at_once_when_meta_creates_a_template_as_marketing(capsys):
+    graph = FakeGraph(post_category="MARKETING")
+
+    code = submit.main(
+        ["--apply", "--waba-id", LIVE_WABA, "--confirm-name", "Proli"],
+        client=graph.client(),
+    )
+
+    assert code == submit.EXIT_NOT_UTILITY
+    printed = capsys.readouterr()
+    assert "category=MARKETING" in printed.out
+    assert "Do not flip them in the registry" in printed.err
+
+
+def test_the_token_is_not_carried_to_another_host_by_a_next_link(capsys):
+    """An absolute link is requested as written, bearer header and all."""
+    graph = FakeGraph()
+    graph.next_page = "https://elsewhere.test/v23.0/111/message_templates?after=x"
+
+    code = submit.main(["--status", "--waba-id", LIVE_WABA], client=graph.client())
+
+    assert code == 1
+    assert [r.url.host for r in graph.requests] == ["graph.test"]
+    assert "another host" in capsys.readouterr().err
+
+
+def test_a_next_link_on_the_same_host_is_followed():
+    pages = iter(["https://graph.test/v23.0/111/message_templates?after=x", None])
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        nxt = next(pages)
+        page = {"data": [{"name": f"t{len(seen)}"}]}
+        if nxt:
+            page["paging"] = {"next": nxt}
+        return httpx.Response(200, json=page)
+
+    client = httpx.Client(
+        base_url="https://graph.test/v23.0", transport=httpx.MockTransport(handler)
+    )
+
+    assert len(submit.fetch_templates(client, LIVE_WABA)) == 2
+    assert seen[1].endswith("after=x")

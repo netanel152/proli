@@ -229,6 +229,10 @@ class CloudAPIProvider(WhatsAppProvider):
         fallback = await self._window_fallback(chat_id, "text")
         if fallback is not None:
             return await self.send_template(chat_id, fallback.key)
+        return await self._post_text(chat_id, text)
+
+    async def _post_text(self, chat_id: str, text: str) -> dict[str, Any] | None:
+        """Transmit ``text``. The caller has already answered for the window."""
         # This sentinel must never survive the loop. ``_split_text`` is total —
         # it returns at least one chunk for any input, ``[""]`` included — and
         # PRO-159 made that load-bearing: the facade and its callers now read a
@@ -345,10 +349,13 @@ class CloudAPIProvider(WhatsAppProvider):
         raises. ``sent_as_template`` tells the caller the text did not go out,
         for whatever only the text could carry.
         """
-        if template_registry.resolve(template_key) is None or (
-            await is_service_window_open(chat_id)
-        ):
+        if template_registry.resolve(template_key) is None:
             return await self.send_text(chat_id, text)
+        if await is_service_window_open(chat_id):
+            # Straight to the wire: `send_text` would read the window again, and
+            # a window that closed between the two reads would page and drop a
+            # message whose template is approved.
+            return await self._post_text(chat_id, text)
         result = await self.send_template(chat_id, template_key, params)
         return {**result, "sent_as_template": template_key}
 

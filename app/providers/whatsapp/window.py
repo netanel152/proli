@@ -85,8 +85,13 @@ def _claim_locally(chat_id: str) -> bool:
     return True
 
 
-async def claim_window_page(chat_id: str) -> bool:
+async def claim_window_page(chat_id: str, *, condition: str = "") -> bool:
     """True at most once per recipient per 24h — the caller may page CRITICAL.
+
+    ``condition`` names a different thing to page about, with a budget of its
+    own. The default is "the window is closed and nothing could be sent". A
+    template Meta accepted and then failed is not that: the caller was told it
+    went out, so a window page earlier in the day must not demote it.
 
     With every registry entry still DRAFT, a closed window is the *expected*
     state for business-initiated sends, so paging on each occurrence would bury
@@ -115,13 +120,14 @@ async def claim_window_page(chat_id: str) -> bool:
         # and these are the least diagnosable losses there are — so fall back
         # to the same bounded local claim an unreadable Redis gets.
         return _claim_locally("")
+    subject = f"{condition}:{chat_id}" if condition else chat_id
     try:
         redis = await get_redis_client()
         return bool(
-            await redis.set(_page_key(chat_id), "1", ex=_PAGE_TTL_SECONDS, nx=True)
+            await redis.set(_page_key(subject), "1", ex=_PAGE_TTL_SECONDS, nx=True)
         )
     except Exception:
-        return _claim_locally(chat_id)
+        return _claim_locally(subject)
 
 
 async def open_service_window(chat_id: str) -> None:

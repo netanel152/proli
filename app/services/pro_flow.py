@@ -1487,7 +1487,12 @@ async def _handle_search(pro, chat_id: str, whatsapp):
             },
             # PRO-45: a fresh owner re-arms the no-show report, exactly as on
             # the `reassign_lead` and admin-assignment paths.
-            extra_unset={"escalation_reason": "", "no_show_reported_at": ""},
+            extra_unset={
+                "escalation_reason": "",
+                "no_show_reported_at": "",
+                # Kept for whoever was offered it by template before.
+                "offer_withheld_details": "",
+            },
             expected_status=LeadStatus.PENDING_ADMIN_REVIEW,
         )
         if claimed is not None:

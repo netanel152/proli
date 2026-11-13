@@ -7,9 +7,9 @@
 
 The default prints every payload and touches nothing. ``--status`` reads Meta's
 templates, prints the status and the category Meta holds for each, and reports
-drift from the registry. It exits 2 if Meta holds any of them in a category other
+drift from the registry. It exits 3 if Meta holds any of them in a category other
 than UTILITY, whatever else it found, 1 on any other drift, and 0 when the two
-agree. ``--apply`` creates whatever Meta
+agree (2 is argparse's own, for a bad command line). ``--apply`` creates whatever Meta
 does not already have. It prints the account's name and id, needs that name typed
 back as ``--confirm-name``, and refuses an account whose name contains "Test" and
 the id 1910054379665469 outright: that is Meta's test Messaging account, the one
@@ -59,7 +59,11 @@ TEST_WABA_ID = "1910054379665469"
 TEMPLATE_FIELDS = "name,language,status,category,components"
 UTILITY = "UTILITY"
 EXIT_DRIFT = 1
-EXIT_NOT_UTILITY = 2
+EXIT_NOT_UTILITY = 3  # not 2: argparse exits 2 on a bad command line
+
+
+class ForeignPageError(Exception):
+    """Graph's paging pointed at a host the token was not configured for."""
 
 
 def to_submit() -> list[TemplateSpec]:
@@ -112,6 +116,9 @@ def fetch_templates(client: httpx.Client, waba_id: str) -> list[dict]:
         templates.extend(page.get("data") or [])
         url = (page.get("paging") or {}).get("next")
         params = None  # Graph's next link already carries them
+        if url and httpx.URL(url).host != client.base_url.host:
+            # An absolute link is followed as written, with the bearer header.
+            raise ForeignPageError()
     return templates
 
 
@@ -164,10 +171,10 @@ def drift(specs: list[TemplateSpec], meta_templates: list[dict]) -> list[str]:
                 )
         if status != "APPROVED" and spec.status is TemplateStatus.APPROVED:
             lines.append(f"{spec.meta_name}: APPROVED here, {status} on Meta")
-        if meta.get("category") != spec.category:
+        if meta_category(meta) != spec.category:
             # Recategorising leaves a template APPROVED, so status cannot show it.
             lines.append(
-                f"{spec.meta_name}: category {meta.get('category')} on Meta, "
+                f"{spec.meta_name}: category {meta_category(meta)} on Meta, "
                 f"{spec.category} here"
             )
         bodies = [
@@ -253,6 +260,7 @@ def apply(client: httpx.Client, waba_id: str, confirm_name: str) -> int:
         for t in fetch_templates(client, waba_id)
     }
     failures = 0
+    recategorised: list[str] = []
     for spec in to_submit():
         if (spec.meta_name, spec.language) in existing:
             status = existing[(spec.meta_name, spec.language)]
@@ -267,8 +275,22 @@ def apply(client: httpx.Client, waba_id: str, confirm_name: str) -> int:
                 f"{spec.meta_name}: FAILED, {_graph_error(response)}", file=sys.stderr
             )
             continue
-        print(f"{spec.meta_name}: {response.json().get('status')}")
-    return 1 if failures else 0
+        created = response.json()
+        print(
+            f"{spec.meta_name}: {created.get('status')}, "
+            f"category={created.get('category', '-')}"
+        )
+        if created.get("category") and meta_category(created) != UTILITY:
+            recategorised.append(spec.meta_name)
+    if recategorised:
+        print(
+            f"Meta created these outside UTILITY: {', '.join(recategorised)}. "
+            "Do not flip them in the registry.",
+            file=sys.stderr,
+        )
+    if failures:
+        return 1
+    return EXIT_NOT_UTILITY if recategorised else 0
 
 
 def graph_client() -> httpx.Client:
@@ -313,6 +335,9 @@ def main(argv: list[str] | None = None, client: httpx.Client | None = None) -> i
             if args.status:
                 return show_status(graph, args.waba_id)
             return apply(graph, args.waba_id, args.confirm_name)
+        except ForeignPageError:
+            print("Graph's next page is on another host. Stopped.", file=sys.stderr)
+            return 1
         except httpx.HTTPStatusError as e:
             print(f"Graph refused: {_graph_error(e.response)}", file=sys.stderr)
             return 1

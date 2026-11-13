@@ -29,7 +29,7 @@ from app.providers.whatsapp.cloud_api import CloudAPIProvider
 from app.providers.whatsapp.dry_run import DryRunProvider
 from app.providers.whatsapp.facade import WhatsAppFacade
 from app.providers.whatsapp.template_registry import TemplateStatus
-from app.providers.whatsapp.window import _window_key
+from app.providers.whatsapp.window import _window_key, claim_window_page
 from app.services import monitor_service, notification_service
 from app.services.workflow_service import process_incoming_message
 
@@ -175,6 +175,23 @@ async def test_approved_open_window_still_sends_the_text(
 
 
 @pytest.mark.asyncio
+async def test_approved_open_window_reads_the_window_once(
+    facade, graph, fake_redis, monkeypatch
+):
+    """A second read could find it closed, and the text would be paged and
+    dropped although the template is approved."""
+    _approve(monkeypatch)
+    answers = AsyncMock(side_effect=[True, False])
+    monkeypatch.setattr(cloud_api, "is_service_window_open", answers)
+
+    result = await _send(facade)
+
+    assert [m["type"] for m in graph] == ["text"]
+    assert result is not None
+    assert answers.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_approved_closed_window_sends_params_in_the_declared_order(
     facade, graph, pages, fake_redis, monkeypatch
 ):
@@ -258,6 +275,47 @@ async def test_a_template_meta_later_fails_pages_once_per_recipient(
     assert CHAT_ID not in text
     assert "undeliverable" not in text
     assert logged.call_count == 1  # the second is reported, not paged
+
+
+@pytest.mark.asyncio
+async def test_a_window_page_earlier_that_day_does_not_demote_a_lost_template(
+    pages, mock_db, monkeypatch, fake_redis
+):
+    """The caller was told the template went out, so nothing else reports it."""
+    monkeypatch.setattr(delivery, "wa_delivery_collection", mock_db.wa_delivery)
+    monkeypatch.setattr(delivery, "page_critical", pages)
+    assert await claim_window_page(CHAT_ID) is True  # a blocked free-form send
+
+    await delivery.record_outbound("wamid.L1", CHAT_ID, "template")
+    await delivery.apply_status_event(
+        {
+            "wa_message_id": "wamid.L1",
+            "chat_id": CHAT_ID,
+            "status": "failed",
+            "error_code": 132001,
+            "error_title": "template does not exist",
+        }
+    )
+
+    assert pages.call_count == 1
+    text = pages.call_args.args[0]
+    assert "code=132001" in text
+    assert "template does not exist" not in text
+    assert CHAT_ID not in text
+
+
+@pytest.mark.asyncio
+async def test_a_lost_template_does_not_use_up_the_window_page(
+    pages, mock_db, monkeypatch, fake_redis
+):
+    monkeypatch.setattr(delivery, "wa_delivery_collection", mock_db.wa_delivery)
+    monkeypatch.setattr(delivery, "page_critical", pages)
+    await delivery.record_outbound("wamid.L2", CHAT_ID, "template")
+    await delivery.apply_status_event(
+        {"wa_message_id": "wamid.L2", "chat_id": CHAT_ID, "status": "failed"}
+    )
+
+    assert await claim_window_page(CHAT_ID) is True
 
 
 @pytest.mark.asyncio
@@ -562,17 +620,15 @@ async def test_jobs_from_a_fresh_fsm_reaches_its_handler(wf, mock_db):
 
 
 @pytest.mark.asyncio
-async def test_a_pro_on_break_does_not_reach_the_keyword_handlers(wf, mock_db):
-    """Pins a defect the free-form path has too. is_active False once the PRO_MODE
-    state has expired: `_is_registered_pro` and auto-detect both skip this pro, so a
-    reply to a finish reminder goes to the customer side. Delete this when decided.
-    """
-    pro_id = await _pro(mock_db, is_active=False)
+async def test_a_pro_on_a_break_can_answer_a_reminder_from_a_fresh_fsm(wf, mock_db):
+    """PRO-212: their own break does not stop a reply to a template reaching its
+    handler."""
+    pro_id = await _pro(mock_db, is_active=False, self_paused=True)
     await _lead(mock_db, pro_id=pro_id, status=LeadStatus.BOOKED)
 
     await process_incoming_message(PRO_CHAT, "עדיין עובד")
 
-    assert _replies(wf, PRO_CHAT) != [Messages.Pro.STILL_WORKING_ACK]
+    assert _replies(wf, PRO_CHAT) == [Messages.Pro.STILL_WORKING_ACK]
 
 
 @pytest.mark.asyncio
@@ -583,19 +639,6 @@ async def test_sos_alert_pending_approve_works_on_an_offered_lead(wf, mock_db):
     await process_incoming_message(PRO_CHAT, "אשר")
 
     assert Messages.Pro.APPROVE_SUCCESS in _replies(wf, PRO_CHAT)[0]
-
-
-@pytest.mark.asyncio
-async def test_sos_alert_pending_approve_finds_nothing_on_an_early_lead(wf, mock_db):
-    """Pins a defect the free-form alert has too. The alert goes out for CONTACTED
-    (an early lead the pro was never offered) and says אשר, and אשר only looks at
-    NEW. Delete this when that is decided."""
-    pro_id = await _pro(mock_db)
-    await _lead(mock_db, pro_id=pro_id, status=LeadStatus.CONTACTED)
-
-    await process_incoming_message(PRO_CHAT, "אשר")
-
-    assert _replies(wf, PRO_CHAT) == [Messages.Pro.NO_PENDING_APPROVALS]
 
 
 @pytest.mark.asyncio
