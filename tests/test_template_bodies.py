@@ -75,15 +75,38 @@ def test_every_template_is_a_draft_utility_template_in_hebrew():
         assert spec.language == "he"
 
 
-def test_early_lead_is_left_out_of_submission():
-    assert not TEMPLATES["early_lead"].submit
-    assert not TEMPLATES["early_lead"].body
+@pytest.mark.parametrize("key", ["early_lead", "pro_lead_outside_trade"])
+def test_an_entry_with_no_reviewed_body_is_left_out_of_submission(key):
+    assert not TEMPLATES[key].submit
+    assert not TEMPLATES[key].body
 
 
-def test_sos_alert_pending_has_no_phone():
-    """PRO-59: before approval the pro must not get the customer's number."""
-    assert "phone" not in TEMPLATES["sos_alert_pending"].params
-    assert "phone" in TEMPLATES["sos_alert"].params
+def test_every_submitted_template_has_a_body():
+    assert all(spec.body for spec in SUBMITTED)
+
+
+def test_sos_alert_pending_has_no_variable_at_all():
+    """PRO-59: before approval the pro must not get the customer's number.
+    PRO-212: nor the customer's words, where they can type it."""
+    assert TEMPLATES["sos_alert_pending"].params == ()
+    assert "{" not in Messages.Templates.SOS_ALERT_PENDING
+    assert TEMPLATES["sos_alert"].params == ("phone", "last_message")
+
+
+def test_the_two_openings_the_owner_approved_for_utility_review():
+    """Approved 2026-11-14: "הצעה" and the megaphone read as promotion."""
+    assert Messages.Templates.LEAD_OFFER_REASSIGNED.startswith(
+        "📋 *פנייה חדשה מפרולי ממתינה לאישורך*\n\n"
+    )
+    assert Messages.Templates.ONBOARDING_APPROVED.split("\n")[1] == (
+        "מעכשיו יישלחו אליך כאן בוואטסאפ פניות של לקוחות."
+    )
+
+
+@pytest.mark.parametrize("spec", SUBMITTED, ids=lambda s: s.key)
+def test_no_body_carries_the_promotional_signals_that_were_removed(spec):
+    assert "הצע" not in spec.body  # הצעה, הצעת, הצעות
+    assert "📢" not in spec.body
 
 
 @pytest.mark.parametrize(
@@ -200,13 +223,19 @@ class _SendSites(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+# The worker's sends and the admin panel's: an operator's click is as
+# business-initiated as a scheduler tick.
+SEND_ROOTS = ("app", "admin_panel")
+
+
 def _call_sites():
-    for path in sorted((ROOT / "app").rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        visitor = _SendSites()
-        visitor.visit(tree)
-        for key, params in visitor.sites:
-            yield path.relative_to(ROOT).as_posix(), key, params
+    for root in SEND_ROOTS:
+        for path in sorted((ROOT / root).rglob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            visitor = _SendSites()
+            visitor.visit(tree)
+            for key, params in visitor.sites:
+                yield path.relative_to(ROOT).as_posix(), key, params
 
 
 def test_every_call_site_supplies_exactly_its_spec_params():
@@ -241,15 +270,32 @@ def test_the_chosen_offer_template_gets_its_params(lead, expected):
 
 
 def test_every_submitted_template_is_reachable_from_a_call_site():
-    """The defect this exists for: an approved template no send can reach.
-
-    The admin panel's sends wait for the open panel PR, so the onboarding verdicts
-    are named here until they move.
-    """
+    """The defect this exists for: an approved template no send can reach."""
     used = {k.value for _, k, _ in _call_sites() if isinstance(k, ast.Constant)}
     used |= {"lead_offer_reassigned"}  # chosen by _offer_template
-    panel_only = {"onboarding_approved", "onboarding_rejected"}
-    assert {spec.key for spec in SUBMITTED} - used == panel_only
+    assert {spec.key for spec in SUBMITTED} - used == set()
+
+
+def test_no_call_site_names_a_template_that_is_not_submitted():
+    """A key with no body can never be approved, so naming it would be a promise
+    the registry cannot keep."""
+    used = {k.value for _, k, _ in _call_sites() if isinstance(k, ast.Constant)}
+    assert used <= {spec.key for spec in SUBMITTED}
+
+
+def test_the_admin_panel_names_a_template_on_each_of_its_sends():
+    """The panel's three direct sends. Its lead offers go through
+    `admin_flow.assign_lead_to_pro`, so `notify_pro_new_lead` names theirs."""
+    panel = {
+        (path, key.value)
+        for path, key, _ in _call_sites()
+        if path.startswith("admin_panel/")
+    }
+    assert panel == {
+        ("admin_panel/views/professionals.py", "onboarding_approved"),
+        ("admin_panel/views/professionals.py", "onboarding_rejected"),
+        ("admin_panel/core/utils.py", "completion_check"),
+    }
 
 
 # ---------------------------------------------------------------------------

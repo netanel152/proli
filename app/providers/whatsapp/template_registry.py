@@ -4,10 +4,13 @@ Meta-approved template behind them.
 The inventory itself is PRO-88 (docs/WHATSAPP_TEMPLATE_CATALOG.md); this module
 is its machine-readable half. Every entry stays ``DRAFT`` until the template
 clears Meta review (``scripts/submit_whatsapp_templates.py`` submits it and
-reports its status). Flipping an entry to ``APPROVED``, with the exact name Meta
-approved, arms it for the call sites that pass ``template_key`` to the facade's
-``send_message``. It does nothing for a send that does not: the admin panel's
-onboarding verdicts and its operator completion check still go out free-form.
+reports its status and the category Meta holds it in). Flipping an entry to
+``APPROVED``, with the exact name Meta approved, arms it for the call sites that
+pass ``template_key`` to the facade's ``send_message``: the worker's, and the
+admin panel's through ``sync.send_text_sync``. It does nothing for a send that
+names no template. Flip only an entry Meta approved as UTILITY: one it holds as
+MARKETING costs several times as much and may not be delivered, so arming it is
+a decision to make on purpose (``--status`` exits 2 on one).
 
 A spec stores no body text: the copy has exactly one home
 (``app/core/messages.py``, ARCHITECTURE_STANDARD §10). ``body`` is a reference to

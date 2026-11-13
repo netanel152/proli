@@ -8,19 +8,23 @@ facade above the provider is the real one, breaker included.
 import dataclasses
 import json
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
+import mongomock
 import pytest
 import pytest_asyncio
 from pydantic import SecretStr
 
+import admin_panel.core.utils as panel_utils
+import admin_panel.views.professionals as professionals
 import app.providers.whatsapp.cloud_api as cloud_api
 import app.services.workflow_service
 from app.core.config import settings
 from app.core.constants import LeadStatus, UserStates
 from app.core.messages import Messages
-from app.providers.whatsapp import delivery, quality, template_registry
+from app.providers.whatsapp import delivery, quality, sync, template_registry
 from app.providers.whatsapp.cloud_api import CloudAPIProvider
 from app.providers.whatsapp.dry_run import DryRunProvider
 from app.providers.whatsapp.facade import WhatsAppFacade
@@ -746,3 +750,127 @@ async def test_send_sos_alert_reports_a_blocked_send_as_not_notified(
 
     whatsapp.send_message.assert_called_once()
     assert "pro_notified=False" in sos_pages.call_args.args[0]
+
+
+# ---------------------------------------------------------------------------
+# The admin panel's sends: an operator's click, through the sync bridge
+# ---------------------------------------------------------------------------
+
+PANEL_PRO_PHONE = "972500000003"
+
+
+@pytest.fixture
+def panel(graph, pages, monkeypatch):
+    """The real Cloud provider behind the panel's bridge, the breaker letting
+    sends through. ``window`` is what the recipient's 24h window answers."""
+    facade = WhatsAppFacade(CloudAPIProvider())
+    monkeypatch.setattr(
+        facade, "_outbound_blocked_reason", AsyncMock(return_value=None)
+    )
+    window = AsyncMock(return_value=False)
+    monkeypatch.setattr(cloud_api, "is_service_window_open", window)
+    monkeypatch.setattr(sync, "get_whatsapp", lambda: facade)
+    return SimpleNamespace(graph=graph, pages=pages, window=window)
+
+
+VERDICTS = [
+    (professionals._notify_pro_approved, "onboarding_approved"),
+    (professionals._notify_pro_rejected, "onboarding_rejected"),
+]
+
+
+@pytest.mark.parametrize("notify, key", VERDICTS, ids=[k for _, k in VERDICTS])
+def test_a_panel_verdict_reaches_a_closed_window_once_its_template_is_approved(
+    panel, monkeypatch, notify, key
+):
+    _approve(monkeypatch, key)
+
+    assert notify(PANEL_PRO_PHONE) is True
+
+    template = panel.graph[0]["template"]
+    assert panel.graph[0]["to"] == PANEL_PRO_PHONE
+    assert template["name"] == template_registry.TEMPLATES[key].meta_name
+    assert "components" not in template  # neither body has a variable
+    assert panel.pages.call_count == 0
+
+
+@pytest.mark.parametrize("notify, key", VERDICTS, ids=[k for _, k in VERDICTS])
+def test_a_draft_panel_verdict_on_a_closed_window_is_still_not_sent(panel, notify, key):
+    assert notify(PANEL_PRO_PHONE) is False
+
+    assert panel.graph == []
+    assert panel.pages.call_count == 1
+
+
+@pytest.mark.parametrize("notify, key", VERDICTS, ids=[k for _, k in VERDICTS])
+def test_a_draft_panel_verdict_on_an_open_window_is_the_same_text_payload(
+    panel, notify, key
+):
+    panel.window.return_value = True
+    spec = template_registry.TEMPLATES[key]
+    free_form = {
+        "onboarding_approved": Messages.Onboarding.APPROVED_NOTIFICATION,
+        "onboarding_rejected": Messages.Onboarding.REJECTED_NOTIFICATION,
+    }[spec.key]
+
+    assert sync.send_text_sync(PANEL_PRO_PHONE + "@c.us", free_form) is True
+    plain = panel.graph.pop()
+    assert notify(PANEL_PRO_PHONE) is True
+
+    assert panel.graph == [plain]
+    assert plain["type"] == "text"
+
+
+def _panel_booked_lead(monkeypatch):
+    db = mongomock.MongoClient()["panel"]
+    pro_id = db["users"].insert_one({"business_name": "שירותי דוגמה"}).inserted_id
+    lead_id = (
+        db["leads"]
+        .insert_one({"chat_id": CHAT_ID, "pro_id": pro_id, "status": "booked"})
+        .inserted_id
+    )
+    monkeypatch.setattr(panel_utils, "leads_collection", db["leads"])
+    monkeypatch.setattr(panel_utils, "users_collection", db["users"])
+    return db, lead_id
+
+
+def test_the_operators_completion_check_reaches_a_closed_window_once_approved(
+    panel, monkeypatch
+):
+    _approve(monkeypatch, "completion_check")
+    db, lead_id = _panel_booked_lead(monkeypatch)
+
+    assert panel_utils.send_completion_check_sync(str(lead_id)) is True
+
+    template = panel.graph[0]["template"]
+    assert template["name"] == "proli_completion_check"
+    assert [p["text"] for p in template["components"][0]["parameters"]] == [
+        "שירותי דוגמה"
+    ]
+    # Stamped like any check that went, so the monitor's cooldown restarts.
+    assert db["leads"].find_one({"_id": lead_id})["completion_check_sent_count"] == 1
+
+
+def test_a_draft_completion_check_on_a_closed_window_is_not_sent_or_stamped(
+    panel, monkeypatch
+):
+    db, lead_id = _panel_booked_lead(monkeypatch)
+
+    assert panel_utils.send_completion_check_sync(str(lead_id)) is False
+
+    assert panel.graph == []
+    assert "completion_check_sent_count" not in db["leads"].find_one({"_id": lead_id})
+
+
+def test_the_bridge_passes_no_template_argument_unless_one_is_named(monkeypatch):
+    """A send that names no template is the call it always was."""
+    facade = MagicMock()
+    facade.send_message = AsyncMock(return_value={"id": "1"})
+    monkeypatch.setattr(sync, "get_whatsapp", lambda: facade)
+
+    assert sync.send_text_sync(CHAT_ID, "hi") is True
+    assert sync.send_text_sync(CHAT_ID, "hi", template_key="completion_check") is True
+
+    plain, named = facade.send_message.await_args_list
+    assert plain.args == (CHAT_ID, "hi") and plain.kwargs == {}
+    assert named.kwargs == {"template_key": "completion_check", "params": None}
