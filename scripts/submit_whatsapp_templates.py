@@ -6,7 +6,10 @@
         --confirm-name "<account name>"
 
 The default prints every payload and touches nothing. ``--status`` reads Meta's
-templates and reports drift from the registry. ``--apply`` creates whatever Meta
+templates, prints the status and the category Meta holds for each, and reports
+drift from the registry. It exits 2 if Meta holds any of them in a category other
+than UTILITY, whatever else it found, 1 on any other drift, and 0 when the two
+agree. ``--apply`` creates whatever Meta
 does not already have. It prints the account's name and id, needs that name typed
 back as ``--confirm-name``, and refuses an account whose name contains "Test" and
 the id 1910054379665469 outright: that is Meta's test Messaging account, the one
@@ -18,8 +21,13 @@ the single-egress rule protects: the circuit breaker and the kill switch guard a
 phone number, and nothing here reaches one. Same shape as
 ``scripts/meta_healthcheck.py``. The token goes in a header and is never printed.
 
-Nothing here changes the registry. When ``--status`` says a template is APPROVED,
-flip its entry in ``app/providers/whatsapp/template_registry.py``.
+Nothing here changes the registry. When ``--status`` says to flip a template,
+flip its entry in ``app/providers/whatsapp/template_registry.py``. It says so
+only for one Meta approved *as UTILITY*. Meta can approve a template as MARKETING,
+or move an approved one there later and leave it APPROVED, and a marketing
+template costs several times a utility one and may not be delivered at all. So
+arming one is a decision somebody makes knowingly, never what follows from
+reading "APPROVED".
 
 Meta's docs, read 2026-11-06, under
 developers.facebook.com/documentation/business-messaging/whatsapp/:
@@ -49,6 +57,9 @@ from app.providers.whatsapp.template_registry import (  # noqa: E402
 GRAPH_ROOT = "https://graph.facebook.com"
 TEST_WABA_ID = "1910054379665469"
 TEMPLATE_FIELDS = "name,language,status,category,components"
+UTILITY = "UTILITY"
+EXIT_DRIFT = 1
+EXIT_NOT_UTILITY = 2
 
 
 def to_submit() -> list[TemplateSpec]:
@@ -104,6 +115,32 @@ def fetch_templates(client: httpx.Client, waba_id: str) -> list[dict]:
     return templates
 
 
+def meta_category(meta: dict) -> str:
+    """The category Meta holds a template in. A missing one is not UTILITY."""
+    return str(meta.get("category") or "UNKNOWN").upper()
+
+
+def not_utility(specs: list[TemplateSpec], meta_templates: list[dict]) -> list[str]:
+    """Each template Meta holds in a category other than UTILITY, one line each.
+
+    Whatever the registry says: a spec edited to ``MARKETING`` would agree with
+    Meta and so not be drift, and it must still stop here.
+    """
+    by_name = {(t.get("name"), t.get("language")): t for t in meta_templates}
+    lines = []
+    for spec in specs:
+        meta = by_name.get((spec.meta_name, spec.language))
+        if meta is None or meta_category(meta) == UTILITY:
+            continue
+        armed = (
+            "it is APPROVED in the registry, so it is being sent in that category"
+            if spec.status is TemplateStatus.APPROVED
+            else "do not flip the registry"
+        )
+        lines.append(f"{spec.meta_name}: {meta_category(meta)} on Meta, {armed}")
+    return lines
+
+
 def drift(specs: list[TemplateSpec], meta_templates: list[dict]) -> list[str]:
     """Every way the registry and Meta disagree, one line each."""
     by_name = {(t.get("name"), t.get("language")): t for t in meta_templates}
@@ -118,7 +155,13 @@ def drift(specs: list[TemplateSpec], meta_templates: list[dict]) -> list[str]:
             continue
         status = str(meta.get("status") or "").upper()
         if status == "APPROVED" and spec.status is not TemplateStatus.APPROVED:
-            lines.append(f"{spec.meta_name}: APPROVED on Meta, flip the registry")
+            if meta_category(meta) == UTILITY:
+                lines.append(f"{spec.meta_name}: APPROVED on Meta, flip the registry")
+            else:
+                lines.append(
+                    f"{spec.meta_name}: APPROVED on Meta as {meta_category(meta)}, "
+                    "do not flip the registry"
+                )
         if status != "APPROVED" and spec.status is TemplateStatus.APPROVED:
             lines.append(f"{spec.meta_name}: APPROVED here, {status} on Meta")
         if meta.get("category") != spec.category:
@@ -168,15 +211,26 @@ def show_status(client: httpx.Client, waba_id: str) -> int:
     by_name = {(t.get("name"), t.get("language")): t for t in meta_templates}
     for spec in to_submit():
         meta = by_name.get((spec.meta_name, spec.language)) or {}
+        category = meta_category(meta) if meta else "-"
         print(
             f"{spec.meta_name}: Meta={meta.get('status', 'NOT SUBMITTED')}, "
-            f"registry={spec.status.value}"
+            f"category={category}, registry={spec.status.value}"
         )
     lines = drift(to_submit(), meta_templates)
     print(f"\n{len(lines)} drift line(s).")
     for line in lines:
         print(f"  {line}")
-    return 1 if lines else 0
+    wrong = not_utility(to_submit(), meta_templates)
+    if wrong:
+        print(
+            f"\n{len(wrong)} template(s) Meta does not hold as UTILITY. Arming one "
+            "is a decision to pay marketing rates for it, not a default:",
+            file=sys.stderr,
+        )
+        for line in wrong:
+            print(f"  {line}", file=sys.stderr)
+        return EXIT_NOT_UTILITY
+    return EXIT_DRIFT if lines else 0
 
 
 def apply(client: httpx.Client, waba_id: str, confirm_name: str) -> int:

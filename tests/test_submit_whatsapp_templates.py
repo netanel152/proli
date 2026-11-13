@@ -1,5 +1,6 @@
 """scripts/submit_whatsapp_templates.py against a fake Graph API. No real call."""
 
+import dataclasses
 import importlib.util
 import pathlib
 import re
@@ -306,3 +307,99 @@ def test_status_exits_nonzero_on_drift(capsys):
 
     assert graph.posts == []
     assert "NOT SUBMITTED" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# The category Meta holds: arming a marketing template is never a default
+# ---------------------------------------------------------------------------
+
+
+def _status(templates, capsys):
+    graph = FakeGraph(templates=templates)
+    code = submit.main(["--status", "--waba-id", LIVE_WABA], client=graph.client())
+    assert graph.posts == []
+    return code, capsys.readouterr()
+
+
+def test_status_prints_the_category_meta_holds_for_every_template(capsys):
+    specs = submit.to_submit()
+
+    code, printed = _status([_meta(spec, status="PENDING") for spec in specs], capsys)
+
+    assert code == 0
+    for spec in specs:
+        assert f"{spec.meta_name}: Meta=PENDING, category=UTILITY" in printed.out
+
+
+def test_status_prints_no_category_for_a_template_meta_does_not_have(capsys):
+    code, printed = _status([], capsys)
+
+    assert code == submit.EXIT_DRIFT  # not submitted is drift, and nothing worse
+    assert "Meta=NOT SUBMITTED, category=-" in printed.out
+    assert "UTILITY" not in printed.err
+
+
+@pytest.mark.parametrize("status", ["APPROVED", "PENDING"])
+def test_status_exits_2_when_meta_holds_one_template_as_marketing(status, capsys):
+    first, *rest = submit.to_submit()
+    templates = [_meta(first, status=status, category="MARKETING")]
+    templates += [_meta(spec, status="PENDING") for spec in rest]
+
+    code, printed = _status(templates, capsys)
+
+    assert code == submit.EXIT_NOT_UTILITY == 2
+    assert f"{first.meta_name}: Meta={status}, category=MARKETING" in printed.out
+    assert f"{first.meta_name}: MARKETING on Meta, do not flip" in printed.err
+    assert "1 template(s) Meta does not hold as UTILITY" in printed.err
+    assert all(spec.meta_name not in printed.err for spec in rest)
+
+
+def test_status_never_says_to_flip_a_template_meta_approved_as_marketing(capsys):
+    """The default this closes: reading APPROVED and arming a marketing template."""
+    marketing, utility, *rest = submit.to_submit()
+    templates = [_meta(marketing, category="MARKETING"), _meta(utility)]
+
+    _, printed = _status(templates, capsys)
+
+    assert f"{utility.meta_name}: APPROVED on Meta, flip the registry" in printed.out
+    assert f"{marketing.meta_name}: APPROVED on Meta, flip" not in printed.out
+    assert (
+        f"{marketing.meta_name}: APPROVED on Meta as MARKETING, "
+        "do not flip the registry"
+    ) in printed.out
+
+
+def test_a_registry_entry_edited_to_marketing_still_fails_the_category_check():
+    """It agrees with Meta, so it is not drift. It must stop here regardless."""
+    spec = dataclasses.replace(submit.to_submit()[0], category="MARKETING")
+    meta = [_meta(spec, status="PENDING")]
+
+    assert not any("category" in line for line in submit.drift([spec], meta))
+    assert submit.not_utility([spec], meta) == [
+        f"{spec.meta_name}: MARKETING on Meta, do not flip the registry"
+    ]
+
+
+def test_an_armed_template_meta_moved_to_marketing_is_named_as_being_sent():
+    """Meta recategorises without revoking, so status alone would look healthy."""
+    spec = dataclasses.replace(
+        submit.to_submit()[0], status=submit.TemplateStatus.APPROVED
+    )
+
+    (line,) = submit.not_utility([spec], [_meta(spec, category="MARKETING")])
+
+    assert "APPROVED in the registry" in line
+    assert "being sent in that category" in line
+
+
+@pytest.mark.parametrize("category", [None, "", "AUTHENTICATION", "marketing"])
+def test_anything_but_utility_counts_including_a_missing_category(category):
+    spec = submit.to_submit()[0]
+
+    assert submit.not_utility([spec], [_meta(spec, category=category)])
+
+
+def test_a_utility_template_in_any_letter_case_passes():
+    spec = submit.to_submit()[0]
+
+    assert submit.not_utility([spec], [_meta(spec, category="utility")]) == []
