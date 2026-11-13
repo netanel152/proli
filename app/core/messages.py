@@ -1308,7 +1308,7 @@ class Messages:
         # they are not the free-form wording with holes in it. A send's optional
         # price and urgency become values. Media links and a voice transcript
         # cannot be a variable at all: they arrive with the approval
-        # (`pro_flow._handle_approve`). The free-form loyalty header has no
+        # (`pro_flow._approve_lead`). The free-form loyalty header has no
         # counterpart here.
         LEAD_OFFER = (
             "📋 *עבודה חדשה מפרולי מחכה לאישורך*\n\n"

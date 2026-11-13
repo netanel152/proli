@@ -165,7 +165,7 @@ async def keep_withheld_details(lead: dict, sent, withheld: str) -> None:
     """Keep what an offer sent as a template could not carry, for the approval.
 
     Links of unknown number cannot be a template variable, so they arrive with
-    the approval: ``pro_flow._handle_approve`` adds what is stored here. ``sent``
+    the approval: ``pro_flow._approve_lead`` adds what is stored here. ``sent``
     is ``send_message``'s result, and nothing is stored unless the template is
     what went out.
     """
