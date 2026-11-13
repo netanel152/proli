@@ -47,7 +47,7 @@ Ordered by how badly the product breaks if the template is missing or rejected.
 | **P11** | SOS alert (`SOS.PRO_ALERT` / `SOS.PRO_ALERT_PENDING`) | `notification_service.send_sos_alert` | Customer distress | Time-critical; a rejected template here is a safety regression. **PRO-59**: the phone-bearing `PRO_ALERT` sends only when the lead is BOOKED; a NEW lead's pro (offered, not yet approved) gets the phone-free `PRO_ALERT_PENDING` instead, which since PRO-212 has no `{last_message}` variable either, because a customer can type their number there — two template bodies, same trigger, so two registry entries (`sos_alert`, `sos_alert_pending`). A CONTACTED or absent lead's pro gets no alert (PRO-212). |
 | **P12** | Customer cancelled (`CUSTOMER_CANCELLED`) | `workflow_service` | Customer cancels | |
 | **P13** | Onboarding approved / rejected | `professionals.py:486, 497` | **Operator clicks a button in the admin panel** | Arbitrary delay after the pro's registration — hours or days. Assume closed. Two bodies, so two registry entries (`onboarding_approved`, `onboarding_rejected`). |
-| **P14** | Lead left a pro outside its trade (`LEAD_OUTSIDE_TRADE`, `LEAD_OUTSIDE_TRADE_OFFER`) | `conversation_pipeline.py` wrong-trade check | The customer's next message on a lead whose pro doesn't fit its trade (PRO-215) | Not `PRO_LOST_LEAD`: nobody failed to answer. Worded to stay true whether the lead goes to another pro or to manual review. |
+| **P14** | Lead left a pro outside its trade (`LEAD_OUTSIDE_TRADE`, `LEAD_OUTSIDE_TRADE_OFFER`) | `conversation_pipeline.py` wrong-trade check | The customer's next message on a lead whose pro doesn't fit its trade (PRO-215) | Not `PRO_LOST_LEAD`: nobody failed to answer. Worded to stay true whether the lead goes to another pro or to manual review. It fires on the *customer's* message, so this pro's window is usually closed: one template (`pro_lead_outside_trade`) for both notices. |
 
 ### Customer-facing
 
@@ -111,7 +111,7 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | P12 | `customer_cancelled` | `customer_name`, `full_address` | `CUSTOMER_CANCELLED` | `workflow_service` cancel path |
 | P13 | `onboarding_approved` | none | `ONBOARDING_APPROVED` | `admin_panel/views/professionals.py::_notify_pro_approved` |
 | P13 | `onboarding_rejected` | none | `ONBOARDING_REJECTED` | `admin_panel/views/professionals.py::_notify_pro_rejected` |
-| P14 | `pro_lead_outside_trade` | — | none | **Not submitted, send left free-form** (`conversation_pipeline.py` wrong-trade check), see below |
+| P14 | `pro_lead_outside_trade` | `issue_type` | `PRO_LEAD_OUTSIDE_TRADE` | `conversation_pipeline.py` wrong-trade check, for both `LEAD_OUTSIDE_TRADE` and `LEAD_OUTSIDE_TRADE_OFFER` |
 | — | `pro_found` | `pro_name`, `issue_type`, `full_address`, `appointment_time`, `price_estimate`, `pro_phone` | `PRO_FOUND` | `pro_flow._approve_lead`. The update `REASSIGNING` and `PENDING_REVIEW` promise, and the only way a closed-window customer gets the pro's phone |
 | C1 | `no_pro_available` | `issue_type` | `NO_PRO_AVAILABLE` | `monitor_service.auto_reject_unassigned_leads` |
 | C2 | `completion_check` | `pro_name` | `COMPLETION_CHECK` | `customer_flow.send_customer_completion_check`, and the operator button, `admin_panel/core/utils.py::send_completion_check_sync` |
@@ -120,7 +120,7 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | C3 | `pending_review` | `issue_type` | `PENDING_REVIEW` | `monitor_service.reassign_lead` (three branches), `pro_flow._escalate_rejected_lead` |
 | P4 | `early_lead` | — | none | **Not submitted, send left free-form**, see below |
 
-That is **19 templates to submit** and two registry entries left out (`early_lead`, `pro_lead_outside_trade`), against the 15 the registry used to list: P11 and P13 were each two bodies under one key, C3 was three, and `pro_found` had no row.
+That is **20 templates to submit** and one registry entry left out (`early_lead`), against the 15 the registry used to list: P11 and P13 were each two bodies under one key, C3 was three, `pro_found` had no row, and P14 came with PRO-215.
 
 `tests/test_template_bodies.py` fails if a call site's `params` stop matching its spec, if a submitted template has no call site, if a call site names a template that is not submitted, or if one of the admin panel's sends names none. It scans `admin_panel/` as well as `app/`, with no exception list.
 
@@ -136,6 +136,8 @@ That is **19 templates to submit** and two registry entries left out (`early_lea
 
 **An emergency P3 takes `lead_offer`,** because `lead_offer_reassigned` has no urgency line and the free-form version opens with the emergency header.
 
+**The wrong-trade notice is one body.** The free-form send has two wordings: one for a pro who was offered the lead ("אין צורך לאשר או לדחות אותה") and one for a pro who had only heard of it. `pro_lead_outside_trade` says "אין צורך לפעול", which is true of both, and like the free-form notice it does not say where the lead went.
+
 **`pro_found` drops two optional lines.** `PRO_FOUND`'s profession and rating are not in the template. Its price stays, as `price_estimate` with the same fallback the offer uses.
 
 **Runtime values are cut.** `sanitize_param` limits `last_message` to 700 characters and every other variable to 120, so that the whole message stays inside the 1024 Meta states for a body. Those two figures are ours.
@@ -144,7 +146,7 @@ That is **19 templates to submit** and two registry entries left out (`early_lea
 
 ## Settled, and still to do
 
-The owner settled these on 2026-11-06: the loyalty header is lost on template offers, a closed-window pro decides without media, an emergency reassignment goes through `lead_offer`, and `early_lead` is not submitted (it would need a media template and is not load-bearing), so its free-form send stays. `pro_lead_outside_trade` (P14, PRO-215) arrived after the bodies were reviewed, so it has none and is not submitted either; its free-form send is lost on a closed window.
+The owner settled these on 2026-11-06: the loyalty header is lost on template offers, a closed-window pro decides without media, an emergency reassignment goes through `lead_offer`, and `early_lead` is not submitted (it would need a media template and is not load-bearing), so its free-form send stays. On 2026-11-14 the owner approved a body for `pro_lead_outside_trade` (P14, PRO-215): one template for the offered and the not-yet-offered case, because "אין צורך לפעול" is true of both, and its free-form wording for an open window stays as it was.
 
 A template Meta accepted and then failed pages the operator under its own once-per-recipient-per-day budget (`delivery.TEMPLATE_LOST`), separate from the "window closed, nothing sent" page, and the page carries Meta's numeric error code.
 
@@ -153,4 +155,4 @@ A template Meta accepted and then failed pages the operator under its own once-p
 - Whether the sandbox number's 5-recipient limit applies to template sends as well as free-form (determines whether PRO-64 can exercise the template path at all).
 - Whether Meta accepts each body as UTILITY. Only review can answer that, and `--status` reports the result.
 - Whether a parameter value may contain a newline, `#`, `$` or `%`. Meta's pages list those characters as a problem with a template's variables without saying whether a runtime value counts. `sanitize_param` flattens the whitespace and leaves the characters in place, so a customer's message containing `%` still goes out as written.
-- **Sends with no row here.** The claim above that everything from the inbound dispatcher is in-window holds for the *sender*, not the other party. A customer's or pro's message can trigger a send to someone whose window is closed: `Pro.CUSTOMER_RESCHEDULED_SUCCESS`, `Pro.CUSTOMER_EXISTING_JOB_QUERY`, `Pro.CUSTOMER_REPORTED_COMPLETION`, `Pro.CUSTOMER_REPORTED_NO_SHOW`, `Customer.PRO_CANCELLED_BOOKING`, `Customer.RATE_SERVICE`, `Customer.AWAITING_APPROVAL_TRANSPARENT`, `Customer.BOT_PAUSED_BY_PRO` (`pro_flow._pause_lead`), `Pro.LEAD_OUTSIDE_TRADE`/`LEAD_OUTSIDE_TRADE_OFFER` (P14) and the early-lead notification (P4). None has a template. On a closed window they page and drop, as they always have. `AWAITING_APPROVAL_TRANSPARENT` is deliberately left that way: on the reassignment and admin paths it is only a progress note, and `pro_found`, `reassigning` or `pending_review` carries the outcome.
+- **Sends with no row here.** The claim above that everything from the inbound dispatcher is in-window holds for the *sender*, not the other party. A customer's or pro's message can trigger a send to someone whose window is closed: `Pro.CUSTOMER_RESCHEDULED_SUCCESS`, `Pro.CUSTOMER_EXISTING_JOB_QUERY`, `Pro.CUSTOMER_REPORTED_COMPLETION`, `Pro.CUSTOMER_REPORTED_NO_SHOW`, `Customer.PRO_CANCELLED_BOOKING`, `Customer.RATE_SERVICE`, `Customer.AWAITING_APPROVAL_TRANSPARENT`, `Customer.BOT_PAUSED_BY_PRO` (`pro_flow._pause_lead`) and the early-lead notification (P4). None has a template. On a closed window they page and drop, as they always have. `AWAITING_APPROVAL_TRANSPARENT` is deliberately left that way: on the reassignment and admin paths it is only a progress note, and `pro_found`, `reassigning` or `pending_review` carries the outcome.

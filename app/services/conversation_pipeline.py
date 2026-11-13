@@ -308,6 +308,12 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     sent = await whatsapp.send_message(
                         to_chat_id(existing_pro["phone_number"]),
                         notice.format(issue=issue),
+                        # It fires on the customer's next message, so this pro's
+                        # window is usually closed. One template for both notices.
+                        template_key="pro_lead_outside_trade",
+                        params={
+                            "issue_type": issue or Messages.Fallbacks.ISSUE_UNKNOWN
+                        },
                     )
                     # None is the facade's "blocked": a closed 24h window, usually.
                     if not sent:

@@ -1379,6 +1379,14 @@ class Messages:
             "*אשר* — לאישור העבודה\n"
             "*דחה* — לדחיית העבודה"
         )
+        # One body for a lead the pro was offered and one they only heard of
+        # early: "אין צורך לפעול" is true of both, and nothing here says where the
+        # lead went, since that may be a human's queue (PRO-215).
+        PRO_LEAD_OUTSIDE_TRADE = (
+            "עדכון מפרולי: הפנייה בנושא {issue_type} כבר לא משויכת אליך, "
+            "כי היא מחוץ לתחום המקצוע שלך.\n"
+            "אין צורך לפעול."
+        )
         CUSTOMER_CANCELLED = (
             "⚠️ *העבודה בוטלה על ידי הלקוח*\n\n"
             "*לקוח:* {customer_name}\n"

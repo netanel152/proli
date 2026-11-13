@@ -75,10 +75,25 @@ def test_every_template_is_a_draft_utility_template_in_hebrew():
         assert spec.language == "he"
 
 
-@pytest.mark.parametrize("key", ["early_lead", "pro_lead_outside_trade"])
-def test_an_entry_with_no_reviewed_body_is_left_out_of_submission(key):
-    assert not TEMPLATES[key].submit
-    assert not TEMPLATES[key].body
+def test_early_lead_is_the_one_entry_left_out_of_submission():
+    """The owner's decision: it would need a media template."""
+    assert [spec.key for spec in TEMPLATES.values() if not spec.submit] == [
+        "early_lead"
+    ]
+    assert not TEMPLATES["early_lead"].body
+    assert len(SUBMITTED) == 20
+
+
+def test_the_wrong_trade_notice_is_one_template_for_both_free_form_notices():
+    """Approved 2026-11-14. It tells a pro the lead is no longer theirs, offered
+    or not, so it can ask for nothing: no אשר or דחה, and "no need to act"."""
+    spec = TEMPLATES["pro_lead_outside_trade"]
+    assert spec.params == ("issue_type",)
+    assert spec.body == (
+        "עדכון מפרולי: הפנייה בנושא {issue_type} כבר לא משויכת אליך, "
+        "כי היא מחוץ לתחום המקצוע שלך.\nאין צורך לפעול."
+    )
+    assert "*" not in spec.body
 
 
 def test_every_submitted_template_has_a_body():
