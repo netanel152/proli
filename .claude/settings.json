@@ -1,5 +1,8 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "env": {
+    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1"
+  },
   "permissions": {
     "allow": [
       "mcp__railway__list-projects",
@@ -138,9 +141,6 @@
     ]
   },
   "enableAllProjectMcpServers": true,
-  "env": {
-    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1"
-  },
   "hooks": {
     "SessionStart": [
       {
@@ -210,7 +210,6 @@
     ]
   },
   "enabledPlugins": {
-    "pyright-lsp@claude-plugins-official": true,
-    "mongodb@claude-plugins-official": true
+    "pyright-lsp@claude-plugins-official": true
   }
 }
