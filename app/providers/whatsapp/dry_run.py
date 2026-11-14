@@ -68,8 +68,10 @@ class DryRunProvider(WhatsAppProvider):
     ) -> dict[str, Any] | None:
         return self._record("interactive", chat_id, text=body, options=list(options))
 
-    async def send_typing(self, chat_id: str) -> None:
-        self._record("typing", chat_id)
+    async def indicate_typing(self, chat_id: str, message_id: str | None) -> None:
+        # Recorded even without a wamid: the harness asserts that the indicator
+        # was *asked for* before the reply, whatever the transport would do.
+        self._record("typing", chat_id, message_id=message_id)
 
     async def get_state(self) -> str | None:
         """Always ``authorized``.

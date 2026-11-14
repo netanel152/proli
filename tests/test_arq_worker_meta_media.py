@@ -89,16 +89,24 @@ async def test_process_message_task_does_not_resolve_media_itself(monkeypatch):
     monkeypatch.setattr(media_handler, "fetch_meta_media", fetch)
     captured = {}
 
-    async def _fake_process_incoming_message(chat_id, user_text, media_url):
+    async def _fake_process_incoming_message(
+        chat_id, user_text, media_url, message_id=None
+    ):
         captured["media_url"] = media_url
+        captured["message_id"] = message_id
 
     monkeypatch.setattr(
         arq_worker, "process_incoming_message", _fake_process_incoming_message
     )
 
     await arq_worker.process_message_task(
-        {}, "972500000001@c.us", "check this out", "meta-media://MEDIA_ROUTE"
+        {},
+        "972500000001@c.us",
+        "check this out",
+        "meta-media://MEDIA_ROUTE",
+        message_id="wamid.MEDIA1",
     )
 
     assert captured["media_url"] == "meta-media://MEDIA_ROUTE"
+    assert captured["message_id"] == "wamid.MEDIA1"
     fetch.assert_not_awaited()

@@ -23,6 +23,7 @@ Method names match the client this replaces so the ~177 existing call sites and
 their test doubles keep working unchanged.
 """
 
+import asyncio
 import urllib.parse
 from typing import Any
 
@@ -61,6 +62,12 @@ _PAUSE_MANUAL_KEY = "wa:instance:paused:manual"
 # "never probed" (worker boot window) or "the monitor stopped running" — both of
 # which are states in which we must NOT send.
 _STATE_KEY = "wa:instance:state"
+
+# PRO-133: how long the read-receipt + typing POST may take before it is given
+# up on. Deliberately well under both the HTTP client's 30s and the background
+# task's 30s: Meta stops showing the indicator ~25s after the call, so a slower
+# one would only turn into a Sentry ERROR for an indicator nobody saw.
+_TYPING_INDICATOR_TIMEOUT_SECONDS = 8
 
 
 def _as_text(value: Any) -> str:
@@ -234,18 +241,29 @@ class WhatsAppFacade:
         waze_url = f"https://waze.com/ul?q={encoded_address}"
         return await self.send_message(chat_id, f"{text_prefix}\n{waze_url}")
 
-    async def send_chat_state_typing(self, chat_id: str) -> None:
-        """Best-effort typing indicator — never blocks real message processing."""
-        if not self._provider.transmits:
-            return
-        if await self._outbound_blocked_reason() is not None:
-            return  # no point showing typing when outbound is halted
+    async def indicate_typing(self, chat_id: str, message_id: str | None) -> None:
+        """Mark the inbound message read and show "typing…" (PRO-133).
+
+        Best-effort: never raises an ``Exception``, and a failure logs at debug
+        — a missing indicator costs the customer nothing, a crashed turn costs
+        the reply. Held to the breaker like a send (a paused number shows
+        nothing, since no reply is coming), but the dry-run provider is still
+        called, so the offline harness can see the indicator was asked for.
+
+        The provider call is bounded *here* rather than left to the background
+        task's own 30s timeout: that timeout fires outside this ``try`` and
+        would reach Sentry as an ERROR, and Meta drops the indicator after
+        ~25s anyway, so a slower call has nothing left to show.
+        """
         try:
-            await self._provider.send_typing(chat_id)
-        except NotImplementedError:
-            pass
+            if await self._outbound_blocked_reason() is not None:
+                return  # outbound halted: no reply is coming, so no indicator
+            await asyncio.wait_for(
+                self._provider.indicate_typing(chat_id, message_id),
+                timeout=_TYPING_INDICATOR_TIMEOUT_SECONDS,
+            )
         except Exception as e:
-            logger.warning(f"Failed to send typing indicator to ...{chat_id[-4:]}: {e}")
+            logger.debug(f"Typing indicator for {_mask(chat_id)} failed: {e}")
 
     # ------------------------------------------------------------------
     # Outbound — provider-contract names

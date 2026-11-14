@@ -57,8 +57,9 @@ stores/args/module imports; anything left but the `except ... as e` name is unbo
 `run_customer_pipeline`'s prologue reads seven facts off `ctx` after the chain returns.
 Only three ctx fields are ever written (`is_exempt`, `emergency_inbound_logged`,
 `current_state` — 2 direct writes + 4 `refresh_state` calls), all inside awaited guards.
-The only `spawn_background_task` on this path is the typing indicator and it never
-touches ctx, so no guard can mutate ctx after the prologue has read it.
+The only `spawn_background_task` on this path is the typing indicator, which since PRO-133
+is spawned by `guard_inbound_rate_limit` (it was `process_incoming_message`) and only ever
+*reads* ctx (`chat_id`, `message_id`), so no guard can mutate ctx after the prologue read it.
 
 ## Edge case: MagicMock hasattr defeats an AsyncMock fallback
 `sec = security or MagicMock(); if not hasattr(sec, "check_and_increment_daily_ai_cap")`
