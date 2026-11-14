@@ -245,15 +245,25 @@ class World:
     # Driving
     # =====================================================================
     async def send(
-        self, text: str | None, *, chat_id: str | None = None, media: str | None = None
+        self,
+        text: str | None,
+        *,
+        chat_id: str | None = None,
+        media: str | None = None,
+        message_id: str | None = None,
     ) -> None:
-        """Deliver one inbound message straight to the orchestrator."""
+        """Deliver one inbound message straight to the orchestrator.
+
+        ``message_id`` is the inbound wamid (PRO-133); omitted by every test that
+        does not care, exactly as a provider that gave none would.
+        """
         from app.services.workflow_service import process_incoming_message
 
         await process_incoming_message(
             chat_id or self.customer,
             text,
             media_url_for(media) if media else None,
+            message_id=message_id,
         )
         await self.settle()
 

@@ -45,7 +45,7 @@ async def clean_db(mock_db):
 async def wf(monkeypatch, clean_db):
     whatsapp = MagicMock()
     whatsapp.send_message = AsyncMock()
-    whatsapp.send_chat_state_typing = AsyncMock()
+    whatsapp.indicate_typing = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", whatsapp)
     monkeypatch.setattr(
         app.services.workflow_service, "has_consent", AsyncMock(return_value=True)

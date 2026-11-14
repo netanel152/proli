@@ -9,6 +9,7 @@ the daily AI-call cap) and `guard_zero_touch_intent`'s third path falling
 through instead of handling.
 """
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -452,6 +453,99 @@ async def test_rate_limit_blocks_customer_over_window(deps):
     deps.whatsapp.send_message.assert_awaited_once_with(
         ctx.chat_id, Messages.Errors.RATE_LIMITED
     )
+
+
+@pytest.fixture
+def spawned_tasks(monkeypatch):
+    """The tasks ``dispatch_guards`` spawns during one test, captured by a spy.
+
+    PRO-187: a test awaits exactly these, never the whole registry, which can
+    hold a task an earlier test left bound to a closed loop.
+    """
+    real_spawn = dispatch_guards.spawn_background_task
+    tasks: list[asyncio.Task] = []
+
+    def spy(coro, *, name):
+        task = real_spawn(coro, name=name)
+        tasks.append(task)
+        return task
+
+    monkeypatch.setattr(dispatch_guards, "spawn_background_task", spy)
+    return tasks
+
+
+# PRO-133 — the read receipt + typing indicator rides on this guard: it is fired
+# once a reply is known to be coming, and not on the limited path, which answers
+# with nothing but the canned notice.
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario, expect_indicator",
+    [
+        ("exempt", True),
+        ("allowed", True),
+        ("limited", False),
+    ],
+)
+async def test_rate_limit_guard_indicates_typing_unless_the_message_is_limited(
+    deps, spawned_tasks, scenario, expect_indicator
+):
+    state = UserStates.PRO_MODE if scenario == "exempt" else UserStates.IDLE
+    deps.security.check_sliding_window = AsyncMock(return_value=scenario != "limited")
+    ctx = make_ctx(current_state=state)
+    ctx.message_id = "wamid.IN1"
+
+    await guard_inbound_rate_limit(ctx, deps)
+    for task in spawned_tasks:
+        await task
+
+    if expect_indicator:
+        deps.whatsapp.indicate_typing.assert_awaited_once_with(ctx.chat_id, "wamid.IN1")
+    else:
+        deps.whatsapp.indicate_typing.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_guard_shows_no_indicator_while_paused_for_a_human(
+    deps, spawned_tasks
+):
+    """guard_paused_for_human answers nothing by design, so blue checks plus
+    ~25s of "typing…" from a bot that will never reply would be worse than
+    silence. The guard itself is unaffected: the message is still allowed
+    through and is_exempt is still resolved. (The "allowed" case of the test
+    above is the positive control: same guard, same collaborators, only the
+    state differs.)"""
+    ctx = make_ctx(current_state=UserStates.PAUSED_FOR_HUMAN)
+    ctx.message_id = "wamid.IN1"
+
+    result = await guard_inbound_rate_limit(ctx, deps)
+    for task in spawned_tasks:
+        await task
+
+    assert result is None
+    assert ctx.is_exempt is False
+    assert spawned_tasks == []
+    deps.security.check_sliding_window.assert_awaited_once()
+    deps.whatsapp.indicate_typing.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_guard_survives_a_failure_to_schedule_the_indicator(
+    deps, monkeypatch
+):
+    """A missing indicator must never cost the reply: if the task cannot be
+    spawned (no loop, closing loop) the guard still lets the message through."""
+
+    def _cannot_spawn(coro, *, name):
+        coro.close()
+        raise RuntimeError("no running event loop")
+
+    monkeypatch.setattr(dispatch_guards, "spawn_background_task", _cannot_spawn)
+    ctx = make_ctx(current_state=UserStates.IDLE)
+
+    result = await guard_inbound_rate_limit(ctx, deps)
+
+    assert result is None
+    assert ctx.is_exempt is False
 
 
 # --------------------------------------------------------------------------

@@ -13,7 +13,6 @@ from app.services.lead_manager_service import (  # noqa: F401 — the guards rea
 )
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
-from app.core.background_tasks import spawn_background_task
 from app.core.logger import logger
 from app.core.database import users_collection, leads_collection, slots_collection
 from app.core.messages import Messages
@@ -320,7 +319,9 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
 # --- Main Orchestrator ---
 
 
-async def process_incoming_message(chat_id: str, user_text: str, media_url: str = None):
+async def process_incoming_message(
+    chat_id: str, user_text: str, media_url: str = None, message_id: str = None
+):
     """
     Entry point for all incoming customer/pro messages.
 
@@ -329,6 +330,9 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
     lead creation. On lock contention we raise ChatLockBusyError so the ARQ
     task wrapper can requeue; on Redis failure the helper returns True and we
     proceed in degraded mode.
+
+    ``message_id`` is the inbound wamid, carried to the rate-limit guard for
+    the PRO-133 read receipt + typing indicator.
     """
     token = uuid.uuid4().hex
     acquired = await acquire_chat_lock(chat_id, token=token)
@@ -340,11 +344,9 @@ async def process_incoming_message(chat_id: str, user_text: str, media_url: str 
 
     renewal = asyncio.create_task(keep_chat_lock(chat_id, token))
     try:
-        spawn_background_task(
-            whatsapp.send_chat_state_typing(chat_id),
-            name=f"typing:{mask_chat_id(chat_id)}",
+        await _process_incoming_message_inner(
+            chat_id, user_text, media_url, message_id=message_id
         )
-        await _process_incoming_message_inner(chat_id, user_text, media_url)
     finally:
         renewal.cancel()
         await release_chat_lock(chat_id, token)
@@ -774,7 +776,7 @@ async def _escalate_emergency(chat_id: str, current_state, user_text: str = ""):
 
 
 async def _process_incoming_message_inner(
-    chat_id: str, user_text: str, media_url: str = None
+    chat_id: str, user_text: str, media_url: str = None, message_id: str = None
 ):
     normalized_text = (user_text or "").strip().lower()
 
@@ -795,6 +797,7 @@ async def _process_incoming_message_inner(
         is_emergency_detected=is_emergency_text(normalized_text),
         # Get state early — needed to skip global checks for pros
         current_state=await StateManager.get_state(chat_id),
+        message_id=message_id,
     )
     deps = GuardDeps(
         whatsapp=whatsapp,
