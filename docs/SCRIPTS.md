@@ -69,6 +69,17 @@ python scripts/normalize_pro_phones.py --apply   # write the normalised phones
 
 Exit `0` when every pro is already in the stored form, `1` when some need fixing (dry run) or are invalid, `2` on a would-be duplicate (nothing written), `3` when there is no pro on record.
 
+### `backfill_pro_trades.py`
+
+PRO-234 backfill. Routing now offers a pro only the trades in its `type` + `categories`, so every handyman / general pro without `trades_set_at` gets the list that reproduces the old rule (every trade except electrical, plus electrician where `handles_electrical` was set) and is stamped `trades_set_at`. It also upserts the `תחומי עבודה:` line into a non-empty `system_prompt` and `$unset`s `handles_electrical` from every pro. Idempotent via `trades_set_at`; dry run by default.
+
+```bash
+python scripts/backfill_pro_trades.py           # report only
+python scripts/backfill_pro_trades.py --apply   # write the lists
+```
+
+Exit `0` when nothing is left to do, `1` when some pros need it (dry run), `3` when there is no pro on record. Against staging or production, run the **`🧰 Backfill pro trades`** workflow (branch picks the environment, report in the job summary). Run it with `apply` ticked right after the deploy, or handyman/general pros are offered nothing but handyman work.
+
 ### `create_indexes.py`
 
 Creates MongoDB indexes for query performance. Run once when setting up a new environment.

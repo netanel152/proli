@@ -105,6 +105,10 @@ from app.core.database import (  # noqa: E402
     slots_collection,
     users_collection,
 )
+from app.core.pro_trades import (  # noqa: E402
+    TYPES_THAT_MUST_LIST,
+    legacy_categories,
+)
 from app.providers.whatsapp import build_provider  # noqa: E402
 
 # --- Batch identity -------------------------------------------------------
@@ -201,7 +205,14 @@ def _pro(
         "phone_number": phone,
         "role": "professional",
         "type": profession,
-        "categories": [profession],
+        # PRO-234: a handyman/general pro fits only the trades it lists, so
+        # those two get the full list or their scenarios would route nowhere.
+        # Every other profession stays itself.
+        "categories": (
+            legacy_categories({"type": profession})
+            if profession in TYPES_THAT_MUST_LIST
+            else [profession]
+        ),
         "service_areas": service_areas,
         "is_active": is_active,
         "is_verified": not pending_approval,

@@ -261,7 +261,7 @@ pipeline = [
 ]
 ```
 
-Candidates are also filtered by trade (`probable_trade(issue_type)` + `trade_fits`, PRO-215) inside each radius, so the radius widens past a wrong-trade pro; an issue naming no trade gets no pro (`None`) unless `require_trade=False`, which only the admin wizard's pro list passes. Electrical work fits only an electrician or a general/handyman pro with `handles_electrical`. The load filter also runs per radius, so a radius whose fitting pros are all at `MAX_PRO_LOAD` widens too. Breaks on the first radius with an available pro. If all three leave nobody, the lead goes to admin review (`None`).
+Candidates are also filtered by trade (`probable_trade(issue_type)` + `trade_fits`, PRO-215) inside each radius, so the radius widens past a wrong-trade pro; an issue naming no trade gets no pro (`None`) unless `require_trade=False`, which only the admin wizard's pro list passes. A pro fits only the trades it lists (`type` + `categories`, PRO-234); handyman and general pros no longer fit every trade, and electrical is just another listed trade (a pro with no trade on record still never fits electrical). The load filter also runs per radius, so a radius whose fitting pros are all at `MAX_PRO_LOAD` widens too. Breaks on the first radius with an available pro. If all three leave nobody, the lead goes to admin review (`None`).
 
 **Step 2 — Text fallback (no coordinates):**
 

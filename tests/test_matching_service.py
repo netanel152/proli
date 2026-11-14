@@ -512,9 +512,9 @@ async def test_is_pro_eligible_for_lead_location_gate(eligible_env):
 
 @pytest.mark.asyncio
 async def test_is_pro_eligible_for_lead_profession_gate(eligible_env):
-    """A lead naming a trade blocks a mismatched pro. General and handyman pros and
-    a pro with no declared trade aren't constrained by it, except on electrical work
-    (`test_pro_search_follows_the_same_rule`). A lead naming no trade is nobody's."""
+    """A lead naming a trade blocks a mismatched pro, general and handyman pros
+    included unless they list that trade (PRO-234). A pro with no declared trade
+    isn't constrained by it. A lead naming no trade is nobody's."""
     pro_location = {"type": "Point", "coordinates": [34.7818, 32.0853]}
     lead = _lead(issue_type="צריך מנעולן דחוף")  # names "locksmith"
 
@@ -522,10 +522,17 @@ async def test_is_pro_eligible_for_lead_profession_gate(eligible_env):
     assert await is_pro_eligible_for_lead(mismatched, lead) is False
 
     general = _pro(location=pro_location, profession_type="general")
-    assert await is_pro_eligible_for_lead(general, lead) is True
+    assert await is_pro_eligible_for_lead(general, lead) is False
 
     handyman = _pro(location=pro_location, profession_type="handyman")
-    assert await is_pro_eligible_for_lead(handyman, lead) is True
+    assert await is_pro_eligible_for_lead(handyman, lead) is False
+
+    listing = _pro(
+        location=pro_location,
+        profession_type="handyman",
+        categories=["handyman", "locksmith"],
+    )
+    assert await is_pro_eligible_for_lead(listing, lead) is True
 
     unspecified = _pro(location=pro_location)  # no profession_type at all
     assert await is_pro_eligible_for_lead(unspecified, lead) is True
@@ -773,7 +780,7 @@ async def test_text_routing_does_not_fall_back_to_another_trade(
 
 @pytest.mark.asyncio
 async def test_text_routing_takes_a_pro_whose_trade_fits(mock_matching_dependencies):
-    """A general pro who does electrical work fits; the better-rated plumber doesn't."""
+    """A general pro who lists electrician fits; the better-rated plumber doesn't."""
     mock_users, _ = mock_matching_dependencies
     plumber = {
         "_id": ObjectId(),
@@ -783,7 +790,7 @@ async def test_text_routing_takes_a_pro_whose_trade_fits(mock_matching_dependenc
     general = {
         "_id": ObjectId(),
         "type": "general",
-        "handles_electrical": True,
+        "categories": ["general", "electrician"],
         "social_proof": {"rating": 3.0},
     }
     _text_search_pros(mock_users, [plumber, general], [])
@@ -812,38 +819,58 @@ async def test_geo_routing_filters_by_trade_when_a_radius_has_only_the_wrong_one
 
 
 @pytest.mark.parametrize(
-    "pro,fits",
+    "pro,wanted,fits",
     [
-        ({"type": "electrician"}, True),
-        ({"type": "handyman", "handles_electrical": True}, True),
-        ({"type": "general", "handles_electrical": True}, True),
-        ({"type": "handyman"}, False),
-        ({"type": "general"}, False),
-        ({"type": "handyman", "handles_electrical": False}, False),
-        ({"type": "plumber", "handles_electrical": True}, False),
-        ({}, False),  # a pro with no trade on record isn't an electrician
+        ({"type": "electrician"}, "electrician", True),
+        ({"type": "plumber", "categories": ["plumber"]}, "electrician", False),
+        # PRO-234: handyman and general fit only what they list.
+        ({"type": "handyman", "categories": ["handyman"]}, "plumber", False),
+        ({"type": "general", "categories": ["general"]}, "locksmith", False),
+        ({"type": "handyman"}, "electrician", False),
+        (
+            {"type": "handyman", "categories": ["handyman", "plumber"]},
+            "plumber",
+            True,
+        ),
+        (
+            {"type": "general", "categories": ["general", "electrician"]},
+            "electrician",
+            True,
+        ),
+        # "handyman" is a trade of its own, so a plumber doesn't fit it either.
+        ({"type": "handyman", "categories": ["handyman"]}, "handyman", True),
+        ({"type": "plumber", "categories": ["plumber"]}, "handyman", False),
+        # A listed trade is enough, whatever the type says.
+        ({"type": "plumber", "categories": ["plumber", "painter"]}, "painter", True),
+        # The pre-PRO-234 flag is no longer read.
+        ({"type": "handyman", "handles_electrical": True}, "electrician", False),
+        # No trade asked for, or none on record, still fits.
+        ({"type": "plumber"}, None, True),
+        ({}, "locksmith", True),
+        # Except electrical: a pro with no trade on record isn't an
+        # electrician, which it never was (the owner's safety exception).
+        ({}, "electrician", False),
     ],
 )
-def test_electrical_work_needs_an_electrician_or_the_explicit_flag(pro, fits):
-    assert trade_fits(pro, "electrician") is fits
+def test_a_pro_fits_the_trades_it_lists_and_nothing_else(pro, wanted, fits):
+    assert trade_fits(pro, wanted) is fits
 
 
 @pytest.mark.parametrize(
-    "pro,fits",
+    "pro,wanted,fits",
     [
-        ({"type": "handyman"}, True),
-        ({"type": "general"}, True),
-        ({"type": "plumber"}, False),
+        ({"type": "handyman", "categories": ["handyman"]}, "electrician", True),
+        ({"type": "handyman", "categories": ["handyman"]}, "locksmith", True),
+        ({"type": "general", "categories": ["general"]}, "electrician", True),
+        ({"type": "general", "categories": ["general"]}, "plumber", True),
+        ({"type": "plumber", "categories": ["plumber"]}, "electrician", False),
+        ({"type": "plumber", "categories": ["plumber"]}, "plumber", True),
     ],
 )
-def test_a_held_lead_is_exempt_only_from_the_electrical_rule(pro, fits):
-    assert trade_fits(pro, "electrician", held=True) is fits
-
-
-@pytest.mark.parametrize("trade", ["plumber", "locksmith", "painter", "cleaner"])
-def test_general_and_handyman_still_fit_every_other_trade(trade):
-    assert trade_fits({"type": "handyman"}, trade)
-    assert trade_fits({"type": "general"}, trade)
+def test_a_held_lead_keeps_the_old_general_and_handyman_rule(pro, wanted, fits):
+    """PRO-215 / PRO-225: a handyman or general pro already on a lead keeps it when
+    its trade changed, which is what held=True is for. Anyone else is dropped."""
+    assert trade_fits(pro, wanted, held=True) is fits
 
 
 @pytest.mark.asyncio
@@ -887,12 +914,14 @@ async def test_pro_search_follows_the_same_rule(eligible_env):
     electrical = _lead(issue_type="קצר במטבח")
     unknown = _lead(issue_type="המזגן לא מקרר")
 
-    handyman = _pro(type="handyman", location=coords)
-    flagged = _pro(type="handyman", handles_electrical=True, location=coords)
+    handyman = _pro(type="handyman", categories=["handyman"], location=coords)
+    lists_it = _pro(
+        type="handyman", categories=["handyman", "electrician"], location=coords
+    )
 
     assert not await is_pro_eligible_for_lead(handyman, electrical)
-    assert await is_pro_eligible_for_lead(flagged, electrical)
-    assert not await is_pro_eligible_for_lead(flagged, unknown)
+    assert await is_pro_eligible_for_lead(lists_it, electrical)
+    assert not await is_pro_eligible_for_lead(lists_it, unknown)
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,149 @@
+name: 🧰 Backfill pro trades
+
+# PRO-234's backfill, as a button. The branch you run this from is the target:
+# `dev` writes staging, `production` writes production, anything else refuses.
+# Unticked is read-only. See docs/CI_WORKFLOWS.md.
+#
+# Run it with the box ticked right after the PRO-234 deploy: until it has run,
+# every handyman and general pro carries a one-element `categories` list and so
+# is offered nothing but handyman work.
+
+run-name: >-
+  ${{ github.ref_name == 'production' && '🧰 Backfill pro trades — PRODUCTION' || (github.ref_name == 'dev' && '🧰 Backfill pro trades — staging' || '🧰 Refused — run from dev (staging) or production') }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Write the trade lists: every handyman/general pro gets the list that reproduces the pre-PRO-234 routing. Leave unticked for a read-only report."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backfill-pro-trades-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  backfill-pro-trades:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # The branch name reaches the script through `env:`, never `${{ }}`
+      # inside `run:`, and only the two known names resolve to a target.
+      - name: Resolve the target from the branch
+        id: target
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "${REF_NAME:-}" in
+            dev)        TARGET=staging ;;
+            production) TARGET=production ;;
+            *)
+              echo "::error::Run this workflow from 'dev' to write staging or from 'production' to write production. Branch '${REF_NAME:-}' maps to nothing. Refusing to touch any database."
+              exit 1
+              ;;
+          esac
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Branch '$REF_NAME' → backfilling $TARGET."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify the connection settings resolved
+        env:
+          MONGO_URI: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_MONGO_URI || secrets.STAGING_MONGO_URI }}
+          TARGET: ${{ steps.target.outputs.target }}
+        run: |
+          set +e
+          set -uo pipefail
+
+          # `Settings.MONGO_URI` defaults to localhost, so a missing secret would
+          # report a clean empty database. This is the guard against that false green.
+          if [ -z "${MONGO_URI:-}" ]; then
+            echo "::error::No MONGO_URI resolved for '$TARGET'. Add it as a *repository* secret (Settings → Secrets and variables → Actions) named PRODUCTION_MONGO_URI or STAGING_MONGO_URI — a secret under Settings → Environments is invisible here, since this job declares no environment. Refusing to run: without it the script would silently check an empty local database and call it clean."
+            exit 1
+          fi
+
+          # The database name only: never the host, never the credentials.
+          DB_NAME="$(python -c 'import os, urllib.parse as up; p = up.urlsplit(os.environ["MONGO_URI"]).path or ""; print(p.lstrip("/").split("?")[0] or "(none named in the URI)")')"
+          echo "Connection settings resolved for $TARGET"
+          echo "  database:    $DB_NAME"
+
+      - name: Backfill trades in ${{ steps.target.outputs.target }}
+        env:
+          MONGO_URI: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_MONGO_URI || secrets.STAGING_MONGO_URI }}
+          REDIS_URL: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_REDIS_URL || secrets.STAGING_REDIS_URL }}
+          # `Settings` refuses to construct without these four. Placeholders:
+          # this script touches neither Gemini nor Cloudinary.
+          GEMINI_API_KEY: unused-by-this-script
+          CLOUDINARY_CLOUD_NAME: unused-by-this-script
+          CLOUDINARY_API_KEY: unused-by-this-script
+          CLOUDINARY_API_SECRET: unused-by-this-script
+          # Deliberately `development`: `staging`/`production` would demand
+          # WEBHOOK_TOKEN and HEALTH_TOKEN. The branch picks the data, not this.
+          ENVIRONMENT: development
+          TARGET_ENV: ${{ steps.target.outputs.target }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          set +e
+          set -uo pipefail
+
+          if [ "${APPLY:-false}" = "true" ]; then
+            FLAGS="--apply"
+            MODE="--apply (writing trade lists)"
+          else
+            FLAGS=""
+            MODE="read-only (dry run — no writes)"
+          fi
+
+          echo "Backfilling pro trades in $TARGET_ENV — $MODE"
+
+          CMD=(python scripts/backfill_pro_trades.py)
+          if [ -n "$FLAGS" ]; then
+            CMD+=("$FLAGS")
+          fi
+
+          "${CMD[@]}" 2>&1 | tee report.txt
+          code=${PIPESTATUS[0]}
+
+          {
+            echo "## 🧰 Pro trades backfill — $TARGET_ENV"
+            echo
+            echo "- Mode: $MODE"
+            echo "- Exit code: \`$code\`"
+            echo
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # The script's exit code stays the job's verdict, so a checklist can
+          # be ticked on a green run and only on a green run.
+          case "$code" in
+            0)
+              echo "✅ Every handyman / general pro has an explicit trade list."
+              ;;
+            1)
+              echo "::error::Some pros still carry no trade list, so they are offered nothing but handyman work. See the job summary — re-run with the apply box ticked."
+              ;;
+            3)
+              echo "::error::No pro matched the filter, so this run checked nothing and is not evidence of anything. See the job summary."
+              ;;
+            *)
+              echo "::error::The backfill did not complete (exit $code). See the log above."
+              ;;
+          esac
+          exit "$code"
