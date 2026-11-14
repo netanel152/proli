@@ -116,6 +116,7 @@ python scripts/clear_history.py    # Clear chat history
 python scripts/check_pro_service_areas.py  # Backfill/audit: geocode every approved pro's service_areas, --apply to write
 #                                            (against staging/production, run the 🗺️ Check pro service areas workflow instead — branch picks the environment, report lands in the job summary)
 python scripts/normalize_pro_phones.py     # Backfill/audit: every pro's phone_number in the bare 972… form, --apply to write (refuses on a would-be duplicate)
+python scripts/backfill_pro_trades.py      # Backfill: handyman/general pros get an explicit trades list (PRO-234), --apply to write; run via the 🧰 Backfill pro trades workflow right after the deploy
 ```
 
 ### Testing

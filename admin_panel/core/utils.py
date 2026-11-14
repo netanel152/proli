@@ -7,6 +7,7 @@ from bson import ObjectId
 import pytz
 
 from app.core.constants import is_prod_like_env
+from app.core.pro_trades import trades_line
 
 # Load environment variables
 load_dotenv()
@@ -97,8 +98,12 @@ PROFESSION_CONFIG = {
 }
 
 
-def generate_system_prompt(name, profession, areas, prices):
-    """מייצר פרומפט ומילות מפתח לפי המקצוע"""
+def generate_system_prompt(name, profession, areas, prices, trades=None):
+    """מייצר פרומפט ומילות מפתח לפי המקצוע
+
+    `trades` (PRO-234) adds the `תחומי עבודה:` line, so the persona names the
+    work this pro takes rather than implying a handyman takes anything.
+    """
     config = PROFESSION_CONFIG.get(profession, PROFESSION_CONFIG["general"])
     role = config["role"]
     safety = config["safety"]
@@ -134,6 +139,9 @@ def generate_system_prompt(name, profession, areas, prices):
 מחירון: {prices}
 אזורי שירות: {areas}
 """
+    line = trades_line(trades or [])
+    if line:
+        prompt += line + "\n"
     return prompt, keywords
 
 
