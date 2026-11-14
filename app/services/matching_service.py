@@ -537,7 +537,8 @@ def pro_trades(pro: dict) -> set:
     """Every trade a pro document claims.
 
     Onboarding (`pro_onboarding_service`) and the seed scripts write `type`
-    plus a one-element `categories` list. `profession_type` is a name only the
+    plus a one-element `categories` list; the admin panel's pro form and
+    `scripts/backfill_pro_trades.py` write the full list (PRO-234). `profession_type` is a name only the
     unit tests ever wrote, which is why the profession gate below read it for
     months without ever firing on a real pro — it fails open, so nothing broke
     loudly. All three are accepted here so neither shape is the odd one out.
@@ -550,23 +551,29 @@ def pro_trades(pro: dict) -> set:
 def trade_fits(pro: dict, wanted: Optional[str], held: bool = False) -> bool:
     """Can this pro take work in `wanted`? No trade asked for → yes.
 
+    A pro fits the trades it lists (`pro_trades`) and nothing else (PRO-234):
+    handyman and general no longer fit every trade, and electrical is just one
+    more listed trade. "handyman" is a trade of its own (small repairs). A pro
+    document with no trade on record at all still fits — except electrical,
+    which it has never fitted: the owner's safety exception survives this
+    change.
+
     A new assignment has to rule out an unknown `wanted` itself: this answer also
-    keeps a pro already holding a lead whose trade nobody can name. Electrical
-    work is the owner's exception to "general and handyman fit anything": it
-    needs an electrician, or one of those two whose profile says they do it.
-    It's for new assignments only: `held` is a pro already on the lead, who doesn't
-    lose it to that rule.
+    keeps a pro already holding a lead whose trade nobody can name. `held` is a
+    pro already on the lead, who keeps the pre-PRO-234 rule — general and
+    handyman fit anything — so nobody loses a lead they hold to this change
+    (PRO-215 / PRO-225).
     """
     if not wanted:
         return True
     own = pro_trades(pro)
-    if wanted == "electrician" and not held:
-        return "electrician" in own or bool(
-            pro.get("handles_electrical") and own & {"general", "handyman"}
-        )
-    if not own:
+    if wanted == "electrician" and not own:
+        # A pro with no trade on record is not an electrician. `held` keeps a
+        # pro already on the lead, as it did before PRO-234.
+        return held
+    if not own or wanted in own:
         return True
-    return bool(own & {wanted, "general", "handyman"})
+    return held and bool(own & {"general", "handyman"})
 
 
 async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:

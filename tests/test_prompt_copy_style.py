@@ -213,3 +213,19 @@ def test_generate_system_prompt_drops_urgent_tag_and_interpolates_persona(
     assert "אבי" in prompt
     assert admin_utils.PROFESSION_CONFIG["plumber"]["safety"] in prompt
     assert keywords == admin_utils.PROFESSION_CONFIG["plumber"]["keywords"]
+
+
+def test_generate_system_prompt_names_the_trades_only_when_given_them(admin_utils):
+    """PRO-234: the persona of a handyman says which work they take."""
+    from app.core.pro_trades import PROMPT_TRADES_MARKER, trades_line
+
+    trades = ["handyman", "plumber"]
+    with_trades, _ = admin_utils.generate_system_prompt(
+        "אבי", "handyman", "תל אביב", "ביקור 200", trades
+    )
+    without, _ = admin_utils.generate_system_prompt(
+        "אבי", "handyman", "תל אביב", "ביקור 200"
+    )
+
+    assert trades_line(trades) in with_trades.splitlines()
+    assert PROMPT_TRADES_MARKER not in without

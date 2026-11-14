@@ -266,6 +266,13 @@ python scripts/check_pro_service_areas.py --apply    # also write missing `locat
 
 Exit code `1` means at least one pro has an area to correct in the admin panel (or none at all), `2` means the geocoder was unavailable and the verdict is incomplete — wait for `geo:unavailable` to clear (60s) and re-run, and `3` means no pro matched the filter, so the run checked nothing and is not evidence of anything (the report says whether that is because none is on record, all are awaiting approval, or all are paused). The workflow exits with the script's code, so a green run is the only green run — and an empty one is not green.
 
+**Backfill pro trades (PRO-234).** Routing offers a pro only the trades it lists. Right after the deploy, run the **`🧰 Backfill pro trades`** workflow with `apply` ticked (same branch-is-target shape as above), or handyman/general pros are offered nothing but handyman work. By hand:
+
+```bash
+python scripts/backfill_pro_trades.py            # dry run
+python scripts/backfill_pro_trades.py --apply    # write categories + trades_set_at, unset handles_electrical
+```
+
 ---
 
 ## Backup & Restore

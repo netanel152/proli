@@ -14,6 +14,12 @@ from admin_panel.core.pro_phone import ERR_TAKEN, check_pro_phone
 from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from admin_panel.core.rbac import can_edit, has_permission
 from app.core.constants import LeadStatus
+from app.core.pro_trades import (
+    LISTABLE_TRADES,
+    categories_for_save,
+    needs_listed_trade,
+    upsert_trades_line,
+)
 from app.services.geocoding_service import (
     ServiceAreaResolution,
     parse_service_areas,
@@ -259,10 +265,19 @@ def render_pro_form(T, pro_data=None):
                     T.get("verified", "Verified"),
                     value=pro_data.get("is_verified", False) if is_edit else False,
                 )
-            handles_electrical = st.checkbox(
-                T["handles_electrical"],
-                value=pro_data.get("handles_electrical", False) if is_edit else False,
-                help=T["handles_electrical_help"],
+            # PRO-234: the work this pro takes, for every type. Routing offers
+            # a pro only the trades listed here (plus its own type).
+            listed = (
+                [t for t in pro_data.get("categories") or [] if t in LISTABLE_TRADES]
+                if is_edit
+                else []
+            )
+            trades = st.multiselect(
+                T["pro_trades"],
+                list(LISTABLE_TRADES),
+                default=listed,
+                format_func=lambda x: profession_label(T, x),
+                help=T["pro_trades_help"],
             )
 
         # Image Upload
@@ -310,6 +325,10 @@ def render_pro_form(T, pro_data=None):
         submit_label = T["btn_create"] if not is_edit else T["save_btn"]
         if st.form_submit_button(submit_label, type="primary"):
             if name and phone and st.session_state.pro_areas:
+                if needs_listed_trade(ptype, trades):
+                    st.error(T["pro_trades_required"])
+                    return
+                categories = categories_for_save(ptype, trades)
                 # Stored in the bare 972… form the bot looks a pro up by (PRO-224).
                 phone, phone_error = check_pro_phone(
                     users_collection,
@@ -359,20 +378,31 @@ def render_pro_form(T, pro_data=None):
 
                 if not updated_prompt.strip():
                     updated_prompt, final_keywords = generate_system_prompt(
-                        name, ptype, service_areas_str, st.session_state.pro_prices
+                        name,
+                        ptype,
+                        service_areas_str,
+                        st.session_state.pro_prices,
+                        categories,
                     )
                 else:
                     _, final_keywords = generate_system_prompt(
-                        name, ptype, service_areas_str, st.session_state.pro_prices
+                        name,
+                        ptype,
+                        service_areas_str,
+                        st.session_state.pro_prices,
+                        categories,
                     )
+                updated_prompt = upsert_trades_line(updated_prompt, categories)
 
                 pro_payload = {
                     "business_name": name,
                     "phone_number": phone,
                     "type": ptype,
-                    # Routing reads these, so a changed type can't leave a stale one.
-                    "categories": [ptype],
-                    "handles_electrical": handles_electrical,
+                    # Routing reads these, so a changed type can't leave a stale
+                    # one. The full list, type first (PRO-234); `trades_set_at`
+                    # keeps the backfill from re-expanding a list set here.
+                    "categories": categories,
+                    "trades_set_at": datetime.now(timezone.utc),
                     "is_active": active,
                     # This form is the admin's decision, so the pro's own *חזרתי*
                     # can't undo it (PRO-212).
@@ -392,7 +422,9 @@ def render_pro_form(T, pro_data=None):
 
                 if is_edit:
                     users_collection.update_one(
-                        {"_id": ObjectId(pro_id)}, {"$set": pro_payload}
+                        {"_id": ObjectId(pro_id)},
+                        # The old electrical flag folded into `categories`.
+                        {"$set": pro_payload, "$unset": {"handles_electrical": ""}},
                     )
                     log_audit("edit_pro", {"pro_id": pro_id, "name": name})
                     open_jobs = (
@@ -553,8 +585,19 @@ def _check_then_approve(p: dict, T) -> None:
       what resolved, flag the pro for a re-check.
     * any definitive miss → stop and show the correction box. "Approve
       anyway" is offered there only when at least one area did resolve.
+
+    A pro whose trade list is empty is sent to the edit form first (PRO-234).
     """
     pro_id = str(p["_id"])
+    # PRO-234: a handyman or general pro with no trade list fits nothing, so
+    # approving one is the same "approved into silence" failure the geocode
+    # check below exists to prevent. WhatsApp registration still writes a
+    # one-element list (PRO-235 asks the pro), so the operator fills it here.
+    if needs_listed_trade(p.get("type", "general"), p.get("categories") or []):
+        set_flash("pro_flash", T["pro_trades_missing_on_approve"], "warning")
+        st.session_state.pro_view_mode = "edit"
+        st.session_state.pro_to_edit = p
+        st.rerun()
     resolution = resolve_service_areas_sync(p.get("service_areas", []))
     if resolution.unresolved or resolution.blocks_approval:
         st.session_state[_geo_check_key(pro_id)] = resolution
@@ -571,6 +614,7 @@ def _approve_pending_pro(p: dict, T, resolution: ServiceAreaResolution) -> None:
         p.get("type", "general"),
         areas_str,
         p.get("prices_for_prompt", ""),
+        p.get("categories") or [p.get("type", "general")],
     )
     update = resolution.mongo_update(
         now=datetime.now(timezone.utc), include_location=True
@@ -579,6 +623,9 @@ def _approve_pending_pro(p: dict, T, resolution: ServiceAreaResolution) -> None:
         {
             "is_active": True,
             "pending_approval": False,
+            # The operator confirmed the trade list by approving, so the
+            # PRO-234 backfill must never re-expand this pro.
+            "trades_set_at": datetime.now(timezone.utc),
             "system_prompt": prompt,
             "keywords": keywords,
         }

@@ -177,12 +177,28 @@ def test_save_without_a_pro_change_stamps_nothing(leads):
     assert "assigned_by_admin_at" not in leads.find_one({"_id": lead_id})
 
 
-def test_pro_form_saves_the_electrical_flag_and_current_type():
-    """View bodies never run in the suite, so this reads the source."""
+def test_pro_form_saves_the_trade_list_and_drops_the_electrical_flag():
+    """View bodies never run in the suite, so this reads the source (PRO-234)."""
     source = Path("admin_panel/views/professionals.py").read_text(encoding="utf-8")
+    payload = source[source.index("pro_payload = {") :]
+    payload = payload[: payload.index("\n                }")]
 
-    assert '"handles_electrical": handles_electrical,' in source
-    assert '"categories": [ptype],' in source
+    assert '"categories": categories,' in payload
+    assert '"trades_set_at":' in payload
+    assert "categories = categories_for_save(ptype, trades)" in source
+    assert '"handles_electrical"' not in payload
+    assert '"$unset": {"handles_electrical": ""}' in source
+
+
+def test_pro_form_refuses_a_handyman_with_no_trade_before_writing():
+    """A handyman/general pro with an empty list would fit nothing, so the form says
+    so and returns ahead of the phone check and every write."""
+    source = Path("admin_panel/views/professionals.py").read_text(encoding="utf-8")
+    guard = source.index("needs_listed_trade(ptype, trades)")
+
+    assert 'st.error(T["pro_trades_required"])' in source[guard : guard + 200]
+    assert guard < source.index("check_pro_phone(")
+    assert guard < source.index("pro_payload = {")
 
 
 def test_create_lead_form_stamps_a_chosen_pro():

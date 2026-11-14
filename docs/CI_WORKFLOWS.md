@@ -9,6 +9,7 @@ What each workflow does, what a red run means, and the incidents behind the odd-
 | `🚢 promote-to-production.yml` | manual | `PRODUCTION_HEALTH_URL` (var, optional) | Not a fast-forward, `dev` is not green (the annotation says which case), a short `skip_reason`, or production did not restart |
 | `🛑 stop_railway_services.yml` | manual, branch is the target | `RAILWAY_TOKEN_PRODUCTION`, `RAILWAY_TOKEN_STAGING` | A named service is **still running**; stop it from the Railway dashboard |
 | `🗺️ check_pro_service_areas.yml` | manual, branch is the target | `{PRODUCTION,STAGING}_MONGO_URI`, `{PRODUCTION,STAGING}_REDIS_URL`, `GOOGLE_MAPS_API_KEY` | A pro cannot be placed on the map, the geocoder was down, nothing was checked, or a secret is missing (PRO-189) |
+| `🧰 backfill_pro_trades.yml` | manual, branch is the target | `{PRODUCTION,STAGING}_MONGO_URI`, `{PRODUCTION,STAGING}_REDIS_URL` | The backfill did not complete, or a secret is missing; unticked `apply` is read-only, and exit `1` on a dry run means pros still need it (PRO-234) |
 | `🩺 health-leads-monitor.yml` | every 10 minutes, manual | `PRODUCTION_HEALTH_TOKEN`, `PRODUCTION_SENTRY_DSN` | See "Lead pipeline monitor" in `docs/OPERATIONS_GUIDE.md` |
 
 ## Conventions

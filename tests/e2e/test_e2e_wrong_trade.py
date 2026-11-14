@@ -114,8 +114,9 @@ async def test_lead_already_with_the_wrong_trade_is_rematched(world):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("trade", ["handyman", "general"])
 async def test_a_held_electrical_lead_is_not_lost_to_the_electrical_rule(world, trade):
-    """That rule is for new assignment. No flag, and an electrician is free to take
-    the job, yet the pro already holding it keeps it."""
+    """The list is for new assignment. This pro does not list electrician, and an
+    electrician is free to take the job, yet the pro already holding it keeps it
+    (`held=True` keeps the pre-PRO-234 rule for a pro already on the lead)."""
     holder = await world.add_pro(R.PRO_PRIMARY, name="בעל מקצוע", profession=trade)
     await _electrician(world)
     await world.grant_consent()
@@ -615,27 +616,34 @@ async def test_unknown_trade_makes_no_loyalty_offer(world):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "trade,flag,gets_the_job",
+    "trade,also_lists,issue,gets_the_job",
     [
-        ("electrician", False, True),
-        ("handyman", True, True),
-        ("general", True, True),
-        ("handyman", False, False),
-        ("general", False, False),
+        ("electrician", [], "קצר במטבח", True),
+        ("handyman", ["electrician"], "קצר במטבח", True),
+        ("general", ["electrician"], "קצר במטבח", True),
+        ("handyman", [], "קצר במטבח", False),
+        ("general", [], "קצר במטבח", False),
+        # PRO-234: no trade is open to a handyman or general pro by default.
+        ("handyman", ["plumber"], "נזילה מתחת לכיור", True),
+        ("general", ["plumber"], "נזילה מתחת לכיור", True),
+        ("handyman", [], "נזילה מתחת לכיור", False),
+        ("general", [], "נזילה מתחת לכיור", False),
     ],
 )
-async def test_electrical_issue_routing(world, trade, flag, gets_the_job):
+async def test_routing_offers_a_pro_only_the_trades_it_lists(
+    world, trade, also_lists, issue, gets_the_job
+):
     pro = await world.add_pro(R.PRO_PRIMARY, name="בעל מקצוע", profession=trade)
     await world.db.users.update_one(
-        {"_id": pro["_id"]}, {"$set": {"handles_electrical": flag}}
+        {"_id": pro["_id"]}, {"$set": {"categories": [trade, *also_lists]}}
     )
     await world.grant_consent()
     world.ai.script(
-        reply("הבנתי.", city="תל אביב", issue="קצר במטבח"),
+        reply("הבנתי.", city="תל אביב", issue=issue),
         reply("שלום."),
     )
 
-    await world.send("יש קצר במטבח בתל אביב")
+    await world.send(f"יש {issue} בתל אביב")
 
     lead = await world.lead()
     if gets_the_job:
