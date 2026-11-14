@@ -215,7 +215,9 @@ async def _run_message(chat_id, user_text, media_url, message_id, job_id, job_tr
         if message_id:
             scope.set_tag("wamid", message_id)
     try:
-        await process_incoming_message(chat_id, user_text, media_url)
+        await process_incoming_message(
+            chat_id, user_text, media_url, message_id=message_id
+        )
     except ChatLockBusyError:
         # Another worker is mid-flight for this chat_id — defer so we preserve
         # message order without duplicate-processing.

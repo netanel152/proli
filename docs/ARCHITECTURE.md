@@ -91,9 +91,11 @@ Customer (WhatsApp)
 ## 3. Message Processing Flow
 
 ```
-process_incoming_message(chat_id, text, media_url)
+process_incoming_message(chat_id, text, media_url, message_id)
         │
-        ├─ [fire-and-forget] send_chat_state_typing(chat_id)   ← typing indicator (non-blocking)
+        ├─ (typing indicator + read receipt: indicate_typing(chat_id, message_id), fired from
+        │   guard_inbound_rate_limit on the exempt/allowed paths only — never when rate-limited,
+        │   never in PAUSED_FOR_HUMAN; best-effort, never raises)
         │
         ├─ Admin phone + "ניהול" / admin_* state?
         │      └─ admin_flow.handle_admin_message()

@@ -157,9 +157,13 @@ class WhatsAppProvider(ABC):
         Same window contract as :meth:`send_text` — report, then raise.
         """
 
-    async def send_typing(self, chat_id: str) -> None:
-        """Optional presence indicator. Best-effort by contract — the facade
-        swallows failures, so the default no-op is a valid implementation."""
+    async def indicate_typing(self, chat_id: str, message_id: str | None) -> None:
+        """Mark the inbound ``message_id`` read and show "typing…" (PRO-133).
+
+        Best-effort by contract — the facade swallows failures, so the default
+        no-op is a valid implementation. ``message_id`` is the inbound wamid;
+        a provider that needs it (Cloud API does) skips the call without one.
+        """
         return None
 
     @abstractmethod

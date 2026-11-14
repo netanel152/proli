@@ -14,6 +14,7 @@ to be updated rather than quietly drifting.
 
 import pytest
 
+import app.services.dispatch_guards as dispatch_guards
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
 from app.core.phone import to_local_phone
@@ -169,6 +170,45 @@ async def test_happy_path_inbound_to_rating(world):
 # ===========================================================================
 # 2. Rejection, reassignment, escalation
 # ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_inbound_wamid_is_marked_read_with_typing_once_per_turn(
+    world, monkeypatch
+):
+    """PRO-133: a customer turn that is going to be answered asks the provider
+    to mark that exact inbound message read and show "typing…", once.
+
+    Ordering against the reply is deliberately not asserted: the indicator is
+    fire-and-forget, and over mongomock/fakeredis nothing in the turn yields to
+    the loop, so where it lands relative to the reply is the scheduler's choice,
+    not behaviour.
+    """
+    await world.standard_cast()
+    world.ai.script(reply("שלום! 👋 אני פרולי. איך קוראים לך ומה קרה?"))
+
+    # PRO-187: await only the indicator task this test's own spy was handed,
+    # never the whole registry.
+    real_spawn = dispatch_guards.spawn_background_task
+    spawned = []
+
+    def spy(coro, *, name):
+        task = real_spawn(coro, name=name)
+        spawned.append(task)
+        return task
+
+    monkeypatch.setattr(dispatch_guards, "spawn_background_task", spy)
+
+    await world.send("היי", message_id="wamid.E2E-IN-1")
+    # `settle()` only spins the loop a few times; wait for the task itself.
+    for task in spawned:
+        await task
+
+    indicators = [s for s in world.recorder.all if s.endpoint == "sendChatStateTyping"]
+    assert len(indicators) == 1, world.recorder.transcript()
+    assert indicators[0].chat_id == world.customer
+    assert indicators[0].payload["messageId"] == "wamid.E2E-IN-1"
+    world.recorder.assert_text_to(world.customer, "איך קוראים לך")
 
 
 @pytest.mark.asyncio

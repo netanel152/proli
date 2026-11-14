@@ -583,6 +583,65 @@ async def test_graph_4xx_logs_and_raises_http_status_error(
 
 
 # ---------------------------------------------------------------------------
+# 7b. PRO-133 — read receipt + typing indicator
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_indicate_typing_posts_read_status_with_typing_indicator(
+    install_recorder, fake_redis, monkeypatch
+):
+    """One call to the messages endpoint marks the inbound wamid read and shows
+    "typing…". It is a status update on *their* message: no ``to``, no 24h-window
+    check (the window is deliberately left closed here), and nothing recorded for
+    delivery tracking."""
+    recorder = install_recorder(_accepted())
+    record_outbound = AsyncMock()
+    monkeypatch.setattr(CloudAPIProvider, "_record_outbound", record_outbound)
+
+    await CloudAPIProvider().indicate_typing(CHAT_ID, "wamid.INBOUND1")
+
+    assert len(recorder.requests) == 1
+    request = recorder.requests[0]
+    assert request.method == "POST"
+    assert request.url == "https://graph.facebook.com/v23.0/1234567890/messages"
+    assert request.headers["Authorization"] == "Bearer test-token"
+    assert json.loads(request.content) == {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": "wamid.INBOUND1",
+        "typing_indicator": {"type": "text"},
+    }
+    record_outbound.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message_id", [None, ""])
+async def test_indicate_typing_without_a_wamid_makes_no_http_call(
+    install_recorder, message_id
+):
+    recorder = install_recorder(_accepted())
+
+    await CloudAPIProvider().indicate_typing(CHAT_ID, message_id)
+
+    assert recorder.requests == []
+
+
+@pytest.mark.asyncio
+async def test_indicate_typing_raises_on_a_graph_error(install_recorder):
+    """The provider reports the failure like every send; it is the facade that
+    makes the indicator best-effort."""
+    install_recorder(
+        lambda request: _json_response(
+            400, {"error": {"code": 100, "message": "Invalid parameter"}}
+        )
+    )
+
+    with pytest.raises(httpx.HTTPStatusError):
+        await CloudAPIProvider().indicate_typing(CHAT_ID, "wamid.INBOUND1")
+
+
+# ---------------------------------------------------------------------------
 # 8. get_state
 # ---------------------------------------------------------------------------
 

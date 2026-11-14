@@ -57,7 +57,7 @@ def turn(monkeypatch):
     mock_wa = MagicMock()
     mock_wa.send_message = AsyncMock(return_value=True)
     mock_wa.send_location_link = AsyncMock()
-    mock_wa.send_chat_state_typing = AsyncMock()
+    mock_wa.indicate_typing = AsyncMock()
     monkeypatch.setattr(workflow_service, "whatsapp", mock_wa)
     monkeypatch.setattr(workflow_service, "has_consent", AsyncMock(return_value=True))
     mock_ai = MagicMock()

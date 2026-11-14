@@ -331,7 +331,7 @@ async def test_process_message_task_trace_id_does_not_leak_across_concurrent_tas
     sink_id = logger.add(_sink, level="INFO")
 
     async def _interleaving_process_incoming_message(
-        chat_id, user_text, media_url=None
+        chat_id, user_text, media_url=None, message_id=None
     ):
         logger.info(f"loop1 {chat_id}")
         await asyncio.sleep(0)

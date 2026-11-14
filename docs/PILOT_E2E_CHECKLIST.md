@@ -63,6 +63,7 @@ ticket merges. Re-verify this table before each run.
 | **PRO-55** (quoted price to pro) | ✅ built — `quoted_price` persisted, shown in `APPROVAL_REQUEST` **and** `PRO_FOUND` | Scenario 1's price check is valid |
 | **PRO-56** (10-min nudge / 25-min offer) | ✅ built — `check_pro_approval_sla` job runs every 5 min | Scenario 3 is a valid regression |
 | **PRO-48** (ADMIN_PHONE reaches the operator) | ⚠️ config check | Verify `ADMIN_PHONE` is **set** in the environment and is the operator's number. Do **not** check it against the default value: production is legitimately set to a number equal to the default, because the default is the operator's own. The boot warning covers the case this row used to test — an environment where nothing set it at all |
+| **PRO-133** (read receipt + typing indicator) | ⚠️ depends on PR #231 | Until it merges, the indicator checks in scenarios 1 and 7 fail by design — on Cloud API nothing was ever transmitted, because `CloudAPIProvider` never overrode the base no-op. This is the only handset evidence PRO-133 can get: the unit suite and the offline harness prove the call is *made*, not that WhatsApp renders it |
 | **Policy links in the consent gate and pro signup** | ⚠️ config check | The consent message carries a privacy link only once `PUBLIC_BASE_ORIGIN` is set, and a terms link (consent + signup welcome) only once `TERMS_ENABLED=true` **and** `app/static/terms.html` is the owner-approved text. `/terms` answers 404 until then. Both variables on **api and worker**. Open every link the message sends |
 
 ---
@@ -79,6 +80,7 @@ reaches the lead as a Cloudinary URL → provide full address when asked (street
 floor, apartment) → provide a time → receive the AI estimate → **(P)** approve with `אשר` →
 **(C)** confirm the booking → after the job, complete + rate `5`.
 **Expected:**
+- **PRO-133 — within a second or two of each customer message, before any reply: the two blue checks appear and the chat header shows "typing…".** Watch the *first* message of the run especially: it arrives pre-consent, so the indicator must show there too. It should stay up for the 3–8s the AI takes and clear when the reply lands. A reply that arrives on one of the instant paths (consent, politeness) may legitimately beat the indicator onto the screen, leaving "typing…" up briefly afterwards — that is known and accepted, not a failure.
 - Bot asks for exactly the missing address parts; only proceeds when all five (street, number, city, floor, apartment) are present.
 - **No `[DEAL:]` / marker text ever appears in a customer-facing message** (PRO-44 — in code).
 - Pro's approval request shows customer name, street + city, issue, time, **and the AI-quoted price** (`💰 הערכת מחיר שניתנה ללקוח`) when the AI gave an estimate (PRO-55). The **same** figure is shown to the customer on approval (`PRO_FOUND`) — single source of truth. A deal with no estimate shows no price line (not a broken/empty line).
@@ -127,6 +129,7 @@ The assigned pro gets an alert only if the lead is **BOOKED** (with the customer
 plus the pause notice) or **NEW** (no phone and no words, offering `אשר`/`דחה`). On a CONTACTED lead,
 or if the admin deactivated the pro, the pro gets nothing. Further C messages within the window are held for a human, not
 auto-answered. After ~15 min the pause auto-expires.
+- **PRO-133 — no indicator while paused.** Messages sent inside the 15-min window get **no blue checks and no "typing…"**: a human owns the chat and the bot answers nothing, so an indicator would promise a reply that never comes. The messages are still held and still reach the human. (Contrast with a `PENDING_ADMIN_REVIEW` chat, where the throttled ack means the indicator *is* shown — that chat is genuinely being worked on.)
 - [ ] Pass  · [ ] File: ______
 
 ### 8. Unmatchable city → admin review
