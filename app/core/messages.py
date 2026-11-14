@@ -174,6 +174,21 @@ class Messages:
         REASSIGN_WAIT_ACK = (
             "🙏 אין בעיה, ממשיכים להמתין לאישור. אעדכן אותך ברגע שיש תשובה."
         )
+        # PRO-238: a "1"/"2" answering REASSIGN_OFFER after the situation it
+        # asked about has moved on. Each says what is true now; none changes
+        # anything.
+        REASSIGN_REPLY_PRO_APPROVED = (
+            "✅ איש המקצוע כבר אישר את הפנייה, ואין צורך לחפש אחר.\n"
+            "אפשר לכתוב *סטטוס* כדי לראות את פרטי העבודה."
+        )
+        REASSIGN_REPLY_ALREADY_MOVED = (
+            "🔄 הפנייה כבר הועברה לאיש מקצוע אחר, והיא ממתינה לאישור שלו.\n"
+            "אעדכן אותך כאן ברגע שתתקבל תשובה."
+        )
+        REASSIGN_REPLY_REQUEST_CLOSED = (
+            "ℹ️ הפנייה הזו כבר סגורה.\n"
+            "אם צריך עוד משהו, אפשר לכתוב לי כאן מה קרה ואפתח פנייה חדשה."
+        )
         BOT_PAUSED_BY_PRO = (
             "📞 איש המקצוע ביקש לדבר איתך ישירות, ויפנה אליך מהמספר שלו.\n"
             "אני מושהה בינתיים."

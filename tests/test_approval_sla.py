@@ -150,6 +150,91 @@ async def test_reassign_offer_fires_at_t_plus_25_non_emergency(
     updated = await mock_db.leads.find_one({"_id": lead_id})
     assert updated["reassign_offered"] is True
     assert updated["approval_nudged"] is False
+    # PRO-238: the claim records which question the customer's 1/2 answers —
+    # when it was asked and which pro it was about — so a late reply can be
+    # told apart from a digit meant for something else.
+    assert updated["reassign_offered_at"] is not None
+    assert updated["reassign_offered_pro_id"] == "pro_123"
+
+
+@pytest.mark.asyncio
+async def test_blocked_offer_send_releases_the_claim_so_the_next_tick_offers_again(
+    mock_db, monkeypatch, mock_whatsapp, mock_state_awaiting_approval
+):
+    """PRO-238: a send the facade blocked (breaker, kill switch, closed window)
+    returns None — no question reached the customer, so no 1/2 reply may be tied
+    to it and the offer must stay re-offerable."""
+    monkeypatch.setattr("app.services.monitor_service.leads_collection", mock_db.leads)
+    monkeypatch.setattr("app.services.monitor_service.users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    await mock_db.users.delete_many({})
+    lead_id = await _seed_lead(mock_db, minutes_ago=26)
+    # Pre-mark as nudged so a released offer can't be mistaken for the nudge.
+    await mock_db.leads.update_one(
+        {"_id": lead_id}, {"$set": {"approval_nudged": True}}
+    )
+    mock_whatsapp.send_message.return_value = None  # blocked, not sent
+
+    await check_pro_approval_sla()
+
+    mock_whatsapp.send_message.assert_awaited_once_with(
+        "customer_sla@c.us",
+        Messages.Customer.REASSIGN_OFFER,
+        template_key="reassign_offer",
+    )
+    released = await mock_db.leads.find_one({"_id": lead_id})
+    assert released["reassign_offered"] is False
+    assert "reassign_offered_at" not in released
+    assert "reassign_offered_pro_id" not in released
+
+    # Next tick, the provider is back: the offer goes out and is stamped.
+    mock_whatsapp.send_message.reset_mock()
+    mock_whatsapp.send_message.return_value = {"id": "sent"}
+
+    await check_pro_approval_sla()
+
+    mock_whatsapp.send_message.assert_awaited_once_with(
+        "customer_sla@c.us",
+        Messages.Customer.REASSIGN_OFFER,
+        template_key="reassign_offer",
+    )
+    offered = await mock_db.leads.find_one({"_id": lead_id})
+    assert offered["reassign_offered"] is True
+    assert offered["reassign_offered_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_blocked_offer_send_does_not_swallow_the_pro_nudge_on_the_same_tick(
+    mock_db, monkeypatch, mock_whatsapp, mock_state_awaiting_approval
+):
+    """The customer being unreachable must not leave a silent pro un-nudged: the
+    nudge goes to a different recipient (whose window may be open) and has its own
+    atomic claim, so it still runs after the offer's claim is rolled back."""
+    monkeypatch.setattr("app.services.monitor_service.leads_collection", mock_db.leads)
+    monkeypatch.setattr("app.services.monitor_service.users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    await mock_db.users.delete_many({})
+    lead_id = await _seed_lead(mock_db, minutes_ago=26)  # approval_nudged False
+    customer_chat = "customer_sla@c.us"
+    pro_chat = "972500000999@c.us"
+    mock_whatsapp.send_message.side_effect = lambda to, *a, **k: (
+        None if to == customer_chat else {"id": "sent"}
+    )
+
+    await check_pro_approval_sla()
+
+    updated = await mock_db.leads.find_one({"_id": lead_id})
+    assert updated["reassign_offered"] is False
+    assert "reassign_offered_at" not in updated
+    assert updated["approval_nudged"] is True
+    mock_whatsapp.send_message.assert_any_await(
+        pro_chat,
+        Messages.Pro.APPROVAL_NUDGE.format(
+            minutes=WorkerConstants.APPROVAL_NUDGE_MINUTES
+        ),
+        template_key="approval_nudge",
+        params=ANY,
+    )
 
 
 @pytest.mark.asyncio
@@ -326,6 +411,8 @@ async def test_customer_reply_1_on_offered_lead_triggers_reassign(
             "chat_id": chat_id,
             "status": LeadStatus.NEW,
             "reassign_offered": True,
+            # An offer sent before PRO-238 stamped it: answerable while recent.
+            "pro_notified_at": datetime.now(timezone.utc) - timedelta(minutes=26),
             "created_at": datetime.now(timezone.utc),
         }
     )
