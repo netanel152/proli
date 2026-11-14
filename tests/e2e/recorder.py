@@ -226,8 +226,16 @@ class RecordingProvider(WhatsAppProvider):
         payload = {"chatId": chat_id, "message": body, "options": list(options)}
         return self._rec._append("sendInteractive", chat_id, body, payload)
 
-    async def send_typing(self, chat_id: str) -> None:
-        self._rec._append("sendChatStateTyping", chat_id, "", {"chatId": chat_id})
+    async def indicate_typing(self, chat_id: str, message_id: str | None) -> None:
+        # The endpoint name is kept from the legacy transport so transcripts and
+        # MESSAGE_ENDPOINTS read the same; the payload carries the inbound wamid
+        # (PRO-133) so a test can assert which message was marked read.
+        self._rec._append(
+            "sendChatStateTyping",
+            chat_id,
+            "",
+            {"chatId": chat_id, "messageId": message_id},
+        )
 
     async def get_state(self) -> str | None:
         self._rec._append("getStateInstance", "", "", {})

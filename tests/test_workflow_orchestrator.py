@@ -19,6 +19,7 @@ from app.services.workflow_service import (
     DEAL_MARKER_RE,
 )
 from app.services.ai_engine_service import AIResponse, ExtractedData
+import app.services.dispatch_guards as dispatch_guards
 import app.services.workflow_service
 
 
@@ -28,7 +29,7 @@ def wf_mocks(monkeypatch, mock_db):
     mock_wa = MagicMock()
     mock_wa.send_message = AsyncMock()
     mock_wa.send_location_link = AsyncMock()
-    mock_wa.send_chat_state_typing = AsyncMock()
+    mock_wa.indicate_typing = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_wa)
 
     mock_state = MagicMock()
@@ -2729,7 +2730,8 @@ async def test_returning_customer_name_seeded_from_prior_lead(wf_mocks, mock_db)
 async def test_typing_indicator_task_name_carries_masked_phone_suffix(
     wf_mocks, monkeypatch
 ):
-    """process_incoming_message spawns the typing indicator through
+    """The typing indicator (spawned by the rate-limit guard since PRO-133,
+    and by process_incoming_message before it) goes through
     spawn_background_task (PRO-143) rather than a bare create_task, naming it
     with app.core.phone.mask_chat_id(chat_id) rather than a raw chat_id[-4:]
     slice. A raw slice on a '<digits>@c.us' id always yields the literal
@@ -2744,7 +2746,7 @@ async def test_typing_indicator_task_name_carries_masked_phone_suffix(
     chat_id = "972501234567@c.us"
 
     captured = {}
-    real_spawn = app.services.workflow_service.spawn_background_task
+    real_spawn = dispatch_guards.spawn_background_task
 
     def spy(coro, *, name):
         captured["name"] = name
@@ -2757,7 +2759,7 @@ async def test_typing_indicator_task_name_carries_masked_phone_suffix(
         captured.setdefault("tasks", []).append(task)
         return task
 
-    monkeypatch.setattr(app.services.workflow_service, "spawn_background_task", spy)
+    monkeypatch.setattr(dispatch_guards, "spawn_background_task", spy)
 
     await process_incoming_message(chat_id, "שלום")
 
@@ -2770,6 +2772,32 @@ async def test_typing_indicator_task_name_carries_masked_phone_suffix(
 
     assert captured["name"] == f"typing:{mask_chat_id(chat_id)}"
     assert "972501234567" not in captured["name"]
+
+
+@pytest.mark.asyncio
+async def test_inbound_wamid_reaches_the_typing_indicator(wf_mocks, monkeypatch):
+    """PRO-133: the wamid handed to process_incoming_message travels through
+    DispatchContext to the provider call that marks that very message read."""
+    mock_wa = wf_mocks[0]
+    chat_id = "972501234567@c.us"
+
+    # PRO-187: await only the task this test's own spy was handed, never the
+    # whole registry.
+    real_spawn = dispatch_guards.spawn_background_task
+    spawned = []
+
+    def spy(coro, *, name):
+        task = real_spawn(coro, name=name)
+        spawned.append(task)
+        return task
+
+    monkeypatch.setattr(dispatch_guards, "spawn_background_task", spy)
+
+    await process_incoming_message(chat_id, "שלום", message_id="wamid.IN1")
+    for task in spawned:
+        await task
+
+    mock_wa.indicate_typing.assert_awaited_once_with(chat_id, "wamid.IN1")
 
 
 # --- PRO-168 review follow-up: REMINDER's sibling options must route alike ---

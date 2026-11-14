@@ -434,6 +434,33 @@ class CloudAPIProvider(WhatsAppProvider):
             chat_id, {"type": "interactive", "interactive": interactive}, "interactive"
         )
 
+    async def indicate_typing(self, chat_id: str, message_id: str | None) -> None:
+        """Blue checks + "typing…" on the inbound message, in one call (PRO-133).
+
+        Meta's mark-as-read endpoint takes a ``typing_indicator``: it shows
+        until we reply or ~25s pass. It is a status update on *their* message,
+        not a message of ours — no ``to``, no wamid back, nothing for
+        ``wa_delivery`` to track, and no 24h-window check (an inbound message
+        is what opens the window). Without the inbound wamid there is nothing
+        to mark, so it is skipped.
+
+        Raises on a non-2xx like every send here; the facade is what makes it
+        best-effort.
+        """
+        if not message_id:
+            return
+        body = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": message_id,
+            "typing_indicator": {"type": "text"},
+        }
+        client = await get_http_client()
+        response = await client.post(
+            self._messages_url(), json=body, headers=self._auth_headers()
+        )
+        response.raise_for_status()
+
     # ------------------------------------------------------------------
     # State + inbound
     # ------------------------------------------------------------------

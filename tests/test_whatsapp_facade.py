@@ -66,8 +66,8 @@ class _TransmittingProvider(WhatsAppProvider):
         self.sent.append(("interactive", chat_id, body))
         return {"id": "4"}
 
-    async def send_typing(self, chat_id):
-        self.sent.append(("typing", chat_id))
+    async def indicate_typing(self, chat_id, message_id):
+        self.sent.append(("typing", chat_id, message_id))
 
     async def get_state(self):
         return "authorized"
@@ -195,11 +195,85 @@ async def test_every_outbound_method_is_gated(transmitting, fake_redis):
     await facade.send_message("972500000001@c.us", "t")
     await facade.send_file_by_url("972500000001@c.us", "http://x/y.jpg")
     await facade.send_location_link("972500000001@c.us", "Tel Aviv")
-    await facade.send_chat_state_typing("972500000001@c.us")
+    await facade.indicate_typing("972500000001@c.us", "wamid.IN1")
     await facade.send_template("972500000001@c.us", "tpl")
     await facade.send_interactive("972500000001@c.us", "body", ["a", "b"])
 
     assert transmitting.sent == []
+
+
+# ===========================================================================
+# PRO-133 — the read receipt + typing indicator is best-effort and breaker-gated
+#
+# The blocked half (a paused or unconfirmed transmitting provider is never
+# reached) is covered by test_every_outbound_method_is_gated above.
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_indicate_typing_reaches_the_provider_with_the_inbound_wamid(
+    transmitting, fake_redis
+):
+    await fake_redis.set(_STATE_KEY, "authorized")
+    facade = WhatsAppFacade(transmitting)
+
+    await facade.indicate_typing("972500000001@c.us", "wamid.IN1")
+
+    assert transmitting.sent == [("typing", "972500000001@c.us", "wamid.IN1")]
+
+
+@pytest.mark.asyncio
+async def test_indicate_typing_swallows_a_provider_error(transmitting, fake_redis):
+    """A Graph 4xx on the indicator must not cost the customer their reply:
+    unlike send_message, this one never raises."""
+
+    async def _raise(chat_id, message_id):
+        raise RuntimeError("simulated Graph 4xx")
+
+    transmitting.indicate_typing = _raise
+    await fake_redis.set(_STATE_KEY, "authorized")
+    facade = WhatsAppFacade(transmitting)
+
+    assert await facade.indicate_typing("972500000001@c.us", "wamid.IN1") is None
+
+
+@pytest.mark.asyncio
+async def test_indicate_typing_gives_up_on_a_hung_provider_without_raising(
+    transmitting, fake_redis, monkeypatch
+):
+    """The facade's own deadline fires inside its try, so a stalled call ends as
+    a debug line here instead of the background task's 30s timeout reaching
+    Sentry as an ERROR for an indicator nobody saw."""
+    started = asyncio.Event()
+
+    async def _hang(chat_id, message_id):
+        started.set()
+        await asyncio.sleep(3600)
+
+    transmitting.indicate_typing = _hang
+    monkeypatch.setattr(facade_module, "_TYPING_INDICATOR_TIMEOUT_SECONDS", 0.01)
+    await fake_redis.set(_STATE_KEY, "authorized")
+    facade = WhatsAppFacade(transmitting)
+
+    assert await facade.indicate_typing("972500000001@c.us", "wamid.IN1") is None
+    assert started.is_set(), "the provider was never reached, so nothing timed out"
+
+
+@pytest.mark.asyncio
+async def test_indicate_typing_is_not_gated_for_a_non_transmitting_provider(
+    fake_redis,
+):
+    """No state key, no pause key, and the dry-run provider is still called and
+    records the indicator with the wamid — the offline harness relies on seeing
+    it asked for."""
+    provider = DryRunProvider()
+    facade = WhatsAppFacade(provider)
+
+    await facade.indicate_typing("972500000001@c.us", "wamid.IN1")
+
+    assert provider.sent == [
+        {"kind": "typing", "chat_id": "972500000001@c.us", "message_id": "wamid.IN1"}
+    ]
 
 
 # ===========================================================================

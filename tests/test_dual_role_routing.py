@@ -38,7 +38,7 @@ def wf_mocks(monkeypatch, mock_db):
     mock_wa = MagicMock()
     mock_wa.send_message = AsyncMock()
     mock_wa.send_location_link = AsyncMock()
-    mock_wa.send_chat_state_typing = AsyncMock()
+    mock_wa.indicate_typing = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", mock_wa)
 
     mock_state = MagicMock()

@@ -35,6 +35,7 @@ from typing import Any, Awaitable, Callable, Optional, Tuple
 from bson import ObjectId
 from bson.errors import InvalidId
 
+from app.core.background_tasks import spawn_background_task
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.legal_links import consent_request_text
 from app.core.logger import logger
@@ -85,6 +86,9 @@ class DispatchContext:
     #: The customer sent a file and re-hosting lost it, so `media_url` is None
     #: and nothing below can tell. The pipeline passes it to the AI engine.
     file_lost: bool = False
+    #: The inbound wamid, when the provider gave one. Only the PRO-133 read
+    #: receipt + typing indicator reads it.
+    message_id: Optional[str] = None
 
     async def refresh_state(self, state_manager) -> Optional[str]:
         """Re-read the FSM state after a guard may have changed it.
@@ -184,6 +188,42 @@ async def guard_help_menu(ctx: DispatchContext, deps: GuardDeps):
     return HANDLED
 
 
+def _indicate_typing(ctx: DispatchContext, deps: GuardDeps) -> None:
+    """PRO-133 — blue checks + "typing…" while the turn runs, fire-and-forget.
+
+    Fired here, once the message is known not to be rate-limited, because Meta's
+    guidance is to show the indicator only when a reply is coming: the limited
+    path below answers with nothing but the canned notice. The three guards
+    above this one reply at once with no AI call, so they need no indicator.
+    Never awaited and never raises — a missing indicator must not cost a reply.
+
+    ``PAUSED_FOR_HUMAN`` is the one state past this guard that answers *nothing*
+    by design (``guard_paused_for_human``: a human owns the chat and the bot must
+    not talk over them), so it gets no indicator either — blue checks and 25s of
+    "typing…" from a bot that will never reply are worse than silence. The
+    PENDING_ADMIN_REVIEW short-circuit throttles its ack to one per 30 min and
+    does show the indicator on a throttled turn: that chat *is* being worked on,
+    and the ack it already sent said so.
+
+    A reply can still beat the indicator onto the screen — the detached task does
+    two Redis reads and a POST, and the quick guards below reply in about as
+    long. The indicator then sits for up to ~25s after the answer. Accepted: the
+    turns it is for are the 3–8s Gemini ones, and the alternative is awaiting a
+    network call on the critical path of every message.
+    """
+    if ctx.current_state == UserStates.PAUSED_FOR_HUMAN:
+        return
+    try:
+        spawn_background_task(
+            deps.whatsapp.indicate_typing(ctx.chat_id, ctx.message_id),
+            name=f"typing:{mask_chat_id(ctx.chat_id)}",
+        )
+    except Exception as e:
+        logger.debug(
+            f"Typing indicator not scheduled for {mask_chat_id(ctx.chat_id)}: {e}"
+        )
+
+
 async def guard_inbound_rate_limit(ctx: DispatchContext, deps: GuardDeps):
     """PRO-21 — per-customer abuse / cost protection.
 
@@ -209,6 +249,7 @@ async def guard_inbound_rate_limit(ctx: DispatchContext, deps: GuardDeps):
         )
 
     if ctx.is_exempt:
+        _indicate_typing(ctx, deps)
         return None
 
     allowed = await deps.security.check_sliding_window(
@@ -217,6 +258,7 @@ async def guard_inbound_rate_limit(ctx: DispatchContext, deps: GuardDeps):
         WorkerConstants.INBOUND_RATE_LIMIT_WINDOW_SECONDS,
     )
     if allowed:
+        _indicate_typing(ctx, deps)
         return None
 
     trips = await deps.security.record_trip(

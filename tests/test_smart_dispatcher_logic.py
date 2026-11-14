@@ -50,7 +50,7 @@ def mock_workflow_dependencies():
         mock_whatsapp.send_message = AsyncMock()
         mock_whatsapp.send_file_by_url = AsyncMock()
         mock_whatsapp.send_location_link = AsyncMock()
-        mock_whatsapp.send_chat_state_typing = AsyncMock()
+        mock_whatsapp.indicate_typing = AsyncMock()
         mock_users.find_one = AsyncMock(return_value=None)
 
         mock_lead_data = {

@@ -454,7 +454,7 @@ async def wf(monkeypatch, mock_db):
     await mock_db.leads.delete_many({})
     whatsapp = MagicMock()
     whatsapp.send_message = AsyncMock()
-    whatsapp.send_chat_state_typing = AsyncMock()
+    whatsapp.indicate_typing = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "whatsapp", whatsapp)
     monkeypatch.setattr(
         app.services.workflow_service,
