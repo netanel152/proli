@@ -152,7 +152,7 @@ The **SLA Monitor** (every 5 min; PRO-73: business hours + `sla_monitor_active` 
 
 The **Pro-Approval SLA** monitor (every 5 min) chases a silent pro on a `NEW` lead awaiting approval, timed from `pro_notified_at`, instead of waiting for the 60-min SOS Healer:
 1. At T+10 min (`APPROVAL_NUDGE_MINUTES`), nudges the pro once.
-2. At T+25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`), offers the customer a reassignment once — gated to business hours (PRO-73); the pro nudge in step 1 is not gated.
+2. At T+25 min (`APPROVAL_REASSIGN_OFFER_MINUTES`), offers the customer a reassignment once — gated to business hours (PRO-73); the pro nudge in step 1 is not gated. The claim also stamps `reassign_offered_at`/`reassign_offered_pro_id`; if the send is blocked (breaker, kill switch, closed window with the template still DRAFT) the claim is released so the next in-hours tick offers again, and the pro nudge still runs on that tick. The customer's *1*/*2* reply is tied to the offer for 24h (`REASSIGN_OFFER_REPLY_MAX_AGE_HOURS`), independent of the FSM state.
 3. Emergency leads use half of both thresholds. Both steps are idempotent via boolean flags on the lead.
 
 The **SOS Reporter** (every 4 h) pages the operator via `page_operator` (Sentry → email, not WhatsApp) once per newly-stuck lead, atomically stamping `admin_reported_at` so the same lead is muted for `SOS_REPORT_REPAGE_HOURS` (24h) afterward; the standing already-paged backlog is logged, not re-paged. A quiet tick therefore means "already paged," not "resolved" — check the admin panel, not the absence of new pages, to know whether a stuck lead is still open.

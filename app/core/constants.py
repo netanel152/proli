@@ -178,6 +178,13 @@ class WorkerConstants:
     # customer types -- landing a rating on the wrong (long-closed) job and
     # leaving the current one uncompleted.
     RATING_PROMPT_MAX_AGE_HOURS = 48
+    # PRO-238: how long a bare "1"/"2" is read as a reply to the PRO-56 reassign
+    # offer (``reassign_offered_at`` on the lead). The offer is held to business
+    # hours, so it can land the next morning and be answered hours after the
+    # 1h AWAITING_PRO_APPROVAL state is gone. Inside this window the digit is
+    # tied to the offer, never to a different question (the completion check's
+    # "1 — כן" closed jobs by mistake); past it the digit is nobody's.
+    REASSIGN_OFFER_REPLY_MAX_AGE_HOURS = 24
     # PRO-45: how long the completion check stays answerable by the bare "3"
     # ("איש המקצוע לא הגיע"). Exactly the reasoning above, and it matters more
     # here than it does for a rating: `completion_check_sent_at` is stamped

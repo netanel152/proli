@@ -33,6 +33,7 @@ from app.services.dispatch_guards import (
     guard_help_menu,
     guard_inbound_rate_limit,
     guard_loyalty_confirmation,
+    guard_pro_approval_soft_hold,
     guard_zero_touch_intent,
     run_guard_chain,
 )
@@ -452,6 +453,48 @@ async def test_rate_limit_blocks_customer_over_window(deps):
     deps.whatsapp.send_message.assert_awaited_once_with(
         ctx.chat_id, Messages.Errors.RATE_LIMITED
     )
+
+
+# --------------------------------------------------------------------------
+# guard_pro_approval_soft_hold — the 1/2 reply to the PRO-56 reassign offer
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "handler_reply, expected_sends",
+    [
+        # "" = the handler already messaged the customer (a reassignment does).
+        pytest.param("", [], id="handled-and-already-announced"),
+        pytest.param(
+            Messages.Customer.REASSIGN_REPLY_PRO_APPROVED,
+            [Messages.Customer.REASSIGN_REPLY_PRO_APPROVED],
+            id="handled-with-reply",
+        ),
+        # None = not a reply to an offer: the generic soft hold answers instead.
+        pytest.param(None, [Messages.Customer.STILL_WAITING], id="not-an-offer-reply"),
+    ],
+)
+async def test_soft_hold_digit_is_read_by_the_reassign_offer_handler(
+    deps, monkeypatch, handler_reply, expected_sends
+):
+    handler = AsyncMock(return_value=handler_reply)
+    monkeypatch.setattr(workflow_service, "handle_reassign_offer_reply", handler)
+    monkeypatch.setattr(
+        workflow_service, "_is_registered_pro", AsyncMock(return_value=False)
+    )
+    ctx = make_ctx(
+        user_text="1",
+        normalized_text="1",
+        current_state=UserStates.AWAITING_PRO_APPROVAL,
+    )
+
+    result = await guard_pro_approval_soft_hold(ctx, deps)
+
+    assert result is HANDLED
+    handler.assert_awaited_once_with(ctx.chat_id, "1", deps.whatsapp)
+    sent = [call.args[1] for call in deps.whatsapp.send_message.await_args_list]
+    assert sent == expected_sends
 
 
 # --------------------------------------------------------------------------

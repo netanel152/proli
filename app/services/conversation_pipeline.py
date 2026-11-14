@@ -118,6 +118,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     leads_collection = wf.leads_collection
     notification_service = wf.notification_service
     _handle_completion = wf._handle_completion
+    handle_reassign_offer_reply = wf.handle_reassign_offer_reply
     handle_customer_rating_text = wf.handle_customer_rating_text
     handle_customer_review_comment = wf.handle_customer_review_comment
     detect_and_fetch_media = wf.detect_and_fetch_media
@@ -162,6 +163,16 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
 
     # 2. Check for Customer Completion, Rating, or Review
     if user_text:
+        # PRO-238: a bare digit answering the reassign offer is read first —
+        # its "1" means "find another pro", and the completion check below
+        # would read the same digit as "the job is finished".
+        reassign_resp = await handle_reassign_offer_reply(chat_id, user_text, whatsapp)
+        if reassign_resp is not None:
+            if reassign_resp:
+                await whatsapp.send_message(chat_id, reassign_resp)
+                await lead_manager.log_message(chat_id, "model", reassign_resp)
+            return
+
         completion_resp = await _handle_completion(chat_id, user_text, whatsapp)
         if completion_resp:
             await whatsapp.send_message(chat_id, completion_resp)

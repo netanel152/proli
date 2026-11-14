@@ -613,37 +613,17 @@ async def guard_pro_approval_soft_hold(ctx: DispatchContext, deps: GuardDeps):
         return None
 
     # PRO-56: if the pro stayed silent and we offered the customer a
-    # reassignment (reassign_offered), handle their 1/2 reply before the
-    # generic soft-hold. 1 → find another pro; 2 → keep waiting (restart timer).
+    # reassignment, handle their 1/2 reply before the generic soft-hold.
+    # PRO-238: the reply is read by `customer_flow.handle_reassign_offer_reply`,
+    # shared with the pipeline, so an answer that outlives this state (or comes
+    # after the pro approved) is still tied to the offer and nothing else.
     if ctx.normalized_text in ("1", "2"):
-        offered_lead = await wf.leads_collection.find_one(
-            {
-                "chat_id": ctx.chat_id,
-                "status": LeadStatus.NEW,
-                "reassign_offered": True,
-            },
-            sort=[("created_at", -1)],
+        reply = await wf.handle_reassign_offer_reply(
+            ctx.chat_id, ctx.normalized_text, deps.whatsapp
         )
-        if offered_lead:
-            if ctx.normalized_text == "1":
-                from app.services import monitor_service
-
-                await monitor_service.reassign_lead(offered_lead)
-            else:  # "2" — keep waiting; fully restart the SLA window so both
-                # the pro nudge (T+10) and the offer (T+25) re-arm.
-                await wf.leads_collection.update_one(
-                    {"_id": offered_lead["_id"]},
-                    {
-                        "$set": {
-                            "reassign_offered": False,
-                            "approval_nudged": False,
-                            "pro_notified_at": datetime.now(timezone.utc),
-                        }
-                    },
-                )
-                await deps.whatsapp.send_message(
-                    ctx.chat_id, Messages.Customer.REASSIGN_WAIT_ACK
-                )
+        if reply is not None:
+            if reply:
+                await deps.whatsapp.send_message(ctx.chat_id, reply)
             return HANDLED
 
     pro_escaping = ctx.normalized_text in wf.PRO_ONLY_KEYWORDS and (

@@ -400,6 +400,140 @@ async def _rating_pending(chat_id: str) -> bool:
     )
 
 
+# PRO-238: the statuses after which a reassign-offer reply has nothing to act on.
+_REQUEST_CLOSED_STATUSES = (
+    LeadStatus.COMPLETED,
+    LeadStatus.CANCELLED,
+    LeadStatus.CLOSED,
+    LeadStatus.REJECTED,
+)
+
+
+async def handle_reassign_offer_reply(chat_id: str, text: str, whatsapp) -> str | None:
+    """Answer a bare "1"/"2" that replies to the PRO-56 reassign offer.
+
+    PRO-238: the offer asks "*1* — לחפש איש מקצוע אחר / *2* — להמתין עוד קצת",
+    but the only reader of that answer used to be the AWAITING_PRO_APPROVAL soft
+    hold. That state lasts an hour, and the pro approving clears it, so a late
+    "1" reached the completion check and closed the job the customer had just
+    been given. The answer is now tied to its question on the lead, not the FSM:
+    the offer stamps ``reassign_offered_at`` and ``reassign_offered_pro_id``, and
+    for ``REASSIGN_OFFER_REPLY_MAX_AGE_HOURS`` a bare digit belongs to it —
+    unless a question asked *after* it (a completion check, a rating prompt, a
+    newer request) owns the digit instead.
+
+    Called by the soft hold (in state) and by the pipeline ahead of the
+    completion check (state gone). Returns None when the digit is not a reply to
+    an offer; otherwise the text to send — ``""`` when this already messaged
+    the customer (a reassignment announces itself). A reply that comes too late
+    to act on changes nothing and says what is true now.
+    """
+    stripped = (text or "").strip()
+    if stripped not in ("1", "2"):
+        return None
+
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=WorkerConstants.REASSIGN_OFFER_REPLY_MAX_AGE_HOURS)
+    lead = await leads_collection.find_one(
+        {
+            "chat_id": chat_id,
+            "$or": [
+                {"reassign_offered_at": {"$gte": cutoff}},
+                # An offer sent before the stamp existed: still open, so still
+                # answerable, exactly as the soft hold read it before.
+                {
+                    "status": LeadStatus.NEW,
+                    "reassign_offered": True,
+                    "reassign_offered_at": {"$exists": False},
+                    "pro_notified_at": {"$gte": cutoff},
+                },
+            ],
+        },
+        # One SLA tick stamps every lead it claims with the same `now`, so
+        # the stamp alone can tie; `created_at` breaks it deterministically.
+        sort=[("reassign_offered_at", -1), ("created_at", -1)],
+    )
+    if not lead:
+        return None
+
+    # A legacy offer carries no stamp; `pro_notified_at` is never later than
+    # the offer went out, so it bounds the same window conservatively. Both
+    # clauses of the query above guarantee one of the two, so the None guard
+    # below is belt-and-braces — a new clause that cannot promise a timestamp
+    # must not quietly skip the newer-question check.
+    offered_at = lead.get("reassign_offered_at") or lead.get("pro_notified_at")
+    if offered_at is not None:
+        newer_question = await leads_collection.find_one(
+            {
+                "chat_id": chat_id,
+                "$or": [
+                    {"completion_check_sent_at": {"$gt": offered_at}},
+                    {"waiting_for_rating": True, "completed_at": {"$gt": offered_at}},
+                    {"_id": {"$ne": lead["_id"]}, "created_at": {"$gt": offered_at}},
+                ],
+            },
+            {"_id": 1},
+        )
+        if newer_question:
+            return None
+
+    status = lead.get("status")
+    offered_pro_id = lead.get("reassign_offered_pro_id", lead.get("pro_id"))
+
+    if status == LeadStatus.NEW and lead.get("pro_id") == offered_pro_id:
+        if not lead.get("reassign_offered"):
+            # Already answered "2"; the soft hold's generic reply covers it.
+            return None
+        if stripped == "1":
+            from app.services import monitor_service
+
+            await monitor_service.reassign_lead(lead)
+            return ""
+        # "2" — keep waiting; fully restart the SLA window so both the pro
+        # nudge (T+10) and the offer (T+25) re-arm. ``reassign_offered_at``
+        # stays, so a later digit still knows which question it answers.
+        # Pinned to the offer, not just the status: the healer or a parallel
+        # "1" can move the lead between the read and this write, and resetting
+        # `pro_notified_at` would then restart the SLA for a pro the customer
+        # was never waiting on.
+        kept_waiting = await leads_collection.update_one(
+            {
+                "_id": lead["_id"],
+                "status": LeadStatus.NEW,
+                "pro_id": offered_pro_id,
+                "reassign_offered": True,
+            },
+            {
+                "$set": {
+                    "reassign_offered": False,
+                    "approval_nudged": False,
+                    "pro_notified_at": now,
+                }
+            },
+        )
+        if kept_waiting.modified_count != 0:
+            return Messages.Customer.REASSIGN_WAIT_ACK
+        # Lost the race. What it lost to decides the answer — the pro approving
+        # (BOOKED) and the rematch exhausting (PENDING_ADMIN_REVIEW) are not
+        # "moved to another pro" — so re-read and fall through to the ladder.
+        fresh = await leads_collection.find_one({"_id": lead["_id"]}, {"status": 1})
+        status = (fresh or {}).get("status", status)
+
+    logger.info(
+        f"Late reassign-offer reply '{stripped}' from {mask_chat_id(chat_id)} "
+        f"(lead={lead['_id']}, status={status}) — answered, nothing changed"
+    )
+    if status == LeadStatus.BOOKED:
+        return Messages.Customer.REASSIGN_REPLY_PRO_APPROVED
+    if status == LeadStatus.NEW:
+        return Messages.Customer.REASSIGN_REPLY_ALREADY_MOVED
+    if status == LeadStatus.PENDING_ADMIN_REVIEW:
+        return Messages.Customer.STILL_PENDING_REVIEW
+    if status in _REQUEST_CLOSED_STATUSES:
+        return Messages.Customer.REASSIGN_REPLY_REQUEST_CLOSED
+    return None
+
+
 async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
     """Checks if the user confirmed job completion via text."""
     stripped = text.strip()
@@ -451,9 +585,14 @@ async def handle_customer_completion_text(chat_id: str, text: str, whatsapp):
             return no_show_resp
         return await _handle_completion_check_decline(chat_id, stripped, normalized)
 
-    lead = await leads_collection.find_one(
-        {"chat_id": chat_id, "status": LeadStatus.BOOKED}, sort=[("created_at", -1)]
-    )
+    query = {"chat_id": chat_id, "status": LeadStatus.BOOKED}
+    if stripped == "1":
+        # PRO-238: a bare "1" is an answer, and only the completion check asks
+        # a question whose "1" means "finished". Without one actually sent, the
+        # digit belongs to some other menu (the reassign offer's "1" is "find
+        # another pro") and must not close a job. Words still complete.
+        query["completion_check_sent_at"] = {"$exists": True}
+    lead = await leads_collection.find_one(query, sort=[("created_at", -1)])
 
     if not lead:
         return None
