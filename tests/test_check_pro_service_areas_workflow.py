@@ -89,6 +89,12 @@ def _run_resolve(resolve_script, tmp_path, ref_name):
         env=env,
         capture_output=True,
         text=True,
+        # These shells echo ✅ and 🗺️. Without an explicit codec, Python
+        # decodes the pipe with the console's locale encoding, and under
+        # cp1252 the emoji fails to decode — a red test for a reason that has
+        # nothing to do with the workflow.
+        encoding="utf-8",
+        errors="replace",
         timeout=10,
     )
     return proc, _parse_github_output(output_path)
@@ -155,6 +161,12 @@ def _run_creds(creds_script, tmp_path, *, mongo_uri, target="staging"):
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        # These shells echo ✅ and 🗺️. Without an explicit codec, Python
+        # decodes the pipe with the console's locale encoding, and under
+        # cp1252 the emoji fails to decode — a red test for a reason that has
+        # nothing to do with the workflow.
+        encoding="utf-8",
+        errors="replace",
         timeout=10,
     )
 
@@ -380,6 +392,12 @@ def test_exit_code_case_block_matches_the_scripts_contract(
         ["bash", "-e", str(case_script), code],
         capture_output=True,
         text=True,
+        # These shells echo ✅ and 🗺️. Without an explicit codec, Python
+        # decodes the pipe with the console's locale encoding, and under
+        # cp1252 the emoji fails to decode — a red test for a reason that has
+        # nothing to do with the workflow.
+        encoding="utf-8",
+        errors="replace",
         timeout=10,
     )
 

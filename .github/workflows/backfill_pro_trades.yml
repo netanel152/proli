@@ -63,6 +63,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Verify the connection settings resolved
+        id: creds
         env:
           MONGO_URI: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_MONGO_URI || secrets.STAGING_MONGO_URI }}
           TARGET: ${{ steps.target.outputs.target }}
@@ -83,6 +84,7 @@ jobs:
           echo "  database:    $DB_NAME"
 
       - name: Backfill trades in ${{ steps.target.outputs.target }}
+        id: backfill
         env:
           MONGO_URI: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_MONGO_URI || secrets.STAGING_MONGO_URI }}
           REDIS_URL: ${{ steps.target.outputs.target == 'production' && secrets.PRODUCTION_REDIS_URL || secrets.STAGING_REDIS_URL }}
