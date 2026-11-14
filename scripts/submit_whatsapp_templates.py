@@ -34,6 +34,10 @@ developers.facebook.com/documentation/business-messaging/whatsapp/:
   reference/whatsapp-business-account/template-api/ (create and list),
   templates/overview/ (positional parameters, ``example.body_text``),
   templates/template-categorization/ (recategorised stays APPROVED).
+Read 2026-11-15 for PRO-230's quick-reply buttons: templates/components/ (a
+``BUTTONS`` component of ``QUICK_REPLY`` buttons, at most 10, label at most 25
+characters) and templates/utility-templates/ (quick-reply allowed on UTILITY).
+A button's label is submitted here; its payload goes with each send.
 """
 
 import argparse
@@ -51,6 +55,7 @@ from app.providers.whatsapp.template_registry import (  # noqa: E402
     TemplateSpec,
     TemplateStatus,
     body_rule_violations,
+    button_rule_violations,
     meta_body,
 )
 
@@ -77,19 +82,47 @@ def build_payload(spec: TemplateSpec) -> dict:
         body["example"] = {
             "body_text": [[Messages.Templates.PARAM_SAMPLES[n] for n in spec.params]]
         }
+    components = [body]
+    if spec.buttons:
+        components.append(
+            {
+                "type": "BUTTONS",
+                "buttons": [
+                    {"type": "QUICK_REPLY", "text": button.label}
+                    for button in spec.buttons
+                ],
+            }
+        )
     return {
         "name": spec.meta_name,
         "language": spec.language,
         "category": spec.category,
-        "components": [body],
+        "components": components,
     }
 
 
 def invalid_bodies() -> list[str]:
+    """Every body or button that must not be submitted, one line each.
+
+    Meta's rules, plus the one that is ours: a template's buttons and the
+    replies its body advertises must be the same list (PRO-230).
+    """
     return [
         f"{spec.meta_name}: {problem}"
         for spec in to_submit()
         for problem in body_rule_violations(meta_body(spec), spec.params)
+        + button_rule_violations(spec)
+    ]
+
+
+def meta_button_labels(meta: dict) -> list[str]:
+    """The quick-reply labels Meta holds for a template, in order."""
+    return [
+        str(button.get("text"))
+        for component in meta.get("components") or []
+        if str(component.get("type")).upper() == "BUTTONS"
+        for button in component.get("buttons") or []
+        if str(button.get("type")).upper() == "QUICK_REPLY"
     ]
 
 
@@ -184,6 +217,14 @@ def drift(specs: list[TemplateSpec], meta_templates: list[dict]) -> list[str]:
         ]
         if bodies != [meta_body(spec)]:
             lines.append(f"{spec.meta_name}: body differs from the registry")
+        if meta_button_labels(meta) != [b.label for b in spec.buttons]:
+            # Not cosmetic: `send_template` attaches one button parameter per
+            # registry button, so Meta refuses every send of a template whose
+            # approved buttons differ. Arming one is worse than leaving it.
+            lines.append(
+                f"{spec.meta_name}: buttons differ from the registry — do not "
+                "flip it, every send would fail. Delete it on Meta and resubmit."
+            )
     return lines
 
 
@@ -207,6 +248,8 @@ def show_dry_run() -> int:
         print("  body:")
         for line in body["text"].split("\n"):
             print(f"    {line}")
+        for button in spec.buttons:
+            print(f"  button: {button.label!r} -> sends {button.payload!r}")
     skipped = [spec.meta_name for spec in TEMPLATES.values() if not spec.submit]
     print(f"\n{len(to_submit())} would be submitted. Left out: {', '.join(skipped)}.")
     print("Dry run: nothing was sent to Meta.")
@@ -319,7 +362,10 @@ def main(argv: list[str] | None = None, client: httpx.Client | None = None) -> i
 
     problems = invalid_bodies()
     if problems:
-        print("Meta would reject these bodies:", file=sys.stderr)
+        print(
+            "Refusing: these bodies or buttons break Meta's rules or ours:",
+            file=sys.stderr,
+        )
         print("\n".join(problems), file=sys.stderr)
         return 1
 

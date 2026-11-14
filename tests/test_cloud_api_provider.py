@@ -19,6 +19,7 @@ from pydantic import SecretStr
 
 from app.core.config import settings
 from app.core.constants import META_ERROR_WINDOW_CLOSED, WorkerConstants
+from app.core.messages import Messages
 from app.providers.whatsapp import delivery, template_registry
 from app.providers.whatsapp.cloud_api import (
     CloudAPIProvider,
@@ -762,6 +763,32 @@ def test_normalize_meta_message_template_quick_reply_button():
     }
     msg = normalize_meta_message(message, {})
     assert msg.text == "1"
+
+
+@pytest.mark.parametrize(
+    "button, expected",
+    [
+        # Sent without button parameters (WhatsApp Manager's test send): label only.
+        ({"text": Messages.Templates.Buttons.FIND_ANOTHER_PRO}, "1"),
+        # Some clients echo the label as the payload.
+        (
+            {
+                "payload": Messages.Templates.Buttons.JOB_DONE,
+                "text": Messages.Templates.Buttons.JOB_DONE,
+            },
+            "1",
+        ),
+        # A label no template carries: the old behaviour, nothing lost.
+        ({"text": "תווית לא מוכרת"}, "תווית לא מוכרת"),
+        # A real payload always wins over what the label would map to.
+        ({"payload": "2", "text": Messages.Templates.Buttons.JOB_DONE}, "2"),
+    ],
+    ids=["label-only", "payload-equals-label", "unknown-label", "payload-wins"],
+)
+def test_normalize_meta_message_maps_a_tap_that_carried_no_payload(button, expected):
+    message = {"from": "972501234567", "id": "wamid.X", "type": "button"}
+
+    assert normalize_meta_message({**message, "button": button}, {}).text == expected
 
 
 def test_normalize_meta_message_image_with_caption():

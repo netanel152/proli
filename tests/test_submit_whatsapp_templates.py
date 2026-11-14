@@ -71,7 +71,8 @@ def _meta(spec, status="APPROVED", **overrides):
         "language": spec.language,
         "status": status,
         "category": spec.category,
-        "components": [{"type": "BODY", "text": meta_body(spec)}],
+        # What Meta holds once it has taken the submitted payload.
+        "components": submit.build_payload(spec)["components"],
         **overrides,
     }
 
@@ -235,7 +236,9 @@ def test_payload_has_a_sample_for_every_variable_and_sequential_numbers(spec):
     assert payload["name"] == spec.meta_name
     assert payload["language"] == "he"
     assert payload["category"] == "UTILITY"
-    assert len(payload["components"]) == 1
+    body, *buttons = payload["components"]
+    assert body["type"] == "BODY"
+    assert len(buttons) == (1 if spec.buttons else 0)
     body = payload["components"][0]
     numbers = [int(n) for n in re.findall(r"\{\{(\d+)\}\}", body["text"])]
     assert numbers == list(range(1, len(spec.params) + 1))
@@ -311,6 +314,104 @@ def test_status_notices_a_body_that_changed_after_approval():
     meta = _meta(spec, status="PENDING", components=[{"type": "BODY", "text": "אחר"}])
 
     assert any("body differs" in x for x in submit.drift([spec], [meta]))
+
+
+BUTTONED = [spec for spec in submit.to_submit() if spec.buttons]
+
+
+@pytest.mark.parametrize("spec", BUTTONED, ids=lambda s: s.key)
+def test_the_payload_submits_the_labels_in_order_as_quick_replies_after_the_body(spec):
+    body, buttons = submit.build_payload(spec)["components"]
+
+    assert body["type"] == "BODY"
+    assert buttons == {
+        "type": "BUTTONS",
+        "buttons": [{"type": "QUICK_REPLY", "text": b.label} for b in spec.buttons],
+    }
+    # The payload is per send, not part of the submission.
+    assert not any(
+        b.payload in str(buttons) for b in spec.buttons if b.payload != b.label
+    )
+
+
+def test_the_dry_run_prints_each_button_with_what_a_tap_sends(capsys):
+    assert submit.main([], client=FakeGraph().client()) == 0
+
+    out = capsys.readouterr().out
+    for spec in BUTTONED:
+        for button in spec.buttons:
+            assert f"button: {button.label!r} -> sends {button.payload!r}" in out
+
+
+@pytest.mark.parametrize(
+    "flag", [[], ["--apply", "--waba-id", LIVE_WABA, "--confirm-name", "Proli"]]
+)
+def test_a_button_meta_would_refuse_stops_the_run_before_any_call(
+    monkeypatch, capsys, flag
+):
+    spec = TEMPLATES["lead_offer"]
+    bad = dataclasses.replace(
+        spec,
+        buttons=(
+            dataclasses.replace(spec.buttons[0], label="אשר, תודה"),
+            spec.buttons[1],
+        ),
+    )
+    monkeypatch.setattr(submit, "TEMPLATES", {**TEMPLATES, spec.key: bad})
+    graph = FakeGraph()
+
+    assert submit.main(flag, client=graph.client()) == 1
+
+    assert graph.requests == []
+    err = capsys.readouterr().err
+    assert "bodies or buttons" in err
+    assert spec.meta_name in err
+
+
+def test_status_reports_no_drift_when_meta_holds_the_same_buttons():
+    specs = BUTTONED
+
+    assert submit.drift(specs, [_meta(spec, status="PENDING") for spec in specs]) == []
+
+
+@pytest.mark.parametrize(
+    "meta_buttons",
+    [
+        None,  # Meta has no BUTTONS component at all
+        ["אשר"],  # one missing
+        ["דחה", "אשר"],  # reordered
+        ["אשר", "דחה", "אחר"],  # one added
+    ],
+    ids=["none", "missing", "reordered", "added"],
+)
+def test_status_notices_buttons_that_differ_from_the_registry(meta_buttons):
+    spec = TEMPLATES["lead_offer"]
+    components = [submit.build_payload(spec)["components"][0]]
+    if meta_buttons is not None:
+        components.append(
+            {
+                "type": "BUTTONS",
+                "buttons": [{"type": "QUICK_REPLY", "text": t} for t in meta_buttons],
+            }
+        )
+
+    lines = submit.drift([spec], [_meta(spec, status="PENDING", components=components)])
+
+    assert len(lines) == 1
+    assert lines[0].startswith(f"{spec.meta_name}: buttons differ from the registry")
+
+
+def test_the_buttons_drift_line_says_what_to_do_about_it():
+    """A mismatch is not cosmetic: every send of the template would be refused,
+    so the line names the remedy as well as the problem."""
+    spec = TEMPLATES["lead_offer"]
+    components = [submit.build_payload(spec)["components"][0]]
+
+    (line,) = submit.drift(
+        [spec], [_meta(spec, status="PENDING", components=components)]
+    )
+
+    assert "resubmit" in line
 
 
 def test_status_exits_nonzero_on_drift(capsys):

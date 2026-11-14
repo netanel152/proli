@@ -99,7 +99,7 @@ Read each file below in full. Check every listed claim against Phase 1 ground tr
 | Section | What to check |
 |---------|---------------|
 | Endpoint list | Every route from Phase 1.4 has a section; no extra routes listed |
-| Supported webhook message types | Does not list `buttonsResponseMessage` (removed — menus are text-only, see CLAUDE.md) |
+| Supported webhook message types | Does not list `buttonsResponseMessage` (the retired vendor's shape). An inbound `button` — a tap on a template quick reply, PRO-230 — is normalized by `cloud_api.normalize_meta_message` and *is* supported |
 | Health check response JSON | Field names match actual `health.py` response structure |
 
 ### `docs/MANUAL_TEST_PLAN.md`

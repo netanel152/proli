@@ -9,9 +9,9 @@ automatically when a matching file is read — see the index at the bottom) and 
 
 ## CRITICAL: text-only menus, and the single outbound egress
 
-**Every WhatsApp menu must stay text-based** (numeric or keyword replies). Example: instead of Approve/Reject buttons, send `"Reply '1' to approve, '2' to reject."`
+**Every WhatsApp menu must stay text-based** (numeric or keyword replies). Example: `"Reply '1' to approve, '2' to reject."` The one exception, by owner decision 2026-11-14: a **template** may carry quick-reply buttons (`TemplateSpec.buttons`), and they must mirror the keywords its body advertises (`template_registry.button_rule_violations` enforces the parity), so a tap and the typed reply reach the same handler.
 
-The original reason was a limitation of the legacy WhatsApp vendor. That vendor is gone (PRO-85 — instance deleted, tariff cancelled), and the rule now rests on a different footing: `WhatsAppProvider.send_interactive` exists on the ABC and the PRO-89 `CloudAPIProvider` transport can send it, but **nothing in any flow may call it** — no template is approved yet (PRO-150 owns template approval; `scripts/submit_whatsapp_templates.py` submits them and reports their status) and the owner decided on 2026-11-06 that the pilot runs on text menus and buttons come after it (PRO-103). The legacy-vendor-shaped `send_interactive_buttons` helper was removed in April 2026 and stays removed.
+`WhatsAppProvider.send_interactive` exists on the ABC and the PRO-89 `CloudAPIProvider` transport can send it, but **nothing in any flow may call it** — a free-form interactive send waits for PRO-104/PRO-105 (PRO-150 owns template approval; `scripts/submit_whatsapp_templates.py` submits templates and reports their status). The legacy-vendor-shaped `send_interactive_buttons` helper was removed in April 2026 and stays removed.
 
 **All outbound traffic goes through `app/providers/whatsapp/` (PRO-86).** Never build a provider directly, never call an HTTP client at a vendor endpoint — both bypass the circuit breaker and the operator kill switch, which is precisely what caused the yellowCard incident. Synchronous callers (the Streamlit admin panel) use `app.providers.whatsapp.sync.send_text_sync`.
 

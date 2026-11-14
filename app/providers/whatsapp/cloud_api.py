@@ -314,10 +314,11 @@ class CloudAPIProvider(WhatsAppProvider):
             "name": spec.meta_name,
             "language": {"code": spec.language},
         }
+        components: list[dict[str, Any]] = []
         if spec.params:
             # Positional body variables, in the order the spec declares for the
             # template's {{1}}..{{n}}.
-            template["components"] = [
+            components.append(
                 {
                     "type": "body",
                     "parameters": [
@@ -330,7 +331,21 @@ class CloudAPIProvider(WhatsAppProvider):
                         for name in spec.params
                     ],
                 }
-            ]
+            )
+        # PRO-230: a quick-reply button's label was submitted with the template;
+        # what a tap sends back is set here, one component per button, by its
+        # position. `normalize_meta_message` reads it back as the message text.
+        for index, button in enumerate(spec.buttons):
+            components.append(
+                {
+                    "type": "button",
+                    "sub_type": "quick_reply",
+                    "index": str(index),
+                    "parameters": [{"type": "payload", "payload": button.payload}],
+                }
+            )
+        if components:
+            template["components"] = components
         return await self._post_message(
             chat_id, {"type": "template", "template": template}, "template"
         )
@@ -626,10 +641,17 @@ def normalize_meta_message(
         reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
         text = reply.get("id") or ""
     elif message_type == "button":
-        # Template quick-reply. The payload is what the template author set —
-        # our templates use the numeric ids for the same FSM-parity reason.
+        # Template quick-reply (PRO-230). The payload is what `send_template`
+        # attached: a pro keyword, or the digit of a customer menu — in both
+        # cases the exact string the flow accepts when typed. A send that
+        # carried no button parameters (WhatsApp Manager's test send) arrives
+        # with only the label, so map a known label back to its payload rather
+        # than routing words no handler reads.
         button = message.get("button") or {}
-        text = button.get("payload") or button.get("text") or ""
+        label = button.get("text") or ""
+        text = button.get("payload") or ""
+        if not text or text == label:
+            text = template_registry.payload_for_label(label) or text or label
     elif message_type == "location":
         location = message.get("location") or {}
         parts = []

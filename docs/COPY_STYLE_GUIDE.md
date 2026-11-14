@@ -44,7 +44,8 @@ everywhere.
 ## 3. Menus — one format
 
 Text-only menus are a hard product rule (see `CLAUDE.md`; nothing calls
-`send_interactive`). On top of that, **one visual format** replaces the five styles in
+`send_interactive`). The one exception is a template's quick-reply buttons
+(2026-11-14), which mirror the keywords its body advertises. On top of that, **one visual format** replaces the five styles in
 the current catalog:
 
 ```

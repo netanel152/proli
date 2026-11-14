@@ -11,6 +11,7 @@ This is what the offline test suite and the PRO-83 E2E harness run against.
 from typing import Any
 
 from app.core.logger import logger
+from app.providers.whatsapp import template_registry
 from app.providers.whatsapp.base import NormalizedMessage, WhatsAppProvider
 
 
@@ -58,6 +59,33 @@ class DryRunProvider(WhatsAppProvider):
     ) -> dict[str, Any] | None:
         return self._record(
             "template", chat_id, template_name=template_name, params=params or {}
+        )
+
+    async def send_business_initiated(
+        self,
+        chat_id: str,
+        text: str,
+        template_key: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """The text, as every provider with no window sends it, plus what the
+        template would have carried.
+
+        Still a ``text`` entry, so nothing that reads the log changes. PRO-230
+        adds ``template_key`` and ``template_buttons`` — the quick replies that
+        template *would* carry, whatever its status, so the harness can assert
+        them while every template is still a draft. Named for the template and
+        not the send on purpose: on an open window Cloud sends plain text, and
+        the recipient of this very send sees no buttons at all.
+        """
+        spec = template_registry.TEMPLATES.get(template_key)
+        buttons = [(b.label, b.payload) for b in spec.buttons] if spec else []
+        return self._record(
+            "text",
+            chat_id,
+            text=text,
+            template_key=template_key,
+            template_buttons=buttons,
         )
 
     async def send_interactive(
