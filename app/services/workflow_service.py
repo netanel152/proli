@@ -59,6 +59,7 @@ from app.services.data_management_service import (  # noqa: F401
 from app.services.customer_flow import (  # noqa: F401
     send_customer_completion_check as _send_completion_check,
     handle_customer_completion_text as _handle_completion,
+    handle_reassign_offer_reply,
     handle_customer_rating_text,
     handle_customer_review_comment,
     handle_reschedule_selection as _handle_reschedule_selection,

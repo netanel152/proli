@@ -1091,19 +1091,53 @@ async def check_pro_approval_sla():
                         "status": LeadStatus.NEW,
                         "reassign_offered": {"$ne": True},
                     },
-                    {"$set": {"reassign_offered": True}},
+                    {
+                        "$set": {
+                            "reassign_offered": True,
+                            # PRO-238: what the customer's 1/2 answers, and for
+                            # how long — read by handle_reassign_offer_reply.
+                            "reassign_offered_at": now,
+                            "reassign_offered_pro_id": lead.get("pro_id"),
+                        }
+                    },
                 )
                 if claimed.modified_count == 1:
-                    await whatsapp.send_message(
+                    sent = await whatsapp.send_message(
                         chat_id,
                         Messages.Customer.REASSIGN_OFFER,
                         template_key="reassign_offer",
                     )
-                    logger.info(
-                        f"⏰ [Approval SLA] Offered reassignment to ...{chat_id[-8:]} "
-                        f"after ~{waited_min:.0f}m."
-                    )
-                continue  # don't also nudge on the same tick
+                    if sent is None:
+                        # PRO-238: nothing went out, so no question is open.
+                        # Release the claim (gated on this tick's stamp) and
+                        # let the next in-hours tick offer again.
+                        await leads_collection.update_one(
+                            {"_id": lead["_id"], "reassign_offered_at": now},
+                            {
+                                "$set": {"reassign_offered": False},
+                                "$unset": {
+                                    "reassign_offered_at": "",
+                                    "reassign_offered_pro_id": "",
+                                },
+                            },
+                        )
+                        logger.warning(
+                            f"⏰ [Approval SLA] Reassignment offer to "
+                            f"...{chat_id[-8:]} did not go out — claim released."
+                        )
+                        # Fall through to the pro nudge: it goes to a different
+                        # recipient, whose window may well be open, and has its
+                        # own atomic claim. Withholding it because the customer
+                        # is unreachable would leave the silent pro un-nudged
+                        # for as long as the block lasts.
+                    else:
+                        logger.info(
+                            f"⏰ [Approval SLA] Offered reassignment to "
+                            f"...{chat_id[-8:]} after ~{waited_min:.0f}m."
+                        )
+                        continue  # don't also nudge on the same tick
+                else:
+                    continue  # another tick owns this offer
 
             # T+nudge: nudge the silent pro (once) — same atomic-claim pattern.
             if waited_min >= nudge_after and not lead.get("approval_nudged"):

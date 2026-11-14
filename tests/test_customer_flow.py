@@ -15,6 +15,7 @@ from app.services import monitor_service
 from app.services.customer_flow import (
     send_customer_completion_check,
     handle_customer_completion_text,
+    handle_reassign_offer_reply,
     handle_customer_rating_text,
     handle_customer_review_comment,
     handle_status_query,
@@ -687,7 +688,7 @@ async def test_handle_completion_survives_pro_notification_window_closed(
 
 @pytest.mark.asyncio
 async def test_handle_completion_numeric_yes(flow_db, mock_whatsapp):
-    """Reply '1' triggers completion."""
+    """Reply '1' triggers completion once the completion check was sent (PRO-238)."""
     pro_id = ObjectId()
     await flow_db.users.insert_one(
         {"_id": pro_id, "business_name": "Test", "phone_number": "972500000001"}
@@ -701,6 +702,7 @@ async def test_handle_completion_numeric_yes(flow_db, mock_whatsapp):
             "status": LeadStatus.BOOKED,
             "pro_id": pro_id,
             "created_at": datetime.now(timezone.utc),
+            "completion_check_sent_at": datetime.now(timezone.utc),
         }
     )
 
@@ -708,6 +710,26 @@ async def test_handle_completion_numeric_yes(flow_db, mock_whatsapp):
         "972501111112@c.us", "1", mock_whatsapp
     )
     assert result is not None
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["status"] == LeadStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+async def test_handle_completion_bare_one_without_a_completion_check_changes_nothing(
+    flow_db, mock_whatsapp
+):
+    """PRO-238: nobody asked "did the job finish?", so a bare '1' is an answer to
+    some other menu and must not close the job or tell the pro it was closed."""
+    chat_id = "972501111114@c.us"
+    lead_id = await _seed_booked_lead(flow_db, chat_id)
+
+    result = await handle_customer_completion_text(chat_id, "1", mock_whatsapp)
+
+    assert result is None
+    lead = await flow_db.leads.find_one({"_id": lead_id})
+    assert lead["status"] == LeadStatus.BOOKED
+    assert not lead.get("waiting_for_rating")
+    mock_whatsapp.send_message.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -866,6 +888,8 @@ async def test_completion_text_one_completes_booked_when_rating_prompt_expired(
             "status": LeadStatus.BOOKED,
             "pro_id": pro_id,
             "created_at": datetime.now(timezone.utc),
+            # PRO-238: a bare "1" completes only a job whose check was sent.
+            "completion_check_sent_at": datetime.now(timezone.utc),
         }
     )
     expired = datetime.now(timezone.utc) - timedelta(
@@ -890,6 +914,307 @@ async def test_completion_text_one_completes_booked_when_rating_prompt_expired(
     assert completion_result is not None
     booked_lead = await flow_db.leads.find_one({"_id": booked_lead_id})
     assert booked_lead["status"] == LeadStatus.COMPLETED
+
+
+# --- PRO-238: handle_reassign_offer_reply ----------------------------------
+# The PRO-56 reassign offer asks "1 — find another pro / 2 — keep waiting". Its
+# answer used to be read only while the customer sat in AWAITING_PRO_APPROVAL, so
+# a late "1" (after the pro approved) fell through to the completion check and
+# closed the job. The answer is now tied to the offer stamped on the lead.
+# The end-to-end repro lives in tests/e2e/test_e2e_reassign_offer_reply.py.
+
+_REASSIGN_OFFER_MAX_AGE = WorkerConstants.REASSIGN_OFFER_REPLY_MAX_AGE_HOURS
+
+
+async def _seed_offered_lead(
+    db, chat_id, *, stamped=True, offered_ago=timedelta(minutes=5), **extra
+):
+    """A lead the customer was offered a reassignment for, still with that pro."""
+    now = datetime.now(timezone.utc)
+    pro_id = ObjectId()
+    lead = {
+        "_id": ObjectId(),
+        "chat_id": chat_id,
+        "status": LeadStatus.NEW,
+        "pro_id": pro_id,
+        "reassign_offered": True,
+        "approval_nudged": True,
+        "pro_notified_at": now - timedelta(minutes=30),
+        "created_at": now - timedelta(hours=1),
+    }
+    if stamped:
+        lead["reassign_offered_at"] = now - offered_ago
+        lead["reassign_offered_pro_id"] = pro_id
+    lead.update(extra)
+    await db.leads.insert_one(lead)
+    return lead
+
+
+@pytest.fixture
+def reassign_spy(monkeypatch):
+    spy = AsyncMock(return_value=True)
+    monkeypatch.setattr(monitor_service, "reassign_lead", spy)
+    return spy
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stamped", [True, False], ids=["stamped", "legacy-offer"])
+async def test_reassign_reply_one_on_open_offer_reassigns_and_stays_silent(
+    flow_db, mock_whatsapp, reassign_spy, stamped
+):
+    """ "1" on the live offer hands the lead to reassign_lead, which announces itself,
+    so the handler returns "" (handled, nothing more to send). An offer sent before
+    the stamp existed (still NEW, still flagged) is answerable exactly as before."""
+    # One chat per case: `flow_db` is shared across the module, and a stamped
+    # offer left by the other case would (rightly) win over a legacy one.
+    chat_id = "972503333301@c.us" if stamped else "972503333300@c.us"
+    lead = await _seed_offered_lead(flow_db, chat_id, stamped=stamped)
+
+    result = await handle_reassign_offer_reply(chat_id, "1", mock_whatsapp)
+
+    assert result == ""
+    reassign_spy.assert_awaited_once()
+    assert reassign_spy.await_args.args[0]["_id"] == lead["_id"]
+
+
+@pytest.mark.asyncio
+async def test_reassign_reply_two_restarts_the_window_and_keeps_the_offer_stamp(
+    flow_db, mock_whatsapp, reassign_spy
+):
+    chat_id = "972503333302@c.us"
+    lead = await _seed_offered_lead(flow_db, chat_id)
+    before = await flow_db.leads.find_one({"_id": lead["_id"]})
+
+    result = await handle_reassign_offer_reply(chat_id, "2", mock_whatsapp)
+
+    assert result == Messages.Customer.REASSIGN_WAIT_ACK
+    reassign_spy.assert_not_awaited()
+    after = await flow_db.leads.find_one({"_id": lead["_id"]})
+    assert after["reassign_offered"] is False
+    assert after["approval_nudged"] is False
+    assert after["pro_notified_at"] > before["pro_notified_at"]
+    # Kept on purpose: a later digit still has to know which question it answers.
+    assert after["reassign_offered_at"] == before["reassign_offered_at"]
+    assert after["status"] == LeadStatus.NEW
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, pro_moved, expected",
+    [
+        (LeadStatus.BOOKED, False, Messages.Customer.REASSIGN_REPLY_PRO_APPROVED),
+        (LeadStatus.NEW, True, Messages.Customer.REASSIGN_REPLY_ALREADY_MOVED),
+        # Copy guide §7: one wording per state, so this reuses the status reply.
+        (
+            LeadStatus.PENDING_ADMIN_REVIEW,
+            False,
+            Messages.Customer.STILL_PENDING_REVIEW,
+        ),
+        (LeadStatus.COMPLETED, False, Messages.Customer.REASSIGN_REPLY_REQUEST_CLOSED),
+        (LeadStatus.CANCELLED, False, Messages.Customer.REASSIGN_REPLY_REQUEST_CLOSED),
+        (LeadStatus.CLOSED, False, Messages.Customer.REASSIGN_REPLY_REQUEST_CLOSED),
+        (LeadStatus.REJECTED, False, Messages.Customer.REASSIGN_REPLY_REQUEST_CLOSED),
+        # Not a state an offer can legitimately be answered from: not ours to reply.
+        (LeadStatus.CONTACTED, False, None),
+    ],
+)
+@pytest.mark.parametrize("digit", ["1", "2"])
+async def test_late_reassign_reply_says_what_is_true_now_and_changes_nothing(
+    flow_db, mock_whatsapp, reassign_spy, status, pro_moved, expected, digit
+):
+    chat_id = "972503333303@c.us"
+    extra = {"status": status}
+    if pro_moved:
+        extra["pro_id"] = ObjectId()  # reassigned since the offer was sent
+    lead = await _seed_offered_lead(flow_db, chat_id, **extra)
+    before = await flow_db.leads.find_one({"_id": lead["_id"]})
+
+    result = await handle_reassign_offer_reply(chat_id, digit, mock_whatsapp)
+
+    assert result == expected
+    reassign_spy.assert_not_awaited()
+    assert await flow_db.leads.find_one({"_id": lead["_id"]}) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "chat_id, moved_by, expected",
+    [
+        pytest.param(
+            "972503333309@c.us",
+            "another-pro",
+            Messages.Customer.REASSIGN_REPLY_ALREADY_MOVED,
+            id="handed-to-another-pro",
+        ),
+        pytest.param(
+            "972503333310@c.us",
+            "pro-approved",
+            Messages.Customer.REASSIGN_REPLY_PRO_APPROVED,
+            id="pro-approved",
+        ),
+    ],
+)
+async def test_reassign_reply_two_loses_the_race_and_answers_what_it_lost_to(
+    flow_db, mock_whatsapp, reassign_spy, monkeypatch, chat_id, moved_by, expected
+):
+    """The offer matches at read time, then the lead changes before the "2" write.
+    The write is pinned to the offered pro and status, so it must miss, write
+    nothing (the other pro's SLA clock is not restarted) and the customer is told
+    what actually happened — not a wait-ack for a pro they were never waiting on,
+    and not "moved to another pro" when the pro in fact approved."""
+    lead = await _seed_offered_lead(flow_db, chat_id)
+    new_pro_id = ObjectId()
+    change = (
+        {"pro_id": new_pro_id}
+        if moved_by == "another-pro"
+        else {"status": LeadStatus.BOOKED}
+    )
+    real = app.services.customer_flow.leads_collection
+
+    class _ChangesRightAfterTheRead:
+        def __getattr__(self, name):
+            return getattr(real, name)
+
+        async def find_one(self, *args, **kwargs):
+            doc = await real.find_one(*args, **kwargs)
+            # The healer / a parallel "1" / the pro's approval lands right after
+            # the read (idempotent, so the handler's later re-read sees it too).
+            await real.update_one({"_id": lead["_id"]}, {"$set": change})
+            return doc
+
+    before = await real.find_one({"_id": lead["_id"]})
+    monkeypatch.setattr(
+        app.services.customer_flow, "leads_collection", _ChangesRightAfterTheRead()
+    )
+
+    result = await handle_reassign_offer_reply(chat_id, "2", mock_whatsapp)
+
+    assert result == expected
+    reassign_spy.assert_not_awaited()
+    after = await real.find_one({"_id": lead["_id"]})
+    assert after["reassign_offered"] is True  # the "2" wrote nothing
+    assert after["approval_nudged"] is True
+    assert after["pro_notified_at"] == before["pro_notified_at"]
+
+
+@pytest.mark.asyncio
+async def test_reassign_reply_defers_when_the_offer_was_already_answered_wait(
+    flow_db, mock_whatsapp, reassign_spy
+):
+    """Same pro, offer flag already reset by an earlier "2": the digit is not a
+    fresh answer, so the soft hold's generic reply owns it."""
+    chat_id = "972503333304@c.us"
+    lead = await _seed_offered_lead(flow_db, chat_id, reassign_offered=False)
+
+    result = await handle_reassign_offer_reply(chat_id, "1", mock_whatsapp)
+
+    assert result is None
+    reassign_spy.assert_not_awaited()
+    after = await flow_db.leads.find_one({"_id": lead["_id"]})
+    assert after["status"] == LeadStatus.NEW
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("newer", ["completion_check", "rating_prompt", "new_request"])
+async def test_reassign_reply_yields_the_digit_to_a_question_asked_after_the_offer(
+    flow_db, mock_whatsapp, reassign_spy, newer
+):
+    chat_id = "972503333305@c.us"
+    now = datetime.now(timezone.utc)
+    if newer == "completion_check":
+        lead = await _seed_offered_lead(
+            flow_db,
+            chat_id,
+            status=LeadStatus.BOOKED,
+            completion_check_sent_at=now,
+        )
+    else:
+        lead = await _seed_offered_lead(flow_db, chat_id)
+    if newer == "rating_prompt":
+        await flow_db.leads.insert_one(
+            {
+                "_id": ObjectId(),
+                "chat_id": chat_id,
+                "status": LeadStatus.COMPLETED,
+                "waiting_for_rating": True,
+                "completed_at": now,
+                "created_at": now - timedelta(hours=2),
+            }
+        )
+    if newer == "new_request":
+        await flow_db.leads.insert_one(
+            {
+                "_id": ObjectId(),
+                "chat_id": chat_id,
+                "status": LeadStatus.CONTACTED,
+                "created_at": now,
+            }
+        )
+    before = await flow_db.leads.find_one({"_id": lead["_id"]})
+
+    result = await handle_reassign_offer_reply(chat_id, "1", mock_whatsapp)
+
+    assert result is None
+    reassign_spy.assert_not_awaited()
+    assert await flow_db.leads.find_one({"_id": lead["_id"]}) == before
+
+
+@pytest.mark.asyncio
+async def test_bare_one_completes_the_job_when_the_completion_check_followed_the_offer(
+    flow_db, mock_whatsapp, reassign_spy
+):
+    """The offer was sent, the pro approved, then the completion check went out:
+    the next "1" answers the newer question and still completes the job."""
+    chat_id = "972503333306@c.us"
+    now = datetime.now(timezone.utc)
+    lead = await _seed_offered_lead(
+        flow_db, chat_id, status=LeadStatus.BOOKED, completion_check_sent_at=now
+    )
+    await flow_db.users.insert_one(
+        {
+            "_id": lead["pro_id"],
+            "business_name": "אבי אינסטלציה",
+            "phone_number": "972500000038",
+        }
+    )
+
+    assert await handle_reassign_offer_reply(chat_id, "1", mock_whatsapp) is None
+    result = await handle_customer_completion_text(chat_id, "1", mock_whatsapp)
+
+    assert result is not None
+    updated = await flow_db.leads.find_one({"_id": lead["_id"]})
+    assert updated["status"] == LeadStatus.COMPLETED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hours_ago, still_answerable",
+    [(_REASSIGN_OFFER_MAX_AGE - 1, True), (_REASSIGN_OFFER_MAX_AGE + 1, False)],
+    ids=["inside-window", "past-window"],
+)
+async def test_reassign_offer_stops_claiming_the_digit_after_its_max_age(
+    flow_db, mock_whatsapp, reassign_spy, hours_ago, still_answerable
+):
+    chat_id = "972503333307@c.us"
+    await _seed_offered_lead(flow_db, chat_id, offered_ago=timedelta(hours=hours_ago))
+
+    result = await handle_reassign_offer_reply(chat_id, "1", mock_whatsapp)
+
+    assert (result == "") is still_answerable
+    assert (result is None) is not still_answerable
+    assert reassign_spy.await_count == (1 if still_answerable else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["3", "כן", "12", ""])
+async def test_reassign_reply_ignores_anything_but_a_bare_one_or_two(
+    flow_db, mock_whatsapp, reassign_spy, text
+):
+    chat_id = "972503333308@c.us"
+    await _seed_offered_lead(flow_db, chat_id)
+
+    assert await handle_reassign_offer_reply(chat_id, text, mock_whatsapp) is None
+    reassign_spy.assert_not_awaited()
 
 
 # --- parse_rating (pure) ---------------------------------------------------
