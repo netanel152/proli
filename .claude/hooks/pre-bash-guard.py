@@ -32,13 +32,33 @@ def target_dir(command, default_cwd=None):
     """
     match = re.search(r"\bgit\s+(?:-c\s+\S+\s+)*-C\s+(\"[^\"]+\"|'[^']+'|\S+)", command)
     if match:
-        return match.group(1).strip("\"'")
+        return _anchored(match.group(1), default_cwd)
 
     match = re.search(r"^\s*cd\s+(\"[^\"]+\"|'[^']+'|\S+)\s*&&", command)
     if match:
-        return match.group(1).strip("\"'")
+        return _anchored(match.group(1), default_cwd)
 
     return default_cwd
+
+
+def _anchored(value, default_cwd):
+    """``value`` from the command, read from the *session's* cwd when relative.
+
+    The hook process's own directory is not the session's, and nothing says it
+    has to be: in CI it is the checkout, which on a push to ``dev`` sits on
+    ``dev``. ``cd . && git commit`` then resolved to that checkout and the
+    protected-branch guard refused a subagent's commit in its own worktree —
+    green on every PR, where the runner builds a detached merge ref, and red the
+    moment the branch was pushed. A path this cannot anchor stays as it is and
+    fails to resolve later, which reads as "unknown branch, allow".
+
+    Still pure. A Windows path is absolute without ``os.path.isabs`` agreeing on
+    POSIX, so it is named: joining a cwd onto ``D:/x`` would invent a directory.
+    """
+    path = _native_path(os.path.expanduser(_unquote(value)))
+    if not default_cwd or os.path.isabs(path) or re.match(r"^[A-Za-z]:", path):
+        return path
+    return os.path.join(default_cwd, path)
 
 
 # `gh pr create` with no --base opens against the repository's default branch,
@@ -196,9 +216,7 @@ def evaluate(command, branch, behind_base=None):
     # is the release branch that Railway deploys — neither takes direct commits.
     # `master`/`main` stay listed so the guard keeps working in clones that have
     # not yet renamed, and for any other repo this hook is copied into.
-    if branch in PROTECTED_BRANCHES and re.search(
-        r"git\s+(?:-\S+\s+|-c\s+\S+\s+|-C\s+\S+\s+)*(commit|push)\b", command
-    ):
+    if branch in PROTECTED_BRANCHES and _PROTECTED_COMMIT_PUSH.search(command):
         return (
             2,
             f"BLOCKED: refusing 'git commit' / 'git push' while on '{branch}'. "
@@ -282,6 +300,13 @@ _GIT_OPTION = (
     rf"|(?!-[cC]|{_VALUED_FLAG}[=\s])-\S+\s+)"
 )
 _GIT_HEAD = rf"""(?<![\w.-])git(?:\.exe)?["']?\s+(?:{_GIT_OPTION})*["']?"""
+# `evaluate`'s protected-branch guard, under the same non-overlap rule and for
+# the same reason. Its own three alternatives (`-\S+`, `-c \S+`, `-C \S+`) each
+# matched a bare `-c`, so a run of them could be split exponentially many ways
+# and 200 of them ran for minutes. It is only reached when the branch *is*
+# protected, so every PR run passed it — a PR builds a detached merge ref, where
+# the branch reads as unknown — and the first push to `dev` timed the hook out.
+_PROTECTED_COMMIT_PUSH = re.compile(rf"git\s+(?:{_GIT_OPTION})*(?:commit|push)\b")
 _WORKTREE_WIDE = r"""worktree["']?\s+(?:-\S+\s+)*["']?(?:remove|move|prune)(?![\w-])"""
 # Anywhere in the text, not just in command position: `env git stash`,
 # `FOO=1 git stash`, `sh -c "git stash"`, `{ git stash; }` and backticks all run
