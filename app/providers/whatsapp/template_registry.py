@@ -26,6 +26,12 @@ Three lookups, three callers:
 * ``freeform_fallback(kind)`` — the window-closed path for a free-form send that
   named no template. Returns ``None`` for everything, which routes the failure
   to an operator page instead.
+
+PRO-230: a template whose body advertises a reply (`*אשר* — …`) also carries it
+as a quick-reply button. The label is submitted with the template; the payload
+goes with each send and is exactly the string the flow accepts when typed, so a
+tap and a typed reply reach the same handler. The keyword lines stay in the
+body, so typing keeps working on a client that shows no buttons.
 """
 
 import re
@@ -48,11 +54,34 @@ _LONG_SPACE_RUN = re.compile(r" {4,}")
 # these are ours, chosen to fit the largest body inside that limit.
 _PARAM_MAX_CHARS = {"last_message": 700}
 _PARAM_DEFAULT_MAX_CHARS = 120
+# Quick-reply buttons, from Meta's docs read 2026-11-15:
+# templates/components/ — "Templates are limited to 10 quick reply buttons",
+# label "25 characters maximum"; templates/utility-templates/ — quick-reply is a
+# supported button type on a UTILITY template, label "Maximum 25 characters.
+# Alphanumeric characters only." Letters (any script), digits and single spaces.
+_MAX_QUICK_REPLIES = 10
+_BUTTON_LABEL_MAX_CHARS = 25
+# Matched with `fullmatch`: `$` would also match before a trailing newline.
+_BUTTON_LABEL = re.compile(r"[^\W_]+(?: [^\W_]+)*")
+# What a body advertises: the menu format, `*token* — text`, one per line. A
+# bold label ends in a colon instead, so it is not a reply, and a token
+# cannot span lines. An option offered mid-sentence rather than as a menu
+# line (RATE_SERVICE's 1-5 and *דלג*) is deliberately not one either: it
+# gets no button, and the parity rule below is satisfied by having none.
+_ADVERTISED_REPLY = re.compile(r"^\*([^*:\n]+)\* —", flags=re.M)
 
 
 class TemplateStatus(str, Enum):
     DRAFT = "draft"  # designed in PRO-88, not yet submitted/approved
     APPROVED = "approved"  # cleared Meta review — sendable
+
+
+@dataclass(frozen=True)
+class QuickReply:
+    """One quick-reply button: what it says, and what a tap sends back."""
+
+    label: str  # submitted with the template; a `Messages.Templates.Buttons` constant
+    payload: str  # sent with each message; the reply the flow already accepts typed
 
 
 @dataclass(frozen=True)
@@ -74,6 +103,20 @@ class TemplateSpec:
     category: str = "UTILITY"
     # False keeps an entry out of scripts/submit_whatsapp_templates.py.
     submit: bool = True
+    # PRO-230: one per reply the body advertises, in the body's order.
+    buttons: tuple[QuickReply, ...] = ()
+
+
+_B = Messages.Templates.Buttons
+_K = Messages.Keywords
+# Pro templates send the keyword, never a bare digit: a digit is a pick from a
+# numbered list, and outside one it opens the list rather than acting (PRO-212).
+_APPROVE_OR_REJECT = (
+    QuickReply(_B.APPROVE, _K.APPROVE_COMMANDS[0]),
+    QuickReply(_B.REJECT, _K.REJECT_COMMANDS[0]),
+)
+_FINISHED = QuickReply(_B.FINISHED, _K.FINISH_COMMANDS[0])
+_HUMAN = QuickReply(_B.HUMAN, _K.SOS_COMMANDS[0])
 
 
 # Keyed by logical name: the catalog rows that survived the consolidation pass,
@@ -99,6 +142,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
                 "price_estimate",
                 "urgency",
             ),
+            buttons=_APPROVE_OR_REJECT,
         ),  # P1, and P3 for an emergency: this body is the one that can say so
         TemplateSpec(
             "lead_offer_reassigned",
@@ -111,6 +155,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
                 "issue_type",
                 "appointment_time",
             ),
+            buttons=_APPROVE_OR_REJECT,
         ),  # P3
         # P4 sends an image when it has one, which needs a media template, and it
         # is not load-bearing. The owner decided not to submit it; its free-form
@@ -127,6 +172,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
             source="Messages.Pro.APPROVAL_NUDGE",
             body=Messages.Templates.APPROVAL_NUDGE,
             params=("issue_type", "minutes"),
+            buttons=_APPROVE_OR_REJECT,
         ),  # P5
         TemplateSpec(
             "daily_agenda",
@@ -134,6 +180,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
             source="Messages.Pro.DAILY_AGENDA_HEADER",
             body=Messages.Templates.DAILY_AGENDA,
             params=("pro_name", "date", "job_count"),
+            buttons=(QuickReply(_B.ACTIVE_JOBS, _K.ACTIVE_JOBS_COMMANDS[0]),),
         ),  # P6
         TemplateSpec(
             "stale_lead_reminder",
@@ -141,12 +188,17 @@ TEMPLATES: dict[str, TemplateSpec] = {
             source="Messages.Pro.STALE_LEAD_REMINDER",
             body=Messages.Templates.STALE_LEAD_REMINDER,
             params=("pro_name", "customer_name"),
+            buttons=(_FINISHED,),
         ),  # P7
         TemplateSpec(
             "finish_reminder",
             "proli_finish_reminder",
             source="Messages.Pro.REMINDER",
             body=Messages.Templates.FINISH_REMINDER,
+            buttons=(
+                _FINISHED,
+                QuickReply(_B.STILL_WORKING, _K.STILL_WORKING_COMMANDS[0]),
+            ),
         ),  # P8
         TemplateSpec(
             "pro_lost_lead",
@@ -174,6 +226,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
             "proli_sos_alert_pending",
             source="Messages.SOS.PRO_ALERT_PENDING",
             body=Messages.Templates.SOS_ALERT_PENDING,
+            buttons=_APPROVE_OR_REJECT,
         ),  # P11, lead NEW: no phone (PRO-59) and no customer text (PRO-212)
         TemplateSpec(
             "customer_cancelled",
@@ -222,6 +275,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
             source="Messages.SOS.NO_PRO_AVAILABLE",
             body=Messages.Templates.NO_PRO_AVAILABLE,
             params=("issue_type",),
+            buttons=(_HUMAN,),
         ),  # C1
         TemplateSpec(
             "completion_check",
@@ -229,6 +283,11 @@ TEMPLATES: dict[str, TemplateSpec] = {
             source="Messages.Customer.COMPLETION_CHECK",
             body=Messages.Templates.COMPLETION_CHECK,
             params=("pro_name",),
+            buttons=(
+                QuickReply(_B.JOB_DONE, "1"),
+                QuickReply(_B.NOT_YET, "2"),
+                QuickReply(_B.PRO_NO_SHOW, "3"),
+            ),
         ),  # C2
         TemplateSpec(
             "reassigning",
@@ -287,6 +346,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
             "proli_pro_cancelled_booking",
             source="Messages.Customer.PRO_CANCELLED_BOOKING",
             body=Messages.Templates.PRO_CANCELLED_BOOKING,
+            buttons=(_HUMAN,),
         ),
         TemplateSpec(
             "rate_service",
@@ -300,6 +360,10 @@ TEMPLATES: dict[str, TemplateSpec] = {
             "proli_reassign_offer",
             source="Messages.Customer.REASSIGN_OFFER",
             body=Messages.Templates.REASSIGN_OFFER,
+            buttons=(
+                QuickReply(_B.FIND_ANOTHER_PRO, "1"),
+                QuickReply(_B.KEEP_WAITING, "2"),
+            ),
         ),
         TemplateSpec(
             "awaiting_approval",
@@ -316,6 +380,19 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),
     )
 }
+
+
+def _payloads_by_label() -> dict[str, str]:
+    """Every unambiguous label → payload pair across the registry."""
+    pairs: dict[str, set[str]] = {}
+    for spec in TEMPLATES.values():
+        for button in spec.buttons:
+            pairs.setdefault(button.label, set()).add(button.payload)
+    return {
+        label: next(iter(payloads))
+        for label, payloads in pairs.items()
+        if len(payloads) == 1
+    }
 
 
 def resolve(key: str) -> TemplateSpec | None:
@@ -363,6 +440,70 @@ def meta_body(spec: TemplateSpec) -> str:
     for number, name in enumerate(spec.params, 1):
         body = body.replace("{" + name + "}", "{{" + str(number) + "}}")
     return body
+
+
+def advertised_replies(body: str) -> list[str]:
+    """The replies a body offers, in order: each `*token* —` menu line's token."""
+    return _ADVERTISED_REPLY.findall(body)
+
+
+def payload_for_label(label: str) -> str | None:
+    """The reply a quick-reply ``label`` stands for, or ``None``.
+
+    PRO-230: a tap normally arrives as the payload ``send_template`` attached.
+    A template sent *without* button parameters — WhatsApp Manager's own test
+    send, or any future caller that bypasses ``send_template`` — arrives
+    carrying the button's label instead, and two customer labels
+    (``REASSIGN_OFFER``'s) match no handler. This maps a label back, so a tap
+    is read as the digit or keyword it stands for however it arrived.
+
+    A label two templates disagree about is not resolvable and returns
+    ``None``; the message then reaches the dispatcher as the label's own words,
+    exactly as it did before this existed.
+
+    The map is registry-global rather than per-template, so a label-only tap is
+    read by its label whatever template it came from. That holds while a label
+    means one thing, which the parity rule in ``button_rule_violations`` keeps
+    true; the day two audiences share a label with different payloads, the
+    lookup degrades to ``None`` instead of guessing.
+
+    Built per call, not cached at import: the suite swaps ``TEMPLATES``
+    wholesale with ``monkeypatch.setattr``, and a map built at import would not
+    see it. Eleven entries, read only when a tap arrives without its payload.
+    """
+    return _payloads_by_label().get(label)
+
+
+def button_rule_violations(spec: TemplateSpec) -> list[str]:
+    """What Meta would refuse in ``spec``'s buttons, and where they and its body
+    disagree.
+
+    The limits are the ones above ``_MAX_QUICK_REPLIES``. The last rule is ours
+    (PRO-230): every reply the body advertises has a button and no button exists
+    without one, so a tap can never offer what typing could not.
+    """
+    problems = []
+    if len(spec.buttons) > _MAX_QUICK_REPLIES:
+        problems.append(f"more than {_MAX_QUICK_REPLIES} quick-reply buttons")
+    labels = [b.label for b in spec.buttons]
+    payloads = [b.payload for b in spec.buttons]
+    for label in labels:
+        if len(label) > _BUTTON_LABEL_MAX_CHARS:
+            problems.append(
+                f"button {label!r} is longer than {_BUTTON_LABEL_MAX_CHARS} characters"
+            )
+        if not _BUTTON_LABEL.fullmatch(label):
+            problems.append(f"button {label!r} is not letters, digits and spaces")
+    if len(set(labels)) != len(labels):
+        problems.append("two buttons share a label")
+    if len(set(payloads)) != len(payloads):
+        problems.append("two buttons share a payload")
+    if payloads != advertised_replies(spec.body):
+        problems.append(
+            f"buttons send {payloads} but the body advertises "
+            f"{advertised_replies(spec.body)}"
+        )
+    return problems
 
 
 def body_rule_violations(body: str, params: tuple[str, ...]) -> list[str]:

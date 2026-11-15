@@ -146,9 +146,10 @@ network, no Mongo and no Redis. New handlers follow the same shape.
 `"Reply '1' to approve, '2' to reject"` — never interactive buttons.
 `send_interactive` exists on the provider ABC and the PRO-89 `CloudAPIProvider`
 transport can send it, but nothing in any flow may call it: no template is
-approved yet (PRO-150 owns approval), and the owner decided on 2026-11-06 that
-the pilot runs on text menus and buttons come after it (PRO-103). This is a
-CLAUDE.md-level rule and reviewers enforce it.
+approved yet (PRO-150 owns approval), and a free-form interactive send waits for
+PRO-104/PRO-105. The one exception, by the owner's decision of 2026-11-14 (PRO-230):
+a template may carry quick-reply buttons mirroring the replies its body advertises.
+This is a CLAUDE.md-level rule and reviewers enforce it.
 
 **6. Every safety check states its failure direction.** Rate limiting fails
 open; the outbound egress fails closed. Neither is an accident, and neither
@@ -324,7 +325,8 @@ Rules:
 - No HTTP client at a vendor messaging endpoint anywhere in the repo.
 - `send_interactive` is defined on the ABC and MUST NOT be called from any
   flow — the PRO-89 transport exists, but no template is approved (PRO-150)
-  and buttons come after the pilot, by the owner's decision (PRO-103).
+  and a free-form interactive send waits for PRO-104/PRO-105. A template's
+  quick-reply buttons are allowed (2026-11-14, PRO-230).
 - Two CI guards enforce this mechanically (the "Guard" steps in
   `.github/workflows/tests.yml`): the build fails on any reference to the
   old vendor's domain **in code** — `*.md` is excluded, so prose may name the
@@ -482,8 +484,8 @@ await whatsapp.send_message(chat_id, Messages.Customer.PRO_ASSIGNED)
 - Placeholders use `str.format` names (`{pro_name}`), and the format call
   happens at the send site, where the values are.
 - **Every menu is text-only** — numbered or keyword replies, with the
-  options spelled out in the message itself. See Principle 5; there are no
-  exceptions pending PRO-88/89.
+  options spelled out in the message itself. See Principle 5; the only
+  exception is a template's quick-reply buttons, which mirror those options.
 - Messages are grouped by audience (`Customer`, `Pro`, `Admin`, `Errors`)
   and new ones join the right group rather than a new top-level.
 - RTL and emoji conventions follow the surrounding catalog; a message that

@@ -322,11 +322,55 @@ async def test_a_lost_template_does_not_use_up_the_window_page(
 async def test_approved_template_with_no_variables_sends_no_components(
     facade, graph, fake_redis, monkeypatch
 ):
+    _approve(monkeypatch, "customer_reported_no_show")  # no variables, no buttons
+
+    await facade.send_message(CHAT_ID, "טקסט", template_key="customer_reported_no_show")
+
+    assert "components" not in graph[0]["template"]
+
+
+@pytest.mark.asyncio
+async def test_a_template_with_buttons_but_no_variables_sends_only_the_buttons(
+    facade, graph, fake_redis, monkeypatch
+):
     _approve(monkeypatch, "finish_reminder")
+    spec = template_registry.TEMPLATES["finish_reminder"]
 
     await facade.send_message(CHAT_ID, "טקסט", template_key="finish_reminder")
 
-    assert "components" not in graph[0]["template"]
+    components = graph[0]["template"]["components"]
+    assert not [c for c in components if c["type"] == "body"]
+    assert [c["parameters"][0]["payload"] for c in components] == [
+        b.payload for b in spec.buttons
+    ]
+
+
+@pytest.mark.asyncio
+async def test_approved_lead_offer_sends_its_body_then_one_quick_reply_per_button(
+    facade, graph, pages, fake_redis, monkeypatch
+):
+    """A tap comes back as the payload, which is what the pro would have typed."""
+    _approve(monkeypatch)
+
+    await _send(facade)
+
+    body, *buttons = graph[0]["template"]["components"]
+    assert body["type"] == "body"
+    assert buttons == [
+        {
+            "type": "button",
+            "sub_type": "quick_reply",
+            "index": str(index),
+            "parameters": [{"type": "payload", "payload": payload}],
+        }
+        for index, payload in enumerate(
+            [
+                Messages.Keywords.APPROVE_COMMANDS[0],
+                Messages.Keywords.REJECT_COMMANDS[0],
+            ]
+        )
+    ]
+    assert pages.call_count == 0
 
 
 @pytest.mark.asyncio
@@ -394,6 +438,40 @@ async def test_dry_run_records_the_text_and_transmits_nothing(graph):
     assert result is not None
     assert [(e["kind"], e["text"]) for e in provider.sent] == [("text", "טקסט חופשי")]
     assert graph == []
+
+
+@pytest.mark.asyncio
+async def test_dry_run_records_the_buttons_its_draft_template_would_carry(
+    graph,
+):
+    provider = DryRunProvider()
+    spec = template_registry.TEMPLATES["completion_check"]
+    assert spec.status is TemplateStatus.DRAFT
+
+    await WhatsAppFacade(provider).send_message(
+        CHAT_ID, "מה שנשלח", template_key="completion_check", params={"pro_name": "דנה"}
+    )
+
+    (entry,) = provider.sent
+    assert entry["kind"] == "text"
+    assert entry["text"] == "מה שנשלח"
+    assert entry["template_key"] == "completion_check"
+    assert entry["template_buttons"] == [(b.label, b.payload) for b in spec.buttons]
+    assert len(entry["template_buttons"]) == 3
+    # The entry is a text send: it carried no buttons itself.
+    assert "buttons" not in entry
+    assert graph == []
+
+
+@pytest.mark.asyncio
+async def test_dry_run_records_no_template_buttons_for_an_unknown_key():
+    provider = DryRunProvider()
+
+    await provider.send_business_initiated(CHAT_ID, "טקסט", "no_such_template")
+
+    (entry,) = provider.sent
+    assert entry["kind"] == "text"
+    assert entry["template_buttons"] == []
 
 
 # ---------------------------------------------------------------------------
