@@ -144,6 +144,30 @@ def test_target_dir_ignores_a_cd_that_is_not_leading():
     assert guard.target_dir("git status && cd /elsewhere", "/session") == "/session"
 
 
+def test_target_dir_anchors_a_relative_cd_to_the_session_cwd():
+    # `cd .` is how an isolated subagent commits in its own worktree. Unanchored
+    # it resolved from the *hook process's* directory, which is the session's
+    # only by coincidence: on CI it is the checkout, and a push to `dev` leaves
+    # that on `dev`, so the protected-branch guard refused the commit (run #442).
+    assert (
+        guard.target_dir("cd . && git commit -m x", "/wt/agent-abc")
+        == "/wt/agent-abc/."
+    )
+
+
+def test_target_dir_anchors_a_relative_dash_c_to_the_session_cwd():
+    assert guard.target_dir("git -C ../main status", "/wt/agent-abc") == (
+        "/wt/agent-abc/../main"
+    )
+
+
+def test_target_dir_leaves_an_absolute_target_alone_in_either_path_flavour():
+    # A Windows path is absolute without `os.path.isabs` agreeing on POSIX, so
+    # anchoring it would invent a directory under the session's cwd.
+    assert guard.target_dir("cd /wt/pro-163 && git status", "/any") == "/wt/pro-163"
+    assert guard.target_dir("cd D:/wt/pro-163 && git status", "/any") == "D:/wt/pro-163"
+
+
 def test_target_dir_without_a_cwd_is_none():
     # No -C, no leading cd, no cwd in the payload — subprocess then falls back
     # to the hook process's own directory, which is the pre-existing behaviour.
@@ -303,3 +327,68 @@ def test_a_stale_branch_does_not_change_any_other_verdict():
     assert guard.evaluate("git status", "feature/x", behind_base=9) == (0, "")
     code, msg = guard.evaluate("git commit -m x", "dev", behind_base=9)
     assert code == 2 and "dev" in msg
+
+
+# --- The option run the protected-branch guard reads --------------------------
+#
+# Its three alternatives each matched a bare `-c`, so a run of them could be
+# split exponentially many ways and 200 of them ran for minutes. The guard is
+# only reached when the branch *is* protected, and until run #442 every CI run
+# read an unknown branch (a PR builds a detached merge ref), so nothing ever ran
+# it: the hook timed out on the first push to `dev`.
+#
+# Run in a child process, because the failure mode is a hang: in-process it
+# would hold the suite until the job's own 15-minute limit killed it.
+
+_OPTION_RUN_PROBE = """
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("g", sys.argv[1])
+g = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(g)
+for option in sys.argv[3:]:
+    for branch in g.PROTECTED_BRANCHES:
+        g.evaluate("git " + option * 200 + sys.argv[2], branch)
+"""
+
+
+def test_a_long_option_run_does_not_blow_up_the_protected_branch_guard():
+    import subprocess
+    import sys
+
+    options = [
+        "-c ",
+        "-c a=b ",
+        "-c=x ",
+        "-a ",
+        "--git-dir=x ",
+        "--git-dir x ",
+        "--work-tree=x ",
+        "-C x ",
+        "--namespace=x ",
+    ]
+    # `z` is not `commit` or `push`, so every split has to be tried before the
+    # match can fail — the shape that is exponential rather than merely long.
+    subprocess.run(
+        [sys.executable, "-c", _OPTION_RUN_PROBE, str(_HOOK_PATH), "z", *options],
+        capture_output=True,
+        timeout=20,
+        check=True,
+    )
+
+
+def test_the_protected_branch_guard_still_blocks_what_it_is_for():
+    """The non-overlapping option run must not have narrowed the rule."""
+    for command in (
+        "git commit -m x",
+        "git push",
+        "git push origin HEAD",
+        "git -c user.email=a@b commit -m x",
+        "git -cuser.email=a@b commit -m x",
+        "git -C /wt/x push origin HEAD",
+        "git --no-pager commit -m x",
+        "git --git-dir x commit -m x",
+        "git --git-dir=x commit -m x",
+    ):
+        assert guard.evaluate(command, "dev")[0] == 2, command
+    for command in ("git status", "git log --grep commit", "git merge origin/dev"):
+        assert guard.evaluate(command, "dev")[0] == 0, command

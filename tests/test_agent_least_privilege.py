@@ -381,6 +381,27 @@ def test_cd_without_a_space_cannot_escape_isolation(repos, command, cwd):
     assert result.returncode == 2, result.stderr
 
 
+@pytest.fixture(scope="module")
+def checkouts(tmp_path_factory):
+    """A checkout on a protected branch, and one on a feature branch.
+
+    Both are named rather than reusing ``_ROOT``, whose branch is whatever the
+    suite happens to be run from: on a PR that is a detached merge ref, and on a
+    push to ``dev`` it is ``dev``. Reading the guard's expensive path only by
+    coincidence is what let run #442 be the first to take it.
+    """
+    root = tmp_path_factory.mktemp("branches")
+    made = {}
+    for branch in ("feature/x", "dev"):
+        path = root / branch.replace("/", "-")
+        path.mkdir()
+        _git(path, "init", "-q", "-b", branch)
+        _git(path, "commit", "-q", "--allow-empty", "-m", "init")
+        made[branch] = path
+    return made
+
+
+@pytest.mark.parametrize("branch", ["feature/x", "dev"])
 @pytest.mark.parametrize(
     "option",
     [
@@ -395,15 +416,20 @@ def test_cd_without_a_space_cannot_escape_isolation(repos, command, cwd):
         "--namespace=x ",
     ],
 )
-def test_a_long_option_run_cannot_outlast_the_hook(option):
-    """The hook has 10s. Overlapping alternatives took over 40s on 26 `-c` options."""
+def test_a_long_option_run_cannot_outlast_the_hook(option, branch, checkouts):
+    """The hook has 10s. Overlapping alternatives took over 40s on 26 `-c` options.
+
+    Both branch kinds, because the protected-branch guard's own option run was
+    exponential too and is only reached when the branch *is* protected — so
+    every run of this test before #442 took the cheap path and passed.
+    """
     command = "git " + option * 200 + "z"
     subprocess.run(
         [sys.executable, str(_HOOKS / "pre-bash-guard.py")],
         input=json.dumps(
             {
                 "tool_input": {"command": command},
-                "cwd": str(_ROOT),
+                "cwd": str(checkouts[branch]),
                 "agent_id": "abc",
                 "agent_type": "general-purpose",
             }
@@ -645,6 +671,43 @@ def test_the_guard_decides_from_real_hook_input(
         env={**os.environ, "CLAUDE_PROJECT_DIR": str(repos / "session-wt")},
     )
     assert result.returncode == expected, result.stderr
+
+
+def test_the_guard_decides_from_the_session_cwd_not_its_own_directory(repos, checkouts):
+    """The hook's process directory is not the session's, and on CI it is the
+    checkout — which a push to `dev` leaves on `dev`.
+
+    `cd . && git commit` resolved there instead of to the agent's own worktree,
+    so the protected-branch guard refused it: green on every PR, where the
+    runner builds a detached merge ref and the branch reads as unknown, and red
+    the moment #237 merged (run #442). Both directions are pinned, because
+    anchoring to the session's cwd must not stop the guard firing for real.
+    """
+    for command, cwd, expected in (
+        ("cd . && git commit -m x", "agent-abc", 0),
+        ("git add a && git commit -m x", "agent-abc", 0),
+        ("git push -u origin HEAD", "agent-abc", 0),
+        # Named rather than inherited: a session really sitting on `dev` is
+        # still refused, however the hook process was started.
+        ("cd . && git commit -m x", None, 2),
+        ("git commit -m x", None, 2),
+    ):
+        payload = {
+            "tool_input": {"command": command},
+            "cwd": str(repos / cwd) if cwd else str(checkouts["dev"]),
+            "agent_id": "abc",
+            "agent_type": "general-purpose",
+        }
+        result = subprocess.run(
+            [sys.executable, str(_HOOKS / "pre-bash-guard.py")],
+            input=json.dumps(payload),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=str(checkouts["dev"]),
+            env={**os.environ, "CLAUDE_PROJECT_DIR": str(repos / "session-wt")},
+        )
+        assert result.returncode == expected, (command, cwd, result.stderr)
 
 
 @pytest.mark.parametrize(
