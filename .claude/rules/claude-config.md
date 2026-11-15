@@ -165,3 +165,11 @@ https://asset-management.mcp.cloudinary.com/sse`).
 `settings.json` sets `CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1` for every session: a session
 spawned from another session inherits `CLAUDE_CODE_CHILD_SESSION=1`, which disables
 transcript writing, and the 2026-08-29 batch lost hours of work to that (`docs/PARALLEL_TRACKS.md`).
+
+## Attribution and commit identity
+
+`settings.json` sets `attribution` to `{"commit": "", "pr": "", "sessionUrl": false}`, so no
+session adds `Co-Authored-By`, `Claude-Session` or a "Generated with Claude Code" footer. Its
+`env` also sets `GIT_AUTHOR_*` and `GIT_COMMITTER_*` to the repo owner. A commit authored as
+`Claude <noreply@anthropic.com>` makes GitHub's squash merge add `Co-authored-by: Claude`,
+and that line was removed from `origin` history on 2026-11-15.

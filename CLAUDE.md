@@ -196,6 +196,7 @@ A merged PR that only adds a document or a script is also not evidence that the 
 
 ## Session Guidelines
 
+- Never add `Co-Authored-By`, `Claude-Session` or "Generated with Claude Code" to commits or PRs.
 - Skip files over 100KB unless explicitly required.
 - Suggest `/cost` when a session is running long to monitor cache ratio.
 - Recommend starting a new session when switching to an unrelated task.
