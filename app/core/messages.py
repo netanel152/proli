@@ -1505,6 +1505,27 @@ class Messages:
             "📞 עדכון מפרולי: איש המקצוע ביקש לדבר איתך ישירות, ויפנה אליך מהמספר שלו.\n"
             "המענה האוטומטי בשיחה הזו מושהה בינתיים."
         )
+
+        class Buttons:
+            # PRO-230: quick-reply button labels, submitted with the templates
+            # whose bodies advertise a reply. A tap sends the button's payload
+            # (`template_registry`), which is the exact string the flow already
+            # accepts typed, so the label is free to be friendlier than the
+            # keyword. Meta, read 2026-11-15: at most 25 characters, and the
+            # utility-template page says "Alphanumeric characters only", hence
+            # no comma in JOB_DONE where the body has one.
+            APPROVE = "אשר"
+            REJECT = "דחה"
+            FINISHED = "סיימתי"
+            STILL_WORKING = "עדיין עובד"
+            ACTIVE_JOBS = "עבודות"
+            HUMAN = "נציג"
+            JOB_DONE = "כן הסתיים"
+            NOT_YET = "עדיין לא"
+            PRO_NO_SHOW = "לא הגיע"
+            FIND_ANOTHER_PRO = "לחפש איש מקצוע אחר"
+            KEEP_WAITING = "להמתין עוד קצת"
+
         # One sample per variable name, sent with the submission and never to a
         # recipient. Meta requires a sample for every variable. All invented: no
         # real person, business, address or phone number.

@@ -151,8 +151,10 @@ class WhatsAppProvider(ABC):
 
         The legacy vendor could not do this at all, which is why the project convention
         was numeric text menus. The PRO-89 transport exists now, but no *flow*
-        calls this: the owner decided on 2026-11-06 that the pilot runs on text
-        menus and buttons come after it (PRO-103, and see CLAUDE.md).
+        calls this. Since 2026-11-14 the owner allows quick-reply buttons on
+        *templates* (PRO-230: `TemplateSpec.buttons`, sent by `send_template`);
+        an interactive free-form send from a flow waits for PRO-104/PRO-105
+        (see CLAUDE.md).
 
         Same window contract as :meth:`send_text` — report, then raise.
         """

@@ -17,9 +17,14 @@ from app.core.constants import WorkerConstants
 from app.core.messages import Messages
 from app.providers.whatsapp.template_registry import (
     TEMPLATES,
+    QuickReply,
+    TemplateSpec,
     TemplateStatus,
+    advertised_replies,
     body_rule_violations,
+    button_rule_violations,
     meta_body,
+    payload_for_label,
     sanitize_param,
 )
 from app.services import notification_service
@@ -185,8 +190,10 @@ ADVERTISED = {
     "נציג": _K.SOS_COMMANDS,
 }
 # Numbered menus are read as digits by their own handler, not a Keywords list:
-# customer_flow's completion menu, and `guard_pro_approval_soft_hold` for the
-# reassignment offer (while the customer is still AWAITING_PRO_APPROVAL).
+# customer_flow's completion menu, and for the reassignment offer
+# `customer_flow.handle_reassign_offer_reply` (PRO-238), which the soft hold and
+# the pipeline both call, so the digits work whether or not the customer is still
+# AWAITING_PRO_APPROVAL.
 DIGIT_MENUS = {
     "completion_check": ["1", "2", "3"],
     "reassign_offer": ["1", "2"],
@@ -195,8 +202,7 @@ DIGIT_MENUS = {
 
 @pytest.mark.parametrize("spec", SUBMITTED, ids=lambda s: s.key)
 def test_every_advertised_reply_is_a_real_keyword(spec):
-    # `*token* — text` is the menu format. A bold label ends in a colon instead.
-    tokens = re.findall(r"^\*([^*:]+)\* —", spec.body, flags=re.M)
+    tokens = advertised_replies(spec.body)
     if spec.key in DIGIT_MENUS:
         assert tokens == DIGIT_MENUS[spec.key]
         return
@@ -209,6 +215,150 @@ def test_every_keyword_in_the_table_is_really_advertised():
     bodies = "\n".join(spec.body for spec in SUBMITTED)
     for token in ADVERTISED:
         assert f"*{token}* —" in bodies
+
+
+# ---------------------------------------------------------------------------
+# PRO-230: quick-reply buttons
+# ---------------------------------------------------------------------------
+
+# Sent to a professional. Their payloads are keywords: a bare digit opens a
+# numbered list rather than acting once outside one (PRO-212).
+PRO_BUTTONED = [
+    "lead_offer",
+    "lead_offer_reassigned",
+    "approval_nudge",
+    "sos_alert_pending",
+    "stale_lead_reminder",
+    "finish_reminder",
+    "daily_agenda",
+]
+
+
+@pytest.mark.parametrize("spec", SUBMITTED, ids=lambda s: s.key)
+def test_buttons_pass_metas_rules_and_match_the_body(spec):
+    assert button_rule_violations(spec) == []
+
+
+def _spec(buttons, advertised):
+    """A spec whose body advertises exactly ``advertised``."""
+    body = "\n".join(f"*{token}* — טקסט" for token in advertised) or "בלי תפריט"
+    return TemplateSpec(
+        "probe",
+        "proli_probe",
+        body=body,
+        buttons=tuple(QuickReply(label, payload) for label, payload in buttons),
+    )
+
+
+@pytest.mark.parametrize(
+    "buttons, advertised, problem",
+    [
+        (
+            [(f"label{i}", str(i)) for i in range(11)],
+            [str(i) for i in range(11)],
+            "more than",
+        ),
+        ([("א" * 26, "1")], ["1"], "longer than"),
+        ([("כן, הסתיים", "1")], ["1"], "letters, digits"),
+        ([("אשר ✅", "1")], ["1"], "letters, digits"),
+        ([("כן  הסתיים", "1")], ["1"], "letters, digits"),
+        ([("אשר\n", "1")], ["1"], "letters, digits"),
+        ([("אשר", "1"), ("אשר", "2")], ["1", "2"], "share a label"),
+        ([("אשר", "1"), ("דחה", "1")], ["1", "1"], "share a payload"),
+        ([("אשר", "1")], [], "advertises"),
+        ([], ["1"], "advertises"),
+    ],
+    ids=[
+        "eleven",
+        "26-chars",
+        "comma",
+        "emoji",
+        "double-space",
+        "trailing-newline",
+        "duplicate-label",
+        "duplicate-payload",
+        "button-without-reply",
+        "reply-without-button",
+    ],
+)
+def test_the_button_rules_catch_what_they_claim_to(buttons, advertised, problem):
+    assert any(
+        problem in found for found in button_rule_violations(_spec(buttons, advertised))
+    )
+
+
+def test_every_label_in_the_registry_stands_for_one_payload():
+    """`payload_for_label` maps a tap that arrived with only its label back to a
+    reply, which is sound only if no two templates give a label two payloads."""
+    payloads_by_label: dict[str, set[str]] = {}
+    for spec in TEMPLATES.values():
+        for button in spec.buttons:
+            payloads_by_label.setdefault(button.label, set()).add(button.payload)
+
+    assert payloads_by_label
+    for label, payloads in payloads_by_label.items():
+        assert len(payloads) == 1, f"{label!r} stands for {payloads}"
+        assert payload_for_label(label) == next(iter(payloads))
+
+
+def test_payload_for_label_knows_nothing_about_a_label_no_template_carries():
+    assert payload_for_label("תווית לא מוכרת") is None
+    assert payload_for_label("") is None
+
+
+def test_a_label_two_templates_disagree_about_has_no_payload(monkeypatch):
+    """The ambiguous case is refused rather than guessed. A second template sends
+    `אשר` as a different payload; the map is read per call, so patching the
+    registry is seen."""
+    from app.providers.whatsapp import template_registry
+
+    clash = TemplateSpec(
+        "clash",
+        "proli_clash",
+        buttons=(QuickReply(Messages.Templates.Buttons.APPROVE, "9"),),
+    )
+    monkeypatch.setattr(template_registry, "TEMPLATES", {**TEMPLATES, "clash": clash})
+
+    assert payload_for_label(Messages.Templates.Buttons.APPROVE) is None
+    assert (
+        payload_for_label(Messages.Templates.Buttons.REJECT)
+        == Messages.Keywords.REJECT_COMMANDS[0]
+    )
+
+
+def test_a_label_of_exactly_25_letters_and_a_single_space_is_accepted():
+    assert (
+        button_rule_violations(_spec([("א" * 12 + " " + "ב" * 12, "1")], ["1"])) == []
+    )
+
+
+@pytest.mark.parametrize("key", PRO_BUTTONED)
+def test_a_pro_button_sends_the_keyword_never_a_bare_digit(key):
+    """The payload is what the pro would type: in `Messages.Keywords`, and not a
+    digit that outside a numbered list only opens one (PRO-212)."""
+    spec = TEMPLATES[key]
+    assert spec.buttons
+    for button in spec.buttons:
+        assert not button.payload.isdigit(), key
+        assert button.payload in ADVERTISED, f"{key} sends {button.payload!r}"
+        assert button.payload in ADVERTISED[button.payload]
+
+
+def test_the_templates_sent_to_a_customer_send_their_menu_digits():
+    customer = {spec.key for spec in SUBMITTED if spec.buttons} - set(PRO_BUTTONED)
+    # Two answer a numbered menu, two ask for a person (a keyword in
+    # `Messages.Keywords.SOS_COMMANDS`).
+    assert customer == {
+        "completion_check",
+        "reassign_offer",
+        "no_pro_available",
+        "pro_cancelled_booking",
+    }
+    for key in DIGIT_MENUS:
+        assert [b.payload for b in TEMPLATES[key].buttons] == DIGIT_MENUS[key]
+    for key in ("no_pro_available", "pro_cancelled_booking"):
+        (button,) = TEMPLATES[key].buttons
+        assert button.payload in Messages.Keywords.SOS_COMMANDS
 
 
 # ---------------------------------------------------------------------------
@@ -247,11 +397,16 @@ class _SendSites(ast.NodeVisitor):
 # The worker's sends and the admin panel's: an operator's click is as
 # business-initiated as a scheduler tick.
 SEND_ROOTS = ("app", "admin_panel")
+PROVIDER_PACKAGE = pathlib.Path("app/providers/whatsapp")
 
 
 def _call_sites():
     for root in SEND_ROOTS:
         for path in sorted((ROOT / root).rglob("*.py")):
+            if PROVIDER_PACKAGE in path.relative_to(ROOT).parents:
+                # The package being called, not a caller: `DryRunProvider` passes
+                # `template_key=` on to a log entry, and no send is made from here.
+                continue
             tree = ast.parse(path.read_text(encoding="utf-8"))
             visitor = _SendSites()
             visitor.visit(tree)

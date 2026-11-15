@@ -166,7 +166,19 @@ That is **29 templates to submit** and one registry entry left out (`early_lead`
 
 **Runtime values are cut.** `sanitize_param` limits `last_message` to 700 characters and every other variable to 120, so that the whole message stays inside the 1024 Meta states for a body. Those two figures are ours.
 
-**Text-only stays.** The owner decided on 2026-11-06 that the pilot runs on text menus and buttons come after it (PRO-103). Replies are plain keywords in the body (`*אשר*`), so nothing changes in the FSM and no template declares a button.
+**Quick-reply buttons (PRO-230).** The owner decided on 2026-11-14 that a template may carry quick-reply buttons for the pilot, reversing the 2026-11-06 "text menus only" decision for templates alone. Replies stay plain keywords in the body (`*אשר*`), and a template's buttons are exactly the replies its body advertises (`template_registry.button_rule_violations`: same list, plus Meta's limits of at most 10 buttons, a label of at most 25 characters, letters, digits and single spaces), so a tap and the typed reply reach the same handler and nothing changes in the FSM. A pro template's payload is always a keyword, never a bare digit (PRO-212). A tap that arrives without its payload (WhatsApp Manager's test send) is read back by its label (`payload_for_label`). Labels live in `Messages.Templates.Buttons`.
+
+| Template | Buttons (label) |
+|---|---|
+| `lead_offer`, `lead_offer_reassigned`, `approval_nudge`, `sos_alert_pending` | אשר, דחה |
+| `stale_lead_reminder` | סיימתי |
+| `finish_reminder` | סיימתי, עדיין עובד |
+| `daily_agenda` | עבודות |
+| `no_pro_available`, `pro_cancelled_booking` | נציג |
+| `completion_check` | three buttons, payloads `1`/`2`/`3` |
+| `reassign_offer` | two buttons, payloads `1`/`2` |
+
+`scripts/submit_whatsapp_templates.py` submits a `BUTTONS` component of `QUICK_REPLY`s after the BODY and prints each button and what a tap sends in the dry run; a rule violation refuses the run, and `--status` reports buttons that differ from the registry and says not to flip such a template, because every send would fail. Every template stays `DRAFT` and nothing was submitted. An interactive free-form send (`send_interactive`) is still called by no flow and waits for PRO-104/PRO-105.
 
 ## Settled, and still to do
 
