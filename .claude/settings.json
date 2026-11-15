@@ -1,7 +1,16 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "env": {
-    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1"
+    "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE": "1",
+    "GIT_AUTHOR_NAME": "Netanel Aknin",
+    "GIT_AUTHOR_EMAIL": "77001319+netanel152@users.noreply.github.com",
+    "GIT_COMMITTER_NAME": "Netanel Aknin",
+    "GIT_COMMITTER_EMAIL": "77001319+netanel152@users.noreply.github.com"
+  },
+  "attribution": {
+    "commit": "",
+    "pr": "",
+    "sessionUrl": false
   },
   "permissions": {
     "allow": [
