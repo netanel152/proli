@@ -173,3 +173,28 @@ session adds `Co-Authored-By`, `Claude-Session` or a "Generated with Claude Code
 `env` also sets `GIT_AUTHOR_*` and `GIT_COMMITTER_*` to the repo owner. A commit authored as
 `Claude <noreply@anthropic.com>` makes GitHub's squash merge add `Co-authored-by: Claude`,
 and that line was removed from `origin` history on 2026-11-15.
+
+`attribution` and its three sub-keys are "any file" scope, so the same block in
+`~/.claude/settings.json` covers **every** project on that machine. The file here covers this
+repo only — a clone of any other project starts with the attribution back on — so the
+per-machine block is the one that makes it stick, and this one states the repo's expectation
+for anyone who has not set it.
+
+Two gaps the setting does not close, both observed rather than assumed:
+
+- **A cloud session never reads `~/.claude/settings.json`**, nor `settings.local.json`. A
+  single-repo session on claude.ai/code reads the committed `.claude/settings.json` and the
+  claude.ai console's server-managed settings, and nothing else; a cloud thread inside a
+  claude.ai *project* reads neither file. So the per-machine block does nothing there, and a
+  cloud session on a repo that committed no block gets the attribution. Server-managed
+  settings are the only lever that reaches every cloud session at once.
+- **A PR opened through a cloud session's GitHub integration can still arrive with the
+  footer**, session URL included, even though `pr: ""` and `sessionUrl: false` are committed
+  here: #238 was opened that way and had one. The setting governs what a session writes, not
+  what the integration appends afterwards — so **read the body back after opening a PR from a
+  cloud session and edit the footer out**. CLAUDE.md carries the rule; this is the one place
+  it has to be applied by hand.
+
+A comment, review or reply is the exception, and in a cloud session carries the footer whether
+or not this file says so: it posts under the owner's account, where "machine-written" is a
+disclosure rather than branding. Nothing in the repo switches that off.
