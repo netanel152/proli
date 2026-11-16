@@ -316,6 +316,9 @@ async def test_send_template_approved_key_posts_positional_params_no_window_need
         "TEMPLATES",
         {**template_registry.TEMPLATES, "test_template": approved},
     )
+    # PRO-232: approved in the registry is half of arming; the environment
+    # names the key for the other half.
+    monkeypatch.setattr(settings, "WHATSAPP_ARMED_TEMPLATES", "test_template")
     recorder = install_recorder(_accepted("wamid.TPL"))
     monkeypatch.setattr(delivery, "wa_delivery_collection", mock_db.wa_delivery)
 
@@ -686,6 +689,127 @@ async def test_get_state_unconfigured_returns_none_without_http_call(
 
     assert await CloudAPIProvider().get_state() is None
     assert recorder.requests == []
+
+
+# ---------------------------------------------------------------------------
+# 8b. get_template_states (PRO-232) — what Meta holds for the armed templates
+# ---------------------------------------------------------------------------
+
+_HELD = template_registry.TEMPLATES["lead_offer"]
+_OTHER = template_registry.TEMPLATES["approval_nudge"]
+
+
+@pytest.fixture
+def waba(monkeypatch):
+    monkeypatch.setattr(settings, "META_WABA_ID", "waba-1")
+
+
+@pytest.mark.asyncio
+async def test_template_states_read_one_exact_name_and_language_match_per_spec(
+    install_recorder, waba
+):
+    def handler(request: httpx.Request) -> httpx.Response:
+        name = request.url.params["name"]
+        if name == _HELD.meta_name:
+            # Language is matched case-insensitively: Meta's "HE" is our "he".
+            row = {"name": name, "language": _HELD.language.upper()}
+            row |= {"status": "approved", "category": "utility"}
+            return _json_response(200, {"data": [row]})
+        # Meta's `name` filter is not guaranteed exact: the right name in another
+        # language, and another template in the right one, are neither a match.
+        return _json_response(
+            200,
+            {
+                "data": [
+                    {
+                        "name": name,
+                        "language": "en_US",
+                        "status": "APPROVED",
+                        "category": "UTILITY",
+                    },
+                    {
+                        "name": name + "_old",
+                        "language": _OTHER.language,
+                        "status": "APPROVED",
+                        "category": "UTILITY",
+                    },
+                ]
+            },
+        )
+
+    recorder = install_recorder(handler)
+
+    states = await CloudAPIProvider().get_template_states([_HELD, _OTHER])
+
+    assert states == {
+        _HELD.key: {"status": "APPROVED", "category": "UTILITY"},
+        _OTHER.key: {"status": "NOT_FOUND", "category": "-"},
+    }
+    assert [r.url.path for r in recorder.requests] == [
+        "/v23.0/waba-1/message_templates"
+    ] * 2
+    assert {r.method for r in recorder.requests} == {"GET"}
+    assert recorder.requests[0].url.params["fields"] == (
+        "name,language,status,category"
+    )
+    assert recorder.requests[0].url.params["limit"] == "100"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["META_WABA_ID", "META_ACCESS_TOKEN"])
+async def test_template_states_without_the_waba_id_or_token_make_no_request(
+    install_recorder, waba, monkeypatch, missing
+):
+    monkeypatch.setattr(settings, missing, None)
+    recorder = install_recorder(_accepted())
+
+    assert await CloudAPIProvider().get_template_states([_HELD]) is None
+    assert recorder.requests == []
+
+
+_UNREADABLE = {"status": "UNREADABLE", "category": "-"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure, expected",
+    [
+        (500, None),
+        (429, None),
+        ("transport", None),
+        # A read Meta refuses will not fix itself: every spec says so, including
+        # the one that read fine before it.
+        (400, {_HELD.key: _UNREADABLE, _OTHER.key: _UNREADABLE}),
+        (403, {_HELD.key: _UNREADABLE, _OTHER.key: _UNREADABLE}),
+    ],
+)
+async def test_template_states_with_one_failed_read_is_never_a_partial_answer(
+    install_recorder, waba, failure, expected
+):
+    """A partial answer would read as "the rest are fine"."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if failure == "transport" and request.url.params["name"] != _HELD.meta_name:
+            raise httpx.ConnectError("down")
+        if request.url.params["name"] == _HELD.meta_name:
+            return _json_response(
+                200,
+                {
+                    "data": [
+                        {
+                            "name": _HELD.meta_name,
+                            "language": _HELD.language,
+                            "status": "APPROVED",
+                            "category": "UTILITY",
+                        }
+                    ]
+                },
+            )
+        return _json_response(failure, {"error": {"message": "boom"}})
+
+    install_recorder(handler)
+
+    assert await CloudAPIProvider().get_template_states([_HELD, _OTHER]) == expected
 
 
 # ---------------------------------------------------------------------------

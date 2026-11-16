@@ -17,7 +17,10 @@ transport:
   raise crashed ``process_message_task`` mid-flow. An unregistered fallback
   template is translated the same way, since it reaches callers through the
   same free-form sends. A vendor *rejection* still propagates — that
-  distinction is the yellowCard lesson.
+  distinction is the yellowCard lesson — with one exception (PRO-232): Meta
+  refusing an armed *template* is paged by the provider and returns ``None``
+  too, because the flow that sent it has already written the state change it
+  announces.
 
 Method names match the client this replaces so the ~177 existing call sites and
 their test doubles keep working unchanged.
@@ -36,6 +39,7 @@ from app.providers.whatsapp.base import (
     ServiceWindowClosedError,
     TemplateNotRegisteredError,
     TemplateParamsError,
+    TemplateRefusedError,
     WhatsAppProvider,
 )
 
@@ -47,6 +51,7 @@ _BLOCKED_BY_POLICY = (
     ServiceWindowClosedError,
     TemplateNotRegisteredError,
     TemplateParamsError,
+    TemplateRefusedError,
 )
 
 # PRO-71: presence of EITHER key halts all outbound.
@@ -164,11 +169,17 @@ class WhatsAppFacade:
         rollout mistake that an operator can fix directly.
         """
         if isinstance(error, TemplateNotRegisteredError):
-            reason = "fallback template is not registered as approved"
-            hint = "Check the PRO-88 registry — an entry is still DRAFT."
+            reason = "template is not armed in this environment"
+            hint = (
+                "Check the PRO-88 registry (still DRAFT?) and "
+                "WHATSAPP_ARMED_TEMPLATES (PRO-232)."
+            )
         elif isinstance(error, TemplateParamsError):
             reason = "template variables do not match its spec"
             hint = "A call site and the PRO-88 registry disagree."
+        elif isinstance(error, TemplateRefusedError):
+            reason = "Meta refused the armed template"
+            hint = "Paged by the provider; see the quality watchdog (PRO-232)."
         else:
             reason = "24h service window closed, no approved fallback template"
             hint = "Reported by the provider; see PRO-87/PRO-150 for templates."
@@ -181,6 +192,20 @@ class WhatsAppFacade:
     # Outbound — legacy names, unchanged signatures
     # ------------------------------------------------------------------
 
+    async def _dropped_by_design(self, chat_id: str, untemplated: str | None) -> bool:
+        """PRO-232: True when a send marked ``untemplated`` cannot arrive.
+
+        The provider has already said so at WARNING. Never raises: a failed
+        check lets the send go ahead exactly as an unmarked one would.
+        """
+        if untemplated is None:
+            return False
+        try:
+            return await self._provider.window_closed_by_design(chat_id, untemplated)
+        except Exception as e:
+            logger.warning(f"By-design window check for {_mask(chat_id)} failed: {e}")
+            return False
+
     async def send_message(
         self,
         chat_id: str,
@@ -188,14 +213,25 @@ class WhatsAppFacade:
         *,
         template_key: str | None = None,
         params: dict[str, Any] | None = None,
+        untemplated: str | None = None,
     ):
         """Send ``text``. A business-initiated send also names its template.
 
         With ``template_key``, a recipient whose window is closed gets that
-        template with ``params``, if it is approved. Otherwise nothing differs
+        template with ``params``, if it is armed. Otherwise nothing differs
         from a send that named no template.
+
+        ``untemplated`` marks a cross-party send that has no template **on
+        purpose** and says why (PRO-232). To a closed window it is dropped
+        quietly — logged at WARNING, ``None`` returned, no operator page and no
+        claim on the page budget, which stays for a send whose template is
+        missing by mistake. A send that names ``template_key`` has a template,
+        so ``untemplated`` is ignored on it rather than dropping what could be
+        delivered.
         """
         if not await self._guard("message", chat_id):
+            return None
+        if template_key is None and await self._dropped_by_design(chat_id, untemplated):
             return None
         try:
             if template_key is None:
@@ -219,8 +255,13 @@ class WhatsAppFacade:
         url: str,
         caption: str = "",
         file_name: str = "media.jpg",
+        *,
+        untemplated: str | None = None,
     ):
+        """Send a file by URL. ``untemplated`` as in :meth:`send_message`."""
         if not await self._guard("file", chat_id):
+            return None
+        if await self._dropped_by_design(chat_id, untemplated):
             return None
         try:
             result = await self._provider.send_file(chat_id, url, caption, file_name)
@@ -325,6 +366,18 @@ class WhatsAppFacade:
             return await self._provider.get_quality()
         except Exception as e:
             logger.warning(f"Quality probe failed: {e}")
+            return None
+
+    async def get_template_states(
+        self, specs: list[Any]
+    ) -> dict[str, dict[str, str]] | None:
+        """What Meta holds for each armed template (PRO-232). Not gated by the
+        breaker, like the other probes: a halted number's templates still need
+        watching. ``None`` when nothing could be read."""
+        try:
+            return await self._provider.get_template_states(specs)
+        except Exception as e:
+            logger.warning(f"Template status probe failed: {e}")
             return None
 
     def parse_webhook(self, payload: Any) -> NormalizedMessage | None:

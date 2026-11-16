@@ -1019,17 +1019,28 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                             + Messages.Pro.EARLY_LEAD_FOOTER
                         )
                         # Send the CURRENT media only if it's new (to avoid duplicate spam)
+                        # PRO-232: the owner left this notice untemplated (it would
+                        # need a media template), so a closed window drops it
+                        # quietly instead of paging.
                         if media_url:
-                            await whatsapp.send_file_by_url(
-                                pro_phone, media_url, caption=notify_msg
+                            notified = await whatsapp.send_file_by_url(
+                                pro_phone,
+                                media_url,
+                                caption=notify_msg,
+                                untemplated="early lead notice",
                             )
                         else:
-                            await whatsapp.send_message(pro_phone, notify_msg)
+                            notified = await whatsapp.send_message(
+                                pro_phone,
+                                notify_msg,
+                                untemplated="early lead notice",
+                            )
 
-                        logger.info(
-                            f"📢 Notified pro {mask_chat_id(pro_phone)} about "
-                            f"lead status from {mask_chat_id(chat_id)}"
-                        )
+                        if notified is not None:
+                            logger.info(
+                                f"📢 Notified pro {mask_chat_id(pro_phone)} about "
+                                f"lead status from {mask_chat_id(chat_id)}"
+                            )
                 except Exception as e:
                     logger.error(f"Failed to notify pro about new lead: {e}")
 

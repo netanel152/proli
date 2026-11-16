@@ -29,10 +29,11 @@ from app.providers.whatsapp.quality import record_business_initiated
 # Safe at top level: window.py imports nothing from this package. The
 # get_whatsapp import further down is deferred for a different reason —
 # that name is defined in __init__ itself, so it has no submodule fallback.
-from app.providers.whatsapp.window import claim_window_page, is_service_window_open
-
-# `claim_window_page`'s condition for a template Meta accepted and then failed.
-TEMPLATE_LOST = "template-lost"
+from app.providers.whatsapp.window import (
+    TEMPLATE_LOST,
+    claim_window_page,
+    is_service_window_open,
+)
 
 
 async def record_outbound(wa_message_id: str, chat_id: str, kind: str) -> None:

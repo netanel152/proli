@@ -10,7 +10,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock
 from bson import ObjectId
 from app.core.constants import UserStates, LeadStatus, WorkerConstants, Actor
 from app.core.messages import Messages
-from app.core.phone import mask_chat_id
+from app.core.phone import mask_chat_id, to_chat_id
 from tests.copy_util import static_prefix
 from app.services.workflow_service import (
     process_incoming_message,
@@ -644,6 +644,61 @@ async def test_customer_cancel_confirmation_without_slot_id_is_noop_safe(
         chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD
     )
     mock_state.clear_state.assert_called_with(chat_id)
+
+
+@pytest.mark.asyncio
+async def test_customer_cancel_survives_a_failed_pro_notice(
+    wf_mocks, mock_db, monkeypatch
+):
+    """PRO-232: CANCELLED is written and the slot released by the time the pro is
+    told. A raise there would crash the task, and ARQ's retry would answer the
+    customer CANCEL_NO_ACTIVE for a job they just cancelled."""
+    mock_wa, mock_state, mock_ctx, _, _ = wf_mocks
+    monkeypatch.setattr(
+        app.services.workflow_service, "slots_collection", mock_db.slots
+    )
+    monkeypatch.setattr(
+        app.services.workflow_service, "users_collection", mock_db.users
+    )
+    chat_id = "972509977006@c.us"
+    pro_phone = "972505551237"
+    pro_id, slot_id, lead_id = ObjectId(), ObjectId(), ObjectId()
+    await mock_db.users.insert_one(
+        {"_id": pro_id, "phone_number": pro_phone, "business_name": "יוסי"}
+    )
+    await mock_db.slots.insert_one({"_id": slot_id, "is_taken": True})
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.BOOKED,
+            "pro_id": pro_id,
+            "booked_slot_id": slot_id,
+            "customer_name": "דנה",
+            "full_address": "הרצל 1, תל אביב",
+            "created_at": "2026-01-01",
+        }
+    )
+
+    async def send(to, *args, **kwargs):
+        if to == to_chat_id(pro_phone):
+            raise RuntimeError("Meta refused it")
+
+    mock_wa.send_message.side_effect = send
+    booked_lead = await mock_db.leads.find_one({"_id": lead_id})
+
+    await app.services.workflow_service._execute_customer_cancel(booked_lead, chat_id)
+
+    assert (await mock_db.leads.find_one({"_id": lead_id}))[
+        "status"
+    ] == LeadStatus.CANCELLED
+    assert (await mock_db.slots.find_one({"_id": slot_id}))["is_taken"] is False
+    mock_wa.send_message.assert_any_await(
+        chat_id, Messages.Customer.CANCELLED_ACTIVE_LEAD
+    )
+    to_pro = mock_wa.send_message.await_args_list[-1]
+    assert to_pro.args[0] == to_chat_id(pro_phone)
+    assert to_pro.kwargs["template_key"] == "customer_cancelled"
 
 
 @pytest.mark.asyncio

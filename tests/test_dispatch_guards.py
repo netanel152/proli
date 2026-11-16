@@ -14,11 +14,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from bson import ObjectId
 
 import app.services.admin_flow as admin_flow_module
 import app.services.dispatch_guards as dispatch_guards
 import app.services.workflow_service as workflow_service
-from app.core.constants import UserStates, WorkerConstants
+from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
 from app.core.phone import to_chat_id
 from app.services.dispatch_guards import (
@@ -35,6 +36,7 @@ from app.services.dispatch_guards import (
     guard_inbound_rate_limit,
     guard_loyalty_confirmation,
     guard_pro_approval_soft_hold,
+    guard_sos_human_handoff,
     guard_zero_touch_intent,
     run_guard_chain,
 )
@@ -710,6 +712,57 @@ async def test_zero_touch_sos_reply_falls_through_without_reprompting(deps):
     deps.state_manager.clear_state.assert_awaited_once_with(ctx.chat_id)
     deps.state_manager.set_state.assert_not_awaited()
     deps.whatsapp.send_message.assert_not_awaited()
+
+
+# --------------------------------------------------------------------------
+# guard_sos_human_handoff (PRO-232)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sos_handoff_still_answers_the_customer_when_the_pro_notice_fails(
+    deps, monkeypatch
+):
+    """The lead is paused and the operator paged by the time the pro is told, so a
+    send that raises there must not cost the customer their acknowledgement."""
+    pro_id = ObjectId()
+    pro_phone = "972500000002"
+    lead = {
+        "_id": ObjectId(),
+        "pro_id": pro_id,
+        "status": LeadStatus.BOOKED,
+        "issue_type": "נזילה",
+    }
+    leads = MagicMock()
+    leads.find_one = AsyncMock(return_value=lead)
+    leads.update_one = AsyncMock()
+    monkeypatch.setattr(workflow_service, "leads_collection", leads)
+    monkeypatch.setattr(workflow_service, "send_sos_alert", AsyncMock())
+    deps.users_collection.find_one = AsyncMock(
+        return_value={"_id": pro_id, "phone_number": pro_phone, "is_active": True}
+    )
+
+    async def send(chat_id, *args, **kwargs):
+        if chat_id == to_chat_id(pro_phone):
+            raise RuntimeError("Meta refused it")
+
+    deps.whatsapp.send_message.side_effect = send
+    ctx = make_ctx(
+        user_text=Messages.Keywords.SOS_COMMANDS[0],
+        normalized_text=Messages.Keywords.SOS_COMMANDS[0],
+    )
+
+    result = await guard_sos_human_handoff(ctx, deps)
+
+    assert result is HANDLED
+    deps.state_manager.set_state.assert_awaited_once_with(
+        ctx.chat_id,
+        UserStates.PAUSED_FOR_HUMAN,
+        ttl=WorkerConstants.PAUSE_TTL_SECONDS,
+    )
+    to_pro, to_customer = deps.whatsapp.send_message.await_args_list
+    assert to_pro.kwargs["template_key"] == "bot_paused"
+    assert to_customer.args == (ctx.chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER)
 
 
 # --------------------------------------------------------------------------

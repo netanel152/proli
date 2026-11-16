@@ -109,6 +109,40 @@ async def test_approve_with_pending_lead(pro_setup, mock_wa, mock_lm, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_approve_survives_a_failed_pro_found_send_and_still_clears_state(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """PRO-232: BOOKED is written, so a send that raises must not leave the
+    customer parked in AWAITING_PRO_APPROVAL or cost the pro their reply."""
+    pro_doc, db = pro_setup
+    customer_chat = "972501111111@c.us"
+    await db.leads.insert_one(
+        {
+            "_id": ObjectId(),
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": customer_chat,
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=ObjectId())
+    )
+    clear_state = AsyncMock()
+    monkeypatch.setattr(app.services.pro_flow.StateManager, "clear_state", clear_state)
+    mock_wa.send_message.side_effect = RuntimeError("Meta refused it")
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert Messages.Pro.APPROVE_SUCCESS in result
+    mock_wa.send_message.assert_awaited_once()
+    clear_state.assert_awaited_once_with(customer_chat)
+
+
+@pytest.mark.asyncio
 async def test_approve_forwards_appointment_datetime_to_book_slot_for_lead(
     pro_setup, mock_wa, mock_lm, monkeypatch
 ):
