@@ -12,6 +12,7 @@ git repo or subprocess is involved.
 """
 
 import importlib.util
+import os
 from pathlib import Path
 
 _HOOK_PATH = (
@@ -110,10 +111,12 @@ def test_target_dir_defaults_to_the_session_cwd():
 
 
 def test_target_dir_follows_dash_c():
-    assert (
-        guard.target_dir("git -C /d/Projects/proli-wt/pro-162 status", "/any")
-        == "/d/Projects/proli-wt/pro-162"
-    )
+    # On Windows the hook rewrites Git Bash's `/d/x` to `D:/x` (`_native_path`)
+    # and joins with `\`; CI is Linux, so these expectations go through the same
+    # helpers rather than hard-coding one platform's spelling.
+    assert guard.target_dir(
+        "git -C /d/Projects/proli-wt/pro-162 status", "/any"
+    ) == guard._native_path("/d/Projects/proli-wt/pro-162")
 
 
 def test_target_dir_follows_dash_c_after_global_options():
@@ -132,10 +135,9 @@ def test_target_dir_follows_dash_c_with_quoted_path():
 
 
 def test_target_dir_follows_a_leading_cd():
-    assert (
-        guard.target_dir("cd /d/Projects/proli-wt/pro-163 && git status", "/any")
-        == "/d/Projects/proli-wt/pro-163"
-    )
+    assert guard.target_dir(
+        "cd /d/Projects/proli-wt/pro-163 && git status", "/any"
+    ) == guard._native_path("/d/Projects/proli-wt/pro-163")
 
 
 def test_target_dir_ignores_a_cd_that_is_not_leading():
@@ -149,15 +151,14 @@ def test_target_dir_anchors_a_relative_cd_to_the_session_cwd():
     # it resolved from the *hook process's* directory, which is the session's
     # only by coincidence: on CI it is the checkout, and a push to `dev` leaves
     # that on `dev`, so the protected-branch guard refused the commit (run #442).
-    assert (
-        guard.target_dir("cd . && git commit -m x", "/wt/agent-abc")
-        == "/wt/agent-abc/."
+    assert guard.target_dir("cd . && git commit -m x", "/wt/agent-abc") == (
+        os.path.join("/wt/agent-abc", ".")
     )
 
 
 def test_target_dir_anchors_a_relative_dash_c_to_the_session_cwd():
     assert guard.target_dir("git -C ../main status", "/wt/agent-abc") == (
-        "/wt/agent-abc/../main"
+        os.path.join("/wt/agent-abc", "../main")
     )
 
 
