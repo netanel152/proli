@@ -824,11 +824,24 @@ async def check_armed_templates() -> list[str]:
     else:
         states = await whatsapp.get_template_states(specs)
         if states is None:
-            # A read that failed says nothing about the templates; the quality
-            # poll's own failure threshold pages a Meta that stays unreadable.
+            # A transient failure says nothing about the templates; the next
+            # tick, 15 minutes on, reads again.
             logger.warning("[WA Templates] Meta template status could not be read")
             return []
-        for spec in specs:
+        unreadable = any(s.get("status") == "UNREADABLE" for s in states.values())
+        if unreadable:
+            # Refused rather than failed: a wrong META_WABA_ID or a token without
+            # the template scope stays wrong, so the armed templates are
+            # unwatched until someone fixes it.
+            conditions.append(
+                (
+                    "template:unreadable",
+                    f"{len(specs)} template(s) armed but Meta refused to list them: "
+                    "check META_WABA_ID and the token's "
+                    "whatsapp_business_management permission.",
+                )
+            )
+        for spec in specs if not unreadable else ():
             state = states.get(spec.key) or {"status": "NOT_FOUND", "category": "-"}
             status, category = state["status"], state["category"]
             if status != "APPROVED":

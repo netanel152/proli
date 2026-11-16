@@ -53,6 +53,11 @@ from app.providers.whatsapp.window import (
 
 _GRAPH_ROOT = "https://graph.facebook.com"
 
+# PRO-232: the HTTP statuses that mean Meta refused *this template* for this send
+# — a 4xx other than the account-wide ones (401 token, 403 permission, 429 rate
+# limit). Only these become a `TemplateRefusedError`.
+_TEMPLATE_REFUSAL_STATUSES = frozenset(range(400, 500)) - {401, 403, 429}
+
 #: Marker scheme for inbound media. Meta webhooks carry a media *id*, not a
 #: URL — the real URL requires an authorized two-step fetch and expires within
 #: minutes, so nothing downstream may ever see it. The worker resolves this
@@ -301,8 +306,9 @@ class CloudAPIProvider(WhatsAppProvider):
         if spec is None:
             page_critical(
                 f"WhatsApp template send to {_mask(chat_id)} blocked: "
-                f"{template_name!r} is not an approved template in the "
-                "registry (PRO-88/PRO-89). The message was NOT sent."
+                f"{template_name!r} is not armed in this environment (DRAFT or "
+                "unknown in the registry, or missing from "
+                "WHATSAPP_ARMED_TEMPLATES). The message was NOT sent."
             )
             raise TemplateNotRegisteredError(
                 f"template {template_name!r} is not registered as approved"
@@ -384,7 +390,12 @@ class CloudAPIProvider(WhatsAppProvider):
             # PRO-232: Meta refused an armed template (paused, disabled, not on
             # this account, a parameter it won't take). `_post_message` has
             # logged Meta's code; this is the page, then the policy error the
-            # facade turns into "not sent".
+            # facade turns into "not sent". A 5xx, or a refusal of the account
+            # rather than the template (expired token, permissions, rate
+            # limit), is not this: it propagates, and the deauth and quality
+            # watchdogs own it rather than one page per recipient.
+            if e.response.status_code not in _TEMPLATE_REFUSAL_STATUSES:
+                raise
             await self._report_refused_template(chat_id, template_key, e)
             raise TemplateRefusedError(
                 f"Meta refused template {template_key!r} for {_mask(chat_id)}"
@@ -630,8 +641,11 @@ class CloudAPIProvider(WhatsAppProvider):
         One GET per template on ``/{waba_id}/message_templates``, filtered by
         name and matched exactly on name and language (Meta's ``name`` filter
         is not guaranteed to be exact). ``None`` when ``META_WABA_ID`` or the
-        token is missing or any read fails: a partial answer would read as
-        "those are fine".
+        token is missing or a read fails transiently (5xx, 429, transport): a
+        partial answer would read as "those are fine". A read Meta *refuses*
+        (another 4xx: a mistyped WABA id, a token without the template scope)
+        will not fix itself, so every spec comes back ``status: "UNREADABLE"``
+        and the watchdog pages it.
         """
         if settings.META_ACCESS_TOKEN is None or not settings.META_WABA_ID:
             return None
@@ -645,16 +659,28 @@ class CloudAPIProvider(WhatsAppProvider):
                     params={
                         "name": spec.meta_name,
                         "fields": "name,language,status,category",
+                        # Every language variant of the name on one page, in
+                        # case the name filter also matches longer names.
+                        "limit": 100,
                     },
                     headers=self._auth_headers(),
                 )
+                if 400 <= response.status_code < 500 and response.status_code != 429:
+                    logger.warning(
+                        f"Meta refused the template status read: HTTP "
+                        f"{response.status_code}"
+                    )
+                    return {
+                        s.key: {"status": "UNREADABLE", "category": "-"} for s in specs
+                    }
                 response.raise_for_status()
                 match = next(
                     (
                         t
                         for t in response.json().get("data") or []
                         if t.get("name") == spec.meta_name
-                        and t.get("language") == spec.language
+                        and str(t.get("language") or "").lower()
+                        == spec.language.lower()
                     ),
                     None,
                 )

@@ -19,10 +19,11 @@ To prove the closed-window path, use a device that has not written to the test
 number for 24 hours. Delivery is confirmed by the handset, and by the
 ``wa_delivery`` record for the wamid printed below reaching ``delivered``.
 
-Exit codes:
+Exit codes (not 1 or 2: an uncaught exception and an argparse usage error exit
+with those, and neither must read as a probe outcome):
     0  sent as the template (the closed-window path)
-    1  sent as free-form text: the window was open, so nothing was proven
-    2  not sent: blocked, refused or not armed (the reason is in the log)
+    3  sent as free-form text: the window was open, so nothing was proven
+    4  not sent: muted, blocked, refused, failed or not armed (see the log)
 """
 
 import argparse
@@ -40,8 +41,8 @@ from app.core.phone import mask_chat_id, to_chat_id  # noqa: E402
 from app.providers.whatsapp import get_whatsapp, template_registry  # noqa: E402
 
 EXIT_TEMPLATE = 0
-EXIT_TEXT = 1
-EXIT_NOT_SENT = 2
+EXIT_TEXT = 3
+EXIT_NOT_SENT = 4
 
 
 async def run(to: str) -> int:
@@ -54,10 +55,20 @@ async def run(to: str) -> int:
         )
         return EXIT_NOT_SENT
     facade = get_whatsapp()
+    if not facade.provider.transmits:
+        # Dry-run would "send" and report the text path, which proves nothing.
+        print(
+            f"⛔ Provider {facade.provider.name!r} cannot transmit here "
+            "(WHATSAPP_DRY_RUN or WHATSAPP_PROVIDER). Nothing sent."
+        )
+        return EXIT_NOT_SENT
     try:
         result = await facade.send_message(
             chat_id, Messages.System.DELIVERY_PROBE, template_key=key, params={}
         )
+    except Exception as e:
+        print(f"⛔ The send to {mask_chat_id(chat_id)} failed: {e}")
+        return EXIT_NOT_SENT
     finally:
         await facade.close()
     if result is None:

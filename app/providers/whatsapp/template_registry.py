@@ -432,7 +432,10 @@ def _warn_once(token: str, why: str) -> None:
     if token in _WARNED_ARMING_TOKENS:
         return
     _WARNED_ARMING_TOKENS.add(token)
-    logger.warning(
+    # ERROR in production, so a mistyped key is noticed at deploy rather than
+    # as a template that never goes out. It still arms nothing.
+    log = logger.error if settings.is_production else logger.warning
+    log(
         f"WHATSAPP_ARMED_TEMPLATES names {token!r}, which {why}. It stays "
         "unarmed: sends naming it behave as if it had no template."
     )

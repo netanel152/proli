@@ -169,8 +169,11 @@ class WhatsAppFacade:
         rollout mistake that an operator can fix directly.
         """
         if isinstance(error, TemplateNotRegisteredError):
-            reason = "fallback template is not registered as approved"
-            hint = "Check the PRO-88 registry — an entry is still DRAFT."
+            reason = "template is not armed in this environment"
+            hint = (
+                "Check the PRO-88 registry (still DRAFT?) and "
+                "WHATSAPP_ARMED_TEMPLATES (PRO-232)."
+            )
         elif isinstance(error, TemplateParamsError):
             reason = "template variables do not match its spec"
             hint = "A call site and the PRO-88 registry disagree."
@@ -222,11 +225,13 @@ class WhatsAppFacade:
         purpose** and says why (PRO-232). To a closed window it is dropped
         quietly — logged at WARNING, ``None`` returned, no operator page and no
         claim on the page budget, which stays for a send whose template is
-        missing by mistake. It never combines with ``template_key``.
+        missing by mistake. A send that names ``template_key`` has a template,
+        so ``untemplated`` is ignored on it rather than dropping what could be
+        delivered.
         """
         if not await self._guard("message", chat_id):
             return None
-        if await self._dropped_by_design(chat_id, untemplated):
+        if template_key is None and await self._dropped_by_design(chat_id, untemplated):
             return None
         try:
             if template_key is None:
