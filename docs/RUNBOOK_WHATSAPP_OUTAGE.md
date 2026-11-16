@@ -313,7 +313,17 @@ on `/health`, next to `checks.worker`.
    errors `138024` and `138025`, which the page leaves out: they are about calling, so ignore them.
 3. **`poll:failed`:** check the token and that Graph is reachable.
    `scripts/meta_healthcheck.py` prints the HTTP status of a failed read.
-4. **`cap:*`:** hold back any manual outreach. Meta's limits page does not say what happens to
+4. **A `🚨 WhatsApp template …` page (`template:*`, PRO-232):** the watchdog reads every armed
+   template (`WHATSAPP_ARMED_TEMPLATES`) from Meta each tick (`META_WABA_ID`), once per condition per
+   24h, paged in production and logged at WARNING elsewhere. `template:unwatched`: `META_WABA_ID` is
+   unset on the worker. `template:unreadable`: Meta refused the read (a 4xx), so check `META_WABA_ID`
+   and the token's `whatsapp_business_management` permission. `template:<key>:status:<S>`: Meta holds
+   it in a state other than `APPROVED`, so sends naming it may be refused (each refusal pages as a
+   lost template). `template:<key>:category:<C>`: Meta moved it off `UTILITY`, so sends may be billed
+   as MARKETING. **Nothing is disarmed automatically.** To stop using it, remove the key from
+   `WHATSAPP_ARMED_TEMPLATES` in that environment and redeploy, or fix the template on Meta. See
+   `docs/RAILWAY_SETUP.md`, "Arming a template".
+5. **`cap:*`:** hold back any manual outreach. Meta's limits page does not say what happens to
    sends over the limit, so treat that as unknown. The count covers **this environment's number
    only**, and Meta shares the limit across the portfolio, so another number in the portfolio makes
    the real figure higher.
