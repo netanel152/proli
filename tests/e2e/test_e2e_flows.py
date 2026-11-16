@@ -21,6 +21,7 @@ from app.core.phone import to_local_phone
 from tests.copy_util import longest_static_chunk, static_prefix
 from tests.e2e import reserved_numbers as R
 from tests.e2e.ai_replay import deal, reply
+from tests.e2e.recorder import RecordingProvider
 from tests.e2e.world import media_url_for
 
 
@@ -165,6 +166,44 @@ async def test_happy_path_inbound_to_rating(world):
         LeadStatus.BOOKED,
         LeadStatus.COMPLETED,
     ]
+
+
+@pytest.mark.asyncio
+async def test_the_early_lead_notice_is_dropped_quietly_when_the_pros_window_is_closed(
+    world, monkeypatch
+):
+    """PRO-232: the owner left the early-lead notice untemplated, so to a closed
+    window it is dropped by design, and the customer's turn carries on."""
+    asked = []
+
+    async def closed(self, chat_id, reason):
+        asked.append((chat_id, reason))
+        return True
+
+    monkeypatch.setattr(RecordingProvider, "window_closed_by_design", closed)
+    await world.standard_cast()
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    world.ai.script(
+        reply("שלום! 👋 אני פרולי. איך קוראים לך ומה קרה?"),
+        reply(
+            "נעים מאוד דנה. איפה בדיוק הנזילה?",
+            customer_name="דנה",
+            city="תל אביב",
+            issue="נזילה מתחת לכיור",
+        ),
+    )
+
+    await world.send("היי")
+    await world.send("יש לי נזילה מתחת לכיור בתל אביב", media="image")
+
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.CONTACTED
+    assert lead["pro_id"] == world.pros[R.PRO_PRIMARY]["_id"]
+    assert {reason for chat, reason in asked if chat == pro_chat} == {
+        "early lead notice"
+    }
+    world.recorder.assert_silent(pro_chat, "the notice has no template to fall back to")
+    world.recorder.assert_text_to(world.customer, "נעים מאוד דנה")
 
 
 # ===========================================================================

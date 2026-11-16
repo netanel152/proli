@@ -42,6 +42,13 @@ _WINDOW_KEY_PREFIX = "wa:window:"
 # rather than once per detection path per occurrence.
 _PAGE_KEY_PREFIX = "wa:window:page:"
 
+# `claim_window_page`'s condition for a template Meta did not deliver: refused at
+# send time (PRO-232, `CloudAPIProvider.send_business_initiated`) or accepted and
+# then failed (`delivery.apply_status_event`). One budget for both, because to
+# the operator they are one thing: a message they were told had a template behind
+# it did not arrive. Re-exported by `delivery`, where it was first defined.
+TEMPLATE_LOST = "template-lost"
+
 # A paging-policy knob, not Meta's rule — it equals SERVICE_WINDOW_TTL_SECONDS
 # by coincidence, not derivation, so it is named separately.
 _PAGE_TTL_SECONDS = 86400  # one page per recipient per day

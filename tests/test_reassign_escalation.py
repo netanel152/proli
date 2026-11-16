@@ -381,6 +381,57 @@ async def test_reassign_lead_default_notifies_old_pro_of_lost_lead(
 
 
 @pytest.mark.asyncio
+async def test_reassign_lead_still_rearms_the_sla_when_the_old_pro_notice_fails(
+    mock_db, monkeypatch, mock_whatsapp
+):
+    """PRO-232: the new pro already holds the lead by the time the old pro is told,
+    so a raise there must not skip re-arming the new pro's approval SLA."""
+    monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
+    monkeypatch.setattr(monitor_service, "users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    await mock_db.users.delete_many({})
+    old_pro_id = ObjectId()
+    await mock_db.users.insert_one({"_id": old_pro_id, "phone_number": "972500000003"})
+    new_pro = {
+        "_id": ObjectId(),
+        "business_name": "אבי",
+        "phone_number": "972500000002",
+    }
+    monkeypatch.setattr(
+        "app.services.matching_service.determine_best_pro",
+        AsyncMock(return_value=new_pro),
+    )
+    monkeypatch.setattr(
+        monitor_service, "notify_pro_new_lead", AsyncMock(return_value=True)
+    )
+    lead = await _insert_exhausted_lead(
+        mock_db, status=LeadStatus.NEW, reassignment_count=0, pro_id=old_pro_id
+    )
+    old_chat = to_chat_id("972500000003")
+
+    async def send(chat_id, *args, **kwargs):
+        if chat_id == old_chat:
+            raise RuntimeError("Meta refused it")
+
+    mock_whatsapp.send_message.side_effect = send
+
+    result = await reassign_lead(lead)
+
+    assert result is True
+    tried = [
+        c for c in mock_whatsapp.send_message.await_args_list if c.args[0] == old_chat
+    ]
+    assert [c.kwargs["template_key"] for c in tried] == ["pro_lost_lead"]
+    assert (await mock_db.leads.find_one({"_id": lead["_id"]}))["pro_id"] == new_pro[
+        "_id"
+    ]
+    assert (
+        await StateManager.get_state(lead["chat_id"])
+        == UserStates.AWAITING_PRO_APPROVAL
+    )
+
+
+@pytest.mark.asyncio
 async def test_reassign_lead_notify_old_pro_false_skips_lost_lead_message(
     mock_db, monkeypatch, mock_whatsapp, mock_state_and_context
 ):

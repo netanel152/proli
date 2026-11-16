@@ -18,7 +18,7 @@ from app.core.logger import logger, page_critical
 from app.core.redis_client import get_redis_client
 from app.core.datetime_utils import within_business_hours
 from app.providers.whatsapp import get_whatsapp, record_account_state
-from app.providers.whatsapp import quality
+from app.providers.whatsapp import quality, template_registry
 from app.providers.whatsapp.facade import _PAUSE_KEY
 from app.services import matching_service
 from app.services.notification_service import (
@@ -412,12 +412,17 @@ async def reassign_lead(
             old_pro = await users_collection.find_one({"_id": current_pro_id})
             if old_pro and old_pro.get("phone_number"):
                 old_phone = to_chat_id(old_pro["phone_number"])
-                await whatsapp.send_message(
-                    old_phone,
-                    Messages.SOS.PRO_LOST_LEAD,
-                    template_key="pro_lost_lead",
-                    params={"issue_type": issue_param(lead)},
-                )
+                # PRO-232: the new pro is written. A send that fails must not
+                # skip re-arming their approval SLA below.
+                try:
+                    await whatsapp.send_message(
+                        old_phone,
+                        Messages.SOS.PRO_LOST_LEAD,
+                        template_key="pro_lost_lead",
+                        params={"issue_type": issue_param(lead)},
+                    )
+                except Exception as e:
+                    logger.error(f"Previous pro not told lead {lead_id} moved on: {e}")
 
         # Re-arm the PRO-56 approval SLA for the NEW pro (PRO-117): the SLA
         # monitor and the 1/2 reassign-offer reply both require the customer to
@@ -785,6 +790,86 @@ def _page_as_new_issue(condition: str, message: str) -> None:
             page_critical(message)
 
 
+_TEMPLATE_PAGE_ACTION = (
+    "Sends naming it may be refused (each refusal is paged as a lost template) or "
+    "billed as MARKETING. Nothing was disarmed: to stop using it, remove its key "
+    "from WHATSAPP_ARMED_TEMPLATES in this environment and redeploy, or fix it on "
+    "Meta. See docs/RUNBOOK_WHATSAPP_OUTAGE.md §8."
+)
+
+
+async def check_armed_templates() -> list[str]:
+    """PRO-232 — is every armed template still APPROVED + UTILITY on Meta?
+
+    Run from the quality watchdog, so it shares its cadence and its
+    `whatsapp_monitor_active` switch. Returns the conditions found. Each is
+    reported at most once per `WA_QUALITY_PAGE_COOLDOWN_HOURS` via
+    `quality.claim_page`: production pages, every other environment logs at
+    WARNING, the same split as the quality conditions. It never disarms: a
+    template Meta recategorised may still be the right one to send, and that is
+    the operator's call.
+    """
+    specs = template_registry.armed_specs()
+    if not specs:
+        return []
+    conditions: list[tuple[str, str]] = []
+    if not settings.META_WABA_ID:
+        conditions.append(
+            (
+                "template:unwatched",
+                f"{len(specs)} template(s) armed but META_WABA_ID is not set, so "
+                "nothing checks that Meta still holds them APPROVED as UTILITY.",
+            )
+        )
+    else:
+        states = await whatsapp.get_template_states(specs)
+        if states is None:
+            # A transient failure says nothing about the templates; the next
+            # tick, 15 minutes on, reads again.
+            logger.warning("[WA Templates] Meta template status could not be read")
+            return []
+        unreadable = any(s.get("status") == "UNREADABLE" for s in states.values())
+        if unreadable:
+            # Refused rather than failed: a wrong META_WABA_ID or a token without
+            # the template scope stays wrong, so the armed templates are
+            # unwatched until someone fixes it.
+            conditions.append(
+                (
+                    "template:unreadable",
+                    f"{len(specs)} template(s) armed but Meta refused to list them: "
+                    "check META_WABA_ID and the token's "
+                    "whatsapp_business_management permission.",
+                )
+            )
+        for spec in specs if not unreadable else ():
+            state = states.get(spec.key) or {"status": "NOT_FOUND", "category": "-"}
+            status, category = state["status"], state["category"]
+            if status != "APPROVED":
+                conditions.append(
+                    (
+                        f"template:{spec.key}:status:{status}",
+                        f"template {spec.meta_name} is armed but Meta holds it "
+                        f"{status}.",
+                    )
+                )
+            elif category != "UTILITY":
+                conditions.append(
+                    (
+                        f"template:{spec.key}:category:{category}",
+                        f"template {spec.meta_name} is armed but Meta now holds it "
+                        f"as {category}, not UTILITY.",
+                    )
+                )
+    for condition, text in conditions:
+        if not await quality.claim_page(condition):
+            continue
+        if settings.is_production:
+            _page_as_new_issue(condition, f"🚨 WhatsApp {text} {_TEMPLATE_PAGE_ACTION}")
+        else:
+            logger.warning(f"[WA Templates] {text} (not paged outside production)")
+    return [condition for condition, _ in conditions]
+
+
 async def check_whatsapp_quality():
     """PRO-90 — early warning on the number's quality rating, tier and health.
 
@@ -828,6 +913,13 @@ async def check_whatsapp_quality():
             f"(was {previous.get('conditions', [])}, "
             f"{previous.get('messaging_tier')})"
         )
+
+    # PRO-232: armed templates' status and category. Never allowed to stop the
+    # number's own checks below.
+    try:
+        await check_armed_templates()
+    except Exception as e:
+        logger.error(f"[WA Templates] armed-template check failed: {e}")
 
     if not settings.is_production:
         return
@@ -1224,9 +1316,12 @@ async def check_sla_deflection():
                 {"$set": {"is_paused": False, "sla_deflected": True}},
             )
 
-            # 3. Send Deflection Message
+            # 3. Send Deflection Message. PRO-232: untemplated on purpose, so a
+            # customer whose window has closed is not an operator page.
             await whatsapp.send_message(
-                chat_id, Messages.Customer.SLA_DEFLECTION_MESSAGE
+                chat_id,
+                Messages.Customer.SLA_DEFLECTION_MESSAGE,
+                untemplated="SLA deflection",
             )
 
             logger.info(

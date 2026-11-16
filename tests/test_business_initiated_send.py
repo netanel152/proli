@@ -45,6 +45,8 @@ OFFER_PARAMS = {
 
 
 def _approve(monkeypatch, key="lead_offer"):
+    """Approve ``key`` in the registry **and** arm it for this environment: since
+    PRO-232 a template is sendable only when both are true."""
     monkeypatch.setattr(
         template_registry,
         "TEMPLATES",
@@ -55,6 +57,21 @@ def _approve(monkeypatch, key="lead_offer"):
             ),
         },
     )
+    already = settings.WHATSAPP_ARMED_TEMPLATES
+    monkeypatch.setattr(
+        settings, "WHATSAPP_ARMED_TEMPLATES", f"{already},{key}" if already else key
+    )
+
+
+def _meta_answers(monkeypatch, status, body):
+    """Make Graph answer every POST with ``status`` and ``body``."""
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body))
+    )
+    monkeypatch.setattr(cloud_api, "get_http_client", AsyncMock(return_value=client))
+
+
+REFUSAL = {"error": {"code": 132001, "message": "Template name does not exist"}}
 
 
 @pytest.fixture
@@ -104,9 +121,13 @@ async def _send(facade):
 
 
 def test_every_registry_entry_is_still_draft():
-    assert {s.status for s in template_registry.TEMPLATES.values()} == {
-        TemplateStatus.DRAFT
-    }
+    """PRO-232: Meta's own sample template, the delivery probe, is the one entry
+    that is approved, and nothing arms it unless an environment names it."""
+    assert {
+        key
+        for key, s in template_registry.TEMPLATES.items()
+        if s.status is not TemplateStatus.DRAFT
+    } == {template_registry.DELIVERY_PROBE_KEY}
 
 
 @pytest.mark.asyncio
@@ -394,20 +415,155 @@ async def test_wrong_variables_page_and_send_nothing(
 
 
 @pytest.mark.asyncio
-async def test_a_vendor_rejection_still_propagates(
-    facade, fake_redis, monkeypatch, mock_db
+async def test_an_armed_template_meta_refuses_is_paged_and_reported_as_not_sent(
+    facade, graph, pages, monkeypatch
 ):
-    """#110's escalation depends on this: a failed offer is an exception or None."""
-    monkeypatch.setattr(settings, "META_ACCESS_TOKEN", SecretStr("test-token"))
-    monkeypatch.setattr(settings, "META_PHONE_NUMBER_ID", "1234567890")
+    """PRO-232: the flow that sent it has already written the state it announces,
+    so a refusal is a page and a ``None``, never an exception. The recipient's
+    second refusal the same day is an ERROR line: the page is shared with the
+    template Meta accepts and then fails, and does not spend the window page."""
     _approve(monkeypatch)
-    client = httpx.AsyncClient(
-        transport=httpx.MockTransport(lambda request: httpx.Response(400, json={}))
-    )
-    monkeypatch.setattr(cloud_api, "get_http_client", AsyncMock(return_value=client))
+    _meta_answers(monkeypatch, 400, REFUSAL)
+    log = MagicMock()
+    monkeypatch.setattr(cloud_api, "logger", log)
+
+    assert await _send(facade) is None
+    assert pages.call_count == 1
+    assert "132001" in pages.call_args.args[0]
+    assert CHAT_ID not in pages.call_args.args[0]
+
+    assert await _send(facade) is None
+    assert pages.call_count == 1
+    demoted = [c for c in log.error.call_args_list if "refused by Meta" in c.args[0]]
+    assert len(demoted) == 1
+    assert await claim_window_page(CHAT_ID) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, refused",
+    [(400, True), (404, True), (401, False), (403, False), (429, False), (500, False)],
+)
+async def test_only_a_refusal_of_the_template_itself_is_paged_and_swallowed(
+    facade, graph, pages, monkeypatch, status, refused
+):
+    """A 401, 403, 429 or 5xx is the account or Meta, not the template: it
+    propagates unpaged and is left to the deauth and quality watchdogs."""
+    _approve(monkeypatch)
+    _meta_answers(monkeypatch, status, REFUSAL)
+
+    if refused:
+        assert await _send(facade) is None
+        assert pages.call_count == 1
+    else:
+        with pytest.raises(httpx.HTTPStatusError):
+            await _send(facade)
+        assert pages.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("named", [False, True], ids=["plain", "armed-template-key"])
+async def test_a_free_form_text_rejection_on_an_open_window_still_raises(
+    facade, graph, pages, fake_redis, monkeypatch, named
+):
+    """The yellowCard rule: only a refused *template* is turned into "not sent".
+    #110's escalation depends on a failed text being an exception or None."""
+    if named:
+        _approve(monkeypatch)
+    await _open_window(fake_redis)
+    _meta_answers(monkeypatch, 400, {})
 
     with pytest.raises(httpx.HTTPStatusError):
-        await _send(facade)
+        if named:
+            await _send(facade)
+        else:
+            await facade.send_message(CHAT_ID, "טקסט חופשי")
+
+    assert pages.call_count == 0
+
+
+# ---------------------------------------------------------------------------
+# PRO-232: a send left untemplated on purpose is dropped quietly, not paged
+# ---------------------------------------------------------------------------
+
+UNTEMPLATED_SENDS = [
+    (lambda f: f.send_message(CHAT_ID, "טקסט", untemplated="why"), "text"),
+    (
+        lambda f: f.send_file_by_url(
+            CHAT_ID, "https://example.com/a.jpg", "כיתוב", untemplated="why"
+        ),
+        "image",
+    ),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("send, _kind", UNTEMPLATED_SENDS, ids=["text", "file"])
+async def test_an_untemplated_send_to_a_closed_window_is_dropped_without_a_page(
+    facade, graph, pages, send, _kind
+):
+    assert await send(facade) is None
+
+    assert graph == []  # no request at all
+    assert pages.call_count == 0
+    # The page budget stays for a send whose template is missing by mistake.
+    assert await claim_window_page(CHAT_ID) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("send, kind", UNTEMPLATED_SENDS, ids=["text", "file"])
+async def test_an_untemplated_send_to_an_open_window_goes_out(
+    facade, graph, fake_redis, send, kind
+):
+    await _open_window(fake_redis)
+
+    assert await send(facade) is not None
+
+    assert [m["type"] for m in graph] == [kind]
+
+
+@pytest.mark.asyncio
+async def test_an_untemplated_send_on_a_provider_with_no_window_goes_out():
+    provider = DryRunProvider()
+
+    result = await WhatsAppFacade(provider).send_message(
+        CHAT_ID, "טקסט", untemplated="why"
+    )
+
+    assert result is not None
+    assert [e["text"] for e in provider.sent] == ["טקסט"]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_by_design_check_lets_the_untemplated_send_proceed():
+    provider = MagicMock()
+    provider.transmits = False
+    provider.window_closed_by_design = AsyncMock(side_effect=RuntimeError("redis"))
+    provider.send_text = AsyncMock(return_value={"idMessage": "x"})
+
+    result = await WhatsAppFacade(provider).send_message(
+        CHAT_ID, "טקסט", untemplated="why"
+    )
+
+    assert result == {"idMessage": "x"}
+    provider.send_text.assert_awaited_once_with(CHAT_ID, "טקסט")
+
+
+@pytest.mark.asyncio
+async def test_untemplated_is_ignored_on_a_send_that_names_its_template():
+    """It has a template, so a closed window must not drop what could be sent."""
+    provider = MagicMock()
+    provider.transmits = False
+    provider.window_closed_by_design = AsyncMock(return_value=True)
+    provider.send_business_initiated = AsyncMock(return_value={"idMessage": "x"})
+
+    result = await WhatsAppFacade(provider).send_message(
+        CHAT_ID, "טקסט", template_key="lead_offer", untemplated="why"
+    )
+
+    assert result == {"idMessage": "x"}
+    provider.send_business_initiated.assert_awaited_once()
+    provider.window_closed_by_design.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

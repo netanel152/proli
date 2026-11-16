@@ -16,6 +16,7 @@ import pytest
 from app.core.constants import WorkerConstants
 from app.core.messages import Messages
 from app.providers.whatsapp.template_registry import (
+    DELIVERY_PROBE_KEY,
     TEMPLATES,
     QuickReply,
     TemplateSpec,
@@ -75,20 +76,27 @@ def test_meta_names_are_unique_and_legal():
 
 
 def test_every_template_is_a_draft_utility_template_in_hebrew():
+    """PRO-232: the delivery probe is Meta's own English sample, not a Proli
+    template, so it is the one entry that is neither DRAFT nor Hebrew."""
     for spec in TEMPLATES.values():
+        if spec.key == DELIVERY_PROBE_KEY:
+            continue
         assert spec.status is TemplateStatus.DRAFT
         assert spec.category == "UTILITY"
         assert spec.language == "he"
 
 
-def test_early_lead_and_rate_service_are_the_entries_left_out_of_submission():
+def test_the_entries_left_out_of_submission():
     """The owner's decisions: early_lead would need a media template, and
     rate_service is a survey, which Meta is likely to hold as MARKETING
-    (2026-11-17). rate_service keeps a body, so submitting it later is one flag."""
-    assert [spec.key for spec in TEMPLATES.values() if not spec.submit] == [
+    (2026-11-17); rate_service keeps a body, so submitting it later is one
+    flag. The probe is already approved on Meta's side, so submitting it
+    would be wrong."""
+    assert {spec.key for spec in TEMPLATES.values() if not spec.submit} == {
         "early_lead",
         "rate_service",
-    ]
+        DELIVERY_PROBE_KEY,
+    }
     assert not TEMPLATES["early_lead"].body
     assert TEMPLATES["rate_service"].body == Messages.Templates.RATE_SERVICE
     assert len(SUBMITTED) == 28

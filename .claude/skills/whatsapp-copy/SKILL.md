@@ -32,13 +32,14 @@ guide it points at; nothing here is a value to trust over them.
    moment (`grep -n "STATUS_" app/core/messages.py`, or the class around the one you touch).
    New copy must agree with its siblings on emoji, register and menu format; two messages for
    one state must not describe two processes (guide §7).
-2. **Write it against the guide**, in order: neutral-first gender (§2 — rephrase before
-   reaching for `השב/י`; never bare masculine in `Customer`), the one menu format (§3 — a
-   lead-in ending `?`/`:`, then `*token* — text`, one per line), at most one emoji at the head
-   (§4), bold only on actionable tokens, field labels and the card headline (§5), Latin or
-   numeric placeholders end-of-line or own-line (§6), no promise the code does not keep (§7),
-   פרולי not Proli in Hebrew, no trailing whitespace (§8).
-3. **Prove every advertised reply has a handler.** For each `*digit*` or `*keyword*` the text
+2. **Write it against the guide**, in order. The owner's 2026-11-17 rules (§1 to §5): voice
+   "אנחנו", no em dash (§1); rephrase before any gendered verb, never a slashed form, never
+   bare masculine in `Customer` (§2); a reply asked for as "כתוב X" / "אפשר לכתוב X" or as
+   `1 - text` lines under a lead-in ending `?`/`:` (§3); no emoji (§4); no `*bold*` (§5).
+   Then Latin or numeric placeholders end-of-line or own-line (§6), no promise the code does
+   not keep (§7), פרולי not Proli in Hebrew, no trailing whitespace (§8). The free-form
+   catalog still shows the older conventions until PRO-245; new copy follows the guide.
+3. **Prove every advertised reply has a handler.** For each digit or keyword the text
    offers, find the branch that consumes it (`Messages.Keywords.<LIST>` and its use in
    `app/services/customer_flow.py`, `pro_flow.py`, `admin_flow.py` or `dispatch_guards.py`).
    A menu option with no handler is the defect §7 exists to prevent.
@@ -63,7 +64,8 @@ Run `pytest tests/test_messages.py tests/test_prompt_copy_style.py -q` before th
 
 ## Review checklist
 
-Guide §10, verbatim: string in the catalog · neutral-first gender · canonical menu format and
-every option handled · ≤1 emoji per the sibling convention · placeholders RTL-safe · promises
+Guide §10: string in the catalog · voice "אנחנו", no em dash · no slashed gender, no bare
+masculine for a customer · replies in one of the two §3 shapes, every one handled · no emoji,
+no bold · placeholders RTL-safe · promises
 match behaviour · tests use `Messages.*` · business-initiated copy mirrored in the template
 registry and catalog doc.

@@ -15,9 +15,9 @@ import pytest_asyncio
 from bson import ObjectId
 
 import app.services.workflow_service
-from app.core.constants import LeadStatus
+from app.core.constants import LeadStatus, UserStates
 from app.core.messages import Messages
-from app.services import admin_flow, monitor_service, pro_flow
+from app.services import admin_flow, monitor_service, notification_service, pro_flow
 from app.services.ai_engine_service import AIResponse, ExtractedData
 from app.services.workflow_service import process_incoming_message
 
@@ -154,6 +154,41 @@ async def test_a_free_form_offer_stores_nothing_because_it_carried_everything(
 
     assert "offer_withheld_details" not in lead
     assert MEDIA_LINK in offer.args[1]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_offer_send_still_finalizes_the_deal_and_keeps_nothing(
+    wf, clean_db, monkeypatch
+):
+    """PRO-232: NEW and AWAITING_PRO_APPROVAL are written, and the approval SLA is
+    what recovers an offer that never arrived. A raise would crash the task and
+    have ARQ re-run the whole turn."""
+    pro_id = await _pro(clean_db)
+    lead_id = await _lead(
+        clean_db, status=LeadStatus.CONTACTED, media_urls=[MEDIA_LINK]
+    )
+    pro = await clean_db.users.find_one({"_id": pro_id})
+
+    async def send(chat_id, *args, **kwargs):
+        if chat_id == PRO_CHAT:
+            raise RuntimeError("Meta refused it")
+
+    wf.send_message.side_effect = send
+    keep = AsyncMock()
+    monkeypatch.setattr(notification_service, "keep_withheld_details", keep)
+
+    await app.services.workflow_service._finalize_deal(
+        CHAT_ID, pro, _agreed_deal(), CITY, "נזילה", TRANSCRIPT, lead_id
+    )
+
+    keep.assert_awaited_once()
+    assert keep.await_args.args[1] is None  # nothing went out, so nothing is kept
+    stored = await clean_db.leads.find_one({"_id": lead_id})
+    assert stored["status"] == LeadStatus.NEW
+    assert (
+        await app.services.workflow_service.StateManager.get_state(CHAT_ID)
+        == UserStates.AWAITING_PRO_APPROVAL
+    )
 
 
 # ---------------------------------------------------------------------------

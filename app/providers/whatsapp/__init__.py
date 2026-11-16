@@ -12,6 +12,7 @@ from app.providers.whatsapp.base import (
     ServiceWindowClosedError,
     TemplateNotRegisteredError,
     TemplateParamsError,
+    TemplateRefusedError,
     WhatsAppProvider,
 )
 from app.providers.whatsapp.cloud_api import CloudAPIProvider
@@ -82,6 +83,7 @@ __all__ = [
     "ServiceWindowClosedError",
     "TemplateNotRegisteredError",
     "TemplateParamsError",
+    "TemplateRefusedError",
     "WhatsAppFacade",
     "WhatsAppProvider",
     "build_provider",

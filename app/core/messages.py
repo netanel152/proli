@@ -1078,6 +1078,10 @@ class Messages:
         # PRO-166: the list-picker button label on the (unused — see CLAUDE.md)
         # interactive-list transport path in cloud_api.py.
         LIST_PICKER_BUTTON = "בחירה"
+        # PRO-232: what scripts/probe_template_delivery.py sends a staging test
+        # device whose window is open. Read only by the operator running it; a
+        # closed window gets Meta's `hello_world` (`delivery_probe`) instead.
+        DELIVERY_PROBE = "בדיקת מסירה של Proli: חלון 24 השעות היה פתוח."
 
     class Keywords:
         # Logic commands used in 'if' statements

@@ -56,6 +56,18 @@ class TemplateParamsError(Exception):
     """
 
 
+class TemplateRefusedError(Exception):
+    """Meta refused an armed template at send time: paused, disabled, not held by
+    this account, or a parameter it would not take (PRO-232). Nothing was
+    delivered.
+
+    Reported (paged through the ``TEMPLATE_LOST`` budget) before it is raised,
+    and translated by the facade like the errors above, so a refusal never
+    aborts the flow whose state change it was announcing. A refused *free-form*
+    send is not this: it still propagates (the yellowCard lesson).
+    """
+
+
 @dataclass(frozen=True)
 class NormalizedMessage:
     """Provider-agnostic inbound message.
@@ -159,6 +171,17 @@ class WhatsAppProvider(ABC):
         Same window contract as :meth:`send_text` — report, then raise.
         """
 
+    async def window_closed_by_design(self, chat_id: str, reason: str) -> bool:
+        """True when a send left untemplated **on purpose** cannot arrive (PRO-232).
+
+        ``reason`` says why the send has no template; it is for the log. The
+        caller drops the send quietly on True instead of letting it reach the
+        "closed window, no approved template" page, which is for a send whose
+        missing template is a defect. The default, for a provider with no
+        window to respect, is False: the send goes ahead as usual.
+        """
+        return False
+
     async def indicate_typing(self, chat_id: str, message_id: str | None) -> None:
         """Mark the inbound ``message_id`` read and show "typing…" (PRO-133).
 
@@ -183,6 +206,18 @@ class WhatsAppProvider(ABC):
         Not abstract: only a transmitting provider has a number to report on.
         ``None`` means there is no reading, which the watchdog treats as a failed
         poll. Keys are in ``CloudAPIProvider.get_quality``.
+        """
+        return None
+
+    async def get_template_states(
+        self, specs: list[Any]
+    ) -> dict[str, dict[str, str]] | None:
+        """What the vendor holds for each template spec, keyed by spec key (PRO-232).
+
+        Each value has ``status`` and ``category`` in Meta's upper case; a spec
+        the account does not hold maps to ``status: "NOT_FOUND"``. ``None``
+        means nothing could be read. Not abstract: only a transmitting provider
+        has an account holding templates.
         """
         return None
 

@@ -339,6 +339,18 @@ class Settings(BaseSettings):
     META_APP_SECRET: SecretStr | None = None
     META_VERIFY_TOKEN: SecretStr | None = None
     META_PHONE_NUMBER_ID: str | None = None
+    # PRO-232: the WhatsApp Business Account that holds this environment's
+    # templates. Not secret, like the phone-number id. Read only by the quality
+    # watchdog's template check; unset, armed templates go unwatched and
+    # production pages about it.
+    META_WABA_ID: str | None = None
+    # PRO-232: the registry keys this environment's Meta account holds, comma- or
+    # space-separated. A template is sent only when it is APPROVED in
+    # `template_registry` *and* named here, so production can arm a key that
+    # staging, on Meta's test account, leaves unarmed. A plain string on purpose:
+    # the registry parses it and ignores whatever it does not recognise, so a bad
+    # value arms less, never more, and never refuses boot. Empty arms nothing.
+    WHATSAPP_ARMED_TEMPLATES: str = ""
     # The cap to alert against when Meta's live limit cannot be read or is not
     # recognized. A new business portfolio starts at 250 unique recipients per
     # moving 24h and can rise to 2,000, so this is a setting and not a constant.

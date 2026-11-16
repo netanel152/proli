@@ -579,14 +579,21 @@ async def _execute_customer_cancel(booked_lead, chat_id: str) -> None:
             pro_phone = to_chat_id(pro["phone_number"])
             customer_name = booked_lead.get("customer_name") or "הלקוח"
             address = booked_lead.get("full_address") or "לא ידועה"
-            await whatsapp.send_message(
-                pro_phone,
-                Messages.Pro.CUSTOMER_CANCELLED.format(
-                    customer_name=customer_name, address=address
-                ),
-                template_key="customer_cancelled",
-                params={"customer_name": customer_name, "full_address": address},
-            )
+            # PRO-232: CANCELLED is written. A raise here would crash the task,
+            # and ARQ's retry would answer the customer CANCEL_NO_ACTIVE.
+            try:
+                await whatsapp.send_message(
+                    pro_phone,
+                    Messages.Pro.CUSTOMER_CANCELLED.format(
+                        customer_name=customer_name, address=address
+                    ),
+                    template_key="customer_cancelled",
+                    params={"customer_name": customer_name, "full_address": address},
+                )
+            except Exception as e:
+                logger.error(
+                    f"Pro not told lead {booked_lead['_id']} was cancelled: {e}"
+                )
 
 
 # PRO-121: the holding states whose handler `return`s unconditionally, so an
@@ -1158,24 +1165,31 @@ async def _finalize_deal(
                 else ""
             ) + notification_service.format_media_links(lead)
 
-            offer = await whatsapp.send_message(
-                pro_phone,
-                approval_msg + withheld,
-                template_key="lead_offer",
-                params={
-                    "customer_name": lead.get("customer_name")
-                    or Messages.Fallbacks.CUSTOMER_NAME,
-                    "full_address": lead["full_address"],
-                    "issue_type": lead["issue_type"],
-                    "appointment_time": lead["appointment_time"],
-                    "price_estimate": notification_service.price_estimate_param(
-                        quoted_price
-                    ),
-                    "urgency": notification_service.urgency_param(
-                        bool(emergency_header)
-                    ),
-                },
-            )
+            # PRO-232: NEW and AWAITING_PRO_APPROVAL are written. An offer that
+            # fails is what the approval SLA nudges and reassigns; a raise would
+            # crash the task and have ARQ re-run the whole turn.
+            try:
+                offer = await whatsapp.send_message(
+                    pro_phone,
+                    approval_msg + withheld,
+                    template_key="lead_offer",
+                    params={
+                        "customer_name": lead.get("customer_name")
+                        or Messages.Fallbacks.CUSTOMER_NAME,
+                        "full_address": lead["full_address"],
+                        "issue_type": lead["issue_type"],
+                        "appointment_time": lead["appointment_time"],
+                        "price_estimate": notification_service.price_estimate_param(
+                            quoted_price
+                        ),
+                        "urgency": notification_service.urgency_param(
+                            bool(emergency_header)
+                        ),
+                    },
+                )
+            except Exception as e:
+                logger.error(f"Offer for lead {lead['_id']} not sent: {e}")
+                offer = None
             await notification_service.keep_withheld_details(lead, offer, withheld)
 
             # PRO-59: no navigation link here. It resolves the exact address,

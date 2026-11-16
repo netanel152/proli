@@ -11,6 +11,7 @@ import re
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -31,6 +32,7 @@ from app.main import app
 from app.providers.whatsapp import delivery, quality
 from app.providers.whatsapp.cloud_api import CloudAPIProvider
 from app.providers.whatsapp.facade import WhatsAppFacade
+from app.providers.whatsapp.template_registry import DELIVERY_PROBE_KEY
 from app.providers.whatsapp.window import open_service_window
 from app.services.pro_flow import _execute_finish
 
@@ -965,6 +967,9 @@ async def test_finish_completes_without_a_review_request_while_tightened(
     assert line == Messages.Customer.RATE_SERVICE.format(pro_name="Pro").split("\n")[0]
     assert Messages.Customer.RATING_SCALE_LINE not in line
     assert "?" not in line, "a question here would invite a reply nothing reads"
+    # PRO-232: no template on purpose, so a closed window drops it quietly.
+    assert whatsapp.send_message.await_args.kwargs["untemplated"]
+    assert "template_key" not in whatsapp.send_message.await_args.kwargs
     # The rating window must stay shut, or a later stray digit reads as a rating.
     assert extra_set["waiting_for_rating"] is False
     assert extra_set["completed_at"] is not None
@@ -1075,6 +1080,155 @@ def test_token_shows_the_fresh_reading(health_client, monkeypatch):
     assert whatsapp["messaging_tier"] == "TIER_250"
     assert whatsapp["window_state"] == "open"
     assert whatsapp["business_initiated_24h"] == {"count": 0, "cap": 250}
+
+
+# ---------------------------------------------------------------------------
+# PRO-232: armed templates are still APPROVED and UTILITY on Meta
+# ---------------------------------------------------------------------------
+
+PROBE = DELIVERY_PROBE_KEY
+FINE = {"status": "APPROVED", "category": "UTILITY"}
+
+
+@pytest.fixture
+def armed(monkeypatch):
+    """The probe template armed, and a WABA id to read its state under."""
+    monkeypatch.setattr(settings, "WHATSAPP_ARMED_TEMPLATES", PROBE)
+    monkeypatch.setattr(settings, "META_WABA_ID", "waba-1")
+
+
+@pytest.fixture
+def meta_templates(monkeypatch):
+    """What Meta answers about the armed templates: the mock to set, plus the
+    paging seam, so a test sees the condition and not Sentry's scope."""
+    states = AsyncMock(return_value={PROBE: FINE})
+    monkeypatch.setattr(monitor, "whatsapp", MagicMock(get_template_states=states))
+    page = MagicMock()
+    monkeypatch.setattr(monitor, "_page_as_new_issue", page)
+    return SimpleNamespace(states=states, page=page)
+
+
+@pytest.mark.asyncio
+async def test_nothing_armed_reads_nothing_from_meta(
+    production, meta_templates, monkeypatch
+):
+    monkeypatch.setattr(settings, "WHATSAPP_ARMED_TEMPLATES", "")
+
+    assert await monitor.check_armed_templates() == []
+
+    meta_templates.states.assert_not_awaited()
+    meta_templates.page.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_armed_templates_with_no_waba_id_are_reported_as_unwatched(
+    production, armed, meta_templates, monkeypatch
+):
+    monkeypatch.setattr(settings, "META_WABA_ID", None)
+
+    assert await monitor.check_armed_templates() == ["template:unwatched"]
+
+    meta_templates.states.assert_not_awaited()
+    assert meta_templates.page.call_args.args[0] == "template:unwatched"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state, conditions",
+    [
+        (FINE, []),
+        (
+            {"status": "PAUSED", "category": "UTILITY"},
+            [f"template:{PROBE}:status:PAUSED"],
+        ),
+        (
+            {"status": "NOT_FOUND", "category": "-"},
+            [f"template:{PROBE}:status:NOT_FOUND"],
+        ),
+        (
+            {"status": "APPROVED", "category": "MARKETING"},
+            [f"template:{PROBE}:category:MARKETING"],
+        ),
+        # The status is the more urgent half, so it is the only one reported.
+        (
+            {"status": "DISABLED", "category": "MARKETING"},
+            [f"template:{PROBE}:status:DISABLED"],
+        ),
+        # Meta refused the read: one condition for the lot, none per template.
+        ({"status": "UNREADABLE", "category": "-"}, ["template:unreadable"]),
+    ],
+    ids=["fine", "paused", "not-found", "recategorised", "status-wins", "unreadable"],
+)
+async def test_each_armed_template_is_judged_on_its_status_then_its_category(
+    production, armed, meta_templates, state, conditions
+):
+    meta_templates.states.return_value = {PROBE: state}
+
+    assert await monitor.check_armed_templates() == conditions
+
+    paged = [c.args[0] for c in meta_templates.page.call_args_list]
+    assert paged == conditions
+    (specs,) = meta_templates.states.await_args.args
+    assert [s.key for s in specs] == [PROBE]
+
+
+@pytest.mark.asyncio
+async def test_an_unreadable_template_state_says_nothing_about_the_templates(
+    production, armed, meta_templates
+):
+    meta_templates.states.return_value = None
+
+    assert await monitor.check_armed_templates() == []
+
+    meta_templates.page.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "environment, paged", [("production", True), ("staging", False)]
+)
+async def test_a_template_condition_pages_in_production_and_only_logs_elsewhere(
+    armed, meta_templates, monkeypatch, environment, paged
+):
+    monkeypatch.setattr(settings, "ENVIRONMENT", environment)
+    meta_templates.states.return_value = {
+        PROBE: {"status": "PAUSED", "category": "UTILITY"}
+    }
+
+    assert await monitor.check_armed_templates() == [f"template:{PROBE}:status:PAUSED"]
+
+    assert meta_templates.page.called is paged
+    if paged:
+        assert "PAUSED" in meta_templates.page.call_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_a_standing_template_condition_pages_once_within_the_cooldown(
+    production, armed, meta_templates
+):
+    meta_templates.states.return_value = {
+        PROBE: {"status": "PAUSED", "category": "UTILITY"}
+    }
+
+    first = await monitor.check_armed_templates()
+    second = await monitor.check_armed_templates()
+
+    assert first == second == [f"template:{PROBE}:status:PAUSED"]  # still reported
+    meta_templates.page.assert_called_once()  # but paged once
+
+
+@pytest.mark.asyncio
+async def test_the_quality_watchdog_survives_the_template_check_raising(
+    production, pages, poll, monkeypatch
+):
+    monkeypatch.setattr(
+        monitor, "check_armed_templates", AsyncMock(side_effect=RuntimeError("boom"))
+    )
+
+    await poll(reading(quality_rating="RED"))
+
+    pages.assert_called_once()  # the number's own page still went out
+    assert (await quality.read_snapshot())["tightened"] is True
 
 
 # ---------------------------------------------------------------------------
