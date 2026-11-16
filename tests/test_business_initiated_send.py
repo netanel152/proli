@@ -224,7 +224,7 @@ async def test_approved_closed_window_sends_params_in_the_declared_order(
     assert result["sent_as_template"] == "lead_offer"
     assert pages.call_count == 0
     template = graph[0]["template"]
-    assert template["name"] == "proli_lead_offer"
+    assert template["name"] == "proli_lead_offer_v2"
     assert template["language"] == {"code": "he"}
     assert [p["text"] for p in template["components"][0]["parameters"]] == [
         Messages.Fallbacks.UNKNOWN,  # the empty customer_name
@@ -1120,7 +1120,7 @@ def test_the_operators_completion_check_reaches_a_closed_window_once_approved(
     assert panel_utils.send_completion_check_sync(str(lead_id)) is True
 
     template = panel.graph[0]["template"]
-    assert template["name"] == "proli_completion_check"
+    assert template["name"] == "proli_completion_check_v2"
     assert [p["text"] for p in template["components"][0]["parameters"]] == [
         "שירותי דוגמה"
     ]
