@@ -256,8 +256,8 @@ def test_payload_has_a_sample_for_every_variable_and_sequential_numbers(spec):
 def test_lead_offer_numbers_its_variables_by_the_declared_order():
     text = meta_body(TEMPLATES["lead_offer"])
 
-    assert "*לקוח:* {{1}}" in text
-    assert "*דחיפות:* {{6}}" in text
+    assert "לקוח: {{1}}" in text
+    assert "דחיפות: {{6}}" in text
 
 
 def test_a_body_out_of_order_with_its_params_cannot_be_submitted(monkeypatch, capsys):

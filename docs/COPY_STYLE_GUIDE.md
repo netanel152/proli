@@ -9,6 +9,15 @@ and the template bodies in `Messages.Templates`.
 site). This guide says **how it reads**. A message that violates a rule here is a review
 comment, exactly like a message that violates §10.
 
+**The owner's decision of 2026-11-17 supersedes this guide's earlier rules** wherever
+they conflicted: פרולי speaks as "אנחנו", and copy carries no em dash, no emoji, no
+`*bold*` and no slashed gender form. §1 to §5 below state the rules as they now are.
+`Messages.Templates` already follows them, and `tests/test_template_bodies.py` holds
+every template body to them. The rest of the catalog, the free-form copy, still uses
+the older conventions until PRO-245 rewrites it, and the tests pinning those
+(`tests/test_messages.py`, `tests/e2e/test_e2e_ai_replay.py`) move with it. New copy
+follows this guide.
+
 Program: PRO-164. The rewrite that applies this guide across the catalog is PRO-168; the
 AI-prompt pass, covering `app/core/prompts.py` and `admin_panel/core/utils.py`'s
 `generate_system_prompt`, landed in PRO-169.
@@ -17,68 +26,80 @@ AI-prompt pass, covering `app/core/prompts.py` and `admin_panel/core/utils.py`'s
 
 ## 1. Voice
 
-- The assistant is **פרולי** — warm, direct, professional Israeli Hebrew. First person
-  singular ("אני בודק", not "אנחנו בודקים").
+- The assistant is **פרולי**, and it speaks as **"אנחנו"**: "מצאנו", "נעדכן אותך",
+  "נחזור אליך". Never first person singular ("אני", "מצאתי", "אעדכן").
+- It reads like a person typed it, not like a system: plain sentences, no decoration.
+  No em dash (`—`) anywhere; a comma or a full stop does the job.
 - Short sentences. One idea per line. WhatsApp is read on a phone, standing up.
-- Customers get the warm register. Pros get the same voice, slightly more operational —
+- Customers get the warm register. Pros get the same voice, slightly more operational,
   but **one register per audience**, never per message.
 - Never promise an action the code does not perform (see §7).
 
-## 2. Gender: neutral-first
+## 2. Gender
 
-Hebrew gendered verbs are the single biggest consistency problem in the current catalog
-(השב ×30 vs השב/י ×1). The rule, in order of preference:
+The rule, in order of preference:
 
-1. **Rephrase so no gendered verb is needed** — infinitives, nouns, or the menu format
-   itself:
-   - ❌ `השב *1* לאישור` → ✅ `לאישור — *1*`
+1. **Rephrase so no gendered verb is needed**: infinitives after "אפשר", nouns, or the
+   plain "אנחנו" voice:
+   - ❌ `השב 1 לאישור` → ✅ `אפשר לענות במספר:`
    - ❌ `שלח כתובת מלאה` → ✅ `נשאר רק לקבל כתובת מלאה:`
-   - ❌ `נסה שוב` → ✅ `אפשר לנסות שוב בעוד רגע`
-2. **When a verb is unavoidable, use the inclusive form**: `השב/י`, `תרצה/י`, `שלח/י`.
-3. **Never** the bare masculine form in customer-facing copy.
+   - ❌ `נסה שוב` → ✅ `אפשר לנסות שוב מאוחר יותר`
+2. **Never a slashed form** (`השב/י`, `הלקוח/ה`, `דיווח/ה`). If no neutral phrasing
+   works, rephrase again.
+3. **Customer-facing copy never uses the bare masculine** for the reader; it always
+   rephrases (rule 1).
+4. **Pro-facing copy may address the pro in the direct masculine imperative**, as the
+   pro audience interacts through fixed keyword commands ("כתוב אשר", "אם סיימת"),
+   consistently, one form everywhere.
+5. A third-person reference to a customer or a professional takes the generic masculine
+   ("הלקוח ביטל", "{customer_name} דיווח", "איש המקצוע יתקשר אליך").
 
-Pro-facing copy may keep the direct imperative register it has today (the pro audience
-interacts through fixed keyword commands), but must be internally consistent — one form,
-everywhere.
-
-## 3. Menus — one format
+## 3. Menus and replies
 
 Text-only menus are a hard product rule (see `CLAUDE.md`; nothing calls
 `send_interactive`). The one exception is a template's quick-reply buttons
-(2026-11-14), which mirror the keywords its body advertises. On top of that, **one visual format** replaces the five styles in
-the current catalog:
+(2026-11-14), which mirror the replies its body advertises. A reply is asked for in one
+of two plain shapes, with no bold and no em dash:
+
+**A keyword, asked for in the sentence:**
 
 ```
-מה עושים עם העבודה?
-*1* — כן, הסתיים ✅
-*2* — עדיין לא
+לאישור כתוב אשר, לדחייה כתוב דחה.
+אפשר לנסות שוב מאוחר יותר, או לכתוב נציג ומישהו מהצוות יחזור אליך.
 ```
 
-- A short lead-in line ending with `?` or `:`.
-- One option per line: `*digit* — text` (bold digit, spaced em dash).
-- Keyword commands the same way: `*אשר* — לאישור העבודה`.
-- No inline menus (`השב '1' לביטול, או '2' כדי להשאיר`), no hyphens instead of the em
-  dash, no inverted `כדי לאשר השב: *אשר*` form.
-- Every advertised digit/keyword **must** have a handler (see §7).
+- "כתוב X" to a pro, "אפשר לכתוב X" to a customer (§2).
+- The keyword is written exactly as `Messages.Keywords` lists it, so what the message
+  says is what the handler matches.
+
+**A numbered choice:**
+
+```
+העבודה הסתיימה? אפשר לענות במספר:
+1 - כן, הסתיימה
+2 - עדיין לא
+```
+
+- A lead-in line ending with `?` or `:`.
+- One option per line: digit, space, hyphen, space, text (`1 - text`). Nothing before
+  the digit on the line.
+- A digit range mentioned in a sentence ("מ-1 עד 5") is not a menu.
+
+Every advertised digit or keyword **must** have a handler (see §7). In a template body,
+`template_registry.advertised_replies` reads exactly these two shapes for the button
+parity rule, and `unread_write_prompts` flags a "כתוב …" it cannot read, so a keyword
+spelt differently from its handler fails the build.
 
 ## 4. Emoji
 
-- **At most one emoji per message**, at the start of the headline line, carrying the
-  message's mood (🎉 success, ⚠️ caution, 🚨 emergency). Not one per line.
-- Sibling messages agree: either every `STATUS_*` message opens with its status emoji or
-  none does — no mixed sets.
-- Option lines in menus may carry at most one trailing emoji when it disambiguates
-  (`*1* — כן, הסתיים ✅`), never decoratively.
+None. No emoji at the head of a message, in a line, or on a menu option. The mood is in
+the words ("עדכון מפרולי:", "סליחה על העיכוב").
 
 ## 5. Bold
 
-WhatsApp `*bold*` marks only:
-
-- actionable tokens — menu digits and keywords (`*1*`, `*אשר*`);
-- field labels in structured cards (`*שם:*`, `*כתובת:*`);
-- the single headline of a card (`*נמצא לך איש מקצוע!*`).
-
-Not whole sentences, not values.
+None. WhatsApp `*bold*` is not used: field labels in a structured card are plain text
+followed by a colon (`שם: {pro_name}`, `כתובת: {full_address}`), the card's headline is
+a plain sentence, and digits and keywords are asked for in words (§3).
 
 ## 6. RTL / bidi safety
 
@@ -136,9 +157,11 @@ Checklist consequences:
 For any PR touching user-facing copy:
 
 - [ ] String lives in `app/core/messages.py` (§10) — no inline literals.
-- [ ] Neutral-first gender (§2); no bare masculine in customer copy.
-- [ ] Menus in the canonical format (§3); every advertised reply has a handler (§7).
-- [ ] ≤1 emoji, per the sibling set's convention (§4).
+- [ ] Voice is "אנחנו", no em dash (§1); no slashed gender form, no bare masculine in
+      customer copy (§2).
+- [ ] Replies asked for in one of the two shapes (§3); every advertised reply has a
+      handler (§7).
+- [ ] No emoji (§4) and no `*bold*` (§5).
 - [ ] Latin/numeric placeholders end-of-line or own-line (§6).
 - [ ] Promises match implemented behavior (§7).
 - [ ] Tests reference `Messages.*` constants, not retyped literals (PRO-167).

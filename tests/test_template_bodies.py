@@ -27,6 +27,7 @@ from app.providers.whatsapp.template_registry import (
     meta_body,
     payload_for_label,
     sanitize_param,
+    unread_write_prompts,
 )
 from app.services import notification_service
 
@@ -85,15 +86,20 @@ def test_every_template_is_a_draft_utility_template_in_hebrew():
         assert spec.language == "he"
 
 
-def test_early_lead_and_the_delivery_probe_are_the_entries_left_out_of_submission():
-    """The owner's decision: early_lead would need a media template. The probe is
-    already approved on Meta's side, so submitting it would be wrong."""
+def test_the_entries_left_out_of_submission():
+    """The owner's decisions: early_lead would need a media template, and
+    rate_service is a survey, which Meta is likely to hold as MARKETING
+    (2026-11-17); rate_service keeps a body, so submitting it later is one
+    flag. The probe is already approved on Meta's side, so submitting it
+    would be wrong."""
     assert {spec.key for spec in TEMPLATES.values() if not spec.submit} == {
         "early_lead",
+        "rate_service",
         DELIVERY_PROBE_KEY,
     }
     assert not TEMPLATES["early_lead"].body
-    assert len(SUBMITTED) == 29
+    assert TEMPLATES["rate_service"].body == Messages.Templates.RATE_SERVICE
+    assert len(SUBMITTED) == 28
 
 
 def test_the_wrong_trade_notice_is_one_template_for_both_free_form_notices():
@@ -102,10 +108,11 @@ def test_the_wrong_trade_notice_is_one_template_for_both_free_form_notices():
     spec = TEMPLATES["pro_lead_outside_trade"]
     assert spec.params == ("issue_type",)
     assert spec.body == (
-        "עדכון מפרולי: הפנייה בנושא {issue_type} כבר לא משויכת אליך, "
-        "כי היא מחוץ לתחום המקצוע שלך.\nאין צורך לפעול."
+        "עדכון מפרולי: הפנייה בנושא {issue_type} כבר לא אצלך, "
+        "כי היא לא בתחום המקצוע שלך.\nאין צורך לעשות כלום."
     )
     assert "*" not in spec.body
+    assert advertised_replies(spec.body) == []
 
 
 def test_every_submitted_template_has_a_body():
@@ -121,13 +128,35 @@ def test_sos_alert_pending_has_no_variable_at_all():
 
 
 def test_the_two_openings_the_owner_approved_for_utility_review():
-    """Approved 2026-11-14: "הצעה" and the megaphone read as promotion."""
+    """Approved 2026-11-14: "הצעה" and the megaphone read as promotion. Reworded
+    in the owner's plain voice 2026-11-17, still with neither."""
     assert Messages.Templates.LEAD_OFFER_REASSIGNED.startswith(
-        "📋 *פנייה חדשה מפרולי ממתינה לאישורך*\n\n"
+        "יש פנייה חדשה מפרולי שמחכה לאישור שלך.\n\n"
     )
     assert Messages.Templates.ONBOARDING_APPROVED.split("\n")[1] == (
-        "מעכשיו יישלחו אליך כאן בוואטסאפ פניות של לקוחות."
+        "מעכשיו פניות של לקוחות יגיעו אליך לכאן, לוואטסאפ."
     )
+
+
+# The owner's voice for template bodies, 2026-11-17: plain text a person would
+# type. The free-form open-window texts keep their own conventions.
+_EMOJI = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE0F]")
+WITH_BODY = [spec for spec in TEMPLATES.values() if spec.body]
+
+
+@pytest.mark.parametrize("spec", WITH_BODY, ids=lambda s: s.key)
+def test_a_template_body_has_no_emoji_em_dash_bold_or_slashed_gender(spec):
+    assert not _EMOJI.search(spec.body)
+    assert "—" not in spec.body
+    assert "*" not in spec.body
+    assert not re.search(r"\w/\w", spec.body), "slashed gender form"
+
+
+@pytest.mark.parametrize("spec", WITH_BODY, ids=lambda s: s.key)
+def test_proli_speaks_as_we_never_i(spec):
+    """The bot's own verbs are plural: "מצאנו", "נעדכן", never "מצאתי"/"אעדכן"."""
+    first_person = r"(?<!\w)(אני|אעדכן|מצאתי|הצלחתי|קיבלתי|העברתי)(?!\w)"
+    assert not re.search(first_person, spec.body)
 
 
 @pytest.mark.parametrize("spec", SUBMITTED, ids=lambda s: s.key)
@@ -152,35 +181,46 @@ def test_every_pause_message_states_the_real_pause_length(text):
 
 
 def test_both_channels_promise_the_customer_the_same_thing():
-    promise = "ייצור איתך קשר בקרוב לתיאום ההגעה."
-    assert Messages.Customer.PRO_FOUND.endswith("{pro_name} " + promise)
-    assert Messages.Templates.PRO_FOUND.endswith(promise)
+    """The pro gets in touch soon to arrange the visit: worded differently in the
+    two channels since 2026-11-17, promising the same thing."""
+    assert Messages.Customer.PRO_FOUND.endswith(
+        "{pro_name} ייצור איתך קשר בקרוב לתיאום ההגעה."
+    )
+    assert Messages.Templates.PRO_FOUND.endswith(
+        "איש המקצוע יתקשר אליך בקרוב כדי לתאם הגעה."
+    )
     assert "לתיאום ההגעה" in Messages.Pro.CONTACT_CARD_CLOSING
 
 
 def test_pro_found_ends_on_words_with_the_phone_as_the_last_variable():
     spec = TEMPLATES["pro_found"]
     assert spec.params[-1] == "pro_phone"
-    assert meta_body(spec).rstrip().endswith("לתיאום ההגעה.")
-    assert "*טלפון:* {pro_phone}\n" in spec.body
+    assert meta_body(spec).rstrip().endswith("כדי לתאם הגעה.")
+    assert "טלפון: {pro_phone}\n" in spec.body
     assert spec.params.index("price_estimate") == len(spec.params) - 2
 
 
 def test_the_two_max_reassignment_messages_promise_the_same_thing():
     """Style guide §7: nothing measures an hour, so neither claims one."""
+    assert "נחזור אליך בהקדם בשעות הפעילות" in Messages.SOS.MAX_REASSIGNMENTS_REACHED
+    assert "ונחזור אליך בשעות הפעילות." in Messages.Templates.MAX_REASSIGNMENTS
     for text in (
         Messages.SOS.MAX_REASSIGNMENTS_REACHED,
         Messages.Templates.MAX_REASSIGNMENTS,
     ):
-        assert "נחזור אליך בהקדם בשעות הפעילות" in text
         assert "תוך שעה" not in text
 
 
-def test_the_rejected_copy_is_the_same_in_both_channels():
-    assert (
-        Messages.Onboarding.REJECTED_NOTIFICATION
-        == Messages.Templates.ONBOARDING_REJECTED
-    )
+def test_the_rejected_copy_says_the_same_thing_in_both_channels():
+    """Word for word until 2026-11-17, when the template took the owner's plain
+    wording and the free-form text kept its own. Both still say not approved at
+    this stage, and where to ask."""
+    for text in (
+        Messages.Onboarding.REJECTED_NOTIFICATION,
+        Messages.Templates.ONBOARDING_REJECTED,
+    ):
+        assert "הפרופיל שלך בפרולי לא אושר בשלב" in text
+        assert "info@proli.me" in text
 
 
 # ---------------------------------------------------------------------------
@@ -219,9 +259,47 @@ def test_every_advertised_reply_is_a_real_keyword(spec):
 
 
 def test_every_keyword_in_the_table_is_really_advertised():
-    bodies = "\n".join(spec.body for spec in SUBMITTED)
-    for token in ADVERTISED:
-        assert f"*{token}* —" in bodies
+    advertised = {t for spec in SUBMITTED for t in advertised_replies(spec.body)}
+    assert set(ADVERTISED) <= advertised
+
+
+@pytest.mark.parametrize("spec", WITH_BODY, ids=lambda s: s.key)
+def test_every_write_prompt_in_a_body_is_read_as_a_reply(spec):
+    """A "כתוב …" the parser cannot read would advertise a reply with no button
+    and slip past the parity rule. "לכתוב לנו" is the one exception."""
+    assert unread_write_prompts(spec.body) == []
+
+
+@pytest.mark.parametrize(
+    "body, replies",
+    [
+        ("לאישור כתוב אשר, לדחייה כתוב דחה.", ["אשר", "דחה"]),
+        ("אם סיימת, כתוב סיימתי ונסגור אותה.", ["סיימתי"]),
+        ("כתוב סיימתי. אם לא, כתוב עדיין עובד ונפסיק.", ["סיימתי", "עדיין עובד"]),
+        ("אפשר לכתוב לנו כאן, או לכתוב נציג.", ["נציג"]),
+        ("כתוב עבודות.", ["עבודות"]),
+        ("כתוב אשרר.", []),  # a misspelling is no reply ...
+        ("כתבו אשר.", []),  # ... nor is another verb form
+        ("לנציג אנושי", []),
+        ("במספר:\n1 - כן\n2 - לא", ["1", "2"]),
+        ("מ-1 (גרוע) עד 5 (מצוין)", []),
+        ("שורה 1 - באמצע", []),
+    ],
+)
+def test_advertised_replies_reads_the_plain_wording(body, replies):
+    assert advertised_replies(body) == replies
+
+
+@pytest.mark.parametrize(
+    "body, unread",
+    [
+        ("כתוב אשרר ונמשיך.", ["כתוב אשרר ונמשיך."]),
+        ("לכתוב משהו", ["לכתוב משהו"]),
+        ("לכתוב לנו כאן, כתוב אשר", []),
+    ],
+)
+def test_unread_write_prompts_finds_what_the_parser_skipped(body, unread):
+    assert unread_write_prompts(body) == unread
 
 
 # ---------------------------------------------------------------------------
@@ -247,8 +325,8 @@ def test_buttons_pass_metas_rules_and_match_the_body(spec):
 
 
 def _spec(buttons, advertised):
-    """A spec whose body advertises exactly ``advertised``."""
-    body = "\n".join(f"*{token}* — טקסט" for token in advertised) or "בלי תפריט"
+    """A spec whose body advertises exactly ``advertised``, as numbered lines."""
+    body = "\n".join(f"{token} - טקסט" for token in advertised) or "בלי תפריט"
     return TemplateSpec(
         "probe",
         "proli_probe",
@@ -459,11 +537,22 @@ def test_every_submitted_template_is_reachable_from_a_call_site():
     assert {spec.key for spec in SUBMITTED} - used == set()
 
 
+# Named at a send site though not submitted, each with its reason. A draft key
+# resolves to None, so the send behaves exactly as one naming no template.
+NAMED_BUT_NOT_SUBMITTED = {
+    # Left out 2026-11-17 as a MARKETING risk; worded and named so submitting it
+    # later is the one `submit` flag.
+    "rate_service",
+}
+
+
 def test_no_call_site_names_a_template_that_is_not_submitted():
     """A key with no body can never be approved, so naming it would be a promise
-    the registry cannot keep."""
+    the registry cannot keep. The one exception is listed with its reason."""
     used = {k.value for _, k, _ in _call_sites() if isinstance(k, ast.Constant)}
-    assert used <= {spec.key for spec in SUBMITTED}
+    assert used - {spec.key for spec in SUBMITTED} == NAMED_BUT_NOT_SUBMITTED
+    for key in NAMED_BUT_NOT_SUBMITTED:
+        assert TEMPLATES[key].body
 
 
 def test_the_admin_panel_names_a_template_on_each_of_its_sends():
@@ -541,7 +630,6 @@ CROSS_PARTY = {
     "pro_cancelled_booking": (),
     "customer_rescheduled": ("customer_name", "full_address", "old_time", "new_time"),
     "customer_existing_job_query": ("customer_name", "issue_type", "phone"),
-    "rate_service": ("pro_name",),
     "customer_reported_no_show": (),
     "reassign_offer": (),
     "awaiting_approval": ("pro_name",),
@@ -560,9 +648,15 @@ def test_a_cross_party_notice_is_submitted_with_its_variables_in_body_order(
     assert tuple(found) == params
 
 
-def test_the_rating_template_is_the_free_form_prompt_word_for_word():
-    """Its digits and *דלג* are read by the same handler either way."""
-    assert Messages.Templates.RATE_SERVICE == Messages.Customer.RATE_SERVICE
+def test_the_rating_template_offers_what_the_free_form_prompt_offers():
+    """Word for word until 2026-11-17. Not submitted now, but kept honest: its
+    1 to 5 and דלג are read by the same handler as the free-form prompt's."""
+    spec = TEMPLATES["rate_service"]
+    assert not spec.submit and spec.params == ("pro_name",)
+    for text in (Messages.Templates.RATE_SERVICE, Messages.Customer.RATE_SERVICE):
+        assert "1" in text and "5" in text and "דלג" in text
+    assert advertised_replies(spec.body) == ["דלג"]
+    assert "דלג" in Messages.Keywords.SKIP_TOKENS
 
 
 def test_only_two_templates_carry_the_customers_phone():
