@@ -35,9 +35,27 @@ cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || exit 0
 echo "web-setup: preparing venv + .env for Claude Code on the web"
 
 # 1. Virtualenv at the project root (gitignored), the layout run-hook.sh expects.
+#    Built on python3.12 when the image has it — the version CI and the
+#    Dockerfile use. The cloud image's default python3 is 3.13, where
+#    pyarrow==17.0.0 (pinned in requirements.txt) has no wheel: pip falls back
+#    to a source build that dies on a missing pkg_resources, and the session
+#    opened with no pytest at all. A venv left behind on another interpreter
+#    (a resumed container from before this fix) is rebuilt for the same reason.
+PY=python3
+if command -v python3.12 >/dev/null 2>&1; then
+    PY=python3.12
+fi
+WANT=$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
+if [ -x venv/bin/python ] && [ -n "$WANT" ]; then
+    HAVE=$(venv/bin/python -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)
+    if [ "$HAVE" != "$WANT" ]; then
+        echo "web-setup: venv/ is Python ${HAVE:-unknown}, want $WANT — rebuilding"
+        rm -rf venv
+    fi
+fi
 if [ ! -x venv/bin/python ]; then
-    if python3 -m venv venv 2>/dev/null; then
-        echo "web-setup: created venv/"
+    if "$PY" -m venv venv 2>/dev/null; then
+        echo "web-setup: created venv/ ($PY)"
     else
         echo "web-setup: could not create venv/ — tests and linters will not run this session" >&2
         exit 0
