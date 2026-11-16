@@ -165,6 +165,12 @@ DELIVERY_PROBE_KEY = "delivery_probe"
 # with the two rows that were really two bodies split (P11, P13) and C3's three
 # messages listed one by one. `params` numbers the variables and is what
 # `send_template` sends by, so a caller's dict order never matters.
+#
+# The `_v2` Meta names: on 2026-11-17 the first submission went out with the
+# pre-#243 wording, and the owner had those 29 templates deleted from the
+# production account and the current wording resubmitted under new names, since
+# a name Meta has just deleted cannot be used again straight away. The keys did
+# not change, so nothing that arms or sends by key notices.
 TEMPLATES: dict[str, TemplateSpec] = {
     spec.key: spec
     for spec in (
@@ -173,7 +179,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         # its own, since it replies inside the 24h window the pro's own אשר opened.
         TemplateSpec(
             "lead_offer",
-            "proli_lead_offer",
+            "proli_lead_offer_v2",
             source="Messages.Pro.APPROVAL_REQUEST",
             body=Messages.Templates.LEAD_OFFER,
             params=(
@@ -188,7 +194,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # P1, and P3 for an emergency: this body is the one that can say so
         TemplateSpec(
             "lead_offer_reassigned",
-            "proli_lead_offer_reassigned",
+            "proli_lead_offer_reassigned_v2",
             source="Messages.Pro.NEW_LEAD_HEADER + Messages.Pro.NEW_LEAD_DETAILS",
             body=Messages.Templates.LEAD_OFFER_REASSIGNED,
             params=(
@@ -210,7 +216,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # P4
         TemplateSpec(
             "approval_nudge",
-            "proli_approval_nudge",
+            "proli_approval_nudge_v2",
             source="Messages.Pro.APPROVAL_NUDGE",
             body=Messages.Templates.APPROVAL_NUDGE,
             params=("issue_type", "minutes"),
@@ -218,7 +224,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # P5
         TemplateSpec(
             "daily_agenda",
-            "proli_daily_agenda",
+            "proli_daily_agenda_v2",
             source="Messages.Pro.DAILY_AGENDA_HEADER",
             body=Messages.Templates.DAILY_AGENDA,
             params=("pro_name", "date", "job_count"),
@@ -226,7 +232,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # P6
         TemplateSpec(
             "stale_lead_reminder",
-            "proli_stale_lead_reminder",
+            "proli_stale_lead_reminder_v2",
             source="Messages.Pro.STALE_LEAD_REMINDER",
             body=Messages.Templates.STALE_LEAD_REMINDER,
             params=("pro_name", "customer_name"),
@@ -234,7 +240,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # P7
         TemplateSpec(
             "finish_reminder",
-            "proli_finish_reminder",
+            "proli_finish_reminder_v2",
             source="Messages.Pro.REMINDER",
             body=Messages.Templates.FINISH_REMINDER,
             buttons=(
@@ -244,54 +250,54 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # P8
         TemplateSpec(
             "pro_lost_lead",
-            "proli_pro_lost_lead",
+            "proli_pro_lost_lead_v2",
             source="Messages.SOS.PRO_LOST_LEAD",
             body=Messages.Templates.PRO_LOST_LEAD,
             params=("issue_type",),
         ),  # P9
         TemplateSpec(
             "bot_paused",
-            "proli_bot_paused",
+            "proli_bot_paused_v2",
             source="Messages.Pro.PAUSE_NOTIFICATION",
             body=Messages.Templates.BOT_PAUSED,
             params=("issue_type",),
         ),  # P10
         TemplateSpec(
             "sos_alert",
-            "proli_sos_alert",
+            "proli_sos_alert_v2",
             source="Messages.SOS.PRO_ALERT",
             body=Messages.Templates.SOS_ALERT,
             params=("phone", "last_message"),
         ),  # P11, lead BOOKED
         TemplateSpec(
             "sos_alert_pending",
-            "proli_sos_alert_pending",
+            "proli_sos_alert_pending_v2",
             source="Messages.SOS.PRO_ALERT_PENDING",
             body=Messages.Templates.SOS_ALERT_PENDING,
             buttons=_APPROVE_OR_REJECT,
         ),  # P11, lead NEW: no phone (PRO-59) and no customer text (PRO-212)
         TemplateSpec(
             "customer_cancelled",
-            "proli_customer_cancelled",
+            "proli_customer_cancelled_v2",
             source="Messages.Pro.CUSTOMER_CANCELLED",
             body=Messages.Templates.CUSTOMER_CANCELLED,
             params=("customer_name", "full_address"),
         ),  # P12
         TemplateSpec(
             "onboarding_approved",
-            "proli_onboarding_approved",
+            "proli_onboarding_approved_v2",
             source="Messages.Onboarding.APPROVED_NOTIFICATION",
             body=Messages.Templates.ONBOARDING_APPROVED,
         ),  # P13
         TemplateSpec(
             "onboarding_rejected",
-            "proli_onboarding_rejected",
+            "proli_onboarding_rejected_v2",
             source="Messages.Onboarding.REJECTED_NOTIFICATION",
             body=Messages.Templates.ONBOARDING_REJECTED,
         ),  # P13
         TemplateSpec(
             "pro_lead_outside_trade",
-            "proli_pro_lead_outside_trade",
+            "proli_pro_lead_outside_trade_v2",
             source="Messages.Pro.LEAD_OUTSIDE_TRADE",
             body=Messages.Templates.PRO_LEAD_OUTSIDE_TRADE,
             params=("issue_type",),
@@ -299,7 +305,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         # Customer-facing
         TemplateSpec(
             "pro_found",
-            "proli_pro_found",
+            "proli_pro_found_v2",
             source="Messages.Customer.PRO_FOUND",
             body=Messages.Templates.PRO_FOUND,
             params=(
@@ -313,7 +319,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # the update REASSIGNING and PENDING_REVIEW promise; no catalog row before
         TemplateSpec(
             "no_pro_available",
-            "proli_no_pro_available",
+            "proli_no_pro_available_v2",
             source="Messages.SOS.NO_PRO_AVAILABLE",
             body=Messages.Templates.NO_PRO_AVAILABLE,
             params=("issue_type",),
@@ -321,7 +327,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # C1
         TemplateSpec(
             "completion_check",
-            "proli_completion_check",
+            "proli_completion_check_v2",
             source="Messages.Customer.COMPLETION_CHECK",
             body=Messages.Templates.COMPLETION_CHECK,
             params=("pro_name",),
@@ -333,21 +339,21 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # C2
         TemplateSpec(
             "reassigning",
-            "proli_reassigning",
+            "proli_reassigning_v2",
             source="Messages.SOS.CUSTOMER_REASSIGNING",
             body=Messages.Templates.REASSIGNING,
             params=("issue_type",),
         ),  # C3
         TemplateSpec(
             "max_reassignments",
-            "proli_max_reassignments",
+            "proli_max_reassignments_v2",
             source="Messages.SOS.MAX_REASSIGNMENTS_REACHED",
             body=Messages.Templates.MAX_REASSIGNMENTS,
             params=("issue_type",),
         ),  # C3
         TemplateSpec(
             "pending_review",
-            "proli_pending_review",
+            "proli_pending_review_v2",
             source="Messages.Customer.PENDING_REVIEW",
             body=Messages.Templates.PENDING_REVIEW,
             params=("issue_type",),
@@ -357,27 +363,27 @@ TEMPLATES: dict[str, TemplateSpec] = {
         # had no catalog row until the 2026-11-14 audit. To the professional:
         TemplateSpec(
             "customer_rescheduled",
-            "proli_customer_rescheduled",
+            "proli_customer_rescheduled_v2",
             source="Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS",
             body=Messages.Templates.CUSTOMER_RESCHEDULED,
             params=("customer_name", "full_address", "old_time", "new_time"),
         ),
         TemplateSpec(
             "customer_existing_job_query",
-            "proli_customer_existing_job_query",
+            "proli_customer_existing_job_query_v2",
             source="Messages.Pro.CUSTOMER_EXISTING_JOB_QUERY",
             body=Messages.Templates.CUSTOMER_EXISTING_JOB_QUERY,
             params=("customer_name", "issue_type", "phone"),
         ),  # lead BOOKED, so the phone is already this pro's to have (PRO-59)
         TemplateSpec(
             "customer_reported_no_show",
-            "proli_customer_reported_no_show",
+            "proli_customer_reported_no_show_v2",
             source="Messages.Pro.CUSTOMER_REPORTED_NO_SHOW",
             body=Messages.Templates.CUSTOMER_REPORTED_NO_SHOW,
         ),
         TemplateSpec(
             "customer_reported_completion",
-            "proli_customer_reported_completion",
+            "proli_customer_reported_completion_v2",
             source="Messages.Pro.CUSTOMER_REPORTED_COMPLETION",
             body=Messages.Templates.CUSTOMER_REPORTED_COMPLETION,
             params=("customer_name",),
@@ -385,14 +391,14 @@ TEMPLATES: dict[str, TemplateSpec] = {
         # To the customer:
         TemplateSpec(
             "pro_cancelled_booking",
-            "proli_pro_cancelled_booking",
+            "proli_pro_cancelled_booking_v2",
             source="Messages.Customer.PRO_CANCELLED_BOOKING",
             body=Messages.Templates.PRO_CANCELLED_BOOKING,
             buttons=(_HUMAN,),
         ),
         TemplateSpec(
             "rate_service",
-            "proli_rate_service",
+            "proli_rate_service_v2",
             source="Messages.Customer.RATE_SERVICE",
             body=Messages.Templates.RATE_SERVICE,
             params=("pro_name",),
@@ -404,7 +410,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),  # the short line sent while the number is degraded stays free-form
         TemplateSpec(
             "reassign_offer",
-            "proli_reassign_offer",
+            "proli_reassign_offer_v2",
             source="Messages.Customer.REASSIGN_OFFER",
             body=Messages.Templates.REASSIGN_OFFER,
             buttons=(
@@ -414,14 +420,14 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),
         TemplateSpec(
             "awaiting_approval",
-            "proli_awaiting_approval",
+            "proli_awaiting_approval_v2",
             source="Messages.Customer.AWAITING_APPROVAL_TRANSPARENT",
             body=Messages.Templates.AWAITING_APPROVAL,
             params=("pro_name",),
         ),  # after a reassignment or an admin assignment; the first offer's is a reply
         TemplateSpec(
             "bot_paused_by_pro",
-            "proli_bot_paused_by_pro",
+            "proli_bot_paused_by_pro_v2",
             source="Messages.Customer.BOT_PAUSED_BY_PRO",
             body=Messages.Templates.BOT_PAUSED_BY_PRO,
         ),

@@ -75,6 +75,56 @@ def test_meta_names_are_unique_and_legal():
     assert all(re.fullmatch(r"[a-z0-9_]+", name) for name in names)
 
 
+# Deleted from the production account on 2026-11-17: the first submission, in the
+# pre-#243 wording. A name Meta has just deleted cannot be reused straight away.
+DELETED_ON_META = {
+    f"proli_{key}"
+    for key in (
+        "lead_offer",
+        "lead_offer_reassigned",
+        "approval_nudge",
+        "daily_agenda",
+        "stale_lead_reminder",
+        "finish_reminder",
+        "pro_lost_lead",
+        "bot_paused",
+        "sos_alert",
+        "sos_alert_pending",
+        "customer_cancelled",
+        "onboarding_approved",
+        "onboarding_rejected",
+        "pro_lead_outside_trade",
+        "pro_found",
+        "no_pro_available",
+        "completion_check",
+        "reassigning",
+        "max_reassignments",
+        "pending_review",
+        "customer_rescheduled",
+        "customer_existing_job_query",
+        "customer_reported_no_show",
+        "customer_reported_completion",
+        "pro_cancelled_booking",
+        "rate_service",
+        "reassign_offer",
+        "awaiting_approval",
+        "bot_paused_by_pro",
+    )
+}
+
+
+def test_no_template_reuses_a_name_deleted_on_meta():
+    assert len(DELETED_ON_META) == 29
+    assert {spec.meta_name for spec in TEMPLATES.values()} & DELETED_ON_META == set()
+
+
+@pytest.mark.parametrize(
+    "spec", [s for s in TEMPLATES.values() if s.body], ids=lambda s: s.key
+)
+def test_every_worded_template_is_submitted_under_its_v2_name(spec):
+    assert spec.meta_name == f"proli_{spec.key}_v2"
+
+
 def test_every_template_is_a_draft_utility_template_in_hebrew():
     """PRO-232: the delivery probe is Meta's own English sample, not a Proli
     template, so it is the one entry that is neither DRAFT nor Hebrew."""
