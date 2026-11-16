@@ -119,7 +119,7 @@ def test_an_explicitly_empty_admin_phone_counts_as_unconfigured(monkeypatch):
         )
 
 
-def test_the_report_fires_only_in_a_prod_like_environment(caplog):
+def test_the_report_fires_only_in_a_prod_like_environment(caplog, monkeypatch):
     """The helper itself, not the shape of the source that calls it.
 
     This replaces a scan that asserted the literal
@@ -129,6 +129,10 @@ def test_the_report_fires_only_in_a_prod_like_environment(caplog):
     wrong in both directions. Exercising the function covers what matters, and
     `test_both_boot_paths_run_the_check` below keeps the call sites honest.
     """
+    # `_env_file=None` skips the file, not the process environment — and a
+    # module that calls `load_dotenv()` on import (admin_panel.core.utils,
+    # scripts/*) copies a developer's .env into it for the rest of the run.
+    monkeypatch.delenv("ADMIN_PHONE", raising=False)
     unset = Settings(_env_file=None, ENVIRONMENT="development", **_BASE_REQUIRED)
     assert unset.admin_phone_unconfigured is True
     assert warn_if_admin_phone_unconfigured(unset) is False, (
@@ -149,9 +153,10 @@ def test_the_report_fires_only_in_a_prod_like_environment(caplog):
     assert warn_if_admin_phone_unconfigured(configured) is False
 
 
-def test_the_report_names_the_number_by_its_last_four_only():
+def test_the_report_names_the_number_by_its_last_four_only(monkeypatch):
     """A full number in a log line is the thing PRO-191/PRO-195 spent two days
     removing; four digits answer "is that warning about me?" without it."""
+    monkeypatch.delenv("ADMIN_PHONE", raising=False)  # see the test above
     s = Settings(_env_file=None, ENVIRONMENT="production", **_PROD_LIKE_REQUIRED)
 
     records = []
