@@ -1154,8 +1154,10 @@ async def test_armed_templates_with_no_waba_id_are_reported_as_unwatched(
             {"status": "DISABLED", "category": "MARKETING"},
             [f"template:{PROBE}:status:DISABLED"],
         ),
+        # Meta refused the read: one condition for the lot, none per template.
+        ({"status": "UNREADABLE", "category": "-"}, ["template:unreadable"]),
     ],
-    ids=["fine", "paused", "not-found", "recategorised", "status-wins"],
+    ids=["fine", "paused", "not-found", "recategorised", "status-wins", "unreadable"],
 )
 async def test_each_armed_template_is_judged_on_its_status_then_its_category(
     production, armed, meta_templates, state, conditions

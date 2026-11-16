@@ -711,7 +711,8 @@ async def test_template_states_read_one_exact_name_and_language_match_per_spec(
     def handler(request: httpx.Request) -> httpx.Response:
         name = request.url.params["name"]
         if name == _HELD.meta_name:
-            row = {"name": name, "language": _HELD.language}
+            # Language is matched case-insensitively: Meta's "HE" is our "he".
+            row = {"name": name, "language": _HELD.language.upper()}
             row |= {"status": "approved", "category": "utility"}
             return _json_response(200, {"data": [row]})
         # Meta's `name` filter is not guaranteed exact: the right name in another
@@ -751,6 +752,7 @@ async def test_template_states_read_one_exact_name_and_language_match_per_spec(
     assert recorder.requests[0].url.params["fields"] == (
         "name,language,status,category"
     )
+    assert recorder.requests[0].url.params["limit"] == "100"
 
 
 @pytest.mark.asyncio
@@ -765,13 +767,30 @@ async def test_template_states_without_the_waba_id_or_token_make_no_request(
     assert recorder.requests == []
 
 
+_UNREADABLE = {"status": "UNREADABLE", "category": "-"}
+
+
 @pytest.mark.asyncio
-async def test_template_states_with_one_failed_read_is_no_answer_not_a_partial_one(
-    install_recorder, waba
+@pytest.mark.parametrize(
+    "failure, expected",
+    [
+        (500, None),
+        (429, None),
+        ("transport", None),
+        # A read Meta refuses will not fix itself: every spec says so, including
+        # the one that read fine before it.
+        (400, {_HELD.key: _UNREADABLE, _OTHER.key: _UNREADABLE}),
+        (403, {_HELD.key: _UNREADABLE, _OTHER.key: _UNREADABLE}),
+    ],
+)
+async def test_template_states_with_one_failed_read_is_never_a_partial_answer(
+    install_recorder, waba, failure, expected
 ):
     """A partial answer would read as "the rest are fine"."""
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if failure == "transport" and request.url.params["name"] != _HELD.meta_name:
+            raise httpx.ConnectError("down")
         if request.url.params["name"] == _HELD.meta_name:
             return _json_response(
                 200,
@@ -786,11 +805,11 @@ async def test_template_states_with_one_failed_read_is_no_answer_not_a_partial_o
                     ]
                 },
             )
-        return _json_response(500, {"error": {"message": "boom"}})
+        return _json_response(failure, {"error": {"message": "boom"}})
 
     install_recorder(handler)
 
-    assert await CloudAPIProvider().get_template_states([_HELD, _OTHER]) is None
+    assert await CloudAPIProvider().get_template_states([_HELD, _OTHER]) == expected
 
 
 # ---------------------------------------------------------------------------

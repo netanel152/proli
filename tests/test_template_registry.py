@@ -127,6 +127,7 @@ def test_a_bad_token_is_warned_about_once_however_often_it_is_read(
 ):
     warn = MagicMock()
     monkeypatch.setattr(template_registry, "logger", warn)
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
     monkeypatch.setattr(settings, "WHATSAPP_ARMED_TEMPLATES", "draft, nope, *, a")
 
     template_registry.armed_keys()
@@ -136,6 +137,24 @@ def test_a_bad_token_is_warned_about_once_however_often_it_is_read(
     for token in ("'draft'", "'nope'", "'*'"):
         assert len([m for m in messages if token in m]) == 1
     assert len(messages) == 3  # and the valid key `a` is not one of them
+
+
+@pytest.mark.parametrize(
+    "environment, level, other",
+    [("production", "error", "warning"), ("staging", "warning", "error")],
+)
+def test_a_bad_token_is_an_error_in_production_and_a_warning_elsewhere(
+    registry, monkeypatch, environment, level, other
+):
+    log = MagicMock()
+    monkeypatch.setattr(template_registry, "logger", log)
+    monkeypatch.setattr(settings, "ENVIRONMENT", environment)
+    monkeypatch.setattr(settings, "WHATSAPP_ARMED_TEMPLATES", "nope")
+
+    assert template_registry.armed_keys() == frozenset()
+
+    getattr(log, level).assert_called_once()
+    getattr(log, other).assert_not_called()
 
 
 def test_the_real_registry_arms_the_probe_when_named_and_never_a_draft(monkeypatch):

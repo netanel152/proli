@@ -440,6 +440,28 @@ async def test_an_armed_template_meta_refuses_is_paged_and_reported_as_not_sent(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, refused",
+    [(400, True), (404, True), (401, False), (403, False), (429, False), (500, False)],
+)
+async def test_only_a_refusal_of_the_template_itself_is_paged_and_swallowed(
+    facade, graph, pages, monkeypatch, status, refused
+):
+    """A 401, 403, 429 or 5xx is the account or Meta, not the template: it
+    propagates unpaged and is left to the deauth and quality watchdogs."""
+    _approve(monkeypatch)
+    _meta_answers(monkeypatch, status, REFUSAL)
+
+    if refused:
+        assert await _send(facade) is None
+        assert pages.call_count == 1
+    else:
+        with pytest.raises(httpx.HTTPStatusError):
+            await _send(facade)
+        assert pages.call_count == 0
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("named", [False, True], ids=["plain", "armed-template-key"])
 async def test_a_free_form_text_rejection_on_an_open_window_still_raises(
     facade, graph, pages, fake_redis, monkeypatch, named
@@ -525,6 +547,23 @@ async def test_a_failing_by_design_check_lets_the_untemplated_send_proceed():
 
     assert result == {"idMessage": "x"}
     provider.send_text.assert_awaited_once_with(CHAT_ID, "טקסט")
+
+
+@pytest.mark.asyncio
+async def test_untemplated_is_ignored_on_a_send_that_names_its_template():
+    """It has a template, so a closed window must not drop what could be sent."""
+    provider = MagicMock()
+    provider.transmits = False
+    provider.window_closed_by_design = AsyncMock(return_value=True)
+    provider.send_business_initiated = AsyncMock(return_value={"idMessage": "x"})
+
+    result = await WhatsAppFacade(provider).send_message(
+        CHAT_ID, "טקסט", template_key="lead_offer", untemplated="why"
+    )
+
+    assert result == {"idMessage": "x"}
+    provider.send_business_initiated.assert_awaited_once()
+    provider.window_closed_by_design.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------

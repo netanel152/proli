@@ -33,6 +33,7 @@ AS_TEXT = {"idMessage": "wamid.2"}
 @pytest.fixture
 def facade(monkeypatch):
     fake = MagicMock()
+    fake.provider.transmits = True
     fake.send_message = AsyncMock(return_value=AS_TEMPLATE)
     fake.close = AsyncMock()
     monkeypatch.setattr(probe, "get_whatsapp", lambda: fake)
