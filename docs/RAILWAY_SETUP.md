@@ -165,6 +165,8 @@ how the two silently re-merge.
 | `GEMINI_API_KEY` | **distinct** | a staging leak or quota burn must not affect production |
 | `META_ACCESS_TOKEN`, `META_APP_SECRET`, `META_VERIFY_TOKEN`, `META_PHONE_NUMBER_ID` | **distinct** | production holds the real pilot number. Staging's `api` and `worker` send live from Meta's Test Number, its **own** test number — never point staging at production's phone-number id with dry-run off, because staging sends are then production sends (same number, same Meta quality rating) |
 | `WHATSAPP_DRY_RUN` | **distinct** | Measured on 2026-11-06: Staging `api` and `worker` are `false` with `WHATSAPP_PROVIDER=cloud`; Production `api`, `worker` and `admin` are `true`. **Production is muted until the PRO-102 cutover**, and goes `false` there, not before. This row once read "Production `false`" and was wrong in the direction that matters, since it is the row an operator reads while configuring an environment |
+| `WHATSAPP_ARMED_TEMPLATES` | **distinct** | PRO-232. The registry keys this environment's Meta account actually holds, comma-separated. A template is sent only when it is `APPROVED` in `template_registry.py` **and** named here, so a registry flip arms nothing by itself. Production names the templates Meta approved on the production account; Staging names only `delivery_probe` (Meta's `hello_world`, the one template the test account holds), or nothing. Never copy Production's value to Staging: staging would then name templates its account does not hold, and every closed-window send would be refused and paged. A name the registry doesn't know, a DRAFT key, or a wildcard arms nothing and is logged once at WARNING; unset arms nothing. Needed on `worker` **and** `admin` (both send), and harmless on `api` |
+| `META_WABA_ID` | **distinct** | PRO-232. The WhatsApp Business Account id that holds this environment's templates (not secret). The quality watchdog reads each armed template's status and category from it every 15 minutes. Needed on `worker`. In production, armed templates with this unset page `template:unwatched` once a day |
 | `CLOUDINARY_*` | shared *(pilot decision)* | media is non-sensitive and a second account is friction with little pilot-stage payoff; revisit post-pilot |
 | `GOOGLE_MAPS_API_KEY` | shared *(pilot decision)* | geocoding only; restrict by API + quota in the Google console; revisit post-pilot |
 | `ADMIN_PHONE`, `ONCALL_PHONE` | shared | not secrets — the same operator is paged from both |
@@ -190,6 +192,7 @@ Set these on the `admin` service, with the same values as that environment's `wo
 | `META_APP_SECRET` | same as `worker` | Required for `cloud` in staging and production, muted or not. `admin` serves no webhook; the boot check does not distinguish services |
 | `META_VERIFY_TOKEN` | same as `worker` | Same rule as `META_APP_SECRET` |
 | `META_GRAPH_API_VERSION` | same as `worker` | Not a boot requirement. Copy it anyway: unset, it takes the config default `v23.0`, which can differ from `worker`'s value |
+| `WHATSAPP_ARMED_TEMPLATES` | same as `worker` | Not a boot requirement. Unset, the panel's sends (pro approval and rejection, the completion check) never use a template, so a recipient whose window is closed gets nothing while the worker's sends to the same person do arrive |
 
 `REDIS_URL` and `MONGO_URI` must also be the same instances as `worker`'s. The worker's watchdog writes the `wa:instance:state` key the facade's breaker reads, and the absent key blocks every send. The 24h window keys and `wa_delivery` are shared the same way.
 
@@ -205,10 +208,26 @@ Set them together, in the Railway dashboard, as one staged change. `cloud` with 
 
 `api`, `worker` **and `admin`** all go live at the cutover. Production `admin` has `WHATSAPP_DRY_RUN=true` and no `WHATSAPP_PROVIDER` or `META_*` values today, so flipping only `api` and `worker` leaves the panel silent. Muted, it says so on every send, so the gap is visible but operators would be phoning every pro.
 
-- [ ] `api` and `worker`: `WHATSAPP_PROVIDER=cloud`, `WHATSAPP_DRY_RUN=false`, Production's own `META_*` values.
+- [ ] `api` and `worker`: `WHATSAPP_PROVIDER=cloud`, `WHATSAPP_DRY_RUN=false`, Production's own `META_*` values, `META_WABA_ID` included.
 - [ ] `admin`: everything in the table above, with Production's values.
 - [ ] After the redeploy, load a panel page, then check `admin`'s logs for `WhatsApp egress using provider 'cloud'`. It is an INFO line: at `LOG_LEVEL=WARNING` it will not appear, and the real offer below is the evidence.
 - [ ] One offer from the production panel reaches a real phone, and the panel reports it as sent.
+
+### Arming a template (PRO-232)
+
+Arming has two halves, and a template is sent only when both are done. Flipping the registry alone arms nothing anywhere.
+
+1. **Code: the registry says Meta approved it.** Run `python scripts/submit_whatsapp_templates.py --status --waba-id <production WABA>`. For each template it reports `APPROVED` with category `UTILITY`, open a PR that flips that entry in `app/providers/whatsapp/template_registry.py` to `TemplateStatus.APPROVED`, with the exact name Meta approved. Leave out any template Meta holds as MARKETING (`--status` exits 3 on one). The PR deploys to staging and production alike, and changes nothing on either until step 2.
+2. **Environment: this account holds it.** Add the key to Production's `WHATSAPP_ARMED_TEMPLATES` on `worker` and `admin` (comma-separated, e.g. `lead_offer,pro_found`), as one staged change, and redeploy. Staging keeps `delivery_probe` or nothing.
+
+Then check it:
+
+- [ ] Within 15 minutes of the redeploy, the quality watchdog has read each armed template from Meta. A template that is not `APPROVED` + `UTILITY`, or `META_WABA_ID` missing, pages `🚨 WhatsApp template …` once a day. No page is the expected outcome.
+- [ ] A closed-window send naming the template reaches a real phone. A refusal from Meta does not break the flow that sent it: it is paged as a lost template (`was refused by Meta`, with Meta's code), under the same once-a-day-per-recipient budget as a template accepted and then failed.
+
+**Disarming** is the same in reverse: remove the key from `WHATSAPP_ARMED_TEMPLATES` and redeploy. Nothing disarms by itself. The watchdog pages and leaves the decision to you, because a template Meta moved to MARKETING may still be the right one to send.
+
+**Staging's proof of a closed-window delivery (PRO-125, PRO-101).** The test account holds none of Proli's templates, but Meta gives it `hello_world`, which the registry maps to `delivery_probe`. With `WHATSAPP_ARMED_TEMPLATES=delivery_probe` on Staging's `worker`, run `python scripts/probe_template_delivery.py --to <registered test device>` inside the staging worker, where its Redis and Mongo are reachable. It sends through the facade the way a flow does, and exits 0 when the template went out (the device's window was closed), 1 when the window was open and plain text went out instead (nothing proven, so retry after 24 silent hours), and 2 when nothing was sent. Confirm on the handset, and check that the printed wamid's `wa_delivery` record reaches `delivered`. Not run as of this change. The exact way to run a one-off command in the staging container is whatever `railway ssh` offers at the time.
 
 ### `ENVIRONMENT` per Railway environment (PRO-34)
 

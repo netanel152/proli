@@ -27,6 +27,8 @@ import mimetypes
 from typing import Any
 from urllib.parse import urlparse
 
+import httpx
+
 from app.core.config import settings
 from app.core.messages import Messages
 from app.core.constants import WorkerConstants
@@ -40,9 +42,14 @@ from app.providers.whatsapp.base import (
     ServiceWindowClosedError,
     TemplateNotRegisteredError,
     TemplateParamsError,
+    TemplateRefusedError,
     WhatsAppProvider,
 )
-from app.providers.whatsapp.window import claim_window_page, is_service_window_open
+from app.providers.whatsapp.window import (
+    TEMPLATE_LOST,
+    claim_window_page,
+    is_service_window_open,
+)
 
 _GRAPH_ROOT = "https://graph.facebook.com"
 
@@ -371,8 +378,58 @@ class CloudAPIProvider(WhatsAppProvider):
             # a window that closed between the two reads would page and drop a
             # message whose template is approved.
             return await self._post_text(chat_id, text)
-        result = await self.send_template(chat_id, template_key, params)
+        try:
+            result = await self.send_template(chat_id, template_key, params)
+        except httpx.HTTPStatusError as e:
+            # PRO-232: Meta refused an armed template (paused, disabled, not on
+            # this account, a parameter it won't take). `_post_message` has
+            # logged Meta's code; this is the page, then the policy error the
+            # facade turns into "not sent".
+            await self._report_refused_template(chat_id, template_key, e)
+            raise TemplateRefusedError(
+                f"Meta refused template {template_key!r} for {_mask(chat_id)}"
+            ) from e
         return {**result, "sent_as_template": template_key}
+
+    async def _report_refused_template(
+        self, chat_id: str, template_key: str, error: httpx.HTTPStatusError
+    ) -> None:
+        """Page a template Meta would not take, under the ``TEMPLATE_LOST`` budget.
+
+        The same budget as a template Meta accepted and then failed: to the
+        operator both are "a message with a template behind it did not arrive".
+        Meta's numeric code goes in the page; its title stays in the log line
+        ``_post_message`` already wrote.
+        """
+        code = None
+        try:
+            code = (error.response.json().get("error") or {}).get("code")
+        except Exception:
+            pass
+        claimed = await claim_window_page(chat_id, condition=TEMPLATE_LOST)
+        log = page_critical if claimed else logger.error
+        log(
+            f"WhatsApp template {template_key!r} to {_mask(chat_id)} was refused "
+            f"by Meta (HTTP {error.response.status_code}, code={code}). The "
+            "message is LOST; the flow that sent it carried on. Check the "
+            "template's status with scripts/submit_whatsapp_templates.py "
+            "--status, and WHATSAPP_ARMED_TEMPLATES for this environment."
+        )
+
+    async def window_closed_by_design(self, chat_id: str, reason: str) -> bool:
+        """PRO-232: a send with no template on purpose, to a closed window.
+
+        Reads the window once and says so at WARNING, never paging: the missing
+        template is a decision, not a defect. Fails open like every window read,
+        so a Redis error lets the send go ahead and Meta be the judge.
+        """
+        if await is_service_window_open(chat_id):
+            return False
+        logger.warning(
+            f"WhatsApp send to {_mask(chat_id)} dropped: its 24h window is closed "
+            f"and it has no template by design ({reason}). Not sent, not paged."
+        )
+        return True
 
     async def send_interactive(
         self,
@@ -564,6 +621,55 @@ class CloudAPIProvider(WhatsAppProvider):
             "can_send_message": self._upper(health.get("can_send_message")),
             "health_errors": self._health_error_codes(health) if health else None,
         }
+
+    async def get_template_states(
+        self, specs: list[template_registry.TemplateSpec]
+    ) -> dict[str, dict[str, str]] | None:
+        """PRO-232: Meta's status and category for each spec, read-only.
+
+        One GET per template on ``/{waba_id}/message_templates``, filtered by
+        name and matched exactly on name and language (Meta's ``name`` filter
+        is not guaranteed to be exact). ``None`` when ``META_WABA_ID`` or the
+        token is missing or any read fails: a partial answer would read as
+        "those are fine".
+        """
+        if settings.META_ACCESS_TOKEN is None or not settings.META_WABA_ID:
+            return None
+        states: dict[str, dict[str, str]] = {}
+        try:
+            client = await get_http_client()
+            for spec in specs:
+                response = await client.get(
+                    f"{_GRAPH_ROOT}/{settings.META_GRAPH_API_VERSION}"
+                    f"/{settings.META_WABA_ID}/message_templates",
+                    params={
+                        "name": spec.meta_name,
+                        "fields": "name,language,status,category",
+                    },
+                    headers=self._auth_headers(),
+                )
+                response.raise_for_status()
+                match = next(
+                    (
+                        t
+                        for t in response.json().get("data") or []
+                        if t.get("name") == spec.meta_name
+                        and t.get("language") == spec.language
+                    ),
+                    None,
+                )
+                states[spec.key] = (
+                    {"status": "NOT_FOUND", "category": "-"}
+                    if match is None
+                    else {
+                        "status": self._upper(match.get("status")) or "UNKNOWN",
+                        "category": self._upper(match.get("category")) or "UNKNOWN",
+                    }
+                )
+        except Exception as e:
+            logger.warning(f"Meta template status read failed: {e}")
+            return None
+        return states
 
     @staticmethod
     def _upper(value: Any) -> str | None:

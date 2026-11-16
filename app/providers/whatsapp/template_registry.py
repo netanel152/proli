@@ -5,10 +5,11 @@ The inventory itself is PRO-88 (docs/WHATSAPP_TEMPLATE_CATALOG.md); this module
 is its machine-readable half. Every entry stays ``DRAFT`` until the template
 clears Meta review (``scripts/submit_whatsapp_templates.py`` submits it and
 reports its status and the category Meta holds it in). Flipping an entry to
-``APPROVED``, with the exact name Meta approved, arms it for the call sites that
-pass ``template_key`` to the facade's ``send_message``: the worker's, and the
-admin panel's through ``sync.send_text_sync``. It does nothing for a send that
-names no template. Flip only an entry Meta approved as UTILITY: one it holds as
+``APPROVED``, with the exact name Meta approved, is the code half of arming it
+for the call sites that pass ``template_key`` to the facade's ``send_message``:
+the worker's, and the admin panel's through ``sync.send_text_sync``. The
+environment half is ``WHATSAPP_ARMED_TEMPLATES`` (PRO-232, below). It does
+nothing for a send that names no template. Flip only an entry Meta approved as UTILITY: one it holds as
 MARKETING costs several times as much and may not be delivered, so arming it is
 a decision to make on purpose (``--status`` exits 2 on one).
 
@@ -27,6 +28,12 @@ Three lookups, three callers:
   named no template. Returns ``None`` for everything, which routes the failure
   to an operator page instead.
 
+PRO-232: ``APPROVED`` is half of arming. The other half is this environment's
+``WHATSAPP_ARMED_TEMPLATES``, which names the keys its Meta account actually
+holds: templates are approved on the production account only, and the same code
+deploys to staging, whose test account holds none of them. ``resolve`` wants
+both, so flipping an entry here arms it nowhere until an environment names it.
+
 PRO-230: a template whose body advertises a reply (`*אשר* — …`) also carries it
 as a quick-reply button. The label is submitted with the template; the payload
 goes with each send and is exactly the string the flow accepts when typed, so a
@@ -39,6 +46,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from app.core.config import settings
+from app.core.logger import logger
 from app.core.messages import Messages
 
 _VARIABLE = re.compile(r"\{\{(\d+)\}\}")
@@ -69,6 +78,11 @@ _BUTTON_LABEL = re.compile(r"[^\W_]+(?: [^\W_]+)*")
 # line (RATE_SERVICE's 1-5 and *דלג*) is deliberately not one either: it
 # gets no button, and the parity rule below is satisfied by having none.
 _ADVERTISED_REPLY = re.compile(r"^\*([^*:\n]+)\* —", flags=re.M)
+# PRO-232: what separates the keys in WHATSAPP_ARMED_TEMPLATES.
+_ARMED_SEPARATORS = re.compile(r"[\s,;]+")
+# Tokens already warned about, so a bad value is reported once per process
+# rather than on every send that consults it.
+_WARNED_ARMING_TOKENS: set[str] = set()
 
 
 class TemplateStatus(str, Enum):
@@ -117,6 +131,10 @@ _APPROVE_OR_REJECT = (
 )
 _FINISHED = QuickReply(_B.FINISHED, _K.FINISH_COMMANDS[0])
 _HUMAN = QuickReply(_B.HUMAN, _K.SOS_COMMANDS[0])
+
+
+# PRO-232: the one entry that stands for Meta's own sample template.
+DELIVERY_PROBE_KEY = "delivery_probe"
 
 
 # Keyed by logical name: the catalog rows that survived the consolidation pass,
@@ -378,6 +396,21 @@ TEMPLATES: dict[str, TemplateSpec] = {
             source="Messages.Customer.BOT_PAUSED_BY_PRO",
             body=Messages.Templates.BOT_PAUSED_BY_PRO,
         ),
+        # PRO-232: not a Proli message. Meta gives every test account a
+        # `hello_world` template, approved and parameterless, and the test
+        # account holds nothing else, so this is how staging proves a real
+        # closed-window template delivery (scripts/probe_template_delivery.py).
+        # No flow names this key; arm it on staging only.
+        TemplateSpec(
+            DELIVERY_PROBE_KEY,
+            "hello_world",
+            status=TemplateStatus.APPROVED,
+            language="en_US",
+            # The text the probe sends on an open window. The template's body is
+            # Meta's own, so none is stored here.
+            source="Messages.System.DELIVERY_PROBE",
+            submit=False,
+        ),
     )
 }
 
@@ -395,15 +428,59 @@ def _payloads_by_label() -> dict[str, str]:
     }
 
 
-def resolve(key: str) -> TemplateSpec | None:
-    """The spec for ``key`` **iff** it is approved and therefore sendable.
+def _warn_once(token: str, why: str) -> None:
+    if token in _WARNED_ARMING_TOKENS:
+        return
+    _WARNED_ARMING_TOKENS.add(token)
+    logger.warning(
+        f"WHATSAPP_ARMED_TEMPLATES names {token!r}, which {why}. It stays "
+        "unarmed: sends naming it behave as if it had no template."
+    )
 
-    Draft and unknown keys both return ``None`` — the caller cannot tell them
-    apart and must not: neither can be transmitted, and the distinction only
-    matters to a human reading the catalog.
+
+def armed_keys() -> frozenset[str]:
+    """The keys this environment arms: named in ``WHATSAPP_ARMED_TEMPLATES``
+    **and** ``APPROVED`` here.
+
+    Fail-safe by construction: a name the registry does not know, a DRAFT entry,
+    a wildcard or a stray character arms nothing, and is reported once at
+    WARNING. There is no "all": arming is always a list of names someone typed.
+    Parsed per call rather than at import, so the suite can change the setting
+    and the registry without reloading this module.
+    """
+    raw = settings.WHATSAPP_ARMED_TEMPLATES or ""
+    armed = set()
+    for token in _ARMED_SEPARATORS.split(raw.strip()):
+        if not token:
+            continue
+        spec = TEMPLATES.get(token)
+        if spec is None:
+            _warn_once(token, "is not a key in the template registry")
+        elif spec.status is not TemplateStatus.APPROVED:
+            _warn_once(token, "is still DRAFT in the registry")
+        else:
+            armed.add(token)
+    return frozenset(armed)
+
+
+def armed_specs() -> list[TemplateSpec]:
+    """Every armed spec, in registry order. What the quality watchdog checks."""
+    keys = armed_keys()
+    return [spec for key, spec in TEMPLATES.items() if key in keys]
+
+
+def resolve(key: str) -> TemplateSpec | None:
+    """The spec for ``key`` **iff** it is armed here and therefore sendable.
+
+    Draft, unknown and unarmed keys all return ``None`` — the caller cannot tell
+    them apart and must not: none of them can be transmitted from this
+    environment, and the distinction only matters to a human reading the
+    catalog or the environment's variables.
     """
     spec = TEMPLATES.get(key)
     if spec is None or spec.status is not TemplateStatus.APPROVED:
+        return None
+    if key not in armed_keys():
         return None
     return spec
 

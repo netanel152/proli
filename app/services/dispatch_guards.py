@@ -580,15 +580,20 @@ async def guard_sos_human_handoff(ctx: DispatchContext, deps: GuardDeps):
             and (pro.get("is_active", True) or pro.get("self_paused"))
         ):
             pro_phone = to_chat_id(pro["phone_number"])
-            await deps.whatsapp.send_message(
-                pro_phone,
-                Messages.Pro.PAUSE_NOTIFICATION,
-                template_key="bot_paused",
-                params={
-                    "issue_type": active_lead.get("issue_type")
-                    or Messages.Fallbacks.ISSUE_UNKNOWN
-                },
-            )
+            # PRO-232: the lead is paused and the operator paged. A send that
+            # fails must not cost the customer their own acknowledgement.
+            try:
+                await deps.whatsapp.send_message(
+                    pro_phone,
+                    Messages.Pro.PAUSE_NOTIFICATION,
+                    template_key="bot_paused",
+                    params={
+                        "issue_type": active_lead.get("issue_type")
+                        or Messages.Fallbacks.ISSUE_UNKNOWN
+                    },
+                )
+            except Exception as e:
+                logger.error(f"Pro not told lead {active_lead['_id']} was paused: {e}")
 
     await deps.whatsapp.send_message(
         ctx.chat_id, Messages.Customer.BOT_PAUSED_BY_CUSTOMER

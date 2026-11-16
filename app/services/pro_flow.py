@@ -609,19 +609,26 @@ async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
         price_line=price_line,
         rating_line=rating_line,
     )
-    await whatsapp.send_message(
-        lead["chat_id"],
-        customer_msg,
-        template_key="pro_found",
-        params={
-            "pro_name": pro_name,
-            "issue_type": lead.get("issue_type", ""),
-            "full_address": lead.get("full_address", ""),
-            "appointment_time": lead.get("appointment_time", ""),
-            "price_estimate": notification_service.price_estimate_param(quoted_price),
-            "pro_phone": pro_phone,
-        },
-    )
+    # PRO-232: BOOKED is written and the pro holds the lead. A send that fails
+    # must not leave the customer parked in AWAITING_PRO_APPROVAL.
+    try:
+        await whatsapp.send_message(
+            lead["chat_id"],
+            customer_msg,
+            template_key="pro_found",
+            params={
+                "pro_name": pro_name,
+                "issue_type": lead.get("issue_type", ""),
+                "full_address": lead.get("full_address", ""),
+                "appointment_time": lead.get("appointment_time", ""),
+                "price_estimate": notification_service.price_estimate_param(
+                    quoted_price
+                ),
+                "pro_phone": pro_phone,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Customer not told lead {lead['_id']} was approved: {e}")
     # Clear AWAITING_PRO_APPROVAL state so customer can continue normally
     await StateManager.clear_state(lead["chat_id"])
 
@@ -935,7 +942,12 @@ async def _execute_finish(lead, pro, whatsapp, pro_chat_id) -> str:
         # The number is already degraded, so a rejection here is likely, and it
         # must not abort a finish whose COMPLETED is already written.
         try:
-            await whatsapp.send_message(lead["chat_id"], feedback_msg.split("\n")[0])
+            # PRO-232: untemplated on purpose; a closed window drops it quietly.
+            await whatsapp.send_message(
+                lead["chat_id"],
+                feedback_msg.split("\n")[0],
+                untemplated="short completion line while the number is degraded",
+            )
         except Exception as e:
             logger.warning(f"Completion line for lead {lead['_id']} not sent: {e}")
     logger.info(f"Lead {lead['_id']} marked as COMPLETED by pro {pro['_id']}")
