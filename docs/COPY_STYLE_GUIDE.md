@@ -9,6 +9,15 @@ and the template bodies in `Messages.Templates`.
 site). This guide says **how it reads**. A message that violates a rule here is a review
 comment, exactly like a message that violates §10.
 
+**Template bodies are the exception** (`Messages.Templates`, owner decision 2026-11-17).
+They are what a recipient with a closed window reads, and they are written to read
+like a person typed them: no emoji, no em dash, no `*bold*`, no slashed gender form,
+and פרולי speaks as "אנחנו" ("מצאנו", "נעדכן"), not §1's first person singular. A
+reply is asked for in the sentence ("לאישור כתוב אשר") instead of §3's `*token* —`
+line, and a numbered menu is `1 - text`. `template_registry.advertised_replies` reads
+those two shapes for the button parity rule, and `tests/test_template_bodies.py`
+holds every body to them. Everything else in this guide still applies to them.
+
 Program: PRO-164. The rewrite that applies this guide across the catalog is PRO-168; the
 AI-prompt pass, covering `app/core/prompts.py` and `admin_panel/core/utils.py`'s
 `generate_system_prompt`, landed in PRO-169.

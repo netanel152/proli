@@ -27,11 +27,12 @@ Three lookups, three callers:
   named no template. Returns ``None`` for everything, which routes the failure
   to an operator page instead.
 
-PRO-230: a template whose body advertises a reply (`*אשר* — …`) also carries it
-as a quick-reply button. The label is submitted with the template; the payload
-goes with each send and is exactly the string the flow accepts when typed, so a
-tap and a typed reply reach the same handler. The keyword lines stay in the
-body, so typing keeps working on a client that shows no buttons.
+PRO-230: a template whose body advertises a reply (`כתוב אשר`, or a numbered
+line `1 - …`) also carries it as a quick-reply button. The label is submitted
+with the template; the payload goes with each send and is exactly the string the
+flow accepts when typed, so a tap and a typed reply reach the same handler. The
+keywords stay in the body, so typing keeps working on a client that shows no
+buttons.
 """
 
 import re
@@ -63,12 +64,35 @@ _MAX_QUICK_REPLIES = 10
 _BUTTON_LABEL_MAX_CHARS = 25
 # Matched with `fullmatch`: `$` would also match before a trailing newline.
 _BUTTON_LABEL = re.compile(r"[^\W_]+(?: [^\W_]+)*")
-# What a body advertises: the menu format, `*token* — text`, one per line. A
-# bold label ends in a colon instead, so it is not a reply, and a token
-# cannot span lines. An option offered mid-sentence rather than as a menu
-# line (RATE_SERVICE's 1-5 and *דלג*) is deliberately not one either: it
-# gets no button, and the parity rule below is satisfied by having none.
-_ADVERTISED_REPLY = re.compile(r"^\*([^*:\n]+)\* —", flags=re.M)
+# What a body advertises, in the plain wording the owner approved 2026-11-17
+# (no bold, no em dash). Two shapes:
+# * a keyword after "כתוב"/"לכתוב" ("לאישור כתוב אשר"). A keyword can be two
+#   words ("עדיין עובד"), so it is matched against the keywords a template may
+#   offer, longest first, and must end at a word boundary. "לכתוב לנו" is the one
+#   other thing a body may write after the verb; `unread_write_prompts` finds any
+#   other, so a misspelt keyword cannot slip past the parity rule unseen.
+# * a numbered line, `1 - text`, at the start of a line. A digit inside a
+#   sentence (RATE_SERVICE's "מ-1 ... עד 5") is not one, and gets no button.
+_REPLY_KEYWORDS = sorted(
+    {
+        *Messages.Keywords.APPROVE_COMMANDS,
+        *Messages.Keywords.REJECT_COMMANDS,
+        *Messages.Keywords.FINISH_COMMANDS,
+        *Messages.Keywords.STILL_WORKING_COMMANDS,
+        *Messages.Keywords.ACTIVE_JOBS_COMMANDS,
+        *Messages.Keywords.SOS_COMMANDS,
+        *Messages.Keywords.SKIP_TOKENS,
+    }
+    - {"1", "2", "3", "4"},  # a digit is offered as a numbered line, never typed
+    key=len,
+    reverse=True,
+)
+_WRITE_VERB = r"(?<!\w)ל?כתוב "
+_ADVERTISED_REPLY = re.compile(
+    rf"{_WRITE_VERB}({'|'.join(map(re.escape, _REPLY_KEYWORDS))})(?!\w)" r"|^(\d+) - ",
+    flags=re.M,
+)
+_WRITE_PROMPT = re.compile(rf"{_WRITE_VERB}(?!לנו(?!\w))")
 
 
 class TemplateStatus(str, Enum):
@@ -354,6 +378,11 @@ TEMPLATES: dict[str, TemplateSpec] = {
             source="Messages.Customer.RATE_SERVICE",
             body=Messages.Templates.RATE_SERVICE,
             params=("pro_name",),
+            # The owner's decision, 2026-11-17: a rating request is a survey,
+            # which Meta is likely to hold as MARKETING. Its send site still
+            # names it, so a window-closed rating prompt pages as before and
+            # submitting it later needs only this flag.
+            submit=False,
         ),  # the short line sent while the number is degraded stays free-form
         TemplateSpec(
             "reassign_offer",
@@ -443,8 +472,21 @@ def meta_body(spec: TemplateSpec) -> str:
 
 
 def advertised_replies(body: str) -> list[str]:
-    """The replies a body offers, in order: each `*token* —` menu line's token."""
-    return _ADVERTISED_REPLY.findall(body)
+    """The replies a body offers, in order: each keyword it asks to be written,
+    and each numbered line's digit."""
+    return [m.group(1) or m.group(2) for m in _ADVERTISED_REPLY.finditer(body)]
+
+
+def unread_write_prompts(body: str) -> list[str]:
+    """Every "כתוב …" in ``body`` that ``advertised_replies`` does not read as a
+    reply, quoted to the end of its line: a keyword the registry does not know,
+    or a misspelling of one. Should be empty for every body."""
+    read = {m.start() for m in _ADVERTISED_REPLY.finditer(body)}
+    return [
+        body[m.start() :].split("\n", 1)[0]
+        for m in _WRITE_PROMPT.finditer(body)
+        if m.start() not in read
+    ]
 
 
 def payload_for_label(label: str) -> str | None:

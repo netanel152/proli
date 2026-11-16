@@ -136,7 +136,7 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | — | `pro_cancelled_booking` | none | `PRO_CANCELLED_BOOKING` | `pro_flow._execute_cancel` |
 | — | `customer_rescheduled` | `customer_name`, `full_address`, `old_time`, `new_time` | `CUSTOMER_RESCHEDULED` | `customer_flow.handle_reschedule_selection` |
 | — | `customer_existing_job_query` | `customer_name`, `issue_type`, `phone` | `CUSTOMER_EXISTING_JOB_QUERY` | `dispatch_guards.guard_new_or_existing` |
-| — | `rate_service` | `pro_name` | `RATE_SERVICE` | `pro_flow._execute_finish`, the full prompt only |
+| — | `rate_service` | `pro_name` | `RATE_SERVICE` | `pro_flow._execute_finish`, the full prompt only. **Not submitted** (2026-11-17), see below |
 | — | `customer_reported_no_show` | none | `CUSTOMER_REPORTED_NO_SHOW` | `customer_flow._handle_no_show_report` |
 | — | `reassign_offer` | none | `REASSIGN_OFFER` | `monitor_service.check_pro_approval_sla` |
 | — | `awaiting_approval` | `pro_name` | `AWAITING_APPROVAL` | `monitor_service.reassign_lead`, `admin_flow.assign_lead_to_pro` |
@@ -144,9 +144,9 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | — | `bot_paused_by_pro` | none | `BOT_PAUSED_BY_PRO` | `pro_flow._pause_lead` |
 | P4 | `early_lead` | — | none | **Not submitted, send left free-form**, see below |
 
-That is **29 templates to submit** and one registry entry left out (`early_lead`), against the 15 the registry used to list: P11 and P13 were each two bodies under one key, C3 was three, `pro_found` had no row, P14 came with PRO-215, and the nine notices to the other party of a conversation had no row at all.
+That is **28 templates to submit** and two registry entries left out (`early_lead`, and `rate_service` since 2026-11-17), against the 15 the registry used to list: P11 and P13 were each two bodies under one key, C3 was three, `pro_found` had no row, P14 came with PRO-215, and the nine notices to the other party of a conversation had no row at all.
 
-`tests/test_template_bodies.py` fails if a call site's `params` stop matching its spec, if a submitted template has no call site, if a call site names a template that is not submitted, or if one of the admin panel's sends names none. It scans `admin_panel/` as well as `app/`, with no exception list.
+`tests/test_template_bodies.py` fails if a call site's `params` stop matching its spec, if a submitted template has no call site, if a call site names a template that is not submitted (one exception, `rate_service`, listed with its reason in `NAMED_BUT_NOT_SUBMITTED`: it has a body, and while it is a draft its send behaves as one naming no template), or if one of the admin panel's sends names none. It scans `admin_panel/` as well as `app/`.
 
 ## What each template had to give up
 
@@ -160,13 +160,13 @@ That is **29 templates to submit** and one registry entry left out (`early_lead`
 
 **An emergency P3 takes `lead_offer`,** because `lead_offer_reassigned` has no urgency line and the free-form version opens with the emergency header.
 
-**The wrong-trade notice is one body.** The free-form send has two wordings: one for a pro who was offered the lead ("אין צורך לאשר או לדחות אותה") and one for a pro who had only heard of it. `pro_lead_outside_trade` says "אין צורך לפעול", which is true of both, and like the free-form notice it does not say where the lead went.
+**The wrong-trade notice is one body.** The free-form send has two wordings: one for a pro who was offered the lead ("אין צורך לאשר או לדחות אותה") and one for a pro who had only heard of it. `pro_lead_outside_trade` says "אין צורך לעשות כלום", which is true of both, and like the free-form notice it does not say where the lead went.
 
 **`pro_found` drops two optional lines.** `PRO_FOUND`'s profession and rating are not in the template. Its price stays, as `price_estimate` with the same fallback the offer uses.
 
 **Runtime values are cut.** `sanitize_param` limits `last_message` to 700 characters and every other variable to 120, so that the whole message stays inside the 1024 Meta states for a body. Those two figures are ours.
 
-**Quick-reply buttons (PRO-230).** The owner decided on 2026-11-14 that a template may carry quick-reply buttons for the pilot, reversing the 2026-11-06 "text menus only" decision for templates alone. Replies stay plain keywords in the body (`*אשר*`), and a template's buttons are exactly the replies its body advertises (`template_registry.button_rule_violations`: same list, plus Meta's limits of at most 10 buttons, a label of at most 25 characters, letters, digits and single spaces), so a tap and the typed reply reach the same handler and nothing changes in the FSM. A pro template's payload is always a keyword, never a bare digit (PRO-212). A tap that arrives without its payload (WhatsApp Manager's test send) is read back by its label (`payload_for_label`). Labels live in `Messages.Templates.Buttons`.
+**Quick-reply buttons (PRO-230).** The owner decided on 2026-11-14 that a template may carry quick-reply buttons for the pilot, reversing the 2026-11-06 "text menus only" decision for templates alone. Replies stay plain keywords in the body ("לאישור כתוב אשר", or a numbered line "1 - …"), and a template's buttons are exactly the replies its body advertises (`template_registry.advertised_replies` reads both shapes, `unread_write_prompts` flags any "כתוב …" it cannot read; `button_rule_violations`: same list, plus Meta's limits of at most 10 buttons, a label of at most 25 characters, letters, digits and single spaces), so a tap and the typed reply reach the same handler and nothing changes in the FSM. A pro template's payload is always a keyword, never a bare digit (PRO-212). A tap that arrives without its payload (WhatsApp Manager's test send) is read back by its label (`payload_for_label`). Labels live in `Messages.Templates.Buttons`.
 
 | Template | Buttons (label) |
 |---|---|
@@ -181,6 +181,8 @@ That is **29 templates to submit** and one registry entry left out (`early_lead`
 `scripts/submit_whatsapp_templates.py` submits a `BUTTONS` component of `QUICK_REPLY`s after the BODY and prints each button and what a tap sends in the dry run; a rule violation refuses the run, and `--status` reports buttons that differ from the registry and says not to flip such a template, because every send would fail. Every template stays `DRAFT` and nothing was submitted. An interactive free-form send (`send_interactive`) is still called by no flow and waits for PRO-104/PRO-105.
 
 ## Settled, and still to do
+
+**The owner's voice, 2026-11-17.** Every template body was rewritten to read like a person, not an AI, before PRO-150's submission: no emoji, no em dash, no `*bold*`, no slashed gender forms, and פרולי speaks as "אנחנו". A reply is asked for in the sentence ("לאישור כתוב אשר, לדחייה כתוב דחה.") and a numbered menu is `1 - text` lines. Variables, their order, button labels and keywords did not change, and the free-form open-window texts kept their own wording, so three pairs that used to be word for word now only promise the same thing (`ONBOARDING_REJECTED`, `PRO_FOUND`'s closing line, `MAX_REASSIGNMENTS`). Every body still clears Meta's review rules and the 20-fixed-characters-per-variable floor without lengthening; the tightest is `pro_found`, at about 21.7. `tests/test_template_bodies.py` pins the voice for every body. The same day `rate_service` was left out of submission: a rating request reads as a survey, which Meta is likely to hold as MARKETING. It keeps its body and its send site still names it, so submitting it later is the one `submit` flag.
 
 The owner settled these on 2026-11-06: the loyalty header is lost on template offers, a closed-window pro decides without media, an emergency reassignment goes through `lead_offer`, and `early_lead` is not submitted (it would need a media template and is not load-bearing), so its free-form send stays. On 2026-11-14 the owner approved a body for `pro_lead_outside_trade` (P14, PRO-215): one template for the offered and the not-yet-offered case, because "אין צורך לפעול" is true of both, and its free-form wording for an open window stays as it was.
 
