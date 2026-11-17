@@ -273,7 +273,6 @@ def test_admin_panel_does_not_import_runtime_entry_points():
 # marks the line ``# cycle: <which>``.
 _INNER_IMPORT_EXCEPTIONS = {
     ("app/api/routes/health.py", "app.core.database"): 1,
-    ("app/core/text_matching.py", "app.core.messages"): 1,
     ("app/providers/whatsapp/cloud_api.py", "app.providers.whatsapp.delivery"): 1,
     ("app/providers/whatsapp/delivery.py", "app.providers.whatsapp"): 1,
     ("app/providers/whatsapp/quality.py", "app.providers.whatsapp"): 1,

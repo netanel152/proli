@@ -1879,7 +1879,7 @@ async def test_emergency_while_waiting_for_pro_approval(
         }
     )
 
-    await process_incoming_message(chat_id, "יש שריפה, דחוף!")
+    await process_incoming_message(chat_id, "יש הצפה, דחוף!")
 
     updated_lead = await mock_db.leads.find_one({"_id": lead_id})
     assert updated_lead["is_emergency"] is True
@@ -1929,7 +1929,7 @@ async def test_emergency_releases_address_gate_when_city_known(wf_mocks, mock_db
     mock_state.get_state = AsyncMock(side_effect=get_state_effect)
     mock_state.clear_state = AsyncMock(side_effect=clear_state_effect)
 
-    await process_incoming_message(chat_id, "יש שריפה בבית!")
+    await process_incoming_message(chat_id, "יש הצפה בבית!")
 
     mock_state.clear_state.assert_called_with(chat_id)
 
@@ -2180,7 +2180,7 @@ async def test_emergency_while_paused_for_human_pages_once_without_reply(
     mock_alert = AsyncMock()
     monkeypatch.setattr(app.services.workflow_service, "send_sos_alert", mock_alert)
 
-    await process_incoming_message(chat_id, "יש שריפה, דחוף!")
+    await process_incoming_message(chat_id, "יש הצפה, דחוף!")
 
     updated_lead = await mock_db.leads.find_one({"_id": lead_id})
     assert updated_lead["is_emergency"] is True

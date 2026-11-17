@@ -298,7 +298,7 @@ async def test_offered_drop_records_an_emergency_declared_this_turn(world):
     await world.awaiting_approval_job(plumber, issue_type="קצר במטבח")
     await world.set_state(UserStates.IDLE)
 
-    await world.send("יש שריפה בלוח")
+    await world.send("קצר חשמלי בלוח, דחוף")
 
     lead = await world.lead()
     assert lead["is_emergency"] is True
@@ -342,7 +342,7 @@ async def test_emergency_without_an_issue_pages_and_reaches_review(world):
     await world.grant_consent()
     world.ai.script(reply("מה בדיוק קרה?", city="תל אביב"))
 
-    await world.send("יש שריפה בבית בתל אביב")
+    await world.send("דחוף מאוד, בבית בתל אביב")
 
     lead = await world.lead()
     assert lead["status"] == LeadStatus.PENDING_ADMIN_REVIEW

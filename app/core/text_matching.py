@@ -9,6 +9,8 @@ multi-word keywords like ``"לא משנה"``, as a complete word sequence.
 
 import re
 
+from app.core.messages import Messages
+
 _TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 
 
@@ -94,6 +96,18 @@ def contains_keyword_prefixed(text, keywords, exclude_phrases=()) -> bool:
     return False
 
 
+def is_life_threatening_text(text) -> bool:
+    """True when ``text`` reports danger to life (PRO-222): fire, smoke, gas,
+    an explosion, electrocution. Deterministic — no AI — so it holds when Gemini
+    is down. The customer is sent to emergency services and no pro is sought.
+    """
+    keywords = Messages.Keywords
+    excludes = keywords.LIFE_THREATENING_EXCLUDE_PHRASES
+    return contains_keyword(
+        text, keywords.LIFE_THREATENING_KEYWORDS, excludes
+    ) or contains_keyword_prefixed(text, keywords.LIFE_THREATENING_PREFIXABLE, excludes)
+
+
 def is_emergency_text(text) -> bool:
     """True when ``text`` declares an emergency (PRO-121).
 
@@ -103,8 +117,6 @@ def is_emergency_text(text) -> bool:
     two separate lists on purpose — see the comments beside them in
     ``Messages.Keywords``.
     """
-    from app.core.messages import Messages
-
     keywords = Messages.Keywords
     excludes = keywords.EMERGENCY_EXCLUDE_PHRASES
     return contains_keyword(

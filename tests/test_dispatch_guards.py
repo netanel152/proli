@@ -97,6 +97,8 @@ def test_guard_chain_order_is_pinned():
         "global_reset",
         "help_menu",
         "inbound_rate_limit",
+        # PRO-222 — before consent and every holding state.
+        "life_threatening",
         "zero_touch_intent",
         "consent_gate",
         "politeness",

@@ -201,16 +201,18 @@ class Messages:
         # only what is true at this point: the request is flagged urgent and the
         # intake is being shortened. The "a pro has your call" claim lives in
         # AWAITING_APPROVAL_TRANSPARENT, which is sent after a real match.
+        # PRO-222: urgent, not life-threatening (that is LIFE_THREATENING, which
+        # sends nobody), so the copy no longer says "חירום".
         EMERGENCY_ACK = (
-            "🚨 *זיהיתי מצב חירום.*\n"
-            "סימנתי את הפנייה כדחופה ואני מקצר את התהליך — אשאל רק את מה שהכרחי "
+            "🚨 *סימנתי את הפנייה כדחופה.*\n"
+            "אני מקצר את התהליך — אשאל רק את מה שהכרחי "
             "כדי לאתר איש מקצוע פנוי בהקדם.\n"
             "בינתיים, חשוב לשמור על בטיחות."
         )
         # PRO-121: an emergency with no city cannot be matched at all, so ask
         # for the city alone — never the full five-part address gate.
         EMERGENCY_NEED_CITY = (
-            "🚨 *זיהיתי מצב חירום.*\n"
+            "🚨 *סימנתי את הפנייה כדחופה.*\n"
             "כדי לאתר עבורך איש מקצוע עכשיו חסר לי רק דבר אחד — *באיזו עיר?*\n"
             "את שאר הפרטים נשלים אחר כך. בינתיים, חשוב לשמור על בטיחות."
         )
@@ -218,6 +220,18 @@ class Messages:
         # approval. The offer is already out, and flagging the lead halves the
         # PRO-56 approval SLA — so say what actually happens next instead of
         # answering with the generic STILL_WAITING.
+        # PRO-222 — life-threatening: no pro, no address, no lead. Pending the
+        # owner's approval of the wording. Numbers: מד"א 101, כבאות והצלה 102,
+        # משטרה 100 (Israel's national emergency numbers).
+        LIFE_THREATENING = (
+            "🚨 *אם יש סכנה — קודם כל להתרחק מהמקום ולהתקשר עכשיו:*\n"
+            "כבאות והצלה *102* (שריפה, עשן, ריח גז, פיצוץ)\n"
+            'מד"א *101* (פגיעה בגוף או התחשמלות)\n'
+            "משטרה *100*\n"
+            "בריח גז: לא להדליק אש, אור או מכשיר חשמלי, לפתוח חלונות ולצאת החוצה.\n"
+            "פרולי אינה שירות חירום ולא תשלח איש מקצוע לקריאה הזו. "
+            "הצוות שלנו עודכן ויחזור אליך כשהמצב בטוח."
+        )
         EMERGENCY_WHILE_WAITING = (
             "🚨 *סימנתי את הפנייה שלך כדחופה.*\n"
             "איש המקצוע שקיבל את הקריאה מתבקש להגיב מיד, ואם לא תתקבל תשובה "
@@ -1258,6 +1272,78 @@ class Messages:
             "לא בסכנה",
             "לדחוף",
             "לדחוף את",
+        ]
+        # PRO-222 — life-threatening: answered with LIFE_THREATENING, never a pro.
+        # Checked before every holding state and before consent, so a miss here
+        # is the worse failure: these lean wide. Exact phrases (whole-token):
+        LIFE_THREATENING_KEYWORDS = [
+            "ריח גז",
+            "ריח של גז",
+            "מריח גז",
+            "מריחים גז",
+            "דליפת גז",
+            "דליפה של גז",
+            "סכנת חיים",
+            "מכת חשמל",
+            "קיבל חשמל",
+            "קיבלתי חשמל",
+            "gas leak",
+            "smell gas",
+            "fire",
+            "explosion",
+        ]
+        # Stems through up to three leading clitics, as EMERGENCY_PREFIXABLE.
+        LIFE_THREATENING_PREFIXABLE = [
+            "שריפה",
+            "שריפות",
+            "שרפה",
+            "אש",
+            "עשן",
+            "נשרף",
+            "נשרפה",
+            "בוער",
+            "בוערת",
+            "פיצוץ",
+            "התפוצץ",
+            "התפוצצה",
+            "התפוצצות",
+            "התחשמל",
+            "התחשמלה",
+            "התחשמלתי",
+            "התחשמלות",
+        ]
+        # Removed before matching. Negations, and a burst pipe or water heater:
+        # in a plumber's chat "פיצוץ" is usually water, which keeps the urgent
+        # fast path (EMERGENCY_PREFIXABLE still matches it there).
+        LIFE_THREATENING_EXCLUDE_PHRASES = [
+            "אין ריח גז",
+            "אין ריח של גז",
+            "לא מריח גז",
+            "אין דליפת גז",
+            "אין שריפה",
+            "אין אש",
+            "אין עשן",
+            "אין סכנת חיים",
+            "לא התחשמל",
+            "לא התחשמלתי",
+            "במחיר שריפה",
+            "פיצוץ צינור",
+            "פיצוץ בצינור",
+            "פיצוץ של צינור",
+            "פיצוץ צנרת",
+            "פיצוץ בצנרת",
+            "פיצוץ מים",
+            "פיצוץ בדוד",
+            "צינור התפוצץ",
+            "הצינור התפוצץ",
+            "התפוצץ צינור",
+            "התפוצץ הצינור",
+            "התפוצץ לי צינור",
+            "דוד התפוצץ",
+            "הדוד התפוצץ",
+            "התפוצץ הדוד",
+            "אש בגריל",
+            "על האש",
         ]
         RATING_OPTIONS = ["1", "2", "3", "4", "5"]
         # PRO-122: an opt-out of the rating / review prompts. Matched by *exact*
