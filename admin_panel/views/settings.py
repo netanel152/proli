@@ -31,6 +31,11 @@ from admin_panel.core.rbac import (
 
 from admin_panel.core.auth import _audit_col
 import pytz
+from app.core.scheduler_config import (
+    SCHEDULER_CONFIG_DEFAULTS,
+    SCHEDULER_CONFIG_ID,
+    scheduler_toggle,
+)
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")
 
@@ -89,21 +94,22 @@ def view_system_settings(T):
         tab_idx += 1
         st.subheader(T.get("scheduler_title", "Auto-Scheduler"))
 
-        config = settings_collection.find_one({"_id": "scheduler_config"})
-        if not config:
-            config = {
-                "_id": "scheduler_config",
-                "run_time": "08:00",
-                "is_active": True,
-                "trigger_now": False,
-            }
-            settings_collection.insert_one(config)
+        # PRO-249: the full default document, the same one the worker
+        # upserts, so a panel-first insert can't leave the worker's defaults
+        # unapplied. $setOnInsert never touches a stored value.
+        settings_collection.update_one(
+            {"_id": SCHEDULER_CONFIG_ID},
+            {"$setOnInsert": dict(SCHEDULER_CONFIG_DEFAULTS)},
+            upsert=True,
+        )
+        config = settings_collection.find_one({"_id": SCHEDULER_CONFIG_ID}) or {}
 
         with st.container(border=True):
             c1, c2, c3 = st.columns(3)
 
             is_active = c1.checkbox(
-                T.get("sch_active", "Active"), value=config.get("is_active", True)
+                T.get("sch_active", "Active"),
+                value=scheduler_toggle(config, "is_active"),
             )
 
             last_run_val = config.get("last_run_date")
@@ -118,7 +124,8 @@ def view_system_settings(T):
 
             try:
                 t_obj = datetime.strptime(
-                    config.get("run_time", "08:00"), "%H:%M"
+                    config.get("run_time", SCHEDULER_CONFIG_DEFAULTS["run_time"]),
+                    "%H:%M",
                 ).time()
             except (ValueError, TypeError):
                 t_obj = time(8, 0)
@@ -130,7 +137,7 @@ def view_system_settings(T):
             if can_edit_settings(role):
                 if c3.button(T.get("sch_run_now", "Run Now"), use_container_width=True):
                     settings_collection.update_one(
-                        {"_id": "scheduler_config"}, {"$set": {"trigger_now": True}}
+                        {"_id": SCHEDULER_CONFIG_ID}, {"$set": {"trigger_now": True}}
                     )
                     log_audit("trigger_scheduler")
                     # The panel's flash slot rather than a bare toast: a toast
@@ -141,7 +148,7 @@ def view_system_settings(T):
                 st.markdown("")
                 if st.button(T.get("sch_save_config", "Save Config"), type="primary"):
                     settings_collection.update_one(
-                        {"_id": "scheduler_config"},
+                        {"_id": SCHEDULER_CONFIG_ID},
                         {
                             "$set": {
                                 "is_active": is_active,
@@ -170,26 +177,27 @@ def view_system_settings(T):
             )
         )
 
-        config = settings_collection.find_one({"_id": "scheduler_config"}) or {}
+        config = settings_collection.find_one({"_id": SCHEDULER_CONFIG_ID}) or {}
 
+        # PRO-249: a missing key shows what the worker does with it.
         with st.container(border=True):
             col_sos1, col_sos2, col_sos3 = st.columns(3)
 
             mon_active = col_sos1.checkbox(
                 T.get("stale_mon_active", "Stale Job Monitor"),
-                value=config.get("stale_monitor_active", True),
+                value=scheduler_toggle(config, "stale_monitor_active"),
                 help=T["help_stale_mon"],
             )
 
             healer_active = col_sos2.checkbox(
                 T.get("sos_healer_active", "SOS Auto-Healer"),
-                value=config.get("sos_healer_active", True),
+                value=scheduler_toggle(config, "sos_healer_active"),
                 help=T["help_sos_healer"],
             )
 
             reporter_active = col_sos3.checkbox(
                 T.get("sos_reporter_active", "SOS Admin Reporter"),
-                value=config.get("sos_reporter_active", True),
+                value=scheduler_toggle(config, "sos_reporter_active"),
                 help=T["help_sos_reporter"],
             )
 
@@ -199,7 +207,7 @@ def view_system_settings(T):
                     T.get("save_safety", "Save Safety Settings"), type="primary"
                 ):
                     settings_collection.update_one(
-                        {"_id": "scheduler_config"},
+                        {"_id": SCHEDULER_CONFIG_ID},
                         {
                             "$set": {
                                 "stale_monitor_active": mon_active,

@@ -18,6 +18,7 @@ from pymongo import ASCENDING, DESCENDING, TEXT
 # Add the project root to the python path to allow imports from 'app'
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from app.core.logger import logger
 from app.core.database import (
     users_collection,
     leads_collection,
@@ -123,13 +124,51 @@ INDEX_SPECS = [
 ]
 
 
-async def create_all_indexes(silent: bool = False):
-    """Create every index in INDEX_SPECS.
+def _key_spec(keys) -> tuple:
+    """Index keys as a comparable tuple: ``[("a", 1), ("b", -1)]``."""
+    return tuple((field, direction) for field, direction in keys)
+
+
+async def find_unlisted_indexes() -> list[tuple[str, str, tuple]]:
+    """Indexes present in the database but absent from ``INDEX_SPECS``.
+
+    Report-only (PRO-250): a superseded index (the old timestamp-only
+    ``audit_log`` index, say) costs every write and is never dropped by
+    ``create_index``. Nothing here drops anything; an operator decides.
+    Returns ``(collection name, index name, key spec)`` rows; ``_id_`` and
+    text indexes (whose stored keys differ from their spec) are skipped.
+    """
+    wanted: dict[str, set[tuple]] = {}
+    collections = {}
+    for _label, collection, keys, _kwargs in INDEX_SPECS:
+        wanted.setdefault(collection.name, set()).add(_key_spec(keys))
+        collections[collection.name] = collection
+
+    unlisted = []
+    for name, collection in collections.items():
+        info = await collection.index_information()
+        for index_name, spec in info.items():
+            if index_name == "_id_" or "_fts" in dict(spec.get("key", [])):
+                continue
+            key = _key_spec(spec.get("key", []))
+            if key not in wanted[name]:
+                unlisted.append((name, index_name, key))
+    return unlisted
+
+
+async def create_all_indexes(silent: bool = False) -> list[dict]:
+    """Create every index in INDEX_SPECS and return the ones that failed.
 
     Safe to call on every startup -- MongoDB skips existing indexes.
-    Set silent=True to suppress print output (e.g. when called from app
-    startup). One failing index is logged and skipped so the rest still
-    get created.
+    ``silent=True`` (the API boot) suppresses the progress lines only: a
+    failed index is always logged at ERROR (PRO-250 — it used to go through
+    the same muted helper, so a unique index that failed on duplicates, or an
+    options conflict such as a changed TTL, vanished at boot). One failing
+    index is skipped so the rest still get created.
+
+    Returns one ``{"label", "keys", "error"}`` dict per failed index; empty
+    means every index is in place. Indexes in the database that the table
+    does not list are logged at WARNING and never dropped.
     """
 
     def log(msg):
@@ -138,6 +177,7 @@ async def create_all_indexes(silent: bool = False):
 
     log("Starting index creation...")
 
+    failures = []
     current_label = None
     for label, collection, keys, kwargs in INDEX_SPECS:
         if label != current_label:
@@ -146,9 +186,23 @@ async def create_all_indexes(silent: bool = False):
         try:
             await collection.create_index(keys, **kwargs)
         except Exception as e:
-            log(f"  Error indexing {label} {keys}: {e}")
+            failures.append({"label": label, "keys": keys, "error": str(e)})
+            logger.error(f"[Indexes] {label} {keys} could not be created: {e}")
 
-    log("Index creation completed.")
+    try:
+        for coll_name, index_name, key in await find_unlisted_indexes():
+            logger.warning(
+                f"[Indexes] {coll_name}.{index_name} {list(key)} exists in the "
+                "database but not in INDEX_SPECS (superseded?). Not dropped."
+            )
+    except Exception as e:
+        logger.warning(f"[Indexes] could not list existing indexes: {e}")
+
+    log(
+        f"Index creation completed: {len(INDEX_SPECS) - len(failures)} of "
+        f"{len(INDEX_SPECS)} in place."
+    )
+    return failures
 
 
 if __name__ == "__main__":

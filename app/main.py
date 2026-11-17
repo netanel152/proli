@@ -108,11 +108,19 @@ async def lifespan(app: FastAPI):
     warn_if_public_origin_malformed(settings)
 
     # Ensure all MongoDB indexes exist (idempotent — safe to run on every startup)
+    # PRO-250: "verified" only when every index is in place; each failure is
+    # already logged at ERROR by create_all_indexes. Non-fatal either way.
     try:
-        await create_all_indexes(silent=True)
-        logger.info("✅ MongoDB indexes verified.")
+        failed = await create_all_indexes(silent=True) or []
+        if failed:
+            logger.error(
+                f"❌ {len(failed)} MongoDB index(es) could not be created: "
+                + ", ".join(f"{f['label']} {f['keys']}" for f in failed)
+            )
+        else:
+            logger.info("✅ MongoDB indexes verified.")
     except Exception as e:
-        logger.warning(f"⚠️ Index creation failed (non-fatal): {e}")
+        logger.error(f"❌ Index creation failed (non-fatal): {e}")
 
     yield
 
