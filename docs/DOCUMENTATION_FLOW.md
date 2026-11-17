@@ -62,6 +62,7 @@ If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatc
 
 When Phase 2 returns `is_deal=True` (or the lead is flagged `is_emergency` and a pro has already been matched — PRO-121 finalizes on the spot, without waiting for `is_deal`). A `[DEAL:` marker in the reply text never counts — it is stripped and decides nothing (PRO-272):
 
+0. Claim check (PRO-271): an existing lead is written only while it is `contacted` (or `new` under a pro who has since been deactivated, so the matched pro replaces them). The turn read the lead before a multi-second AI call; a lead booked, reassigned or already offered in the meantime gets no write, no offer and no SLA reset. The write re-checks the same status/owner atomically, and a lead that changed between the check and the write loses the race the same way. The assigned-pro fast path does not finalize a `new` lead at all.
 1. Create or update lead with `status=new`, `pro_id`, `full_address` (composed), `street`, `street_number`, `city`, `floor`, `apartment`, `issue_type`, `appointment_time`, `appointment_datetime` (parsed to a BSON UTC date via `parse_iso_to_utc`), `media_url`
 2. Set customer state to `AWAITING_PRO_APPROVAL` (customer sees a soft-hold message on next message)
 3. Send customer `Messages.Customer.AWAITING_APPROVAL`

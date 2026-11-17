@@ -924,6 +924,34 @@ async def _build_pro_response(
     )
 
 
+async def _deal_claim(lead: "dict | None", best_pro: dict) -> "dict | None":
+    """The guard `_finalize_deal` writes under, or None when it must not write.
+
+    PRO-271. A deal turns a CONTACTED lead into an offer (NEW + pro_id). The one
+    NEW lead it may still claim is an orphaned offer: its pro was deactivated,
+    so the dispatcher matched someone else. A NEW lead whose pro is still active
+    already has its offer out — writing again would re-offer it and restart the
+    approval clock — and BOOKED or anything later is not this turn's to touch.
+    The returned kwargs make `set_lead_status` re-check the same state
+    atomically, so a change after this read loses too.
+    """
+    if not lead:
+        return None
+    status = lead.get("status")
+    if status == LeadStatus.CONTACTED:
+        return {"expected_status": LeadStatus.CONTACTED}
+    if status != LeadStatus.NEW:
+        return None
+    owner = lead.get("pro_id")
+    if owner is None:
+        return {"expected_status": LeadStatus.NEW}
+    if owner == best_pro.get("_id"):
+        return None
+    if await users_collection.find_one({"_id": owner, "is_active": True}):
+        return None
+    return {"expected_status": LeadStatus.NEW, "expected_pro_id": owner}
+
+
 async def _finalize_deal(
     chat_id,
     best_pro,
@@ -960,6 +988,22 @@ async def _finalize_deal(
         if current_lead_id
         else None
     )
+
+    # PRO-271: the turn read this lead before a multi-second AI call. A pro may
+    # have approved it, the healer may have reassigned it, or an admin may have
+    # moved it since, and writing NEW + pro_id over any of those reverts a
+    # booking or hands the job back to a replaced pro. Only a lead this deal can
+    # still claim goes on; the write below re-checks the same thing atomically.
+    claim = None
+    if current_lead_id:
+        claim = await _deal_claim(active_lead_doc, best_pro)
+        if claim is None:
+            logger.warning(
+                f"⏭️ Not finalizing lead {current_lead_id} for {mask_chat_id(chat_id)}: "
+                f"it is {(active_lead_doc or {}).get('status')!r} now, not a lead "
+                "this deal can claim (changed during the turn)"
+            )
+            return
     is_emergency = (
         active_lead_doc.get("is_emergency", False) if active_lead_doc else False
     )
@@ -1072,10 +1116,23 @@ async def _finalize_deal(
             if not lead_update[field]:
                 del lead_update[field]
         # CONTACTED -> NEW once the routing engine has matched a pro. Goes
-        # through set_lead_status so the transition lands in status_history.
+        # through set_lead_status so the transition lands in status_history,
+        # conditional on the lead still being what _deal_claim accepted
+        # (PRO-271): a change between that read and this write loses the race.
         lead = await set_lead_status(
-            current_lead_id, LeadStatus.NEW, Actor.SYSTEM, extra_set=lead_update
+            current_lead_id,
+            LeadStatus.NEW,
+            Actor.SYSTEM,
+            extra_set=lead_update,
+            **claim,
         )
+        if lead is None:
+            logger.warning(
+                f"⏭️ Lost the race finalizing lead {current_lead_id} for "
+                f"{mask_chat_id(chat_id)}: it changed before the write — no offer, "
+                "no SLA reset"
+            )
+            return
         if media_url:
             await leads_collection.update_one(
                 {"_id": current_lead_id},

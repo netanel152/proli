@@ -68,6 +68,16 @@ def mock_workflow_dependencies():
         )
         mock_leads.update_one = AsyncMock()
 
+        # set_lead_status writes through lead_manager_service's own collection,
+        # which this fixture does not patch. Answer it from the same mock lead,
+        # so _finalize_deal sees its status write land (PRO-271: a write that
+        # matches nothing is a lost race, and no offer goes out).
+        set_status_patch = patch(
+            "app.services.workflow_service.set_lead_status",
+            AsyncMock(return_value=mock_lead_data),
+        )
+        set_status_patch.start()
+
         # Default users find response
         mock_cursor = MagicMock()
         mock_cursor.to_list = AsyncMock(return_value=[])
@@ -94,7 +104,10 @@ def mock_workflow_dependencies():
         mock_state.set_state = AsyncMock()
         mock_state.clear_state = AsyncMock()
 
-        yield mock_ai, mock_users, mock_whatsapp, mock_lm, mock_leads
+        try:
+            yield mock_ai, mock_users, mock_whatsapp, mock_lm, mock_leads
+        finally:
+            set_status_patch.stop()
 
 
 @pytest.mark.asyncio
