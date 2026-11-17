@@ -350,6 +350,11 @@ class WorkerConstants:
     # otherwise read as "in the future" and flip /health to "unknown" (and
     # the watchdog to an ERROR line) until the clocks agreed again.
     BACKUP_CLOCK_SKEW_TOLERANCE_SECONDS = 300
+    # PRO-251: how long GET /health waits on the Mongo ping before reporting
+    # Mongo down. The ping is awaited on the event loop (Motor), never a
+    # blocking pymongo call, so a hung Mongo costs the probe this much and
+    # costs webhook intake nothing.
+    HEALTH_DB_PING_TIMEOUT_SECONDS = 2.0
     # PRO-112 — Mongo auth failures on scheduler jobs are a *config* failure
     # (rotated/deleted DB user), not a data condition: left at ERROR they
     # accumulate silently while the worker is effectively dead. This many auth

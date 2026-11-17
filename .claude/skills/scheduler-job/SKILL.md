@@ -40,6 +40,10 @@ async def run_<job>():
   rejection) goes through `_customer_cold_job_allowed(toggle)` — business hours **and** a
   per-job toggle in `settings.scheduler_config` that defaults **off** (PRO-73). A job that
   only pages the operator or writes state checks the toggle alone, like `run_sos_reporter`.
+  A new toggle gets its default in `app/core/scheduler_config.py`'s
+  `SCHEDULER_CONFIG_DEFAULTS` and is read with `scheduler_toggle(config, key)`, never
+  `config.get(key, <default>)`: the admin panel reads the same table (PRO-249), and
+  `tests/test_scheduler_config_defaults.py` fails on a second copy of a default.
 - **Environment.** Production-only jobs (backup, its freshness watchdog) are gated at
   *registration* with `if settings.is_production:` — the job never enters the scheduler
   elsewhere (PRO-127), so staging cannot page about something it is not meant to do.

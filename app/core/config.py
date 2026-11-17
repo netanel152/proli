@@ -93,6 +93,11 @@ class Settings(BaseSettings):
     MONGO_MAX_POOL_SIZE: int = 100
     MONGO_MIN_POOL_SIZE: int = 10
     MONGO_MAX_IDLE_TIME_MS: int = 30000
+    # PRO-251: explicit rather than inherited. 30s is pymongo's own default, so
+    # no operation's patience changes; it is spelled out so it can be tuned per
+    # environment. /health no longer depends on it: its ping has its own
+    # 2s bound (WorkerConstants.HEALTH_DB_PING_TIMEOUT_SECONDS).
+    MONGO_SERVER_SELECTION_TIMEOUT_MS: int = 30000
     ADMIN_PASSWORD: SecretStr | None = None
 
     @field_validator("ADMIN_PASSWORD", mode="before")
