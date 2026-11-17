@@ -296,6 +296,7 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp, expected_status=None):
             "admin_reported_at": "",
             "no_show_reported_at": "",
             "offer_withheld_details": "",
+            "admin_offer_undelivered_at": "",
         },
         # Both callers pass PENDING_ADMIN_REVIEW (PRO-282 for the wizard, whose
         # pick can be 15 minutes old). The panel's button acts on a lead_id captured
@@ -324,6 +325,20 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp, expected_status=None):
         # assignment stands; the caller tells the admin the truth and they
         # contact the pro by phone.
         offer_sent = await notify_pro_new_lead(lead, pro, whatsapp)
+        # PRO-208: the operator is told to phone the pro when the offer did not
+        # reach them — not sent, or "sent" by a provider that transmits
+        # nothing. Record it on the lead so the healer and the approval SLA
+        # leave the lead with the operator instead of reassigning it and
+        # telling that pro they lost a job they never saw. A later delivered
+        # offer clears it (the unset above).
+        delivered = offer_sent and getattr(
+            getattr(whatsapp, "provider", None), "transmits", True
+        )
+        if not delivered:
+            await leads_collection.update_one(
+                {"_id": lead["_id"], "pro_id": pro["_id"]},
+                {"$set": {"admin_offer_undelivered_at": now}},
+            )
         # Tell the CUSTOMER a pro was found — mirrors the auto-match path in
         # workflow_service. Without this the customer sat in silence after the
         # PENDING_REVIEW message ("צוות Proli יחזור אליך") until they proactively

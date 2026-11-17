@@ -407,9 +407,15 @@ def panel(muted, monkeypatch):
     async def find_one(query):
         return db["leads"].find_one(query)
 
+    async def update_one(query, update):
+        # PRO-208: an offer that did not reach the pro is marked on the lead.
+        return db["leads"].update_one(query, update)
+
     monkeypatch.setattr(admin_flow, "set_lead_status", set_lead_status)
     monkeypatch.setattr(
-        admin_flow, "leads_collection", SimpleNamespace(find_one=find_one)
+        admin_flow,
+        "leads_collection",
+        SimpleNamespace(find_one=find_one, update_one=update_one),
     )
 
     db["users"].insert_one(
@@ -481,7 +487,10 @@ def test_strip_offer_through_the_real_view(panel):
     assert not at.exception, at.exception
 
     _assert_operator_told_muted(at, db)
-    assert db["leads"].find_one({"_id": lead_id})["status"] == "new"
+    lead = db["leads"].find_one({"_id": lead_id})
+    assert lead["status"] == "new"
+    # PRO-208: the healer must leave a lead whose offer never left the panel.
+    assert "admin_offer_undelivered_at" in lead
 
 
 def test_edit_form_offer_through_the_real_view(panel):

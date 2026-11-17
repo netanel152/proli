@@ -378,6 +378,7 @@ async def reassign_lead(
                 "completion_check_sent_at": "",
                 "completion_check_sent_count": "",
                 "offer_withheld_details": "",
+                "admin_offer_undelivered_at": "",
             },
             # PRO-281: status, owner and count as read — see _as_read.
             extra_filter=as_read,
@@ -461,7 +462,12 @@ async def reassign_lead(
             )
 
         # 5. Notify old pro
-        if notify_old_pro and current_pro_id:
+        # PRO-208: a pro whose admin offer never arrived did not lose a job.
+        if (
+            notify_old_pro
+            and current_pro_id
+            and not lead.get("admin_offer_undelivered_at")
+        ):
             old_pro = await users_collection.find_one({"_id": current_pro_id})
             if old_pro and old_pro.get("phone_number"):
                 old_phone = to_chat_id(old_pro["phone_number"])
@@ -554,6 +560,10 @@ async def check_and_reassign_stale_leads():
     query = {
         "status": {"$in": [LeadStatus.NEW, LeadStatus.CONTACTED]},
         "created_at": {"$lt": threshold_time},
+        # PRO-208: an admin's offer that never reached the pro is the
+        # operator's to follow up (they were told to phone the pro). Moving it
+        # on would tell that pro they "lost" a job they never saw.
+        "admin_offer_undelivered_at": {"$exists": False},
     }
 
     try:
@@ -1180,6 +1190,9 @@ async def check_pro_approval_sla():
             "status": LeadStatus.NEW,
             "pro_id": {"$ne": None},
             "pro_notified_at": {"$ne": None},
+            # PRO-208: no nudge about, or reassignment of, an offer the pro
+            # never received — the operator is reaching them by hand.
+            "admin_offer_undelivered_at": {"$exists": False},
         }
         leads = await leads_collection.find(query).to_list(
             length=WorkerConstants.DB_QUERY_LIMIT
