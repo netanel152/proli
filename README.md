@@ -100,7 +100,7 @@ TERMS_ENABLED=false                  # true publishes /terms and its links, only
 ENVIRONMENT=development              # development | staging | production (anything else fails at startup)
 ```
 
-`PUBLIC_BASE_ORIGIN` must be a host where `/privacy` and `/terms` reach the API. Behind the nginx setup (`nginx/nginx.conf`, `nginx/nginx.prod.conf`) those paths currently fall through `location /` to Streamlit, so do not point it at an nginx host until they are routed to the API. A malformed value logs an ERROR at boot and the messages go out with no link.
+`PUBLIC_BASE_ORIGIN` must be a host where `/privacy` and `/terms` reach the API. Behind the local nginx setup (`nginx/nginx.conf`) those paths currently fall through `location /` to Streamlit, so do not point it at an nginx host until they are routed to the API. A malformed value logs an ERROR at boot and the messages go out with no link.
 
 ### 3. Seed the database
 
