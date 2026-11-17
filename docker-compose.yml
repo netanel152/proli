@@ -15,7 +15,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_URL=redis://redis:6379/0
       # PRO-34: the base compose file is the documented LOCAL dev stack.
-      # The production overlay (docker-compose.prod.yml) sets production.
+      # Staging and production run on Railway, which sets ENVIRONMENT itself.
       - ENVIRONMENT=development
     depends_on:
       mongo:
@@ -42,7 +42,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_URL=redis://redis:6379/0
       # PRO-34: the base compose file is the documented LOCAL dev stack.
-      # The production overlay (docker-compose.prod.yml) sets production.
+      # Staging and production run on Railway, which sets ENVIRONMENT itself.
       - ENVIRONMENT=development
     depends_on:
       mongo:
@@ -71,7 +71,7 @@ services:
       - REDIS_HOST=redis
       - REDIS_URL=redis://redis:6379/0
       # PRO-34: the base compose file is the documented LOCAL dev stack.
-      # The production overlay (docker-compose.prod.yml) sets production.
+      # Staging and production run on Railway, which sets ENVIRONMENT itself.
       - ENVIRONMENT=development
     depends_on:
       mongo:

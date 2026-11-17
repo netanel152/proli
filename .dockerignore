@@ -22,7 +22,6 @@ backups/
 # Dev/CI artefacts
 .dockerignore
 docker-compose.yml
-docker-compose.override.yml
 README.md
 pytest.ini
 tests/

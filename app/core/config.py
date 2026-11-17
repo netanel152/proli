@@ -201,10 +201,9 @@ class Settings(BaseSettings):
         An *unset* ENVIRONMENT never reaches this validator: pydantic defaults
         to ``validate_default=False``, so the field default is used as-is. An
         empty value here therefore means the operator explicitly set it to ""
-        — a misconfiguration, not an omission — so it is rejected too. The
-        blank-value idiom is real in this repo (``docker-compose.prod.yml``
-        uses ``- MONGO_URI=`` to mean "inherit"), and Railway allows empty
-        variables.
+        — a misconfiguration, not an omission — so it is rejected too.
+        Railway allows empty variables, and the compose ``- VAR=`` idiom sets
+        one too.
         """
         if v is None or not str(v).strip():
             raise ValueError(
@@ -254,9 +253,8 @@ class Settings(BaseSettings):
         the healthy state is one somebody turns off.
 
         **An explicitly empty value counts as unconfigured.** Railway allows
-        an empty variable and `docker-compose.prod.yml` uses the bare `VAR=`
-        idiom deliberately, so `ADMIN_PHONE=` is a shape this repo really
-        produces — and it is worse than the default, not better: the field
+        an empty variable and compose's bare `VAR=` idiom sets one, so
+        `ADMIN_PHONE=` is a shape a deployment really produces — and it is worse than the default, not better: the field
         lands in `model_fields_set`, `to_chat_id("")` returns `""`, and
         `notification_service.py`'s `"***" + oncall[-4:]` renders `"***"`, so
         the page goes nowhere and the log line cannot even say who was missed.

@@ -1,7 +1,6 @@
 # Core Backend
 fastapi~=0.115.0
 uvicorn==0.27.1
-gunicorn==21.2.0
 # PRO-50: pin pydantic AND pydantic-core together. pydantic-core was previously
 # unpinned, so it could float to a version incompatible with the pinned pydantic
 # (e.g. pydantic 2.6.1 + pydantic-core 2.46.3 → "cannot import name

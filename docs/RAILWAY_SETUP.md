@@ -238,7 +238,7 @@ Then check it:
 | Staging | `staging` |
 | Production | `production` |
 
-> Environment **ids** were listed here until PRO-128 and both had gone stale — they resolved to nothing, and `scripts/start_railway_services.sh` was passing the same dead uuids to `railway up`. Address environments by name (`--environment Production`); the CLI accepts a name anywhere it accepts an id, and names don't rot. Run `railway environment` to see the current list if you need an id for something else.
+> Environment **ids** were listed here until PRO-128 and both had gone stale — they resolved to nothing, and the since-deleted `scripts/start_railway_services.sh` was passing the same dead uuids to `railway up`. Address environments by name (`--environment Production`); the CLI accepts a name anywhere it accepts an id, and names don't rot. Run `railway environment` to see the current list if you need an id for something else.
 
 Set it on all 3 services (`api`, `worker`, `admin`) in each environment:
 
