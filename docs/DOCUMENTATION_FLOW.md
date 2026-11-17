@@ -60,7 +60,7 @@ If the customer's active lead already has an assigned `pro_id`, Phase 1 (Dispatc
 
 ## 3. Deal Finalization (`_finalize_deal`)
 
-When Phase 2 returns `is_deal=True` (or the lead is flagged `is_emergency` and a pro has already been matched — PRO-121 finalizes on the spot, without waiting for a `[DEAL]` marker):
+When Phase 2 returns `is_deal=True` (or the lead is flagged `is_emergency` and a pro has already been matched — PRO-121 finalizes on the spot, without waiting for `is_deal`). A `[DEAL:` marker in the reply text never counts — it is stripped and decides nothing (PRO-272):
 
 1. Create or update lead with `status=new`, `pro_id`, `full_address` (composed), `street`, `street_number`, `city`, `floor`, `apartment`, `issue_type`, `appointment_time`, `appointment_datetime` (parsed to a BSON UTC date via `parse_iso_to_utc`), `media_url`
 2. Set customer state to `AWAITING_PRO_APPROVAL` (customer sees a soft-hold message on next message)

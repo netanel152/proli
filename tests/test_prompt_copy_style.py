@@ -209,7 +209,8 @@ def test_generate_system_prompt_drops_urgent_tag_and_interpolates_persona(
     # The [URGENT] tag instruction was removed: nothing in app/ parsed it, so
     # the model was emitting a token the customer saw verbatim.
     assert "[URGENT]" not in prompt
-    assert "[DEAL:" in prompt
+    # PRO-272: the closing tag is gone too — only the JSON is_deal closes a deal.
+    assert "[DEAL:" not in prompt
     assert "אבי" in prompt
     assert admin_utils.PROFESSION_CONFIG["plumber"]["safety"] in prompt
     assert keywords == admin_utils.PROFESSION_CONFIG["plumber"]["keywords"]

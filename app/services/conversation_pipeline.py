@@ -131,7 +131,6 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     _inbound_log_text = wf._inbound_log_text
     _strip_deal_marker = wf._strip_deal_marker
     _clean_quoted_price = wf._clean_quoted_price
-    DEAL_MARKER_RE = wf.DEAL_MARKER_RE
 
     # --- prologue: the turn's facts, read back off the context ---------------
     # The guards mutate these on the way past — the rate limiter resolves
@@ -527,11 +526,11 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
             return
 
-        # Check for deal on the raw text, then send/log the cleaned copy —
-        # the [DEAL:...] marker must never reach the customer.
-        is_deal = pro_response_obj.is_deal or bool(
-            DEAL_MARKER_RE.search(pro_response_obj.reply_to_user)
-        )
+        # Only the model's JSON `is_deal` closes a deal. A "[DEAL:" marker in
+        # the reply text is stripped below and decides nothing: no prompt the
+        # system controls relies on it, so it appears when the model echoes
+        # customer text (PRO-272).
+        is_deal = bool(pro_response_obj.is_deal)
         # PRO-121: this is where an emergency released from the address gate
         # actually lands. Every route into AWAITING_ADDRESS writes `pro_id`
         # first — the matching block below does it before _finalize_deal runs,
@@ -975,21 +974,16 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 )
                 pro_response_obj = None
 
-            # A [DEAL] marker alone is not enough — _finalize_deal's address gate
+            # is_deal alone is not enough — _finalize_deal's address gate
             # rejects an incomplete address, in which case the deal does NOT
             # finalize this turn and the pro still needs the EARLY_LEAD notice.
             # Only treat the turn as finalizing when the address is actually
             # complete (same gate helper), so we never suppress the notice on a
-            # deal that will be rejected (PRO-116 Q1).
-            _deal_flagged = bool(
-                pro_response_obj
-                and (
-                    pro_response_obj.is_deal
-                    or DEAL_MARKER_RE.search(pro_response_obj.reply_to_user)
-                )
-            )
-            # PRO-121: an emergency finalizes on this turn with no [DEAL]
-            # marker and with an incomplete address (_finalize_deal grants it a
+            # deal that will be rejected (PRO-116 Q1). A "[DEAL:" marker in the
+            # text never counts (PRO-272).
+            _deal_flagged = bool(pro_response_obj and pro_response_obj.is_deal)
+            # PRO-121: an emergency finalizes on this turn with no is_deal
+            # and with an incomplete address (_finalize_deal grants it a
             # city-only bypass), so deriving this from _deal_flagged alone sent
             # the pro "אין צורך לפעול עכשיו" milliseconds before the emergency
             # approval request — telling them to stand down on the one lead
@@ -1049,13 +1043,10 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         pro_response_obj if (best_pro and pro_response_obj) else dispatcher_response
     )
 
-    # 7. Check for [DEAL] or Structured Booking — detect on the raw text
-    # before stripping the marker for the customer-facing send.
-    is_deal = final_response.is_deal
-
-    deal_string_match = DEAL_MARKER_RE.search(final_response.reply_to_user)
-    if deal_string_match:
-        is_deal = True
+    # 7. Only the model's JSON `is_deal` closes a deal. A "[DEAL:" marker in
+    # the reply is stripped from the customer-facing send and decides nothing
+    # — it is what a customer gets by asking the model to echo it (PRO-272).
+    is_deal = bool(final_response.is_deal)
 
     # PRO-121: this turn dispatches the emergency even though the AI did not
     # close the deal, so its reply is still mid-intake ("איזו קומה?"). Sending it
@@ -1088,8 +1079,8 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             {"_id": current_lead_id}, {"$set": {"quoted_price": _qp_clean}}
         )
 
-    # PRO-121: an emergency does not wait for the AI to volunteer a [DEAL]
-    # marker. Once a pro is actually matched, finalize on the spot — and only
+    # PRO-121: an emergency does not wait for the AI to set is_deal.
+    # Once a pro is actually matched, finalize on the spot — and only
     # then does the customer hear that someone has their call
     # (AWAITING_APPROVAL_TRANSPARENT, sent by _finalize_deal). Its address gate
     # already grants an emergency a city-only bypass, so the offer goes out with
@@ -1098,7 +1089,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         if emergency_expedite:
             logger.warning(
                 f"🚑 Emergency expedited dispatch for {mask_chat_id(chat_id)} — finalizing "
-                f"without a [DEAL] marker (pro={best_pro['_id']})"
+                f"before the model set is_deal (pro={best_pro['_id']})"
             )
         try:
             await _finalize_deal(

@@ -226,7 +226,7 @@ process_incoming_message(chat_id, text, media_url, message_id)
                │      adopts pro's system prompt, pricing, social proof
                │      tracks token usage: $inc users.total_tokens_used (fire-and-forget)
                │      is_deal=True (or an emergency lead with a matched
-               │      pro, even without [DEAL]) → _finalize_deal()
+               │      pro, even without is_deal) → _finalize_deal()
                │
                └─ _finalize_deal():
                       check for emergency (Lead.is_emergency == True)

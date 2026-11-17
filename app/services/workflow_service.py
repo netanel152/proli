@@ -100,8 +100,10 @@ lead_manager = LeadManager()
 
 _IL_TZ = pytz.timezone("Asia/Jerusalem")
 
-# Internal deal marker the AI sometimes embeds in reply_to_user as a fallback
-# deal-detection signal. It must never reach the customer.
+# A "[DEAL: ...]" marker the model may still write into reply_to_user — older
+# personas asked for one. It is stripped from customer-facing text and never
+# decides a deal: only the JSON `is_deal` does (PRO-272). A marker in the reply
+# is otherwise exactly what a customer gets by asking the model to echo it.
 DEAL_MARKER_RE = re.compile(r"\[DEAL:.*?\]", re.DOTALL)
 
 # PRO-169: personas generated before that fix asked the model to open an
@@ -109,8 +111,7 @@ DEAL_MARKER_RE = re.compile(r"\[DEAL:.*?\]", re.DOTALL)
 # reached the customer verbatim. Approved pros keep the persona stored on their
 # document at approval time, so the tag can still be emitted until PRO-177
 # regenerates them. Stripped at the same seam as the deal marker — and kept as
-# a *separate* pattern, because DEAL_MARKER_RE.search() doubles as the
-# fallback deal-detection signal and an emergency tag must never count as one.
+# a *separate* pattern so each is named for what it strips.
 URGENT_TAG_RE = re.compile(r"\[URGENT\]")
 
 # PRO-55: a price quote is a plain number or number-range. The value is
@@ -133,10 +134,9 @@ def _clean_quoted_price(value) -> "str | None":
 
 
 def _strip_deal_marker(text: str) -> str:
-    """Strip the internal [DEAL:...] marker from customer-facing text.
-
-    Detection must run on the original (raw) text before calling this —
-    this only cleans the copy that gets sent/logged.
+    """Strip a stray [DEAL:...] marker (and [URGENT] tag) from customer-facing
+    text. The marker is never a deal signal (PRO-272) — this only cleans the
+    copy that gets sent/logged.
     """
     cleaned = DEAL_MARKER_RE.sub("", text or "")
     cleaned = URGENT_TAG_RE.sub("", cleaned)
