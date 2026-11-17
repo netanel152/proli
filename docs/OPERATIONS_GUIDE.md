@@ -224,7 +224,9 @@ Access at `http://localhost:8501` (local) or via nginx proxy at port 8080 (Docke
 
 Manage admins under **Settings → Admin Users** (Owner only). All actions are logged to the audit log; the viewer there is paginated (25/50/100/200 per page) and filterable by subject, user, action, and date range (dates cut on Israel time, matching the displayed timestamps).
 
-**Fallback auth:** If no admins exist in the DB, the system accepts the `ADMIN_PASSWORD` env var.
+**Fallback auth (bootstrap only):** while the `admins` collection is empty, the login accepts `ADMIN_PASSWORD_HASH` (or the plain `ADMIN_PASSWORD`, compared in constant time) and logs in as owner. Once any admin exists in the DB, the env password is ignored, whatever username is typed (PRO-267). Create the first DB owner, then unset both env vars.
+
+**Lockout:** 5 failed logins on one username lock that username for 15 minutes. Every failure also counts against one global key; 30 failures in 15 minutes lock all logins for the rest of that window, so rotating usernames gets an attacker no fresh attempts. Both counters live in Redis and fail open when it is unreachable.
 
 ### Lead Management
 

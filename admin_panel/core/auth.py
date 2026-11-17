@@ -2,6 +2,7 @@ from functools import partial
 import streamlit as st
 import os
 import time
+import hmac
 import secrets
 import extra_streamlit_components as stx
 import bcrypt
@@ -22,6 +23,15 @@ import certifi
 # app/services/security_service.py) — admin panel availability beats lockout.
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_SECONDS = 900  # 15 minutes
+
+# PRO-267: the per-username counter is keyed on what the attacker types, so
+# rotating usernames gave every guess a fresh counter. Every failure also counts
+# against this one key, which nobody can vary. It is higher than the per-user
+# limit so one mistyping operator never locks the others out, and it trips for
+# everyone at once: during a spray an admin waits out the window too, which is
+# the price of a key the attacker cannot rotate.
+GLOBAL_LOCKOUT_IDENTIFIER = "__all_logins__"
+GLOBAL_MAX_FAILED_ATTEMPTS = 30
 
 try:
     _redis_url = (
@@ -65,7 +75,7 @@ def _lockout_key(identifier: str) -> str:
     return f"admin_lockout:{identifier}"
 
 
-def _is_locked(identifier: str) -> tuple[bool, int]:
+def _is_locked(identifier: str, limit: int = MAX_FAILED_ATTEMPTS) -> tuple[bool, int]:
     """Returns (locked, seconds_remaining). Fail-open on Redis errors."""
     if _rate_redis is None:
         return (False, 0)
@@ -74,7 +84,7 @@ def _is_locked(identifier: str) -> tuple[bool, int]:
         count = _rate_redis.get(key)
         if count is None:
             return (False, 0)
-        if int(count) >= MAX_FAILED_ATTEMPTS:
+        if int(count) >= limit:
             ttl = _rate_redis.ttl(key)
             return (True, max(0, int(ttl)))
         return (False, 0)
@@ -93,6 +103,24 @@ def _record_failed_attempt(identifier: str) -> None:
             _rate_redis.expire(key, LOCKOUT_SECONDS)
     except Exception as e:
         logger.warning(f"Admin lockout increment failed: {e}")
+
+
+def login_locked(identifier: str) -> tuple[bool, int]:
+    """Locked out on the typed username's counter or on the global one (PRO-267)."""
+    for key, limit in (
+        (identifier, MAX_FAILED_ATTEMPTS),
+        (GLOBAL_LOCKOUT_IDENTIFIER, GLOBAL_MAX_FAILED_ATTEMPTS),
+    ):
+        locked, seconds_left = _is_locked(key, limit)
+        if locked:
+            return (True, seconds_left)
+    return (False, 0)
+
+
+def record_failed_login(identifier: str) -> None:
+    """Count a failure on the typed username and on the key nobody can vary."""
+    _record_failed_attempt(identifier)
+    _record_failed_attempt(GLOBAL_LOCKOUT_IDENTIFIER)
 
 
 def _reset_attempts(identifier: str) -> None:
@@ -216,8 +244,21 @@ def _authenticate_admin(username: str, password: str) -> dict | None:
     return None
 
 
+def authenticate(username: str, password: str, has_db_admins: bool) -> dict | None:
+    """Who these credentials log in as, or None.
+
+    PRO-267: the env password is the bootstrap path and nothing else. Once the
+    ``admins`` collection has anyone in it, only an account there can log in;
+    before, a failed DB login fell through to the env password for *any*
+    username, and a correct guess was owner.
+    """
+    if has_db_admins:
+        return _authenticate_admin(username, password) if username else None
+    return _authenticate_env(password)
+
+
 def _authenticate_env(password: str) -> dict | None:
-    """Fallback: authenticate using env var (bootstrap mode)."""
+    """Bootstrap only: authenticate using env var while no DB admin exists."""
     admin_hash = os.getenv("ADMIN_PASSWORD_HASH")
     admin_plain = os.getenv("ADMIN_PASSWORD")
 
@@ -227,7 +268,7 @@ def _authenticate_env(password: str) -> dict | None:
                 return {"username": "admin", "role": AdminRole.OWNER}
         except Exception:
             pass
-    elif admin_plain and password == admin_plain:
+    elif admin_plain and hmac.compare_digest(password.encode(), admin_plain.encode()):
         return {"username": "admin", "role": AdminRole.OWNER}
 
     return None
@@ -320,7 +361,7 @@ def check_password(cookies):
             identifier = username or "env"
 
             # Brute-force guard: block further attempts after MAX_FAILED_ATTEMPTS
-            locked, seconds_left = _is_locked(identifier)
+            locked, seconds_left = login_locked(identifier)
             if locked:
                 minutes_left = max(1, seconds_left // 60)
                 logger.warning(
@@ -328,15 +369,7 @@ def check_password(cookies):
                 )
                 st.error(T_auth["login_locked"].replace("{minutes}", str(minutes_left)))
             else:
-                auth_result = None
-
-                # Try DB auth first if admins exist
-                if has_db_admins and username:
-                    auth_result = _authenticate_admin(username, password)
-
-                # Fallback to env var auth
-                if not auth_result:
-                    auth_result = _authenticate_env(password)
+                auth_result = authenticate(username, password, has_db_admins)
 
                 if auth_result:
                     admin_username = auth_result.get("username", "admin")
@@ -371,7 +404,7 @@ def check_password(cookies):
                     # The dashboard appearing is the confirmation.
                     st.rerun()
                 else:
-                    _record_failed_attempt(identifier)
+                    record_failed_login(identifier)
                     logger.warning(f"Failed admin login attempt (user: {identifier})")
                     st.error(T_auth["wrong_password"])
 

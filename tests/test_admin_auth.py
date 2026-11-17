@@ -234,3 +234,62 @@ def test_session_check_never_compares_against_naive_local_time():
         and not node.keywords
     ]
     assert bare == []
+
+
+# --- PRO-267: the env password is bootstrap-only, and rotating names locks out ---
+
+
+@pytest.fixture
+def env_password(monkeypatch):
+    monkeypatch.delenv("ADMIN_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("ADMIN_PASSWORD", "hunter2")
+    monkeypatch.setattr(auth, "_authenticate_admin", lambda username, password: None)
+
+
+def test_env_password_logs_in_while_no_db_admin_exists(env_password):
+    assert auth.authenticate("", "hunter2", has_db_admins=False) == {
+        "username": "admin",
+        "role": auth.AdminRole.OWNER,
+    }
+
+
+def test_env_password_no_longer_works_once_db_admins_exist(env_password):
+    for username in ("", "admin", "anything"):
+        assert auth.authenticate(username, "hunter2", has_db_admins=True) is None
+
+
+def test_db_admins_still_log_in_with_their_own_password(monkeypatch):
+    doc = {"username": "dana", "role": "editor"}
+    monkeypatch.setattr(
+        auth,
+        "_authenticate_admin",
+        lambda username, password: doc if password == "right" else None,
+    )
+
+    assert auth.authenticate("dana", "right", has_db_admins=True) is doc
+    assert auth.authenticate("dana", "wrong", has_db_admins=True) is None
+
+
+def test_rotating_usernames_is_locked_out_by_the_global_counter(fake_redis):
+    for n in range(auth.GLOBAL_MAX_FAILED_ATTEMPTS):
+        assert auth.login_locked(f"a{n}") == (False, 0)
+        auth.record_failed_login(f"a{n}")
+
+    locked, _ = auth.login_locked("a-fresh-name")
+    assert locked is True
+
+
+def test_one_users_failures_do_not_lock_the_others_out(fake_redis):
+    for _ in range(auth.MAX_FAILED_ATTEMPTS):
+        auth.record_failed_login("dana")
+
+    assert auth.login_locked("dana")[0] is True
+    assert auth.login_locked("yossi") == (False, 0)
+
+
+def test_plaintext_env_compare_is_constant_time():
+    import inspect
+
+    source = inspect.getsource(auth._authenticate_env)
+    assert "compare_digest" in source
+    assert "password == admin_plain" not in source
