@@ -37,6 +37,30 @@ except Exception as e:
     _rate_redis = None
 
 
+# PRO-252: every session expiry is aware UTC. The `admin_sessions.expiry` TTL
+# index (expireAfterSeconds: 0) is evaluated by Mongo in UTC, and pymongo reads
+# a stored datetime back as naive UTC; a naive local `datetime.now()` was right
+# only while the container clock ran in UTC.
+SESSION_LIFETIME = timedelta(days=7)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """An expiry as aware UTC. A naive value is UTC: that is how pymongo
+    returns every stored datetime, and a session written before PRO-252 was
+    naive container time, which on Railway (no TZ set) is UTC too."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _session_live(session: dict | None, now: datetime | None = None) -> bool:
+    return bool(session) and _as_utc(session["expiry"]) > (now or _utcnow())
+
+
 def _lockout_key(identifier: str) -> str:
     return f"admin_lockout:{identifier}"
 
@@ -254,7 +278,7 @@ def check_password(cookies):
         if cookie_token:
             _cleanup_expired_sessions()
             session = _active_sessions.get(cookie_token) or _load_session(cookie_token)
-            if session and session["expiry"] > datetime.now():
+            if _session_live(session):
                 _active_sessions[cookie_token] = session  # warm local cache
                 st.session_state["authenticated"] = True
                 st.session_state["admin_username"] = session["username"]
@@ -329,7 +353,7 @@ def check_password(cookies):
 
                     if remember_me:
                         secure_token = secrets.token_hex(32)
-                        expires = datetime.now() + timedelta(days=7)
+                        expires = _utcnow() + SESSION_LIFETIME
                         session_data = {
                             "expiry": expires,
                             "username": admin_username,
@@ -405,7 +429,7 @@ def _load_session(token: str) -> dict | None:
         doc = _sessions_col.find_one({"_token": token})
         if doc:
             return {
-                "expiry": doc["expiry"],
+                "expiry": _as_utc(doc["expiry"]),
                 "username": doc["username"],
                 "role": doc["role"],
             }
@@ -423,9 +447,11 @@ def _delete_session(token: str):
 
 
 def _cleanup_expired_sessions():
-    now = datetime.now()
+    now = _utcnow()
     # Clean local cache
-    expired = [t for t, s in list(_active_sessions.items()) if s["expiry"] <= now]
+    expired = [
+        t for t, s in list(_active_sessions.items()) if not _session_live(s, now)
+    ]
     for t in expired:
         del _active_sessions[t]
     # Clean MongoDB
