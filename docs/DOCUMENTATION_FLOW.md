@@ -176,4 +176,4 @@ Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "
 
 - **Log masking:** All log sinks (stdout + file) apply a regex filter that masks Israeli phone numbers: `972521234567` → `97252****567` (country code + first 2 digits + last 3 digits preserved). Applied unconditionally in all environments.
 - **Consent gate:** `has_consent(chat_id)` is checked before processing customer messages. Non-consented users receive a privacy notice.
-- **Data management:** `data_management_service.py` provides GDPR-compliant data export and user deletion.
+- **Data management:** `data_management_service.py` provides GDPR-compliant data export and user deletion (not yet wired to an endpoint). Both cover messages, leads, reviews (stored under `customer_chat_id`), `wa_delivery` and consent; delete also clears every chat-keyed Redis entry except the short-lived `lock:chat:` mutex (PRO-247).
