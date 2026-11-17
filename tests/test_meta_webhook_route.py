@@ -426,6 +426,67 @@ async def test_post_development_without_app_secret_is_accepted(
     _capturing_pool.enqueue_job.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_post_with_an_empty_app_secret_in_staging_is_forbidden(
+    fake_redis, _capturing_pool, monkeypatch
+):
+    """PRO-270: ``META_APP_SECRET=`` is ``SecretStr('')``, not None. Keyed
+    with b"" the HMAC is one anyone can compute, so a POST "signed" that way
+    under the dryrun provider must be refused like an unset secret."""
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
+    monkeypatch.setattr(settings, "WHATSAPP_PROVIDER", "dryrun")
+    monkeypatch.setattr(settings, "META_APP_SECRET", SecretStr(""))
+
+    raw = json.dumps(_text_message_payload(wamid="wamid.EMPTYSECRET1")).encode()
+    forged = "sha256=" + hmac.new(b"", raw, hashlib.sha256).hexdigest()
+    resp = await _post(
+        raw, {"Content-Type": "application/json", "X-Hub-Signature-256": forged}
+    )
+
+    assert resp.status_code == 403
+    _capturing_pool.enqueue_job.assert_not_awaited()
+
+
+def test_handshake_with_an_empty_verify_token_is_forbidden(monkeypatch):
+    monkeypatch.setattr(settings, "META_VERIFY_TOKEN", SecretStr(""))
+
+    resp = sync_client.get(
+        "/webhook/meta",
+        params={"hub.mode": "subscribe", "hub.verify_token": "", "hub.challenge": "c"},
+    )
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.parametrize("provider", ["dryrun", "cloud"])
+@pytest.mark.parametrize("empty", ["META_APP_SECRET", "META_VERIFY_TOKEN"])
+@pytest.mark.parametrize("value", [None, SecretStr("")])
+def test_api_refuses_to_boot_prod_like_without_inbound_secrets(
+    monkeypatch, provider, empty, value
+):
+    """PRO-270: the route is served whatever the provider says."""
+    from app.api.routes.meta_webhook import require_inbound_secrets
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
+    monkeypatch.setattr(settings, "WHATSAPP_PROVIDER", provider)
+    monkeypatch.setattr(settings, "META_APP_SECRET", SecretStr("s"))
+    monkeypatch.setattr(settings, "META_VERIFY_TOKEN", SecretStr("t"))
+    monkeypatch.setattr(settings, empty, value)
+
+    with pytest.raises(RuntimeError, match=empty):
+        require_inbound_secrets(settings)
+
+
+def test_api_boots_in_development_without_inbound_secrets(monkeypatch):
+    from app.api.routes.meta_webhook import require_inbound_secrets
+
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "META_APP_SECRET", None)
+    monkeypatch.setattr(settings, "META_VERIFY_TOKEN", SecretStr(""))
+
+    require_inbound_secrets(settings)
+
+
 # ---------------------------------------------------------------------------
 # Non-ASCII signature header — must 403, never 500
 # ---------------------------------------------------------------------------

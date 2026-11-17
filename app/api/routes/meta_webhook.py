@@ -47,6 +47,40 @@ from app.services.security_service import SecurityService
 router = APIRouter()
 
 
+INBOUND_SECRETS = ("META_APP_SECRET", "META_VERIFY_TOKEN")
+
+
+def _configured(secret) -> str | None:
+    """The secret's value, or None when it is unset *or empty* (PRO-270).
+
+    ``META_APP_SECRET=`` arrives as ``SecretStr('')``, which is not None, and an
+    HMAC keyed with ``b""`` is one anyone can compute.
+    """
+    if secret is None:
+        return None
+    return secret.get_secret_value() or None
+
+
+def require_inbound_secrets(cfg) -> None:
+    """Refuse to serve this route unauthenticated in staging or production.
+
+    PRO-270: the route is live whatever ``WHATSAPP_PROVIDER`` says, ``dryrun``
+    included, and ``Settings.require_cloud_provider_config`` only checks these
+    under ``cloud``. The API calls this at boot. It is not a Settings
+    validator because ``admin`` and ``worker`` share Settings and serve no
+    webhook.
+    """
+    if not cfg.is_prod_like:
+        return
+    missing = [name for name in INBOUND_SECRETS if not _configured(getattr(cfg, name))]
+    if missing:
+        raise RuntimeError(
+            f"{', '.join(missing)} must be set and non-empty in a "
+            f"{cfg.ENVIRONMENT} environment: /webhook/meta is served whatever "
+            "WHATSAPP_PROVIDER says, and they are what authenticates it."
+        )
+
+
 @router.get("/webhook/meta")
 async def verify_subscription(
     mode: str | None = Query(default=None, alias="hub.mode"),
@@ -55,30 +89,23 @@ async def verify_subscription(
 ):
     """Meta's one-time subscription handshake: echo the challenge iff the
     operator-chosen verify token matches."""
-    token = settings.META_VERIFY_TOKEN
+    token = _configured(settings.META_VERIFY_TOKEN)
     if (
         token is not None
         and mode == "subscribe"
-        and hmac.compare_digest(
-            (verify_token or "").encode(), token.get_secret_value().encode()
-        )
+        and hmac.compare_digest((verify_token or "").encode(), token.encode())
     ):
         return PlainTextResponse(challenge or "")
     logger.warning("Meta webhook verification attempt with wrong/missing token")
     return JSONResponse(status_code=403, content={"status": "forbidden"})
 
 
-def _signature_valid(raw_body: bytes, header: str | None) -> bool:
+def _signature_valid(raw_body: bytes, header: str | None, secret: str) -> bool:
     """Constant-time check of ``X-Hub-Signature-256`` against META_APP_SECRET."""
     if not header:
         return False
     expected = (
-        "sha256="
-        + hmac.new(
-            settings.META_APP_SECRET.get_secret_value().encode(),
-            raw_body,
-            hashlib.sha256,
-        ).hexdigest()
+        "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     )
     # Compare bytes, not str: compare_digest raises TypeError on a non-ASCII
     # str, and header values reach us latin-1-decoded straight off the wire —
@@ -90,8 +117,11 @@ def _signature_valid(raw_body: bytes, header: str | None) -> bool:
 async def meta_webhook_endpoint(request: Request):
     raw_body = await request.body()
 
-    if settings.META_APP_SECRET is not None:
-        if not _signature_valid(raw_body, request.headers.get("X-Hub-Signature-256")):
+    secret = _configured(settings.META_APP_SECRET)
+    if secret is not None:
+        if not _signature_valid(
+            raw_body, request.headers.get("X-Hub-Signature-256"), secret
+        ):
             logger.warning(
                 "Security Alert: Meta webhook POST with invalid or missing "
                 "X-Hub-Signature-256"

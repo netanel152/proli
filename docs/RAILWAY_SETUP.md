@@ -136,7 +136,7 @@ HEALTH_TOKEN=...  # X-Health-Token header value for the detailed /health payload
 WEBHOOK_TOKEN=...  # Random string for webhook auth — required (boot fails without it) once ENVIRONMENT is staging/production (PRO-86)
 WHATSAPP_PROVIDER=dryrun  # dryrun (default) | cloud — cloud selects the PRO-89 CloudAPIProvider (Meta Graph API)
 META_ACCESS_TOKEN=...        # secret — required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
-META_APP_SECRET=...          # secret — signs inbound /webhook/meta; required for cloud in staging/production
+META_APP_SECRET=...          # secret — signs inbound /webhook/meta; api: required (non-empty) in staging/production whatever the provider (PRO-270); other services: for cloud
 META_VERIFY_TOKEN=...        # secret — echoed back during the Meta subscription handshake; required for cloud in staging/production
 META_PHONE_NUMBER_ID=...     # not secret — Graph node id, required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
 WA_BUSINESS_INITIATED_CAP=250  # worker only; fallback cap for the 80% alert when Meta's live limit can't be read
