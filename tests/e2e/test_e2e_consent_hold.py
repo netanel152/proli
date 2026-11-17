@@ -361,7 +361,7 @@ async def test_a_guard_below_the_gate_cannot_fire_twice_on_a_rerun(world, monkey
 async def test_an_emergency_that_dies_past_the_log_pages_the_operator(
     world, monkeypatch
 ):
-    await world.send("יש שריפה")
+    await world.send("דחוף!!")
     monkeypatch.setattr(
         workflow_service, "_handle_completion", AsyncMock(side_effect=RuntimeError)
     )
@@ -372,7 +372,7 @@ async def test_an_emergency_that_dies_past_the_log_pages_the_operator(
         await world.send("כן")
 
     page.assert_called_once()
-    assert "שריפה" not in page.call_args.args[0]
+    assert "דחוף" not in page.call_args.args[0]
     assert world.customer not in page.call_args.args[0]
 
 
@@ -383,7 +383,7 @@ async def test_an_emergency_that_dies_past_the_log_pages_the_operator(
 async def test_an_emergency_that_fails_before_the_log_pages_unless_it_will_rerun(
     world, monkeypatch, failure, pages
 ):
-    await world.send("יש שריפה")
+    await world.send("דחוף!!")
     monkeypatch.setattr(
         workflow_service.lead_manager, "log_message", AsyncMock(side_effect=failure)
     )
@@ -395,7 +395,7 @@ async def test_an_emergency_that_fails_before_the_log_pages_unless_it_will_rerun
 
     assert page.call_count == pages
     for call in page.call_args_list:
-        assert "שריפה" not in call.args[0]
+        assert "דחוף" not in call.args[0]
         assert world.customer not in call.args[0]
         assert "consent" in call.args[0], "says where to find the number"
 
@@ -494,8 +494,8 @@ async def test_an_emergency_opening_is_still_an_emergency_after_the_replay(world
     was "כן" when the orchestrator computed it."""
     await world.standard_cast()
     await world.db.consent.delete_many({})
-    await world.send("יש שריפה בתל אביב")
-    world.ai.script(reply("מאתר איש מקצוע.", city="תל אביב", issue="שריפה"))
+    await world.send("יש הצפה בתל אביב")
+    world.ai.script(reply("מאתר איש מקצוע.", city="תל אביב", issue="הצפה"))
     await world.send("כן")
 
     lead = await world.lead()

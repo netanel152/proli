@@ -41,7 +41,8 @@ from app.core.legal_links import consent_request_text
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.phone import to_chat_id, to_local_phone, strip_suffix, mask_chat_id
-from app.core.text_matching import contains_keyword
+from app.core.redis_client import get_redis_client
+from app.core.text_matching import contains_keyword, is_life_threatening_text
 
 
 class _Handled:
@@ -272,6 +273,88 @@ async def guard_inbound_rate_limit(ctx: DispatchContext, deps: GuardDeps):
             f"🚨 Possible abuse: {mask_chat_id(ctx.chat_id)} tripped the rate limit {trips}x"
         )
     await deps.whatsapp.send_message(ctx.chat_id, Messages.Errors.RATE_LIMITED)
+    return HANDLED
+
+
+#: PRO-222 — states a pro or admin is in while acting as one. A message from an
+#: exempt sender in any other state is a pro writing as a customer.
+_PRO_OR_ADMIN_STATE_PREFIXES = ("pro_", "onboarding_", "admin_")
+
+#: One operator page per chat per window, however many times they write it.
+LIFE_THREAT_PAGE_TTL_SECONDS = 600
+
+
+def _acting_as_pro_or_admin(ctx: DispatchContext) -> bool:
+    state = str(getattr(ctx.current_state, "value", ctx.current_state) or "")
+    return ctx.is_exempt and (
+        state == "" or state.lower().startswith(_PRO_OR_ADMIN_STATE_PREFIXES)
+    )
+
+
+async def guard_life_threatening(ctx: DispatchContext, deps: GuardDeps):
+    """PRO-222 — danger to life goes to emergency services, never to a pro.
+
+    Fire, smoke, gas, an explosion or electrocution: tell the customer to move
+    away and call 102/101/100, page the operator, and look for nobody. Runs
+    ahead of the consent gate and every holding state, so it answers in any
+    state a customer can write in — including before consent, where nothing is
+    stored: the turn is not logged, no lead is created, the operator's page
+    carries no customer text, and the FSM state (with any held pre-consent
+    messages) is cleared. An open CONTACTED/NEW lead goes to
+    PENDING_ADMIN_REVIEW so nothing still suggests a pro is coming; a BOOKED job
+    is left to the operator the page reaches.
+    """
+    from app.services import workflow_service as wf  # cycle: workflow_service
+
+    if not is_life_threatening_text(ctx.user_text or ""):
+        return None
+    if _acting_as_pro_or_admin(ctx):
+        return None
+
+    await deps.whatsapp.send_message(ctx.chat_id, Messages.Customer.LIFE_THREATENING)
+
+    moved = None
+    lead = await wf.leads_collection.find_one(
+        {
+            "chat_id": ctx.chat_id,
+            "status": {"$in": [LeadStatus.CONTACTED, LeadStatus.NEW]},
+        },
+        sort=[("created_at", -1)],
+    )
+    if lead:
+        moved = await wf.set_lead_status(
+            lead["_id"],
+            LeadStatus.PENDING_ADMIN_REVIEW,
+            wf.Actor.SYSTEM,
+            extra_set={"escalation_reason": "life_threatening"},
+            expected_status=lead["status"],
+        )
+    await deps.state_manager.clear_state(ctx.chat_id)
+
+    first = True
+    try:
+        redis = await get_redis_client()
+        first = bool(
+            await redis.set(
+                f"life_threat_paged:{ctx.chat_id}",
+                "1",
+                ex=LIFE_THREAT_PAGE_TTL_SECONDS,
+                nx=True,
+            )
+        )
+    except Exception as e:
+        logger.warning(f"Life-threat page dedupe unavailable, paging anyway: {e}")
+    if first:
+        wf.notification_service.page_operator(
+            f"LIFE-THREATENING report from {mask_chat_id(ctx.chat_id)}: told to "
+            "call emergency services, no pro sought"
+            + (f"; lead {lead['_id']} moved to PENDING_ADMIN_REVIEW" if moved else "")
+            + ". Check on them once it is safe."
+        )
+    logger.warning(
+        f"🚨 Life-threatening report from {mask_chat_id(ctx.chat_id)} — "
+        "sent to emergency services"
+    )
     return HANDLED
 
 
@@ -1607,6 +1690,9 @@ GUARD_CHAIN: Tuple[Tuple[str, Guard], ...] = (
     ("global_reset", guard_global_reset),
     ("help_menu", guard_help_menu),
     ("inbound_rate_limit", guard_inbound_rate_limit),
+    # PRO-222: after the rate limiter (it bounds the pages) and before consent
+    # and every holding state, which would answer anything else first.
+    ("life_threatening", guard_life_threatening),
     ("zero_touch_intent", guard_zero_touch_intent),
     ("consent_gate", guard_consent_gate),
     ("politeness", guard_politeness),
