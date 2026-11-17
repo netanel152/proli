@@ -90,7 +90,7 @@ pytest -m integration
 | `test_admin_audit_queries.py` | `admin_panel/core/audit_queries.py` (PRO-142, sync, injected collection) — `write_audit_entry` fail-open behavior, `build_audit_filter`, pagination (`count_audit_entries`/`fetch_audit_page`/`page_count`/`clamp_page`), and `format_audit_rows` timestamp handling |
 | `test_scheduling_service.py` | Recurring templates, slot generation |
 | `test_pro_onboarding.py` | WhatsApp self-signup flow |
-| `test_data_management.py` | Consent, data export, deletion |
+| `test_data_management.py` | Consent, data export, deletion. PRO-247: export and delete find reviews by `customer_chat_id` (how they are written) and `wa_delivery` by `chat_id`; delete leaves no Mongo document or Redis key naming the chat and spares another chat; a drift scan fails when a new `f"<family>:{chat_id}"` Redis key in `app/` is not on the delete path |
 | `test_admin_auth.py` | Password hashing, cookie auth, session tokens |
 | `test_admin_kanban.py` | PRO-46 — `pending_admin_review` surfaced on the admin Kanban: column presence, `STATUS_COLORS`/label drift guards, localized-render checks, and the count-query/enum guard |
 | `test_admin_view_call_arity.py` | Static `ast` guard: every resolvable call in `admin_panel/` (same-module and imported from the panel) must bind its target signature. Streamlit views never execute under the unit suite, so a wrong-arity call is otherwise invisible until an operator opens the page — PRO-188 shipped `_render_pending_review_strip(T, pro_names, pro_map_name_to_id)` against a one-parameter def and took down the Dashboard tab on staging. Includes checker self-tests so the guard cannot rot into a no-op |
