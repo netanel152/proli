@@ -82,9 +82,9 @@ Exit `0` when nothing is left to do, `1` when some pros need it (dry run), `3` w
 
 ### `create_indexes.py`
 
-Creates MongoDB indexes for query performance. Run once when setting up a new environment.
+Creates every MongoDB index in its `INDEX_SPECS` table. The API runs the same table on every boot (`create_all_indexes(silent=True)`), so a manual run only primes a brand-new database or shows the list.
 
-Indexes created: `phone_number` (unique), `location` (2dsphere), `chat_id`, `status`, `pro_id+status` (compound), `status+created_at` (compound).
+A failed index (a unique index blocked by duplicates, an options conflict such as a changed TTL) is always logged at ERROR, `silent` or not, and returned; the API boot then logs how many failed instead of "✅ MongoDB indexes verified." An index the database holds but the table does not list (a superseded one) is logged at WARNING and never dropped (PRO-250).
 
 ```bash
 python scripts/create_indexes.py
