@@ -645,3 +645,124 @@ def test_view_cannot_set_a_pro_outside_the_routing():
     # Every assignment outcome, including the strip's, gets its own sentence.
     assert "ASSIGN_PRO_GONE" in code
     assert "ASSIGN_PRO_LOOKUP_FAILED" in code
+
+
+# --- PRO-283: the save is guarded on the status the frame was built with ---
+
+
+def _save_framed(leads, lead_id, changed, frame_status, offer=None, **kwargs):
+    stored = leads.find_one({"_id": lead_id}) or {}
+    frame = pd.DataFrame(
+        [
+            {
+                "id": str(lead_id),
+                "client": "Yossi",
+                "professional": "Held By",
+                "_pro_id": str(stored.get("pro_id") or ""),
+                "status": frame_status,
+            }
+        ]
+    )
+    return save_lead_edits(
+        frame,
+        {0: changed},
+        leads_collection=leads,
+        pro_map_name_to_id={"Dana": PRO_ID},
+        unknown_pro_label=UNKNOWN,
+        status_by_label={
+            "Waiting": PENDING,
+            "Booked": "booked",
+            "Cancelled": "cancelled",
+            "Completed": "completed",
+        },
+        offer_pending=offer or _Offer(),
+        **kwargs,
+    )
+
+
+def test_a_pro_change_cannot_move_a_lead_booked_since_the_frame(leads):
+    """The frame showed NEW with pro A; A approved; the operator saves pro B."""
+    pro_a = ObjectId()
+    lead_id = _lead(leads, status="booked", pro_id=pro_a)
+
+    result = _save_framed(leads, lead_id, {"professional": "Dana"}, frame_status="new")
+
+    doc = leads.find_one({"_id": lead_id})
+    assert (doc["status"], doc["pro_id"]) == ("booked", pro_a)
+    assert "assigned_by_admin_at" not in doc
+    assert result["skipped_rows"] == [{"client": "Yossi", "reason": SKIP_STALE_PRO}]
+
+
+def test_a_status_edit_from_a_stale_frame_is_not_written(leads):
+    lead_id = _lead(leads, status="booked", pro_id=ObjectId())
+
+    result = _save_framed(
+        leads, lead_id, {"status_label": "Waiting"}, frame_status="new"
+    )
+
+    assert leads.find_one({"_id": lead_id})["status"] == "booked"
+    assert result["skipped_rows"][0]["reason"] == SKIP_STALE_PRO
+
+
+def test_a_details_edit_from_a_stale_frame_still_saves(leads):
+    lead_id = _lead(leads, status="booked", pro_id=ObjectId())
+
+    result = _save_framed(
+        leads, lead_id, {"details_summary": "edit"}, frame_status="new"
+    )
+
+    assert result["updated"] == 1
+    assert leads.find_one({"_id": lead_id})["issue_type"] == "edit"
+
+
+class _BookedBeforeWrite:
+    """The lead is read as NEW, then a pro approves before the write lands."""
+
+    def __init__(self, leads):
+        self._leads = leads
+        self._approved = False
+
+    def find_one(self, *args, **kwargs):
+        return self._leads.find_one(*args, **kwargs)
+
+    def update_one(self, query, update):
+        if not self._approved:
+            self._approved = True
+            self._leads.update_one(
+                {"_id": query["_id"]}, {"$set": {"status": "booked"}}
+            )
+        return self._leads.update_one(query, update)
+
+
+def test_an_approval_between_the_read_and_the_write_is_not_overwritten(leads):
+    pro_a = ObjectId()
+    lead_id = _lead(leads, status="new", pro_id=pro_a)
+
+    result = _save_framed(
+        _BookedBeforeWrite(leads),
+        lead_id,
+        {"professional": "Dana"},
+        frame_status="new",
+    )
+
+    doc = leads.find_one({"_id": lead_id})
+    assert (doc["status"], doc["pro_id"]) == ("booked", pro_a)
+    assert result["skipped_rows"][0]["reason"] == SKIP_STALE_PRO
+
+
+@pytest.mark.parametrize("label, released", [("Cancelled", True), ("Completed", False)])
+def test_a_terminal_move_releases_the_booked_slot(leads, label, released):
+    slots = mongomock.MongoClient()["proli_test"]["slots"]
+    slot_id = slots.insert_one({"is_taken": True}).inserted_id
+    lead_id = _lead(leads, status="booked", pro_id=ObjectId(), booked_slot_id=slot_id)
+
+    _save_framed(
+        leads,
+        lead_id,
+        {"status_label": label},
+        frame_status="booked",
+        slots_collection=slots,
+    )
+
+    assert slots.find_one({"_id": slot_id})["is_taken"] is (not released)
+    assert ("booked_slot_id" in leads.find_one({"_id": lead_id})) is (not released)

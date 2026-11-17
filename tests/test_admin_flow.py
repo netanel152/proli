@@ -1088,3 +1088,61 @@ async def test_unknown_admin_state_resets_silently(
 
     mock_state.clear_state.assert_awaited_once_with("admin@c.us")
     mock_whatsapp.send_message.assert_not_called()
+
+
+# --- PRO-282 — the wizard's assignment is conditional, like the strip's -----
+
+
+@pytest.mark.asyncio
+async def test_wizard_does_not_reassign_a_lead_claimed_between_pick_and_assign(
+    patch_admin_collections, mock_state, mock_whatsapp, monkeypatch
+):
+    """The admin picked a PENDING_ADMIN_REVIEW lead; before they chose a pro,
+    pro X claimed it with מצא and approved. Choosing pro Y must not hand X's
+    booked customer to Y."""
+    db = patch_admin_collections
+    notify = AsyncMock(return_value=True)
+    monkeypatch.setattr(admin_flow, "notify_pro_new_lead", notify)
+    pro_x, pro_y = ObjectId(), ObjectId()
+    await db.users.insert_one(
+        {
+            "_id": pro_y,
+            "phone_number": "972501234567",
+            "role": "professional",
+            "business_name": "יוסי",
+        }
+    )
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "status": LeadStatus.BOOKED,  # was PENDING_ADMIN_REVIEW at the pick
+            "pro_id": pro_x,
+            "chat_id": "customer@c.us",
+            "full_address": "תל אביב",
+            "issue_type": "נזילה",
+        }
+    )
+    mock_state.get_metadata.return_value = {
+        "selected_lead_id": str(lead_id),
+        "admin_pros_context": {"1": str(pro_y)},
+    }
+
+    await admin_flow.handle_admin_message(
+        "admin@c.us",
+        "1",
+        UserStates.ADMIN_SELECTING_PRO,
+        mock_state,
+        None,
+        mock_whatsapp,
+        None,
+    )
+
+    lead = await db.leads.find_one({"_id": lead_id})
+    assert (lead["status"], lead["pro_id"]) == (LeadStatus.BOOKED, pro_x)
+    notify.assert_not_awaited()
+    sent = [(c.args[0], c.args[1]) for c in mock_whatsapp.send_message.call_args_list]
+    assert sent == [
+        ("admin@c.us", Messages.Admin.ASSIGN_LEAD_TAKEN.format(pro_name="יוסי"))
+    ]
+    mock_state.clear_state.assert_awaited()

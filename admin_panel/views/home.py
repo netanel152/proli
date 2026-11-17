@@ -6,6 +6,7 @@ from admin_panel.core.utils import (
     users_collection,
     leads_collection,
     messages_collection,
+    slots_collection,
     send_completion_check_sync,
 )
 from admin_panel.ui.components import (
@@ -1031,6 +1032,7 @@ def view_leads_dashboard(T):
                                 offer_pending=_offer_pending,
                                 report=result,
                                 end_conversation=end_conversation_sync,
+                                slots_collection=slots_collection,
                             )
                             # A stale refusal too: the retry needs a fresh frame.
                             if report_acted(result) or any(
@@ -1453,7 +1455,10 @@ def _render_selected_lead_actions(
                                     if isinstance(frame_pro_id, str)
                                     else None
                                 ),
+                                # PRO-283: the status this form was built with.
+                                expected_status=selected_lead.get("status") or None,
                                 end_conversation=end_conversation_sync,
+                                slots_collection=slots_collection,
                             )
                             if change["found"]:
                                 # PRO-161: the st.success here was discarded by the

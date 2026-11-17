@@ -357,7 +357,9 @@ def apply_lead_changes(
     leads_collection,
     offer_pending=None,
     expected_pro=None,
+    expected_status=None,
     end_conversation=None,
+    slots_collection=None,
 ):
     """Write one lead's edits and decide what setting its pro *means*.
 
@@ -384,6 +386,17 @@ def apply_lead_changes(
     ``expected_pro`` is the pro id the caller's frame was built with (``""`` for
     none). If a pro change finds somebody else stored, nothing at all is written
     and ``stale`` comes back true, as the strip refuses with ``ASSIGN_STALE``.
+
+    ``expected_status`` is the status the frame was built with (PRO-283). A save
+    that moves the status or the pro finds a different status stored → nothing
+    written, ``stale``: a frame up to 30s old must not hand a lead that was just
+    BOOKED to another pro, or put back a status somebody else moved. Such a
+    write is also filtered on the status and pro it read, so a change between
+    that read and the write is ``stale`` too, never "vanished".
+
+    A status move into a terminal status other than COMPLETED releases the
+    lead's ``booked_slot_id`` (``slots_collection``), as the chat cancel paths
+    do; a completed job used its slot.
 
     Fields that already hold the stored value are dropped rather than rewritten:
     a stale frame must not put back a status somebody else just moved, and a
@@ -422,7 +435,7 @@ def apply_lead_changes(
 
     # Doubles as the existence check for every kind of edit.
     current = leads_collection.find_one(
-        {"_id": oid}, {"status": 1, "pro_id": 1, "chat_id": 1}
+        {"_id": oid}, {"status": 1, "pro_id": 1, "chat_id": 1, "booked_slot_id": 1}
     )
     if current is None:
         logger.warning(f"[LeadsEditor] Lead {lead_id} vanished before it was read.")
@@ -460,6 +473,20 @@ def apply_lead_changes(
     if not pro_moved:
         set_ops.pop("pro_id", None)
 
+    # PRO-283: status and owner are what a stale frame can do harm with.
+    guarded = status_moved or pro_moved
+    if (
+        guarded
+        and expected_status is not None
+        and current.get("status") != expected_status
+    ):
+        logger.warning(
+            f"[LeadsEditor] Lead {lead_id} changed status since the frame was built."
+        )
+        set_ops.clear()
+        unset_ops.clear()
+        return _result(True, stale=True)
+
     waiting = new_status == LeadStatus.PENDING_ADMIN_REVIEW
     if (
         pro_moved
@@ -495,15 +522,31 @@ def apply_lead_changes(
     if unset_ops:
         update_op["$unset"] = unset_ops
     if update_op:
-        result = leads_collection.update_one({"_id": oid}, update_op)
+        write_filter = {"_id": oid}
+        if guarded:
+            # PRO-283: as read, so a move that lands between the read and this
+            # write (a pro's approval) is not overwritten.
+            write_filter["status"] = current.get("status")
+            write_filter["pro_id"] = stored_pro
+        result = leads_collection.update_one(write_filter, update_op)
         # matched_count, not modified_count: a write of the value already held
         # is still a successful save. A delete landing between the read and this
         # write shows up here.
         if getattr(result, "matched_count", 0) == 0:
+            if guarded and leads_collection.find_one({"_id": oid}, {"_id": 1}):
+                logger.warning(
+                    f"[LeadsEditor] Lead {lead_id} changed between read and write."
+                )
+                set_ops.clear()
+                unset_ops.clear()
+                return _result(True, stale=True)
             logger.warning(
                 f"[LeadsEditor] Lead {lead_id} vanished between read and write."
             )
             return _result(False)
+
+    if status_moved and new_status in _SLOT_RELEASING_STATUSES:
+        _release_slot_quietly(leads_collection, slots_collection, oid, current)
 
     if status_moved and new_status in TERMINAL_STATUSES and end_conversation:
         _end_conversation_quietly(leads_collection, oid, current, end_conversation)
@@ -513,6 +556,32 @@ def apply_lead_changes(
 
     outcome, pro_name = offer_pending(lead_id, offer_to)
     return _result(True, (outcome, pro_name))
+
+
+#: Terminal moves that give the pro's slot back. COMPLETED keeps it: the job
+#: used that time.
+_SLOT_RELEASING_STATUSES = (
+    LeadStatus.CANCELLED,
+    LeadStatus.CLOSED,
+    LeadStatus.REJECTED,
+)
+
+
+def _release_slot_quietly(leads_collection, slots_collection, oid, lead):
+    """PRO-283: free the lead's booked slot and drop the pointer, as a cancel in
+    chat does. The lead is already saved, so a failure is logged, never raised."""
+    slot_id = lead.get("booked_slot_id")
+    if not slot_id or slots_collection is None:
+        return
+    try:
+        slots_collection.update_one(
+            {"_id": slot_id, "is_taken": True}, {"$set": {"is_taken": False}}
+        )
+        leads_collection.update_one(
+            {"_id": oid, "booked_slot_id": slot_id}, {"$unset": {"booked_slot_id": ""}}
+        )
+    except Exception as e:
+        logger.error(f"[LeadsEditor] Releasing the slot of lead {oid} failed: {e}")
 
 
 def _end_conversation_quietly(leads_collection, oid, lead, end_conversation):
@@ -645,6 +714,13 @@ def record_change(report, change, *, client, pro_label, unknown_pro_label=None):
         report["updated"] += 1
 
 
+def _frame_status(row):
+    """The frame's raw ``status`` (hidden; the operator edits ``status_label``),
+    or ``None`` if this frame does not carry one (PRO-283)."""
+    value = row.get("status")
+    return value if isinstance(value, str) and value else None
+
+
 def _frame_pro_id(row):
     """The frame's ``_pro_id``, or ``None`` if this frame does not carry one."""
     value = row.get("_pro_id")
@@ -663,6 +739,7 @@ def save_lead_edits(
     offer_pending=None,
     report=None,
     end_conversation=None,
+    slots_collection=None,
 ):
     """Apply the leads editor's edits, resolving row identity safely.
 
@@ -771,7 +848,13 @@ def save_lead_edits(
                 leads_collection=leads_collection,
                 offer_pending=offer_pending,
                 expected_pro=_frame_pro_id(row),
+                # The raw column is hidden and the operator edits the label; a
+                # caller that edits `status` itself has no "as built" value left.
+                expected_status=(
+                    None if "status" in changed_data else _frame_status(row)
+                ),
                 end_conversation=end_conversation,
+                slots_collection=slots_collection,
             )
         except Exception as e:
             logger.error(f"[LeadsEditor] Saving lead {lead_id} failed: {e}")
