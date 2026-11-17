@@ -862,6 +862,12 @@ class Messages:
             "⚠️ הליד שויך ל-{pro_name}, אבל שליחת ההצעה אליו נכשלה "
             "(ייתכן שחלון 24 השעות שלו סגור). יש ליצור איתו קשר ידנית."
         )
+        # PRO-282: the lead left PENDING_ADMIN_REVIEW while the admin was
+        # choosing (a pro's מצא claimed it, say). Nothing was written.
+        ASSIGN_LEAD_TAKEN = (
+            "⚠️ הליד כבר לא ממתין לשיבוץ — מישהו טיפל בו בינתיים. "
+            "לא שויך ל-{pro_name}. אפשר לפתוח את הרשימה מחדש עם *ניהול*."
+        )
 
     class SOS:
         CUSTOMER_REASSIGNING = (

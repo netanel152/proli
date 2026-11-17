@@ -252,9 +252,10 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp, expected_status=None):
     hunting the wrong problem. Every caller must say which of the three
     happened; the assignment stands either way.
 
-    ``expected_status`` makes the write conditional and race-safe. Left ``None``
-    (the wizard) the write is unconditional, exactly as before. Passed a status
-    (the panel) and the lead has since moved on, nothing is written and
+    ``expected_status`` makes the write conditional and race-safe. Both callers
+    pass ``PENDING_ADMIN_REVIEW`` (the wizard since PRO-282); left ``None`` the
+    write is unconditional. Passed a status and the lead has since moved on,
+    nothing is written and
     :data:`LEAD_ALREADY_TAKEN` comes back in place of ``offer_sent`` — the one
     outcome where the lead is *not* assigned to this pro.
     """
@@ -296,8 +297,8 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp, expected_status=None):
             "no_show_reported_at": "",
             "offer_withheld_details": "",
         },
-        # Opt-in, so the wizard keeps its unconditional write. The panel passes
-        # PENDING_ADMIN_REVIEW because its button acts on a lead_id captured
+        # Both callers pass PENDING_ADMIN_REVIEW (PRO-282 for the wizard, whose
+        # pick can be 15 minutes old). The panel's button acts on a lead_id captured
         # when the page rendered, on a page that auto-refreshes and that several
         # operators may have open. Without the guard, a second click pulls a
         # lead that has since moved on back to NEW under a different pro,
@@ -352,10 +353,27 @@ async def assign_lead_to_pro(lead_id, pro, whatsapp, expected_status=None):
 
 
 async def _assign_lead_to_pro(chat_id, lead_id, pro, state_manager, whatsapp):
-    """Wizard wrapper: assign, then clear state and answer the admin in chat."""
-    offer_sent, pro_name = await assign_lead_to_pro(lead_id, pro, whatsapp)
+    """Wizard wrapper: assign, then clear state and answer the admin in chat.
+
+    PRO-282: the lead was picked from the PENDING_ADMIN_REVIEW list up to
+    ``ADMIN_TTL`` ago, so the write is conditional on it still waiting there,
+    as the panel's strip is. A lead claimed meanwhile (a pro's מצא, then an
+    approval) is left alone and the admin is told.
+    """
+    offer_sent, pro_name = await assign_lead_to_pro(
+        lead_id, pro, whatsapp, expected_status=LeadStatus.PENDING_ADMIN_REVIEW
+    )
 
     await state_manager.clear_state(chat_id)
+    if offer_sent is LEAD_ALREADY_TAKEN:
+        await whatsapp.send_message(
+            chat_id, Messages.Admin.ASSIGN_LEAD_TAKEN.format(pro_name=pro_name)
+        )
+        logger.info(
+            f"[admin_flow] Lead {lead_id} left PENDING_ADMIN_REVIEW before the "
+            f"assignment by admin ...{chat_id[-8:]} — not assigned."
+        )
+        return
     if offer_sent:
         await whatsapp.send_message(
             chat_id, Messages.Admin.ASSIGN_SUCCESS.format(pro_name=pro_name)
