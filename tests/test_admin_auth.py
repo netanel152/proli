@@ -178,7 +178,7 @@ def test_persisted_session_round_trips_through_mongo_as_utc(israel_clock, sessio
     expiry = auth._utcnow() + timedelta(hours=1)
     auth._persist_session("tok", {"expiry": expiry, "username": "a", "role": "owner"})
 
-    stored = sessions.find_one({"_token": "tok"})["expiry"]
+    stored = sessions.find_one({"_token": auth._token_key("tok")})["expiry"]
     assert abs(stored.replace(tzinfo=timezone.utc) - expiry) < timedelta(seconds=1)
 
     loaded = auth._load_session("tok")
@@ -216,7 +216,10 @@ def test_cleanup_drops_expired_and_keeps_live_sessions_in_utc(israel_clock, sess
     auth._cleanup_expired_sessions()
 
     assert set(auth._active_sessions) == {"live", "legacy"}
-    assert {d["_token"] for d in sessions.find()} == {"live", "legacy"}
+    assert {d["_token"] for d in sessions.find()} == {
+        auth._token_key("live"),
+        auth._token_key("legacy"),
+    }
 
 
 def test_session_check_never_compares_against_naive_local_time():
@@ -293,3 +296,48 @@ def test_plaintext_env_compare_is_constant_time():
     source = inspect.getsource(auth._authenticate_env)
     assert "compare_digest" in source
     assert "password == admin_plain" not in source
+
+
+# --- PRO-275: tokens stored hashed, a Secure cookie, escaped pro text ---
+
+
+def test_a_session_is_stored_under_the_tokens_hash_never_the_token(sessions):
+    token = "a" * 64
+    data = {
+        "expiry": auth._utcnow() + timedelta(hours=1),
+        "username": "a",
+        "role": "owner",
+    }
+
+    auth._persist_session(token, data)
+
+    stored = [d["_token"] for d in sessions.find()]
+    assert stored == [auth._token_key(token)]
+    assert token not in stored
+    assert auth._load_session(token)["username"] == "a"
+    # The stored value replayed as a cookie finds nothing.
+    assert auth._load_session(stored[0]) is None
+
+    auth._delete_session(token)
+    assert sessions.count_documents({}) == 0
+
+
+def test_the_auth_cookie_is_set_secure():
+    import inspect
+
+    source = inspect.getsource(auth.check_password)
+    call = source[source.index("cookie_manager.set(") :]
+    call = call[: call.index(")") + 1]
+    assert "secure=True" in call
+
+
+def test_pro_supplied_text_is_escaped_before_an_html_render():
+    from pathlib import Path
+
+    source = Path("admin_panel/views/professionals.py").read_text(encoding="utf-8")
+    assert "html.escape(image_url" in source
+    assert (
+        source.count('html.escape(", ".join(map(str, p.get("service_areas"')
+        + source.count("html.escape(', '.join(map(str, p.get('service_areas'")
+        == 2
+    )

@@ -1,3 +1,4 @@
+import html
 import streamlit as st
 from bson.objectid import ObjectId
 from datetime import datetime, timezone
@@ -108,7 +109,8 @@ def render_pro_list(T):
                 image_url = p.get("profile_image_url")
                 if image_url:
                     st.markdown(
-                        f'<img src="{image_url}" class="pro-circle-img">',
+                        f'<img src="{html.escape(image_url, quote=True)}" '
+                        'class="pro-circle-img">',
                         unsafe_allow_html=True,
                     )
                 else:
@@ -140,7 +142,8 @@ def render_pro_list(T):
                 pro_type = profession_label(T, p.get("type", "general"))
                 st.caption(f"{pro_type} · {p.get('phone_number', '')}")
 
-                areas = ", ".join(p.get("service_areas", []))
+                # PRO-275: pro-supplied text, rendered as HTML — escaped.
+                areas = html.escape(", ".join(map(str, p.get("service_areas", []))))
                 if areas:
                     st.markdown(
                         f"<span style='font-size:0.85rem; color:var(--text-secondary);'>{T['new_areas']}: {areas}</span>",
@@ -498,7 +501,8 @@ def render_pending_approvals(T):
                 st.markdown(f"**🟡 {p.get('business_name') or T['unnamed_pro']}**")
                 st.caption(f"{pro_type_label} · {p.get('phone_number', '')}")
                 st.markdown(
-                    f"<span style='font-size:0.85rem;'>{T.get('new_areas', 'Areas')}: {', '.join(p.get('service_areas', []))}</span>",
+                    f"<span style='font-size:0.85rem;'>{T.get('new_areas', 'Areas')}: "
+                    f"{html.escape(', '.join(map(str, p.get('service_areas', []))))}</span>",
                     unsafe_allow_html=True,
                 )
                 if p.get("prices_for_prompt"):
