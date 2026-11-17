@@ -27,6 +27,11 @@ from app.core.config import settings
 from app.core.constants import BACKUP_LAST_SUCCESS_KEY, LeadStatus, WorkerConstants
 from app.core.phone import to_chat_id, strip_suffix
 from app.core.datetime_utils import within_business_hours
+from app.core.scheduler_config import (
+    SCHEDULER_CONFIG_DEFAULTS,
+    SCHEDULER_CONFIG_ID,
+    scheduler_toggle,
+)
 import math
 import os
 import time
@@ -228,8 +233,8 @@ async def monitor_unfinished_jobs():
     Monitors 'booked' leads and takes action based on their age.
     """
     # 1. Check Config
-    config = await settings_collection.find_one({"_id": "scheduler_config"})
-    if config and not config.get("stale_monitor_active", True):
+    config = await settings_collection.find_one({"_id": SCHEDULER_CONFIG_ID})
+    if not scheduler_toggle(config, "stale_monitor_active"):
         return
 
     now_il = datetime.now(IL_TZ)
@@ -300,8 +305,8 @@ async def _customer_cold_job_allowed(toggle_key: str) -> bool:
     operator turns them on after the WhatsApp number is warmed up (pilot safety)."""
     if not within_business_hours():
         return False
-    config = await settings_collection.find_one({"_id": "scheduler_config"})
-    return bool(config and config.get(toggle_key, False))
+    config = await settings_collection.find_one({"_id": SCHEDULER_CONFIG_ID})
+    return scheduler_toggle(config, toggle_key)
 
 
 @with_scheduler_lock("run_sos_healer", ttl=500)
@@ -683,8 +688,8 @@ async def run_backup_freshness_watchdog():
 @track_mongo_auth_failures
 async def run_sos_reporter():
     """Wrapper for SOS Admin Reporter with Toggle Check"""
-    config = await settings_collection.find_one({"_id": "scheduler_config"})
-    if config and not config.get("sos_reporter_active", True):
+    config = await settings_collection.find_one({"_id": SCHEDULER_CONFIG_ID})
+    if not scheduler_toggle(config, "sos_reporter_active"):
         return
     await send_periodic_admin_report()
 
@@ -731,8 +736,8 @@ async def run_whatsapp_state_monitor():
     """PRO-20 — WhatsApp account deauth watchdog. Toggle via `whatsapp_monitor_active`.
     Lock TTL is kept under the polling interval so a missed/crashed tick doesn't
     block the next one from running."""
-    config = await settings_collection.find_one({"_id": "scheduler_config"})
-    if config and not config.get("whatsapp_monitor_active", True):
+    config = await settings_collection.find_one({"_id": SCHEDULER_CONFIG_ID})
+    if not scheduler_toggle(config, "whatsapp_monitor_active"):
         return
     await check_whatsapp_instance_state()
 
@@ -742,8 +747,8 @@ async def run_whatsapp_state_monitor():
 async def run_whatsapp_quality_monitor():
     """PRO-90 — quality rating, tier and WABA health watchdog. Shares the
     `whatsapp_monitor_active` toggle: one switch for watching the number."""
-    config = await settings_collection.find_one({"_id": "scheduler_config"})
-    if config and not config.get("whatsapp_monitor_active", True):
+    config = await settings_collection.find_one({"_id": SCHEDULER_CONFIG_ID})
+    if not scheduler_toggle(config, "whatsapp_monitor_active"):
         return
     await check_whatsapp_quality()
 
@@ -757,23 +762,11 @@ async def daily_reminders_job():
     """
     try:
         # 1. Ensure Config Exists (Upsert)
+        # PRO-73's defaults (cold customer-facing jobs OFF) live in
+        # app/core/scheduler_config.py, shared with the admin panel (PRO-249).
         await settings_collection.update_one(
-            {"_id": "scheduler_config"},
-            {
-                "$setOnInsert": {
-                    "run_time": "08:00",
-                    "is_active": True,
-                    "last_run_date": None,
-                    "stale_monitor_active": True,
-                    # PRO-73: the three cold customer-facing jobs default OFF —
-                    # enable per-toggle once the WhatsApp number is warmed up.
-                    "sos_healer_active": False,
-                    "lead_janitor_active": False,
-                    "sla_monitor_active": False,
-                    "sos_reporter_active": True,
-                    "whatsapp_monitor_active": True,
-                }
-            },
+            {"_id": SCHEDULER_CONFIG_ID},
+            {"$setOnInsert": dict(SCHEDULER_CONFIG_DEFAULTS)},
             upsert=True,
         )
 
@@ -783,7 +776,7 @@ async def daily_reminders_job():
         # Only run if active and NOT run today yet
         result = await settings_collection.find_one_and_update(
             {
-                "_id": "scheduler_config",
+                "_id": SCHEDULER_CONFIG_ID,
                 "is_active": True,
                 "last_run_date": {"$ne": today_str},
             },
