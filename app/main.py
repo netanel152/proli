@@ -11,7 +11,7 @@ from app.core.startup_checks import (
 )
 import asyncio
 from contextlib import asynccontextmanager
-from app.api.routes import webhook, meta_webhook, health, privacy, terms
+from app.api.routes import meta_webhook, health, privacy, terms
 from app.core.redis_client import close_redis_client, get_redis_client
 from app.core.http_client import close_http_client as _close_shared_http_client
 from app.core.database import client as mongo_client
@@ -159,7 +159,6 @@ app.add_middleware(
 )
 
 # --- Routers ---
-app.include_router(webhook.router)
 app.include_router(meta_webhook.router)  # PRO-89 — Meta Cloud API inbound
 app.include_router(privacy.router)  # PRO-87 — public privacy policy page
 app.include_router(terms.router)  # public terms page, 404 until published

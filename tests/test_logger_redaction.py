@@ -18,9 +18,9 @@ def test_mask_pii_unchanged():
     assert mask_pii("972521234567") == "97252****567"
 
 
-def test_redact_secrets_replaces_webhook_token_in_query(monkeypatch):
+def test_redact_secrets_replaces_verify_token_in_query(monkeypatch):
     # The leak PRO-80 fixes: a uvicorn access log line with a secret in the query
-    # string. The legacy `?token=` route is being retired; Meta's subscription
+    # string. The legacy `?token=` route is gone (PRO-254); Meta's subscription
     # handshake puts META_VERIFY_TOKEN in the query string the same way.
     monkeypatch.setattr(logmod, "_SECRET_VALUES", ["webhooktok456"])
     out = redact_secrets(
@@ -52,7 +52,7 @@ def test_redact_secrets_noop_when_no_secrets(monkeypatch):
 
 
 def test_secret_values_has_no_empty_entries():
-    # An unset/empty secret (e.g. WEBHOOK_TOKEN=None) must never enter the set —
+    # An unset/empty secret (e.g. HEALTH_TOKEN=None) must never enter the set —
     # otherwise "" would match every message and redact everything.
     assert all(v for v in logmod._SECRET_VALUES)
 

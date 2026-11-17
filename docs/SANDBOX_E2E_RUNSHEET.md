@@ -42,7 +42,7 @@ template path PRO-64 can exercise later.
 - [ ] `WHATSAPP_PROVIDER=dryrun` for Part 1 (inbound only), flipped to `cloud` for Part 2+.
 - [ ] `WHATSAPP_DRY_RUN` **unset/false** when Part 2 begins — it overrides everything.
 - [ ] For any step that sends from the panel, staging `admin` has its own copy of these too, per "What `admin` needs in order to send" in `docs/RAILWAY_SETUP.md`. Until it does, a panel test proves nothing about delivery: the panel says the environment is muted and nothing reaches a phone.
-- [ ] `ENVIRONMENT=staging`, `WEBHOOK_TOKEN` set (legacy route), Sentry paging live.
+- [ ] `ENVIRONMENT=staging`, Sentry paging live. (`WEBHOOK_TOKEN` is no longer needed — the legacy route it authenticated was removed in PRO-254.)
 
 ---
 

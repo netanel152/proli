@@ -40,7 +40,7 @@ SENTINELS = {
     "REDIS_URL": "redis://:sentinel-redis-pw-22c9@redis.example.net:6379/0",
     "CLOUDINARY_API_KEY": "sentinel-cloudinary-key-33da",
     "CLOUDINARY_API_SECRET": "sentinel-cloudinary-secret-44eb",
-    "WEBHOOK_TOKEN": "sentinel-webhook-token-55fc",
+    "HEALTH_TOKEN": "sentinel-health-token-55fc",
     "GOOGLE_MAPS_API_KEY": "sentinel-maps-key-66ad",
     "SENTRY_DSN": "https://sentinel-sentry-key-77be@o1.ingest.sentry.io/1",
 }
@@ -183,7 +183,7 @@ def test_str_and_format_mask_every_secret(loaded_settings):
     _assert_no_sentinels(str(loaded_settings), context="str(settings)")
     _assert_no_sentinels(f"{loaded_settings}", context="f-string interpolation")
     _assert_no_sentinels(
-        f"{loaded_settings.WEBHOOK_TOKEN}", context="f-string on a single field"
+        f"{loaded_settings.HEALTH_TOKEN}", context="f-string on a single field"
     )
 
 
@@ -219,7 +219,7 @@ def test_iter_secret_values_skips_unset_fields():
         CLOUDINARY_CLOUD_NAME="c",
         CLOUDINARY_API_KEY="a-real-looking-key-2",
         CLOUDINARY_API_SECRET="a-real-looking-secret",
-        WEBHOOK_TOKEN=None,
+        HEALTH_TOKEN=None,
     )
     values = s.iter_secret_values()
     assert all(values), "empty value entered the redaction list"

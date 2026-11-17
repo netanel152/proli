@@ -387,13 +387,14 @@ META_ERROR_WINDOW_CLOSED = 131047
 
 
 class APIStatus:
-    RUNNING = "Proli is running! 🚀"
+    """Statuses the Meta inbound route (`POST /webhook/meta`) answers with.
+
+    The legacy `POST /webhook` route and the statuses only it returned
+    (group / no-data / rate-limit / wrong-instance, and the `RUNNING` banner)
+    were removed with it (PRO-254)."""
+
     PROCESSING = "processing_message"
-    IGNORED_GROUP = "ignored_group"
-    IGNORED_NO_DATA = "ignored_no_data"
-    IGNORED_WRONG_INSTANCE = "ignored_wrong_instance"
     IGNORED_TYPE = "ignored_type"
-    IGNORED_RATE_LIMIT = "ignored_rate_limit"
     ERROR = "error"
 
 

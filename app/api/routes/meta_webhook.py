@@ -1,6 +1,6 @@
 """PRO-89 — the Meta Cloud API webhook.
 
-Mounted alongside the legacy ``/webhook`` route at its own path. Deliberately
+The only inbound route since the legacy ``/webhook`` was removed (PRO-254). Deliberately
 live even when ``WHATSAPP_PROVIDER=dryrun``: Meta's subscription handshake and
 inbound delivery can then be verified during PRO-87 onboarding while outbound
 stays muted — receiving was never the dangerous direction.
@@ -129,8 +129,8 @@ async def meta_webhook_endpoint(request: Request):
             return JSONResponse(status_code=403, content={"status": "forbidden"})
     elif settings.is_prod_like:
         # No secret configured in staging/production: nothing can authenticate
-        # this call, so nothing may act on it (same posture as PRO-86's
-        # WEBHOOK_TOKEN requirement on the legacy route).
+        # this call, so nothing may act on it (the posture PRO-86 set for the
+        # since-removed legacy route's token).
         logger.warning(
             "Meta webhook POST rejected: META_APP_SECRET is not configured "
             "in a prod-like environment."

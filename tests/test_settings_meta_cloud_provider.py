@@ -52,7 +52,6 @@ def test_cloud_provider_in_staging_without_webhook_auth_creds_fails(monkeypatch)
             **_BASE_REQUIRED,
             WHATSAPP_PROVIDER="cloud",
             ENVIRONMENT="staging",
-            WEBHOOK_TOKEN="wt",
             META_ACCESS_TOKEN="token",
             META_PHONE_NUMBER_ID="123",
         )
@@ -66,7 +65,6 @@ def test_cloud_provider_in_staging_with_all_four_meta_settings_boots(monkeypatch
         **_BASE_REQUIRED,
         WHATSAPP_PROVIDER="cloud",
         ENVIRONMENT="staging",
-        WEBHOOK_TOKEN="wt",
         META_ACCESS_TOKEN="token",
         META_PHONE_NUMBER_ID="123",
         META_APP_SECRET="app-secret",
