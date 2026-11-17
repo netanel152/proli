@@ -355,8 +355,13 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     # No "אעביר…" here: `reassign_lead` sends AWAITING_APPROVAL_
                     # TRANSPARENT only once it has found another pro, and before
                     # the search nobody knows whether one exists.
+                    # As the drop above left it: no pro. PRO-281's guard pins
+                    # the owner it is handed, so the pre-drop copy would lose.
                     moved = await monitor_service.reassign_lead(
-                        active_lead, notify_old_pro=False, announce=False
+                        {**active_lead, "pro_id": None},
+                        notify_old_pro=False,
+                        announce=False,
+                        reassigned_from=existing_pro["_id"],
                     )
                 except Exception as e:
                     logger.error(

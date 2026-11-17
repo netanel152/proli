@@ -509,9 +509,9 @@ async def test_reassign_lead_new_write_guard_skips_on_concurrent_status_change(
     ``expected_status=lead.get('status')`` now (a pro's reject and the
     Healer's tick can race in different processes). If the DB doc has already
     moved by the time this caller tries to write NEW, the guard must fail
-    closed: no pro notified, no NEW write, no "found you someone" message —
-    only the unconditional CUSTOMER_REASSIGNING notice that fires before the
-    matching round."""
+    closed: no pro notified, no NEW write, no "found you someone" message.
+    Since PRO-281 a copy that no longer matches the lead stops before the
+    CUSTOMER_REASSIGNING notice too, so the customer hears nothing at all."""
     monkeypatch.setattr(monitor_service, "leads_collection", mock_db.leads)
     await mock_db.leads.delete_many({})
     new_pro = {
@@ -544,17 +544,7 @@ async def test_reassign_lead_new_write_guard_skips_on_concurrent_status_change(
     assert updated["pro_id"] == "old_pro"
     assert "reassignment_count" not in updated or updated["reassignment_count"] == 0
 
-    mock_whatsapp.send_message.assert_any_call(
-        lead["chat_id"],
-        Messages.SOS.CUSTOMER_REASSIGNING,
-        template_key="reassigning",
-        params=ANY,
-    )
-    transparent_msg = Messages.Customer.AWAITING_APPROVAL_TRANSPARENT.format(
-        pro_name=new_pro["business_name"]
-    )
-    for call in mock_whatsapp.send_message.await_args_list:
-        assert call.args[1] != transparent_msg
+    mock_whatsapp.send_message.assert_not_awaited()
 
 
 @pytest.mark.asyncio

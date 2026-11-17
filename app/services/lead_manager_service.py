@@ -19,6 +19,7 @@ async def set_lead_status(
     extra_unset: Optional[dict] = None,
     expected_status=None,
     expected_pro_id=None,
+    extra_filter: Optional[dict] = None,
 ):
     """Canonical lead status transition — the single writer of ``lead.status``.
 
@@ -43,6 +44,10 @@ async def set_lead_status(
     does the same for ownership: status alone is not always enough, because a
     reassignment leaves the lead at ``NEW`` under a *different* pro, so a stale
     write from the previous owner still matches on status (PRO-123).
+
+    ``extra_filter`` adds any other field conditions to the same filter, for a
+    caller whose read can be stale in a way status and owner alone don't show
+    (PRO-281: a NEW→NEW reassignment pins the count and owner it read).
     """
     oid = lead_id if isinstance(lead_id, ObjectId) else ObjectId(lead_id)
     set_fields = {"status": status, "updated_at": datetime.now(timezone.utc)}
@@ -54,7 +59,7 @@ async def set_lead_status(
     }
     if extra_unset:
         update["$unset"] = extra_unset
-    query = {"_id": oid}
+    query = {"_id": oid, **(extra_filter or {})}
     if expected_status is not None:
         query["status"] = expected_status
     if expected_pro_id is not None:

@@ -121,8 +121,34 @@ async def _alert_admin_lead_escalated(lead, attempts: int) -> None:
         )
 
 
+def _as_read(lead, still_due=None) -> dict:
+    """The filter a reassignment writes under: the lead exactly as the caller
+    read it (PRO-281).
+
+    Status alone is not enough. A NEW lead is NEW before and after a NEW→NEW
+    reassignment, so a second caller holding a stale copy — the SOS healer's
+    batch, minutes old by the time it reaches a lead — still matched and offered
+    the lead to a second pro. The owner and the reassignment count both change
+    on every reassignment, so pinning them makes exactly one caller win.
+    ``still_due`` carries the caller's own trigger condition (the healer's age
+    threshold), so a lead someone else just refreshed no longer qualifies.
+    """
+    count = lead.get("reassignment_count", 0)
+    return {
+        "status": lead.get("status"),
+        # None matches a lead with no pro_id at all, which is what was read.
+        "pro_id": lead.get("pro_id"),
+        "reassignment_count": count if count else {"$in": [0, None]},
+        **(still_due or {}),
+    }
+
+
 async def reassign_lead(
-    lead, notify_old_pro: bool = True, announce: bool = True
+    lead,
+    notify_old_pro: bool = True,
+    announce: bool = True,
+    still_due: dict | None = None,
+    reassigned_from=None,
 ) -> bool:
     """Reassign one lead to the next-best pro, excluding its current pro.
 
@@ -140,11 +166,29 @@ async def reassign_lead(
     and already got the reject acknowledgement. ``announce=False`` skips
     ``CUSTOMER_REASSIGNING``, whose apology for the wait is false for a caller that
     moved the lead for another reason and told the customer so itself.
+
+    Every write is conditional on the lead still being as ``lead`` shows it
+    (``_as_read``, PRO-281), and a lead that has already moved on is left
+    alone before anyone is messaged. ``still_due`` is the caller's trigger
+    condition, re-checked in the same filter (the healer's age threshold).
+    ``reassigned_from`` names the previous pro when the caller already took the
+    lead off them (the wrong-trade drop clears ``pro_id`` before handing over).
     """
     lead_id = lead["_id"]
     chat_id = lead["chat_id"]
     current_pro_id = lead.get("pro_id")
     reassignment_count = lead.get("reassignment_count", 0)
+    as_read = _as_read(lead, still_due)
+
+    # PRO-281: a stale copy stops here, before the customer hears
+    # "finding you another pro" or a second pro is offered the job. The
+    # conditional writes below still decide any race that starts after this.
+    if not await leads_collection.find_one({"_id": lead_id, **as_read}):
+        logger.info(
+            f"⏭️ [Reassign] Lead {lead_id} changed since it was read — "
+            "not reassigning a stale copy."
+        )
+        return False
 
     # Hard stop, checked FIRST. PRO-63 — hand the lead to a human instead of
     # closing it. This customer has been failed MAX_REASSIGNMENTS times;
@@ -179,7 +223,7 @@ async def reassign_lead(
             LeadStatus.PENDING_ADMIN_REVIEW,
             Actor.SYSTEM,
             extra_set={"escalation_reason": "max_reassignments_exhausted"},
-            expected_status=lead.get("status"),
+            extra_filter=as_read,
         )
         if not escalated:
             logger.info(
@@ -224,12 +268,19 @@ async def reassign_lead(
             f"⏭️ [Reassign] Skipping lead {lead_id} for ...{chat_id[-8:]} — no usable "
             f"location (full_address={raw_location!r}). Escalating to PENDING_ADMIN_REVIEW."
         )
-        await set_lead_status(
+        escalated = await set_lead_status(
             lead_id,
             LeadStatus.PENDING_ADMIN_REVIEW,
             Actor.SYSTEM,
             extra_set={"escalation_reason": "no_usable_location"},
+            extra_filter=as_read,
         )
+        if escalated is None:
+            logger.info(
+                f"⏭️ [Reassign] Lead {lead_id} changed before the no-location "
+                "escalation — leaving it to whoever moved it."
+            )
+            return False
         # PRO-117: this branch used to escalate silently — the customer's state
         # was cleared with no message, the exact "ghosting" the other two
         # escalation branches already avoid. Fail-open like them.
@@ -294,7 +345,7 @@ async def reassign_lead(
                 "pro_notified_at": datetime.now(timezone.utc),
                 "approval_nudged": False,
                 "reassign_offered": False,
-                "reassigned_from": current_pro_id,
+                "reassigned_from": reassigned_from or current_pro_id,
                 "reassignment_count": reassignment_count + 1,
             },
             # PRO-162: same reasoning as the `created_at` reset above. The lead
@@ -328,7 +379,8 @@ async def reassign_lead(
                 "completion_check_sent_count": "",
                 "offer_withheld_details": "",
             },
-            expected_status=lead.get("status"),
+            # PRO-281: status, owner and count as read — see _as_read.
+            extra_filter=as_read,
         )
         if updated is None:
             logger.info(
@@ -359,6 +411,7 @@ async def reassign_lead(
                 Actor.SYSTEM,
                 extra_set={"escalation_reason": "pro_offer_send_failed"},
                 expected_status=LeadStatus.NEW,
+                expected_pro_id=new_pro_id,
             )
             if escalated is None:
                 # Someone else moved the lead between our write and now —
@@ -456,7 +509,15 @@ async def reassign_lead(
         f"⚠️ [Reassign] Could not find replacement for lead {lead_id} — "
         f"escalating to PENDING_ADMIN_REVIEW."
     )
-    await set_lead_status(lead_id, LeadStatus.PENDING_ADMIN_REVIEW, Actor.SYSTEM)
+    escalated = await set_lead_status(
+        lead_id, LeadStatus.PENDING_ADMIN_REVIEW, Actor.SYSTEM, extra_filter=as_read
+    )
+    if escalated is None:
+        logger.info(
+            f"⏭️ [Reassign] Lead {lead_id} changed before the no-replacement "
+            "escalation — leaving it to whoever moved it."
+        )
+        return False
     try:
         await whatsapp.send_message(
             chat_id,
@@ -508,7 +569,10 @@ async def check_and_reassign_stale_leads():
         )
 
         for lead in stale_leads:
-            await reassign_lead(lead)
+            # PRO-281: the batch was read before the first reassignment sent
+            # anything, so by the time it reaches a lead that lead may have
+            # been refreshed by someone else; it must still be stale.
+            await reassign_lead(lead, still_due={"created_at": {"$lt": threshold_time}})
 
     except Exception as e:
         logger.error(f"❌ [SOS Healer] Error: {e}")
