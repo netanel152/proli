@@ -391,7 +391,7 @@ The routing engine found no matching pro.
 
 Configure the full URL, including the token, at your WhatsApp provider: `https://your-domain/webhook?token=<value>`. Requests without a valid token receive `403 Forbidden`. `WEBHOOK_TOKEN` is **required** (the app refuses to boot without it) whenever `ENVIRONMENT` is `staging`/`production` — PRO-86 removed the sender instance-id check that used to be the other half of webhook authentication, so an unset token would otherwise mean no authentication at all.
 
-The PRO-89 Meta Cloud API route (`GET`/`POST /webhook/meta`) uses a separate auth model, not `WEBHOOK_TOKEN`: the `GET` handshake checks `hub.verify_token` against `META_VERIFY_TOKEN`, and every `POST` is authenticated by an `X-Hub-Signature-256` HMAC over the raw body keyed by `META_APP_SECRET` (both required for `cloud` in staging/production).
+The PRO-89 Meta Cloud API route (`GET`/`POST /webhook/meta`) uses a separate auth model, not `WEBHOOK_TOKEN`: the `GET` handshake checks `hub.verify_token` against `META_VERIFY_TOKEN`, and every `POST` is authenticated by an `X-Hub-Signature-256` HMAC over the raw body keyed by `META_APP_SECRET`. The `api` service refuses to boot in staging or production unless both are set and non-empty, whatever `WHATSAPP_PROVIDER` says (PRO-270); `worker` and `admin` need them only under `cloud`.
 
 ### Admin authentication
 

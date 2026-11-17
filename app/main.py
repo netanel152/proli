@@ -95,6 +95,10 @@ async def _probe_redis() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ---- Startup ----
+    # PRO-270: before anything else. An empty META_APP_SECRET makes the Meta
+    # route's signature check forgeable, whatever WHATSAPP_PROVIDER says.
+    meta_webhook.require_inbound_secrets(settings)
+
     # PRO-153: both probes retry with bounded backoff (see _connect_with_retry).
     # After the retries the decision is deliberate fail-closed: this API's one
     # job is enqueueing webhooks to Redis, so serving without it would 503
