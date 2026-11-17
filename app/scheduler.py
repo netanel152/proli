@@ -396,7 +396,8 @@ async def _report_backup_failure(detail: str) -> None:
 async def run_daily_backup():
     """Run automated daily backup via subprocess (PRO-111: mongodump → S3).
 
-    scripts/backup.py exits non-zero when the dump fails OR when --upload-s3
+    ``python -m app.db.backup`` (restructure phase 3: it used to run
+    scripts/backup.py by file path) exits non-zero when the dump fails OR when --upload-s3
     can't land the archive in S3 (missing bucket / failed upload) — a backup
     that only exists on Railway's ephemeral disk is treated as a failure.
     """
@@ -404,16 +405,17 @@ async def run_daily_backup():
     import subprocess
     import sys
 
-    script_path = os.path.join(
-        os.path.dirname(os.path.dirname(__file__)), "scripts", "backup.py"
-    )
+    # The repository root, so `-m app.db.backup` resolves the package however
+    # the worker was started.
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     try:
         # to_thread: a real mongodump + S3 upload takes minutes — running it
         # synchronously would stall the worker's event loop (and every other
         # scheduler job / inbound message) for the whole dump.
         result = await asyncio.to_thread(
             subprocess.run,
-            [sys.executable, script_path, "--upload-s3"],
+            [sys.executable, "-m", "app.db.backup", "--upload-s3"],
+            cwd=project_root,
             capture_output=True,
             text=True,
             timeout=600,
@@ -450,7 +452,7 @@ async def run_daily_backup():
         else:
             # Tail only — enough to diagnose without dumping a full trace into
             # every log line. loguru sinks write to stdout (app/core/logger.py),
-            # so backup.py's own failure reason is on stdout; stderr carries
+            # so app/db/backup.py's own failure reason is on stdout; stderr carries
             # raw tool output (e.g. a mongodump crash).
             # Belt-and-braces (PRO-94): this feeds a CRITICAL that reaches
             # Sentry — scrub every known secret BEFORE truncating, so a secret
@@ -680,7 +682,7 @@ async def run_backup_freshness_watchdog():
         f"🚨 [Scheduler] Backups are stale: {stale_detail} "
         f"(threshold {WorkerConstants.BACKUP_MAX_AGE_HOURS}h). No durable backup "
         "is landing — check the worker was up at 02:00 IL, the daily_backup "
-        "job is registered (production only), and scripts/backup.py --upload-s3."
+        "job is registered (production only), and `python -m app.db.backup --upload-s3`."
     )
 
 

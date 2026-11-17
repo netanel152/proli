@@ -82,7 +82,7 @@ Exit `0` when nothing is left to do, `1` when some pros need it (dry run), `3` w
 
 ### `create_indexes.py`
 
-Creates every MongoDB index in its `INDEX_SPECS` table. The API runs the same table on every boot (`create_all_indexes(silent=True)`), so a manual run only primes a brand-new database or shows the list.
+Creates every MongoDB index in the `INDEX_SPECS` table. A CLI wrapper: the table and the logic are `app/db/indexes.py`, which the API also runs on every boot (`create_all_indexes(silent=True)`), so a manual run only primes a brand-new database or shows the list.
 
 A failed index (a unique index blocked by duplicates, an options conflict such as a changed TTL) is always logged at ERROR, `silent` or not, and returned; the API boot then logs how many failed instead of "✅ MongoDB indexes verified." An index the database holds but the table does not list (a superseded one) is logged at WARNING and never dropped (PRO-250).
 
@@ -108,7 +108,7 @@ python scripts/generate_admin_hash.py
 
 ### `backup.py`
 
-Creates a gzipped MongoDB backup via `mongodump`. Also runs automatically daily at 02:00 IL via APScheduler.
+Creates a gzipped MongoDB backup via `mongodump`. A CLI wrapper: the backup itself is `app/db/backup.py`, which the worker runs daily at 02:00 IL (production only) as `python -m app.db.backup --upload-s3`. Archives still land in the repository root's `backups/`.
 
 Retention policy: 7 daily + 4 weekly backups.
 
