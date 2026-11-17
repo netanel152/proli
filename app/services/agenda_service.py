@@ -23,12 +23,9 @@ No database access here — callers fetch, this module sorts and renders.
 from datetime import date, datetime, timezone
 from typing import Callable, Iterable, List, Optional, Tuple
 
-import pytz
-
 from app.core.constants import WorkerConstants
+from app.core.datetime_utils import IL_TZ
 from app.core.messages import Messages
-
-IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 # Row renderer: (global 1-based row number, lead document, rendered time) → text.
 RowRenderer = Callable[[int, dict, str], str]

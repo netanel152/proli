@@ -16,7 +16,9 @@ from app.core.logger import logger
 
 # A naive datetime from the model is interpreted as Israel local time, because
 # the prompt gives the model the current time in Israel as its anchor.
-_IL_TZ = pytz.timezone("Asia/Jerusalem")
+# The one definition of Israel time for app/ and admin_panel/:
+# tests/test_israel_timezone.py fails the build on a second one.
+IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 
 # PRO-73: customer-facing "cold" re-engagement jobs (SOS healer, lead janitor,
@@ -29,7 +31,7 @@ BUSINESS_HOURS_END = 21  # exclusive (last contact hour is 20:xx)
 def within_business_hours(now: Optional[datetime] = None) -> bool:
     """True if the current Israel-local time is within customer-contact hours
     (08:00–21:00). Gates cold customer-facing scheduler jobs (PRO-73)."""
-    now_il = (now or datetime.now(timezone.utc)).astimezone(_IL_TZ)
+    now_il = (now or datetime.now(timezone.utc)).astimezone(IL_TZ)
     return BUSINESS_HOURS_START <= now_il.hour < BUSINESS_HOURS_END
 
 
@@ -58,5 +60,5 @@ def parse_iso_to_utc(value: Optional[str]) -> Optional[datetime]:
         # is_dst=False (pytz default): a wall-clock time inside the spring-forward
         # gap resolves an hour off rather than raising. Once-a-year, one-hour edge
         # for a scheduling hint — acceptable, and never a crash.
-        dt = _IL_TZ.localize(dt)
+        dt = IL_TZ.localize(dt)
     return dt.astimezone(timezone.utc)

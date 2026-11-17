@@ -27,7 +27,7 @@ import pytz
 
 from app.core.logger import logger
 
-_IL_TZ = pytz.timezone("Asia/Jerusalem")
+from app.core.datetime_utils import IL_TZ as _IL_TZ
 
 # Page sizes offered by the viewer. The old viewer had no pagination at all
 # — a hardcoded `.limit(200)` — so on a busy panel the audit trail simply
@@ -200,7 +200,7 @@ def format_audit_rows(entries, tz=None):
     rather than as an error. The aware branch covers callers that hand in
     aware values directly (tests, or a future ``tz_aware`` client).
     """
-    tz = tz or pytz.timezone("Asia/Jerusalem")
+    tz = tz or _IL_TZ
     rows = []
     for entry in entries:
         ts = entry.get("timestamp", "")

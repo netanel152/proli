@@ -37,7 +37,7 @@ from app.core.scheduler_config import (
     scheduler_toggle,
 )
 
-IL_TZ = pytz.timezone("Asia/Jerusalem")
+from app.core.datetime_utils import IL_TZ
 
 
 def _step_audit_page(delta):
@@ -410,9 +410,7 @@ def view_system_settings(T):
             # clock these dates and timestamps mean has to be stated rather
             # than assumed. It is Israel time on both sides: the table
             # renders in it and the date filters cut their days on it.
-            st.caption(
-                T.get("audit_tz_note", "All times are Israel time (Asia/Jerusalem).")
-            )
+            st.caption(T["audit_tz_note"])
 
             f_subject, f_user, f_action = st.columns([2, 1, 1])
             with f_subject:

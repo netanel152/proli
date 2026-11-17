@@ -20,7 +20,7 @@ from app.core.prompts import Prompts
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
 from app.core.phone import to_chat_id, strip_suffix, mask_chat_id
 from app.services.lead_manager_service import set_lead_status
-from app.core.datetime_utils import parse_iso_to_utc
+from app.core.datetime_utils import IL_TZ as _IL_TZ, parse_iso_to_utc
 from app.core.redis_client import (
     acquire_chat_lock,
     release_chat_lock,
@@ -66,7 +66,6 @@ from app.services.customer_flow import (  # noqa: F401
     handle_status_query as _handle_status_query,
 )
 from app.services.scheduling_service import get_available_slots  # noqa: F401
-import pytz
 
 # PRO-181: these four have no caller left *in this module* — the pro-routing
 # guards moved to dispatch_guards.py — but they are not dead. Those guards reach
@@ -97,8 +96,6 @@ from datetime import datetime, timezone
 whatsapp = get_whatsapp()
 ai = AIEngine()
 lead_manager = LeadManager()
-
-_IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 # A "[DEAL: ...]" marker the model may still write into reply_to_user — older
 # personas asked for one. It is stripped from customer-facing text and never
