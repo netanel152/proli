@@ -8,6 +8,7 @@ import pytz
 
 from app.core.constants import is_prod_like_env
 from app.core.pro_trades import trades_line
+from app.core.slot_writes import insert_slots_sync
 
 # Load environment variables
 load_dotenv()
@@ -176,8 +177,8 @@ def create_initial_schedule(pro_id):
                     "is_taken": False,
                 }
             )
-    if slots:
-        slots_collection.insert_many(slots)
+    # PRO-277: approve runs this too, over days the pro may already have.
+    insert_slots_sync(slots_collection, slots)
 
 
 def send_completion_check_sync(lead_id: str):

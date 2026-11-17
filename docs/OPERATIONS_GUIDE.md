@@ -404,6 +404,13 @@ python scripts/generate_admin_hash.py
 
 `book_slot_for_lead` uses MongoDB `find_one_and_update` to atomically find a free slot and mark it taken — preventing double-booking even under concurrent requests. It returns the reserved slot's `_id` (`Optional[ObjectId]`, `None` if no slot was available), which the approve path persists as the lead's `booked_slot_id` so release/reschedule always free the exact reserved slot rather than a sibling slot from another active job.
 
+Two more guards stop the same pro being booked twice for one time (PRO-277):
+
+- **One document per pro and start time.** `slots` is unique on `(pro_id, start_time)` (`app/db/indexes.py`). Every generator (the panel's bulk tab and day editor, `create_initial_schedule`, the template regenerator) inserts through `app/core/slot_writes.py`, which skips a slot that is already there instead of failing the batch. On the first boot after the change, `prepare_unique_slot_index` removes duplicate free slots and drops the old non-unique index. It keeps the copy a lead points to, else a taken one. If one pro and time hold two taken or booked slots, that is a real double booking: it logs an ERROR and leaves the old index in place, so the unique index build fails loudly too, until someone deletes the wrong copy by hand.
+- **No overlapping ranges.** A free 11:00–12:00 template slot inside a taken 10:00–12:00 panel slot is not free. The claim (`claim_free_slot`) and the customer's reschedule give such a slot back and skip it.
+
+The admin day editor (PRO-278) writes only the fields an admin changed, each conditional on the `is_taken` it loaded, and never frees or deletes a slot a live lead's `booked_slot_id` points to. Rows it leaves alone are reported (held, changed since loading, or a duplicate start time).
+
 ---
 
 ## Environment Variables Reference

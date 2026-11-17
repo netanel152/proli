@@ -38,6 +38,14 @@ def db():
 
 
 TZ = pytz.timezone("Asia/Jerusalem")
+
+
+def _counts(**written):
+    """The full result dict: the counts a test names, zero for the rest."""
+    keys = ("deleted", "updated", "inserted", "skipped", "held", "stale", "duplicates")
+    return {key: written.get(key, 0) for key in keys}
+
+
 DATE = date(2026, 9, 1)
 
 
@@ -68,9 +76,9 @@ def test_save_empty_day_string_times_inserts_new_rows_without_crashing(db):
         columns=EDITOR_COLUMNS,
     )
 
-    result = save_daily_schedule(slots, edited_df, set(), pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, [], pro_id, DATE, TZ)
 
-    assert result == {"deleted": 0, "updated": 0, "inserted": 2, "skipped": 0}
+    assert result == _counts(deleted=0, updated=0, inserted=2, skipped=0)
     docs = list(slots.find({"pro_id": pro_id}).sort("start_time", 1))
     assert len(docs) == 2
     # 09:00 IDT (UTC+3 in September) -> 06:00 UTC
@@ -110,9 +118,9 @@ def test_save_populated_day_time_objects_inserts_new_rows(db):
         columns=EDITOR_COLUMNS,
     )
 
-    result = save_daily_schedule(slots, edited_df, set(), pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, [], pro_id, DATE, TZ)
 
-    assert result == {"deleted": 0, "updated": 0, "inserted": 2, "skipped": 0}
+    assert result == _counts(deleted=0, updated=0, inserted=2, skipped=0)
     assert slots.count_documents({"pro_id": pro_id}) == 2
 
 
@@ -133,13 +141,13 @@ def test_save_columnless_frame_degrades_without_crashing(db):
             "is_taken": False,
         }
     ).inserted_id
-    original_ids = {str(existing_id)}
+    original = [slots.find_one({"_id": existing_id})]
 
     edited_df = pd.DataFrame([])  # zero columns
 
-    result = save_daily_schedule(slots, edited_df, original_ids, pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, original, pro_id, DATE, TZ)
 
-    assert result == {"deleted": 1, "updated": 0, "inserted": 0, "skipped": 0}
+    assert result == _counts(deleted=1, updated=0, inserted=0, skipped=0)
     assert slots.count_documents({}) == 0
 
 
@@ -169,7 +177,7 @@ def test_is_taken_none_and_nan_coerced_to_literal_false(db):
         columns=EDITOR_COLUMNS,
     )
 
-    save_daily_schedule(slots, edited_df, set(), pro_id, DATE, TZ)
+    save_daily_schedule(slots, edited_df, [], pro_id, DATE, TZ)
 
     docs = list(slots.find({"pro_id": pro_id}))
     assert len(docs) == 2
@@ -191,7 +199,7 @@ def test_update_existing_row_updates_in_place_no_duplicate(db):
             "is_taken": False,
         }
     ).inserted_id
-    original_ids = {str(existing_id)}
+    original = [slots.find_one({"_id": existing_id})]
 
     edited_df = pd.DataFrame(
         [
@@ -205,9 +213,9 @@ def test_update_existing_row_updates_in_place_no_duplicate(db):
         columns=EDITOR_COLUMNS,
     )
 
-    result = save_daily_schedule(slots, edited_df, original_ids, pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, original, pro_id, DATE, TZ)
 
-    assert result == {"deleted": 0, "updated": 1, "inserted": 0, "skipped": 0}
+    assert result == _counts(deleted=0, updated=1, inserted=0, skipped=0)
     assert slots.count_documents({}) == 1  # no duplicate created
     doc = slots.find_one({"_id": existing_id})
     assert doc["is_taken"] is True
@@ -234,14 +242,14 @@ def test_delete_row_missing_from_editor_is_removed(db):
             "is_taken": False,
         }
     ).inserted_id
-    original_ids = {str(existing_id)}
+    original = [slots.find_one({"_id": existing_id})]
 
     # admin removed the row in the editor -> frame has the schema but no rows
     edited_df = pd.DataFrame([], columns=EDITOR_COLUMNS)
 
-    result = save_daily_schedule(slots, edited_df, original_ids, pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, original, pro_id, DATE, TZ)
 
-    assert result == {"deleted": 1, "updated": 0, "inserted": 0, "skipped": 0}
+    assert result == _counts(deleted=1, updated=0, inserted=0, skipped=0)
     assert slots.count_documents({}) == 0
 
 
@@ -263,7 +271,7 @@ def test_new_slot_local_time_stored_as_utc(db):
         columns=EDITOR_COLUMNS,
     )
 
-    save_daily_schedule(slots, edited_df, set(), pro_id, DATE, TZ)
+    save_daily_schedule(slots, edited_df, [], pro_id, DATE, TZ)
 
     doc = slots.find_one({"pro_id": pro_id})
     # 09:00 IDT (Israel Daylight Time, UTC+3 in September) -> 06:00 UTC.
@@ -301,9 +309,9 @@ def test_half_filled_rows_skipped_and_counted_without_crash(db):
         columns=EDITOR_COLUMNS,
     )
 
-    result = save_daily_schedule(slots, edited_df, set(), pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, [], pro_id, DATE, TZ)
 
-    assert result == {"deleted": 0, "updated": 0, "inserted": 0, "skipped": 2}
+    assert result == _counts(deleted=0, updated=0, inserted=0, skipped=2)
     assert slots.count_documents({}) == 0
 
 
@@ -328,9 +336,9 @@ def test_unparseable_time_string_skipped_and_counted_without_crash(db):
         columns=EDITOR_COLUMNS,
     )
 
-    result = save_daily_schedule(slots, edited_df, set(), pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, [], pro_id, DATE, TZ)
 
-    assert result == {"deleted": 0, "updated": 0, "inserted": 0, "skipped": 1}
+    assert result == _counts(deleted=0, updated=0, inserted=0, skipped=1)
     assert slots.count_documents({}) == 0
 
 
@@ -355,9 +363,9 @@ def test_empty_string_id_treated_as_new_row_not_dropped(db):
         columns=EDITOR_COLUMNS,
     )
 
-    result = save_daily_schedule(slots, edited_df, set(), pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, [], pro_id, DATE, TZ)
 
-    assert result == {"deleted": 0, "updated": 0, "inserted": 1, "skipped": 0}
+    assert result == _counts(deleted=0, updated=0, inserted=1, skipped=0)
     assert slots.count_documents({"pro_id": pro_id}) == 1
 
 
@@ -389,9 +397,9 @@ def test_colonless_time_strings_skipped_and_counted_without_wrong_midnight(db):
         columns=EDITOR_COLUMNS,
     )
 
-    result = save_daily_schedule(slots, edited_df, set(), pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, [], pro_id, DATE, TZ)
 
-    assert result == {"deleted": 0, "updated": 0, "inserted": 0, "skipped": 2}
+    assert result == _counts(deleted=0, updated=0, inserted=0, skipped=2)
     assert slots.count_documents({}) == 0
 
 
@@ -399,13 +407,20 @@ def test_colonless_time_strings_skipped_and_counted_without_wrong_midnight(db):
 
 
 def test_stale_id_concurrently_deleted_reports_zero_updated_no_crash(db):
-    """An id present in original_ids and in the frame, but whose document
+    """An id among the loaded slots and in the frame, but whose document
     was concurrently deleted from the collection (another admin session),
     must not be reported as updated -- update_one matches nothing."""
     slots = db.slots
     pro_id = ObjectId()
     stale_id = ObjectId()  # never inserted into slots
-    original_ids = {str(stale_id)}
+    original = [
+        {
+            "_id": stale_id,
+            "start_time": datetime(2026, 9, 1, 5, 0),
+            "end_time": datetime(2026, 9, 1, 6, 0),
+            "is_taken": False,
+        }
+    ]
 
     edited_df = pd.DataFrame(
         [
@@ -419,7 +434,157 @@ def test_stale_id_concurrently_deleted_reports_zero_updated_no_crash(db):
         columns=EDITOR_COLUMNS,
     )
 
-    result = save_daily_schedule(slots, edited_df, original_ids, pro_id, DATE, TZ)
+    result = save_daily_schedule(slots, edited_df, original, pro_id, DATE, TZ)
 
-    assert result == {"deleted": 0, "updated": 0, "inserted": 0, "skipped": 0}
+    assert result == _counts(stale=1)
     assert slots.count_documents({}) == 0
+
+
+# --- PRO-278: a save writes only what changed, against what it read ---
+
+
+def _taken_row(slot_id, taken):
+    return pd.DataFrame(
+        [
+            {
+                "_id": str(slot_id),
+                "start_time": time(9, 0),
+                "end_time": time(10, 0),
+                "is_taken": taken,
+            }
+        ],
+        columns=EDITOR_COLUMNS,
+    )
+
+
+def _slot_at_nine(slots, pro_id, taken=False):
+    # 09:00 Israel time on DATE (UTC+3 in September) is 06:00 UTC.
+    return slots.insert_one(
+        {
+            "pro_id": pro_id,
+            "start_time": datetime(2026, 9, 1, 6, 0),
+            "end_time": datetime(2026, 9, 1, 7, 0),
+            "is_taken": taken,
+        }
+    ).inserted_id
+
+
+def test_slot_taken_between_read_and_save_stays_taken(db):
+    """The worker books the slot after the editor loaded it as free; saving
+    an untouched row must not write is_taken: False back over the booking."""
+    slots = db.slots
+    pro_id = ObjectId()
+    slot_id = _slot_at_nine(slots, pro_id)
+    original = [slots.find_one({"_id": slot_id})]
+
+    slots.update_one({"_id": slot_id}, {"$set": {"is_taken": True}})  # the worker
+
+    result = save_daily_schedule(
+        slots, _taken_row(slot_id, False), original, pro_id, DATE, TZ
+    )
+
+    assert result == _counts()
+    assert slots.find_one({"_id": slot_id})["is_taken"] is True
+
+
+def test_a_change_saved_over_a_slot_booked_since_the_read_is_refused(db):
+    """Even a real edit is written only against the is_taken it was read with."""
+    slots = db.slots
+    pro_id = ObjectId()
+    slot_id = _slot_at_nine(slots, pro_id)
+    original = [slots.find_one({"_id": slot_id})]
+    slots.update_one({"_id": slot_id}, {"$set": {"is_taken": True}})
+
+    edited = _taken_row(slot_id, False)
+    edited.loc[0, "end_time"] = time(11, 0)
+    result = save_daily_schedule(slots, edited, original, pro_id, DATE, TZ)
+
+    assert result == _counts(stale=1)
+    doc = slots.find_one({"_id": slot_id})
+    assert doc["is_taken"] is True
+    assert doc["end_time"] == datetime(2026, 9, 1, 7, 0)
+
+
+def test_a_slot_a_live_lead_holds_is_never_freed_or_deleted(db):
+    slots = db.slots
+    pro_id = ObjectId()
+    freed = _slot_at_nine(slots, pro_id, taken=True)
+    deleted = slots.insert_one(
+        {
+            "pro_id": pro_id,
+            "start_time": datetime(2026, 9, 1, 8, 0),
+            "end_time": datetime(2026, 9, 1, 9, 0),
+            "is_taken": True,
+        }
+    ).inserted_id
+    db.leads.insert_many(
+        [
+            {"status": "booked", "booked_slot_id": freed},
+            {"status": "booked", "booked_slot_id": deleted},
+        ]
+    )
+    original = list(slots.find({}))
+
+    # The admin unticks the first and removes the second row.
+    result = save_daily_schedule(
+        slots,
+        _taken_row(freed, False),
+        original,
+        pro_id,
+        DATE,
+        TZ,
+        leads_collection=db.leads,
+    )
+
+    assert result == _counts(held=2)
+    assert slots.find_one({"_id": freed})["is_taken"] is True
+    assert slots.find_one({"_id": deleted}) is not None
+
+
+def test_a_slot_whose_lead_is_finished_can_be_freed(db):
+    slots = db.slots
+    pro_id = ObjectId()
+    slot_id = _slot_at_nine(slots, pro_id, taken=True)
+    db.leads.insert_one({"status": "completed", "booked_slot_id": slot_id})
+    original = [slots.find_one({"_id": slot_id})]
+
+    result = save_daily_schedule(
+        slots,
+        _taken_row(slot_id, False),
+        original,
+        pro_id,
+        DATE,
+        TZ,
+        leads_collection=db.leads,
+    )
+
+    assert result == _counts(updated=1)
+    assert slots.find_one({"_id": slot_id})["is_taken"] is False
+
+
+def test_an_unchanged_row_is_not_written(db):
+    slots = db.slots
+    pro_id = ObjectId()
+    slot_id = _slot_at_nine(slots, pro_id)
+    original = [slots.find_one({"_id": slot_id})]
+
+    result = save_daily_schedule(
+        slots, _taken_row(slot_id, False), original, pro_id, DATE, TZ
+    )
+
+    assert result == _counts()
+
+
+def test_a_new_row_at_an_existing_start_time_is_a_duplicate_not_a_copy(db):
+    """PRO-277: with the unique index, a second slot at 09:00 is refused."""
+    slots = db.slots
+    slots.create_index([("pro_id", 1), ("start_time", 1)], unique=True)
+    pro_id = ObjectId()
+    _slot_at_nine(slots, pro_id)
+
+    edited = _taken_row(ObjectId(), False)
+    edited.loc[0, "_id"] = None
+    result = save_daily_schedule(slots, edited, [], pro_id, DATE, TZ)
+
+    assert result == _counts(duplicates=1)
+    assert slots.count_documents({}) == 1

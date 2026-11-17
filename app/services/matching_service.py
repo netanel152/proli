@@ -636,6 +636,69 @@ async def is_pro_eligible_for_lead(pro: dict, lead: dict) -> bool:
     return active_load < WorkerConstants.MAX_PRO_LOAD
 
 
+#: How many overlapping candidates one claim may step past before giving up.
+_MAX_OVERLAP_SKIPS = 10
+
+
+async def overlapping_taken_slot(
+    slot: dict, ignore_ids=(), collection=None
+) -> Optional[dict]:
+    """A taken slot of the same pro whose time range overlaps ``slot`` (PRO-277).
+
+    Generators of different granularity (the panel's 2-hour slots, a template's
+    hour) can leave a free 10:00-11:00 inside a taken 10:00-12:00. The unique
+    index stops exact copies; this is what stops the overlap. A slot with no
+    ``end_time`` has no range to compare and never counts as overlapping.
+    """
+    start, end = slot.get("start_time"), slot.get("end_time")
+    if start is None or end is None:
+        return None
+    collection = slots_collection if collection is None else collection
+    return await collection.find_one(
+        {
+            "pro_id": slot["pro_id"],
+            "is_taken": True,
+            "_id": {"$nin": [slot["_id"], *ignore_ids]},
+            "start_time": {"$lt": end},
+            "end_time": {"$gt": start},
+        }
+    )
+
+
+async def claim_free_slot(query: dict, sort, ignore_ids=()) -> Optional[dict]:
+    """Atomically take the first free slot ``query`` matches whose range does not
+    overlap a slot the pro already has taken (PRO-277).
+
+    The take is a find_one_and_update; the overlap is checked right after it,
+    and a slot that overlaps is given back and skipped. Two claims racing for two
+    overlapping slots can then both give theirs back and book nothing, which is
+    the safe way round: no slot rather than a double booking. ``ignore_ids`` are
+    taken slots that do not count as a clash (a reschedule's own old slot).
+    """
+    skipped = []
+    for _ in range(_MAX_OVERLAP_SKIPS):
+        claim = dict(query)
+        if skipped:
+            claim["_id"] = {"$nin": skipped}
+        slot = await slots_collection.find_one_and_update(
+            claim, {"$set": {"is_taken": True}}, sort=sort
+        )
+        if slot is None:
+            return None
+        clash = await overlapping_taken_slot(slot, ignore_ids)
+        if clash is None:
+            return slot
+        await slots_collection.update_one(
+            {"_id": slot["_id"], "is_taken": True}, {"$set": {"is_taken": False}}
+        )
+        logger.info(
+            f"⏭️ Slot {slot['_id']} overlaps taken slot {clash['_id']} for Pro "
+            f"{slot['pro_id']}; skipped"
+        )
+        skipped.append(slot["_id"])
+    return None
+
+
 async def book_slot_for_lead(
     pro_id: str,
     lead_created_at: datetime,
@@ -722,21 +785,19 @@ async def book_slot_for_lead(
         # earlier in-window slot only when nothing at/after is free. Each
         # claim is a single atomic find_one_and_update and the second runs
         # only if the first matched nothing, so no double-claim window.
-        slot = await slots_collection.find_one_and_update(
+        slot = await claim_free_slot(
             {
                 **base_query,
                 "start_time": {"$gte": preferred_from, "$lte": end_window},
             },
-            {"$set": {"is_taken": True}},
             sort=[("start_time", 1)],
         )
         if slot is None and preferred_from > floor_time:
-            slot = await slots_collection.find_one_and_update(
+            slot = await claim_free_slot(
                 {
                     **base_query,
                     "start_time": {"$gte": floor_time, "$lt": preferred_from},
                 },
-                {"$set": {"is_taken": True}},
                 sort=[("start_time", -1)],
             )
 
