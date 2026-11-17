@@ -1,135 +1,239 @@
-import re
+"""Inbound webhook, end to end through the FastAPI app: ``POST /webhook/meta``.
 
+These used to drive the legacy ``POST /webhook`` envelope. That route is being
+retired, so every ingress check here now goes through the Meta Cloud API route
+instead. What the legacy route alone did (the ``?token=`` WEBHOOK_TOKEN check,
+the ``@g.us`` group filter) has no Meta counterpart: Cloud API authenticates
+with the ``X-Hub-Signature-256`` HMAC, which the signature tests below cover,
+and does not deliver group traffic to business numbers.
+
+The POSTs run on one event loop through ``httpx.ASGITransport`` rather than
+``TestClient``: the route touches fakeredis (idempotency and the service
+window), and fakeredis binds to the first loop that uses it. The same reason
+is spelled out in tests/test_meta_webhook_route.py.
+"""
+
+import hashlib
+import hmac
+import json
+import re
+from unittest.mock import ANY, AsyncMock
+
+import httpx
 import pytest
-from fastapi.testclient import TestClient
-from unittest.mock import ANY, AsyncMock, patch
 from pydantic import SecretStr
+
+from app.core.config import settings
 from app.main import app
 
 _HEX12 = re.compile(r"^[0-9a-f]{12}$")
 
-client = TestClient(app)
+PHONE = "972501234567"
+CHAT_ID = f"{PHONE}@c.us"
+APP_SECRET = "integration-app-secret"
 
-# Payload Templates
-VALID_PAYLOAD = {
-    "typeWebhook": "incomingMessageReceived",
-    "instanceData": {
-        "idInstance": 7107387490,
-        "wid": "1234567890@c.us",
-        "typeInstance": "whatsapp",
-    },
-    "timestamp": 1234567890,
-    "idMessage": "F1234567890",
-    "senderData": {"chatId": "972501234567@c.us", "senderName": "Test User"},
-    "messageData": {
-        "typeMessage": "textMessage",
-        "textMessageData": {"textMessage": "Hello Proli"},
-    },
-}
+
+def _payload(message: dict | None = None, *, contacts: bool = True) -> dict:
+    """One Meta ``messages`` change carrying ``message`` (a text by default)."""
+    if message is None:
+        message = {
+            "from": PHONE,
+            "id": "wamid.F1234567890",
+            "timestamp": "1234567890",
+            "type": "text",
+            "text": {"body": "Hello Proli"},
+        }
+    value = {"messaging_product": "whatsapp", "messages": [message]}
+    if contacts:
+        value["contacts"] = [{"wa_id": PHONE, "profile": {"name": "Test User"}}]
+    return {
+        "object": "whatsapp_business_account",
+        "entry": [
+            {"id": "WABA_ID", "changes": [{"field": "messages", "value": value}]}
+        ],
+    }
+
+
+def _sign(raw: bytes, secret: str = APP_SECRET) -> str:
+    return "sha256=" + hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+
+
+async def _post(raw: bytes, headers: dict | None = None) -> httpx.Response:
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://testserver"
+    ) as client:
+        return await client.post(
+            "/webhook/meta",
+            content=raw,
+            headers={"Content-Type": "application/json", **(headers or {})},
+        )
 
 
 @pytest.fixture
-def mock_background_tasks():
-    # Patch settings to match test payload and disable token auth
-    # PRO-86: the sender instance-id check went with the Green provider.
-    with patch("app.core.config.settings.WEBHOOK_TOKEN", None):
-        # Mock ARQ pool
-        with patch("app.api.routes.webhook.get_arq_pool") as mock_get_pool:
-            mock_pool = AsyncMock()
-            mock_get_pool.return_value = mock_pool
-            # Also mock redis client for idempotency check
-            with patch("app.api.routes.webhook.get_redis_client") as mock_get_redis:
-                mock_redis = AsyncMock()
-                mock_get_redis.return_value = mock_redis
-                # Redis set returns True (new message)
-                mock_redis.set.return_value = True
+def mock_pool(monkeypatch):
+    """The ARQ pool the route enqueues to, captured instead of a real Redis."""
+    pool = AsyncMock()
 
-                yield mock_pool
+    async def _get_pool():
+        return pool
+
+    monkeypatch.setattr("app.api.routes.meta_webhook.get_arq_pool", _get_pool)
+    return pool
 
 
-def test_webhook_valid_text_message(mock_background_tasks):
-    mock_pool = mock_background_tasks
+@pytest.fixture
+def dev_unsigned(monkeypatch):
+    """Development with no META_APP_SECRET: the route accepts unsigned bodies."""
+    monkeypatch.setattr(settings, "ENVIRONMENT", "development")
+    monkeypatch.setattr(settings, "META_APP_SECRET", None)
 
-    response = client.post("/webhook", json=VALID_PAYLOAD)
+
+@pytest.fixture
+def staging_signed(monkeypatch):
+    """A prod-like environment with META_APP_SECRET configured."""
+    monkeypatch.setattr(settings, "ENVIRONMENT", "staging")
+    monkeypatch.setattr(settings, "META_APP_SECRET", SecretStr(APP_SECRET))
+
+
+# ---------------------------------------------------------------------------
+# Payload handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_webhook_valid_text_message(fake_redis, mock_pool, dev_unsigned):
+    response = await _post(json.dumps(_payload()).encode())
 
     assert response.status_code == 200
     assert response.json() == {"status": "processing_message"}
 
-    # PRO-174: the route now also forwards the trace_id it bound for this
-    # turn. new_trace_id() is unkeyed random (PRO-174 blocker fix — a digest
-    # of message_id+chat_id was a decryption key for mask_pii), so the exact
-    # value cannot be predicted here — assert shape via ANY, then check the
-    # actual forwarded value separately.
-    mock_pool.enqueue_job.assert_called_once_with(
+    # PRO-174: the route also forwards the trace_id it bound for this turn.
+    # new_trace_id() is unkeyed random, so the exact value cannot be
+    # predicted here: assert shape via ANY, then check the forwarded value.
+    mock_pool.enqueue_job.assert_awaited_once_with(
         "process_message_task",
-        "972501234567@c.us",
+        CHAT_ID,
         "Hello Proli",
         None,
-        message_id="F1234567890",
+        message_id="wamid.F1234567890",
         trace_id=ANY,
     )
-    forwarded_trace_id = mock_pool.enqueue_job.call_args.kwargs["trace_id"]
+    forwarded_trace_id = mock_pool.enqueue_job.await_args.kwargs["trace_id"]
     assert _HEX12.match(forwarded_trace_id)
+    # The wamid is claimed for idempotency, and the sender's window is open.
+    assert await fake_redis.exists("webhook:wamid.F1234567890")
+    assert await fake_redis.exists(f"wa:window:{CHAT_ID}")
 
 
-def test_webhook_ignored_group_message(mock_background_tasks):
-    mock_pool = mock_background_tasks
-
-    payload = VALID_PAYLOAD.copy()
-    payload["senderData"] = {"chatId": "123456789@g.us", "senderName": "Group Chat"}
-
-    response = client.post("/webhook", json=payload)
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "ignored_group"}
-    mock_pool.enqueue_job.assert_not_called()
-
-
-def test_webhook_invalid_json():
-    response = client.post("/webhook", content="{invalid_json}")
-    assert response.status_code == 422  # Validation error
-
-
-def test_webhook_missing_fields(mock_background_tasks):
-    # Payload missing senderData
-    payload = {
-        "typeWebhook": "incomingMessageReceived",
-        "messageData": {"typeMessage": "textMessage"},
+@pytest.mark.asyncio
+async def test_webhook_unsupported_message_type_is_ignored(
+    fake_redis, mock_pool, dev_unsigned
+):
+    reaction = {
+        "from": PHONE,
+        "id": "wamid.REACTION1",
+        "type": "reaction",
+        "reaction": {"message_id": "wamid.F1234567890", "emoji": "👍"},
     }
-    # Pydantic validation passes (optional fields), but logic handles it
-    response = client.post("/webhook", json=payload)
+
+    response = await _post(json.dumps(_payload(reaction)).encode())
+
     assert response.status_code == 200
-    assert response.json() == {"status": "ignored_no_data"}
+    assert response.json() == {"status": "ignored_type"}
+    mock_pool.enqueue_job.assert_not_awaited()
 
 
-def test_webhook_token_query_param_required_when_configured():
-    """When WEBHOOK_TOKEN is set, requests must carry ?token= parameter."""
-    # PRO-86: the sender instance-id check went with the Green provider.
-    # PRO-94: the field is a SecretStr and the route unwraps it — patching a
-    # bare str here would pass a type the route can no longer read.
-    with patch("app.core.config.settings.WEBHOOK_TOKEN", SecretStr("secret-token")):
-        with patch("app.api.routes.webhook.get_arq_pool") as mock_get_pool, patch(
-            "app.api.routes.webhook.get_redis_client"
-        ) as mock_get_redis:
-            mock_get_pool.return_value = AsyncMock()
-            mock_redis = AsyncMock()
-            mock_redis.set.return_value = True
-            mock_get_redis.return_value = mock_redis
+@pytest.mark.asyncio
+async def test_webhook_invalid_json(fake_redis, mock_pool, dev_unsigned):
+    # Unlike the legacy route's 422, the Meta route answers 200: a body it
+    # cannot parse is ours to log, not Meta's to retry.
+    response = await _post(b"{invalid_json}")
 
-            # Missing token → 403
-            resp_missing = client.post("/webhook", json=VALID_PAYLOAD)
-            assert resp_missing.status_code == 403
-            assert resp_missing.json() == {"status": "forbidden"}
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored_type"}
+    mock_pool.enqueue_job.assert_not_awaited()
 
-            # Wrong token → 403
-            resp_wrong = client.post(
-                "/webhook", json=VALID_PAYLOAD, params={"token": "not-the-token"}
-            )
-            assert resp_wrong.status_code == 403
 
-            # Correct token → 200
-            resp_ok = client.post(
-                "/webhook", json=VALID_PAYLOAD, params={"token": "secret-token"}
-            )
-            assert resp_ok.status_code == 200
-            assert resp_ok.json() == {"status": "processing_message"}
+@pytest.mark.asyncio
+async def test_webhook_missing_fields(fake_redis, mock_pool, dev_unsigned):
+    # A message with no sender, and a change with no messages at all: both
+    # parse as JSON, neither carries anything to process.
+    no_sender = _payload(
+        {"id": "wamid.NOFROM1", "type": "text", "text": {"body": "hi"}},
+        contacts=False,
+    )
+    response = await _post(json.dumps(no_sender).encode())
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored_type"}
+
+    empty_change = {
+        "object": "whatsapp_business_account",
+        "entry": [{"id": "WABA_ID", "changes": [{"field": "messages", "value": {}}]}],
+    }
+    response = await _post(json.dumps(empty_change).encode())
+    assert response.status_code == 200
+    assert response.json() == {"status": "ignored_type"}
+
+    mock_pool.enqueue_job.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
+# Authentication in a prod-like environment: X-Hub-Signature-256
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_webhook_signature_missing_is_forbidden_in_staging(
+    fake_redis, mock_pool, staging_signed
+):
+    response = await _post(json.dumps(_payload()).encode())
+
+    assert response.status_code == 403
+    assert response.json() == {"status": "forbidden"}
+    mock_pool.enqueue_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_webhook_signature_wrong_secret_is_forbidden_in_staging(
+    fake_redis, mock_pool, staging_signed
+):
+    raw = json.dumps(_payload()).encode()
+
+    response = await _post(raw, {"X-Hub-Signature-256": _sign(raw, "not-the-secret")})
+
+    assert response.status_code == 403
+    assert response.json() == {"status": "forbidden"}
+    mock_pool.enqueue_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_webhook_signature_over_a_different_body_is_forbidden_in_staging(
+    fake_redis, mock_pool, staging_signed
+):
+    # A genuine signature authenticates only the bytes it was computed over:
+    # replaying it on an altered body must not pass.
+    signed_raw = json.dumps(_payload()).encode()
+    tampered = _payload()
+    tampered["entry"][0]["changes"][0]["value"]["messages"][0]["text"][
+        "body"
+    ] = "Tampered"
+    tampered_raw = json.dumps(tampered).encode()
+
+    response = await _post(tampered_raw, {"X-Hub-Signature-256": _sign(signed_raw)})
+
+    assert response.status_code == 403
+    mock_pool.enqueue_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_webhook_signature_correct_is_processed_in_staging(
+    fake_redis, mock_pool, staging_signed
+):
+    raw = json.dumps(_payload()).encode()
+
+    response = await _post(raw, {"X-Hub-Signature-256": _sign(raw)})
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "processing_message"}
+    mock_pool.enqueue_job.assert_awaited_once()

@@ -136,7 +136,7 @@ python scripts/restore.py --no-drop         # Restore without dropping existing 
 
 ### `simulate_webhook.py`
 
-Interactive webhook simulator. Prompts for a message, builds a valid legacy-envelope JSON payload, and POSTs it to `http://localhost:8000/webhook`. Lives under `tests/`, not `scripts/`.
+Interactive webhook simulator. Prompts for a message, builds a Meta Cloud API `messages` payload carrying it, and POSTs it to `http://localhost:8000/webhook/meta`. When `META_APP_SECRET` is set in its environment it signs the body with `X-Hub-Signature-256`, as the route requires whenever the backend has that secret; without it the body goes unsigned, which only a development backend accepts. Lives under `tests/`, not `scripts/`.
 
 ```bash
 python tests/simulate_webhook.py

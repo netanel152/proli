@@ -21,6 +21,9 @@ anchor computed *inside* the fixture, so a slow suite run cannot drift a thresho
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
+import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -279,55 +282,73 @@ class World:
         text: str | None,
         *,
         chat_id: str | None = None,
-        id_message: str = "e2e-1",
-        media_kind: str | None = None,
+        id_message: str = "wamid.e2e-1",
     ) -> dict:
-        """A synthetic legacy-envelope ``incomingMessageReceived`` payload."""
-        sender = chat_id or self.customer
-        if media_kind:
-            _, mime = MEDIA_FIXTURES[media_kind]
-            message_data = {
-                "typeMessage": {
-                    "image": "imageMessage",
-                    "audio": "audioMessage",
-                    "video": "videoMessage",
-                }[media_kind],
-                "fileMessageData": {
-                    "downloadUrl": media_url_for(media_kind),
-                    "caption": text or "",
-                    "mimeType": mime,
-                },
-            }
-        else:
-            message_data = {
-                "typeMessage": "textMessage",
-                "textMessageData": {"textMessage": text or ""},
-            }
+        """A synthetic Meta Cloud API ``messages`` webhook carrying one text message.
+
+        ``id_message`` becomes the message's wamid. The sender goes in bare-digit
+        form (``972…``), as Meta sends it; the route converts it to the internal
+        ``…@c.us`` chat id. Only text is built here: media in the harness is
+        delivered through ``send(media=...)``, straight to the orchestrator.
+        """
+        sender = (chat_id or self.customer).split("@", 1)[0]
         return {
-            "typeWebhook": "incomingMessageReceived",
-            "idMessage": id_message,
-            # PRO-86: /webhook no longer compares this against a configured
-            # instance id — the check went with the Green provider. Kept as a
-            # constant so the recorded fixtures keep their exact shape.
-            "instanceData": {"idInstance": 1111111111},
-            "senderData": {"chatId": sender, "senderName": "E2E"},
-            "messageData": message_data,
+            "object": "whatsapp_business_account",
+            "entry": [
+                {
+                    "id": "E2E_WABA",
+                    "changes": [
+                        {
+                            "field": "messages",
+                            "value": {
+                                "messaging_product": "whatsapp",
+                                "contacts": [
+                                    {"wa_id": sender, "profile": {"name": "E2E"}}
+                                ],
+                                "messages": [
+                                    {
+                                        "from": sender,
+                                        "id": id_message,
+                                        "type": "text",
+                                        "text": {"body": text or ""},
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                }
+            ],
         }
 
     async def post_webhook(self, payload: dict) -> dict:
-        """POST a payload to the real FastAPI ``/webhook`` route in-process.
+        """POST a payload to the real FastAPI ``/webhook/meta`` route in-process.
 
-        Exercises the production token check, idempotency guard, group filter,
-        DDoS shield and text extraction. Jobs land in ``self._enqueued`` instead of
-        Redis; ``drain()`` runs them through the real ARQ task wrapper.
+        Exercises the production signature check, service-window tracking,
+        idempotency guard, DDoS shield and message normalization. The body is
+        signed with ``X-Hub-Signature-256`` whenever ``META_APP_SECRET`` is set
+        at call time, exactly as Meta signs it; with no secret configured the
+        development environment accepts it unsigned. Jobs land in
+        ``self._enqueued`` instead of Redis; ``drain()`` runs them through the
+        real ARQ task wrapper.
         """
+        from app.core.config import settings
         from app.main import app
+
+        raw = json.dumps(payload).encode()
+        headers = {"Content-Type": "application/json"}
+        if settings.META_APP_SECRET is not None:
+            digest = hmac.new(
+                settings.META_APP_SECRET.get_secret_value().encode(),
+                raw,
+                hashlib.sha256,
+            ).hexdigest()
+            headers["X-Hub-Signature-256"] = f"sha256={digest}"
 
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
             transport=transport, base_url="http://e2e"
         ) as client:
-            response = await client.post("/webhook", json=payload)
+            response = await client.post("/webhook/meta", content=raw, headers=headers)
         return response.json()
 
     async def drain(self) -> int:
@@ -338,8 +359,8 @@ class World:
         # this exact list, so rebinding it would orphan every later enqueue.
         jobs = list(self._enqueued)
         self._enqueued.clear()
-        for _name, args in jobs:
-            await process_message_task({}, *args)
+        for _name, args, kwargs in jobs:
+            await process_message_task({}, *args, **kwargs)
         await self.settle()
         return len(jobs)
 
@@ -348,14 +369,11 @@ class World:
         text: str | None,
         *,
         chat_id: str | None = None,
-        id_message: str = "e2e-1",
-        media_kind: str | None = None,
+        id_message: str = "wamid.e2e-1",
     ) -> dict:
-        """Full path: webhook → enqueue → worker task."""
+        """Full path: Meta webhook → enqueue → worker task."""
         result = await self.post_webhook(
-            self.webhook_payload(
-                text, chat_id=chat_id, id_message=id_message, media_kind=media_kind
-            )
+            self.webhook_payload(text, chat_id=chat_id, id_message=id_message)
         )
         await self.drain()
         return result
