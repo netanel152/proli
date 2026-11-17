@@ -106,7 +106,7 @@ def test_app_boots_when_redis_is_briefly_down(no_sleep, monkeypatch):
         return redis
 
     monkeypatch.setattr(main_module, "get_redis_client", flaky_get_redis_client)
-    monkeypatch.setattr(main_module, "create_all_indexes", AsyncMock(return_value=None))
+    monkeypatch.setattr(main_module, "create_all_indexes", AsyncMock(return_value=[]))
     monkeypatch.setattr(main_module, "close_redis_client", AsyncMock())
     monkeypatch.setattr(main_module, "_close_shared_http_client", AsyncMock())
 
