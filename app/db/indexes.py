@@ -64,6 +64,14 @@ INDEX_SPECS = [
     ),
     # --- Messages ---
     ("Messages", messages_collection, [("chat_id", ASCENDING)], {}),
+    # PRO-253: get_chat_history's Mongo fallback filters on chat_id and reads
+    # the newest messages by timestamp.
+    (
+        "Messages",
+        messages_collection,
+        [("chat_id", ASCENDING), ("timestamp", ASCENDING)],
+        {},
+    ),
     (
         "Messages",
         messages_collection,
