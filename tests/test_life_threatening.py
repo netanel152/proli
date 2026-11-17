@@ -76,10 +76,24 @@ def test_urgent_copy_no_longer_says_emergency():
         assert "חירום" not in copy
 
 
-def test_the_life_threatening_copy_names_the_emergency_numbers():
+def test_the_life_threatening_copy_names_the_emergency_numbers_in_bold():
     copy = Messages.Customer.LIFE_THREATENING
     for number in ("101", "102", "100"):
-        assert number in copy
+        assert f"*{number}*" in copy
+
+
+def test_the_gas_line_says_to_shut_the_main_valve_safely_and_call_from_outside():
+    """The owner's wording (2026-11-17): the gas line pins all of its steps."""
+    gas_line = next(
+        line
+        for line in Messages.Customer.LIFE_THREATENING.splitlines()
+        if line.startswith("בריח גז:")
+    )
+    assert gas_line == (
+        "בריח גז: לא להדליק אש, אור או מכשיר חשמלי, "
+        "לסגור את ברז הגז הראשי אם אפשר לעשות את זה בלי סיכון, "
+        "לפתוח חלונות, לצאת החוצה ולהתקשר מחוץ לבית."
+    )
 
 
 # --- the guard, in every state a customer can write in ----------------------

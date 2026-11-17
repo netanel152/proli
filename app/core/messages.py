@@ -220,15 +220,18 @@ class Messages:
         # approval. The offer is already out, and flagging the lead halves the
         # PRO-56 approval SLA — so say what actually happens next instead of
         # answering with the generic STILL_WAITING.
-        # PRO-222 — life-threatening: no pro, no address, no lead. Pending the
-        # owner's approval of the wording. Numbers: מד"א 101, כבאות והצלה 102,
-        # משטרה 100 (Israel's national emergency numbers).
+        # PRO-222 — life-threatening: no pro, no address, no lead. Wording
+        # approved by the owner 2026-11-17 (gas line extended the same day).
+        # Numbers: מד"א 101, כבאות והצלה 102, משטרה 100 (Israel's national
+        # emergency numbers), kept bold; the rest of the styling is PRO-245's.
         LIFE_THREATENING = (
             "🚨 *אם יש סכנה — קודם כל להתרחק מהמקום ולהתקשר עכשיו:*\n"
             "כבאות והצלה *102* (שריפה, עשן, ריח גז, פיצוץ)\n"
             'מד"א *101* (פגיעה בגוף או התחשמלות)\n'
             "משטרה *100*\n"
-            "בריח גז: לא להדליק אש, אור או מכשיר חשמלי, לפתוח חלונות ולצאת החוצה.\n"
+            "בריח גז: לא להדליק אש, אור או מכשיר חשמלי, "
+            "לסגור את ברז הגז הראשי אם אפשר לעשות את זה בלי סיכון, "
+            "לפתוח חלונות, לצאת החוצה ולהתקשר מחוץ לבית.\n"
             "פרולי אינה שירות חירום ולא תשלח איש מקצוע לקריאה הזו. "
             "הצוות שלנו עודכן ויחזור אליך כשהמצב בטוח."
         )
