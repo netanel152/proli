@@ -26,10 +26,13 @@ redelivery can land.
 import hashlib
 import hmac
 import json
+import time
+import uuid
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from app.core import chat_order
 from app.core.config import settings
 from app.core.constants import APIStatus
 from app.core.logger import logger, new_trace_id
@@ -204,6 +207,15 @@ async def meta_webhook_endpoint(request: Request):
                     )
                     continue
 
+                # PRO-214: join the chat's order under the id arq is handed,
+                # before any worker can pick the job up.
+                job_id = uuid.uuid4().hex
+                try:
+                    await chat_order.join(
+                        await get_redis_client(), chat_id, job_id, time.time()
+                    )
+                except Exception as e:
+                    logger.warning(f"Chat order join failed (job runs unordered): {e}")
                 try:
                     if arq_pool is None:
                         arq_pool = await get_arq_pool()
@@ -214,8 +226,15 @@ async def meta_webhook_endpoint(request: Request):
                         normalized.media_url,
                         message_id=normalized.message_id,
                         trace_id=trace_id,
+                        _job_id=job_id,
                     )
                 except Exception:
+                    try:
+                        await chat_order.leave(
+                            await get_redis_client(), chat_id, job_id
+                        )
+                    except Exception:
+                        pass  # its presence key expires; the queue prunes it
                     # Release the idempotency claim: the outer handler answers
                     # 200 (Meta must not retry-storm us), so a claimed-but-
                     # unqueued wamid would otherwise be a permanently lost

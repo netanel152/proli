@@ -262,6 +262,7 @@ async def test_post_with_valid_signature_enqueues_and_opens_window(
         None,
         message_id="wamid.ROUTE1",
         trace_id=ANY,
+        _job_id=ANY,
     )
     forwarded_trace_id = _capturing_pool.enqueue_job.await_args.kwargs["trace_id"]
     assert _HEX12.match(forwarded_trace_id)

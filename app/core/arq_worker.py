@@ -18,6 +18,7 @@ from app.core.phone import mask_chat_id
 from app.core.sentry import sentry_active
 from app.core.database import client
 from app.core.http_client import close_http_client
+from app.core import chat_order
 from app.core.redis_client import get_redis_client, ChatLockBusyError
 from app.core.messages import Messages
 from app.core.text_matching import is_emergency_text
@@ -150,7 +151,15 @@ async def _process_message(
                 f"re-run too many times: job {job_id}, try {job_try}",
             )
             return
-        await _run_message(chat_id, user_text, media_url, message_id, job_id, job_try)
+        await _run_message(
+            chat_id,
+            user_text,
+            media_url,
+            message_id,
+            job_id,
+            job_try,
+            enqueued_at=ctx.get("enqueue_time"),
+        )
     finally:
         logger.info(
             f"Task ended: job {job_id} try {job_try} for {mask_chat_id(chat_id)} "
@@ -202,7 +211,86 @@ async def _drop_job(chat_id: str, user_text: str, reason: str) -> None:
         await _tell_customer_to_retry(chat_id)
 
 
-async def _run_message(chat_id, user_text, media_url, message_id, job_id, job_try):
+async def _my_turn(chat_id: str, job_id, enqueued_at) -> bool:
+    """Join the chat's queue and say whether this job is at its head (PRO-214).
+
+    Without it each waiting job retried on its own clock, and with the backoff
+    growing per try, the message that had waited longest retried least often: a
+    correction sent second could run first. True when ordering can't apply (no
+    job id or enqueue time, as for a job run by hand) or Redis fails: order is
+    worth a wait, never a lost message.
+    """
+    if not job_id or enqueued_at is None:
+        return True
+    try:
+        redis = await get_redis_client()
+        key = chat_order.order_key(chat_id)
+        # The webhook already joined this job at enqueue; this covers a job
+        # enqueued another way, and refreshes the presence key either way.
+        await chat_order.join(redis, chat_id, job_id, enqueued_at.timestamp())
+        while True:
+            head = await redis.zrange(key, 0, 0)
+            if not head or head[0] == job_id:
+                break
+            if await redis.exists(chat_order.presence_key(head[0])):
+                return False
+            # Gone without leaving: a job arq lost. It must not hold the chat.
+            await redis.zrem(key, head[0])
+            logger.warning(
+                f"Chat order for {mask_chat_id(chat_id)}: pruned job {head[0]}, "
+                "which stopped retrying without finishing"
+            )
+        # Our turn: keep the place for as long as a turn may take.
+        await redis.set(
+            chat_order.presence_key(job_id), "1", ex=WorkerSettings.job_timeout + 30
+        )
+        return True
+    except Exception as e:
+        logger.warning(f"Chat order check failed for job {job_id} (running): {e}")
+        return True
+
+
+async def _leave_queue(chat_id: str, job_id) -> None:
+    if not job_id:
+        return
+    try:
+        await chat_order.leave(await get_redis_client(), chat_id, job_id)
+    except Exception as e:
+        logger.warning(f"Could not leave the chat order for job {job_id}: {e}")
+
+
+async def _wait(chat_id, user_text, job_id, job_try, why: str):
+    """Defer this job for a later try, or drop it on the last one."""
+    if job_try >= WorkerSettings.max_tries:
+        await _leave_queue(chat_id, job_id)
+        await _drop_job(chat_id, user_text, f"{why} on the last try: job {job_id}")
+        return
+    await _count_lock_wait(job_id)
+    defer = 2 * job_try
+    logger.info(f"{why} for {mask_chat_id(chat_id)} — requeuing with {defer}s defer")
+    raise Retry(defer=defer)
+
+
+async def _run_message(
+    chat_id, user_text, media_url, message_id, job_id, job_try, enqueued_at=None
+):
+    if not await _my_turn(chat_id, job_id, enqueued_at):
+        await _wait(chat_id, user_text, job_id, job_try, "an earlier message is queued")
+        return
+    try:
+        await _run_turn(chat_id, user_text, media_url, message_id, job_id, job_try)
+    except Retry:
+        raise  # still waiting: keep the place in the queue
+    except BaseException as e:
+        # A shutdown re-runs the job, so it keeps its place; anything else
+        # ends it for good.
+        if not isinstance(e, asyncio.CancelledError):
+            await _leave_queue(chat_id, job_id)
+        raise
+    await _leave_queue(chat_id, job_id)
+
+
+async def _run_turn(chat_id, user_text, media_url, message_id, job_id, job_try):
     if sentry_active():
         # PRO-134: tags set at task start (not in an except) so they ride
         # every event and breadcrumb this job produces. ArqIntegration
@@ -221,17 +309,7 @@ async def _run_message(chat_id, user_text, media_url, message_id, job_id, job_tr
     except ChatLockBusyError:
         # Another worker is mid-flight for this chat_id — defer so we preserve
         # message order without duplicate-processing.
-        if job_try >= WorkerSettings.max_tries:
-            await _drop_job(
-                chat_id, user_text, f"chat lock busy on the last try: job {job_id}"
-            )
-            return
-        await _count_lock_wait(job_id)
-        defer = 2 * job_try
-        logger.info(
-            f"Chat lock busy for {mask_chat_id(chat_id)} — requeuing with {defer}s defer"
-        )
-        raise Retry(defer=defer)
+        await _wait(chat_id, user_text, job_id, job_try, "chat lock busy")
     except Exception as e:
         # sentry_skip: the re-raise below propagates to ArqIntegration, which
         # captures the full exception — the bridge reporting this log line
