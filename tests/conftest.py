@@ -294,6 +294,11 @@ def patch_dependencies(request, monkeypatch, mock_db):
         app.services.data_management_service, "reviews_collection", reviews
     )
     monkeypatch.setattr(app.services.data_management_service, "slots_collection", slots)
+    monkeypatch.setattr(
+        app.services.data_management_service,
+        "wa_delivery_collection",
+        mock_db.wa_delivery,
+    )
 
     # PRO-142 removed app/services/audit_service.py — a complete async audit
     # implementation production never called, whose only references were its

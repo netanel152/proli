@@ -481,6 +481,12 @@ def apply_lead_changes(
 
     if set_ops:
         update_op["$set"] = dict(set_ops)
+    if status_moved:
+        # PRO-248: stamp it like lead_manager_service.set_lead_status does. The
+        # stale-lead nudger and the PENDING_ADMIN_REVIEW short-circuit both read
+        # `updated_at`, so a move without it looked hours old the moment it was
+        # saved. Beside `set_ops`, which reports what the operator edited.
+        update_op.setdefault("$set", {})["updated_at"] = datetime.now(timezone.utc)
     if record_only:
         # PRO-215: a human chose this pro, so the bot must not rematch it away.
         # Beside `set_ops`, which reports what the operator edited. The offer

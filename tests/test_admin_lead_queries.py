@@ -1241,3 +1241,76 @@ def test_build_lead_row_malformed_deal_marker_hits_except_and_leaves_defaults():
     # parsed the marker into the clean composed form the successful-parse
     # test above pins.
     assert row["details_summary"] != "נזילה מתחת לכיור | 10:00 | תל אביב"
+
+
+# --- PRO-248: a status move saved from the panel stamps updated_at ---
+
+_OLD_STAMP = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+
+def _stamp(doc):
+    value = doc.get("updated_at")
+    if value is not None and value.tzinfo is None:  # mongomock drops tzinfo
+        value = value.replace(tzinfo=timezone.utc)
+    return value
+
+
+@pytest.mark.parametrize("new_status", ["booked", "pending_admin_review", "closed"])
+def test_status_move_from_panel_stamps_updated_at(db, new_status):
+    """The stale-lead nudger selects on ``updated_at < threshold`` and the
+    PENDING_ADMIN_REVIEW short-circuit is armed from it; a panel move that
+    left the old stamp looked hours old the moment it was saved."""
+    from admin_panel.core.lead_queries import apply_lead_changes
+
+    lead_id = db.leads.insert_one(
+        _lead_doc(status="new", updated_at=_OLD_STAMP, chat_id="972501234567@c.us")
+    ).inserted_id
+    before = datetime.now(timezone.utc)
+
+    change = apply_lead_changes(
+        str(lead_id), {"status": new_status}, leads_collection=db.leads
+    )
+
+    doc = db.leads.find_one({"_id": lead_id})
+    assert doc["status"] == new_status
+    assert _stamp(doc) >= before.replace(microsecond=0)
+    # Reported edits stay the operator's own fields.
+    assert change["written"] == ["status"]
+
+
+def test_edit_without_a_status_move_leaves_updated_at_alone(db):
+    """Only a real transition is stamped, the same rule the status_history
+    push follows: a status cell toggled back to what is stored writes nothing."""
+    from admin_panel.core.lead_queries import apply_lead_changes
+
+    lead_id = db.leads.insert_one(
+        _lead_doc(status="booked", updated_at=_OLD_STAMP)
+    ).inserted_id
+
+    apply_lead_changes(
+        str(lead_id),
+        {"status": "booked", "details": "new details"},
+        leads_collection=db.leads,
+    )
+
+    doc = db.leads.find_one({"_id": lead_id})
+    assert doc["details"] == "new details"
+    assert _stamp(doc) == _OLD_STAMP
+    assert doc["status_history"] == []
+
+
+def test_panel_and_bot_status_writers_set_the_same_fields(db):
+    """Both writers of a lead's status (the bot's set_lead_status and the
+    panel's save) leave status, a status_history entry and updated_at."""
+    from admin_panel.core.lead_queries import apply_lead_changes
+
+    lead_id = db.leads.insert_one(
+        _lead_doc(status="new", updated_at=_OLD_STAMP)
+    ).inserted_id
+
+    apply_lead_changes(str(lead_id), {"status": "booked"}, leads_collection=db.leads)
+
+    doc = db.leads.find_one({"_id": lead_id})
+    assert {"status", "status_history", "updated_at"} <= set(doc)
+    assert doc["status_history"][-1]["status"] == "booked"
+    assert _stamp(doc) > _OLD_STAMP
