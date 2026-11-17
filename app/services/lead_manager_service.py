@@ -329,8 +329,12 @@ class LeadManager:
         if cutoff:
             query["timestamp"] = {"$gt": cutoff}
 
-        cursor = messages_collection.find(query).sort("timestamp", 1).limit(limit)
-        msgs = await cursor.to_list(length=limit)
+        # PRO-253: the newest `limit`, as the Redis path's `[-limit:]` gives —
+        # an ascending sort with a limit returned the conversation's opening
+        # turns and dropped the latest ones. Read newest-first, then put them
+        # back in conversation order.
+        cursor = messages_collection.find(query).sort("timestamp", -1).limit(limit)
+        msgs = list(reversed(await cursor.to_list(length=limit)))
 
         formatted = []
         for m in msgs:

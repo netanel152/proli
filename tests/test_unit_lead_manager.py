@@ -197,10 +197,11 @@ async def test_get_chat_history_cache_miss(mock_lead_manager_db):
     _, mock_messages, mock_context_manager = mock_lead_manager_db
     lead_manager = LeadManager()
 
-    # Mock data returned from DB
+    # Mock data returned from DB — newest first, as the PRO-253 query
+    # (sort by timestamp descending, then limit) returns it.
     mock_history = [
-        {"role": "user", "text": "Hi", "timestamp": datetime.now()},
         {"role": "model", "text": "Hello", "timestamp": datetime.now()},
+        {"role": "user", "text": "Hi", "timestamp": datetime.now()},
     ]
     mock_messages.find.return_value.to_list.return_value = mock_history
 
@@ -209,6 +210,7 @@ async def test_get_chat_history_cache_miss(mock_lead_manager_db):
     # Verify Cache Miss behavior
     mock_context_manager.get_history.assert_called_once_with("123")
     mock_messages.find.assert_called_once()
+    mock_messages.find.return_value.sort.assert_called_once_with("timestamp", -1)
     mock_context_manager.set_history.assert_called_once()
 
     assert len(history) == 2
