@@ -249,6 +249,12 @@ def patch_dependencies(request, monkeypatch, mock_db):
     monkeypatch.setattr(app.services.pro_flow, "leads_collection", leads)
     monkeypatch.setattr(app.services.pro_flow, "reviews_collection", reviews)
 
+    # PRO-281: reassign_lead re-reads the lead before messaging anyone, through
+    # monitor_service's own leads_collection.
+    import app.services.monitor_service
+
+    monkeypatch.setattr(app.services.monitor_service, "leads_collection", leads)
+
     # Mock ContextManager globally — all services that call clear_context hit Redis otherwise
     mock_ctx = MagicMock()
     mock_ctx.clear_context = AsyncMock()
