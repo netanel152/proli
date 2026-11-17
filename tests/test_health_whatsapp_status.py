@@ -46,7 +46,7 @@ def _facade(state=None, error=None):
 def _mock_mongo_and_redis(monkeypatch):
     """Keep mongo/redis checks fast and deterministic — this file only cares
     about the whatsapp branch of GET /health."""
-    monkeypatch.setattr(health_route, "check_db_connection", lambda: True)
+    monkeypatch.setattr(health_route, "ping_db", AsyncMock(return_value=True))
 
     mock_redis = AsyncMock()
     mock_redis.ping = AsyncMock(return_value=True)

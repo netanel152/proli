@@ -1,6 +1,9 @@
+import asyncio
+
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import MongoClient, uri_parser
 from app.core.config import settings
+from app.core.constants import WorkerConstants
 import certifi
 
 # PRO-94: MONGO_URI is a SecretStr (it embeds the Atlas password). Unwrapped
@@ -11,6 +14,7 @@ _MONGO_URI = settings.MONGO_URI.get_secret_value()
 # Determine if SSL is needed (usually for Atlas/Cloud)
 ca_file = certifi.where() if "+srv" in _MONGO_URI else None
 kwargs = {"tlsCAFile": ca_file} if ca_file else {}
+kwargs["serverSelectionTimeoutMS"] = settings.MONGO_SERVER_SELECTION_TIMEOUT_MS
 
 # Extract database name from URI (supports proli_db, proli_staging_db, etc.)
 _parsed_uri = uri_parser.parse_uri(_MONGO_URI)
@@ -49,11 +53,18 @@ sync_client = MongoClient(_MONGO_URI, **kwargs)
 sync_db = sync_client[DB_NAME]
 
 
-def check_db_connection():
+async def ping_db(
+    timeout: float = WorkerConstants.HEALTH_DB_PING_TIMEOUT_SECONDS,
+) -> bool:
+    """True when Mongo answers a ping within ``timeout`` seconds.
+
+    PRO-251: this used to be a blocking ``sync_client`` ping called from the
+    async ``/health`` route, so while Mongo was unreachable every probe froze
+    the API's event loop (webhook intake included) for the 30s server
+    selection timeout. The Motor ping is awaited, and ``wait_for`` bounds it.
+    """
     try:
-        # Motor's ping is async, so we use the sync client for a quick health check function
-        # if this function is called synchronously.
-        sync_client.admin.command("ping")
+        await asyncio.wait_for(client.admin.command("ping"), timeout)
         return True
     except Exception:
         return False

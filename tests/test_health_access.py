@@ -37,7 +37,7 @@ TOKEN = "test-health-token-123"
 @pytest.fixture(autouse=True)
 def _mock_dependencies(monkeypatch, mock_db):
     """Deterministic mongo/redis/whatsapp so only the access logic varies."""
-    monkeypatch.setattr(health_route, "check_db_connection", lambda: True)
+    monkeypatch.setattr(health_route, "ping_db", AsyncMock(return_value=True))
 
     mock_redis = AsyncMock()
     mock_redis.ping = AsyncMock(return_value=True)
