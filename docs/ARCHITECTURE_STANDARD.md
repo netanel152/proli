@@ -720,6 +720,13 @@ One file earns a scheduled task of its own:
 | 1        | `app/services/workflow_service.py` | 1,674 | The dispatcher. Split by domain seam; dispatch table stays, implementations move to their owning flows. |
 | 2        | `admin_panel/ui/components.py`     | 1,030 | Split by view area; lower risk, lower urgency.                   |
 
+**Superseded by [`RESTRUCTURE_PLAN.md`](./RESTRUCTURE_PLAN.md)** (2026-11-17,
+PRO-246). The table above has gone stale: `workflow_service.py` is down to
+about 1,200 lines, and `dispatch_guards.py` (about 1,650) is not in it at all.
+The plan has the current measurements and the phased order. By owner decision
+on 2026-11-17, phases 0–3 land before the pilot and phases 4–9 wait until
+after it.
+
 Each refactor is behaviour-preserving, lands as small reviewable PRs, and
 MUST NOT share a PR with a behaviour change. The e2e state-matrix suite is
 the regression net for the dispatcher work — run it before and after every
