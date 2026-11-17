@@ -41,6 +41,7 @@ _PER_CHAT_KEY_TEMPLATES = (
     "rl:inbound:{chat_id}",
     "rl:trips:{chat_id}",
     "retry_notice:{chat_id}",
+    "chat_order:{chat_id}",
     "wa:window:{chat_id}",
     "wa:window:page:{chat_id}",
 )

@@ -118,6 +118,7 @@ async def test_webhook_valid_text_message(fake_redis, mock_pool, dev_unsigned):
         None,
         message_id="wamid.F1234567890",
         trace_id=ANY,
+        _job_id=ANY,
     )
     forwarded_trace_id = mock_pool.enqueue_job.await_args.kwargs["trace_id"]
     assert _HEX12.match(forwarded_trace_id)
