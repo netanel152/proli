@@ -409,7 +409,7 @@ The legacy `POST /webhook` route — the retired vendor's envelope, authenticate
 
 ### Admin authentication
 
-Passwords are never stored in plaintext. The system uses bcrypt with a random salt. Sessions use `secrets.token_hex(32)` tokens validated server-side on each request. Logout invalidates the token immediately.
+Passwords are never stored in plaintext. The system uses bcrypt with a random salt. Sessions use `secrets.token_hex(32)` tokens validated server-side on each request; the server stores only each token's sha256 hash, and the auth cookie is `Secure`. Failed logins are counted per user and under one global counter (`GLOBAL_MAX_FAILED_ATTEMPTS = 30`), so rotating usernames does not escape the lockout. Logout invalidates the token immediately.
 
 Generate a password hash:
 ```bash
@@ -453,8 +453,8 @@ The admin day editor (PRO-278) writes only the fields an admin changed, each con
 | `ADMIN_PHONE` | `972524828796` | Admin WhatsApp number for SOS alerts. Leaving it unset (or empty) in a prod-like environment is reported at ERROR on every api/worker boot — PRO-48; the default is a real number, so an unconfigured deploy pages whoever it names |
 | `WHATSAPP_PROVIDER` | `dryrun` | Read per service, so `admin` needs its own: see "What `admin` needs in order to send" in `docs/RAILWAY_SETUP.md`. Outbound transport: `dryrun` (logs, never transmits) or `cloud` (the PRO-89 `CloudAPIProvider` — Meta Graph API, code-complete but not yet onboarded, see PRO-87). An unrecognised value falls back to `dryrun` |
 | `META_ACCESS_TOKEN` | — | Secret. Meta Graph API System User token; required once `WHATSAPP_PROVIDER=cloud` and `WHATSAPP_DRY_RUN` is not `true` |
-| `META_APP_SECRET` | — | Secret. Signs inbound `/webhook/meta` (`X-Hub-Signature-256`); required for `cloud` in staging/production |
-| `META_VERIFY_TOKEN` | — | Secret. Echoed back during the Meta subscription handshake (`GET /webhook/meta`); required for `cloud` in staging/production |
+| `META_APP_SECRET` | — | Secret. Signs inbound `/webhook/meta` (`X-Hub-Signature-256`); the `api` service refuses to boot in staging/production unless it is set and non-empty, whatever the provider (PRO-270); `worker`/`admin` need it only under `cloud` |
+| `META_VERIFY_TOKEN` | — | Secret. Echoed back during the Meta subscription handshake (`GET /webhook/meta`); same rule as `META_APP_SECRET` |
 | `META_PHONE_NUMBER_ID` | — | Not secret. Graph API phone-number node id; required once `WHATSAPP_PROVIDER=cloud` and `WHATSAPP_DRY_RUN` is not `true` |
 | `WA_BUSINESS_INITIATED_CAP` | `250` | Worker. Cap for the 80% business-initiated alert when Meta's live limit cannot be read or is not recognized; a recognized live limit wins. Blank, zero, negative or non-numeric means the default |
 | `META_GRAPH_API_VERSION` | `v23.0` | Graph API version pinned in every outbound request URL |

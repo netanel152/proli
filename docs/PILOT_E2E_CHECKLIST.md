@@ -48,6 +48,7 @@ buttons.
 - [ ] The panel can send: `admin` has the variables in "What `admin` needs in order to send" (`docs/RAILWAY_SETUP.md`), and after loading a page its logs show `WhatsApp egress using provider 'cloud'` (an INFO line, so at `LOG_LEVEL=WARNING` use a real panel send as the evidence). `/health` reports `api`'s provider, not `admin`'s.
 - [ ] Sentry paging live (PRO-18): `SENTRY_DSN` set, `fatal→email` rule exists, a test critical emails you.
 - [ ] Worker running (APScheduler jobs active) — check logs for `worker:heartbeat` and `[WA Monitor]`.
+- [ ] Sentry watches the pipeline (PRO-17): Crons shows `worker-pipeline-watch` with recent `ok` check-ins (10-minute cadence), and the uptime monitor on the public `/health` is green (`docs/OPERATIONS_GUIDE.md`, "Monitors that do not depend on GitHub").
 - [ ] At least one **approved, active** pro covers C's city with free upcoming slots.
 - [ ] If testing SLA timings, confirm no quiet-hours/scheduler gating (PRO-73) will suppress the nudges during the run.
 
@@ -187,11 +188,65 @@ Each step on a phone whose 24h window is open (it wrote to the bot within the da
    prompt arrives, as typing `1` would.
 - [ ] Pass  · [ ] File: ______
 
+### 13. Life-threatening report  ·  regresses PRO-222
+**Steps (C):** (a) from a fresh number with **no consent on record**, send **`יש שריפה בדירה`**.
+(b) From a chat with an open lead that is still `contacted` or `new` (offered, not yet approved),
+send **`יש ריח גז`**. (c) Send **`יש שריפה`** again within 10 minutes. (d) Repeat (a) from
+**P's own phone** while P is in pro mode.
+**Expected:**
+- Each reply to C is the urgent notice (`Customer.LIFE_THREATENING`): move away and call **102**
+  (fire, smoke, gas, explosion), **101** (injury or electric shock), **100** (police), and for gas
+  shut the main valve only if that is safe and call from outside. It does not say "חירום", and it
+  says Proli will not send a pro to this call.
+- **No pro is offered or notified**, and no new lead is created. In (a) nothing about the chat is
+  stored: no consent prompt, no message in the panel.
+- In (b) the open lead goes to **`pending_admin_review`** with `escalation_reason: life_threatening`
+  and appears in the panel's pending-review view; the offer already sent to a pro is withdrawn from
+  the flow (an `אשר` from that pro is answered as no longer available).
+- The operator gets **one** Sentry page per chat per 10 minutes, with the number masked and none of
+  the customer's words: (c) does not page a second time.
+- (d) is answered as a pro command, not as an emergency report.
+- [ ] Pass  · [ ] File: ______
+
+### 14. Message order  ·  regresses PRO-214
+**Steps (C):** from a chat mid-intake, send three messages in quick succession (e.g. the city, then
+the street, then the time), without waiting for a reply.
+**Expected:** the bot answers them in the order they were sent, never a later message before an
+earlier one, and the lead ends up with all three details. Nothing is lost or answered twice.
+- [ ] Pass  · [ ] File: ______
+
+### 15. Assignment and reassignment races  ·  regresses PRO-271, PRO-281, PRO-282, PRO-283
+**Steps:** (a) With a lead in `pending_admin_review`, assign it to a pro from the admin panel's
+one-click strip and, from the `ניהול` wizard, to a different pro, as close together as you can (or
+assign once, then assign again from a stale screen). (b) With a lead whose pro has not answered,
+and the customer's reassignment offer showing, have **P** tap `אשר` and **C** reply `1` at the same
+moment. (c) In the panel, change a lead's status or pro from a page you loaded before someone else
+changed it, then save.
+**Expected:**
+- (a) Exactly one assignment wins and exactly one pro gets the offer; the other path says the lead
+  was already taken (the wizard answers `Admin.ASSIGN_LEAD_TAKEN`) and messages nobody.
+- (b) Exactly one outcome: the lead is booked with P, **or** it is offered to the next pro. Never
+  both: the lead ends with a single pro and the losing side changes nothing.
+- (c) A save from a stale page writes nothing over the newer owner or status and says so (a row
+  skipped as stale), and a cancel releases the booked slot.
+- [ ] Pass  · [ ] File: ______
+
+### 16. Slot uniqueness  ·  regresses PRO-277
+**Steps:** (a) Have two customers (or one customer and the panel) book the **same pro at the same
+time** as close together as you can. (b) In the panel, run the bulk slot generator for a range that
+already has slots, and let the Sunday regeneration (or a second click) run over it again.
+**Expected:**
+- (a) One booking succeeds; the other customer is offered another time. The pro's schedule shows
+  one slot taken, never two bookings at the same time, and a slot that overlaps an already-taken one
+  is not offered.
+- (b) No duplicate slot rows appear; a repeat run adds nothing for times that already exist.
+- [ ] Pass  · [ ] File: ______
+
 ---
 
 ## Exit criteria
 
-- [ ] **All 12 scenarios Pass** on a single clean run (production config) — PRO-55 and PRO-56 are now in code (see the dependency table).
+- [ ] **All 16 scenarios Pass** on a single clean run (production config) — PRO-55 and PRO-56 are now in code (see the dependency table).
 - [ ] Every failure encountered has a linked Linear ticket, fixed and re-verified.
 - [ ] The run is signed off below.
 
@@ -199,7 +254,7 @@ Only when this is fully green does the pilot start.
 
 ## Sign-off
 
-| Run # | Date | Tester | Result (X/11) | Notes / tickets filed |
+| Run # | Date | Tester | Result (X/16) | Notes / tickets filed |
 |---|---|---|---|---|
 |  |  |  |  |  |
 |  |  |  |  |  |

@@ -32,7 +32,7 @@ Customer (WhatsApp)
 
 **Role:** Stateless HTTP ingestion layer.
 
-- Validates incoming webhook (token — the only auth mechanism since PRO-86 removed the sender instance-id check, required whenever `ENVIRONMENT` is staging/production; idempotency via Redis `SET NX`; rate limiting 10 req/60 s per `chat_id`)
+- Validates incoming webhook (the `X-Hub-Signature-256` HMAC over the raw body, keyed by `META_APP_SECRET`; an unset or empty secret refuses the API's boot in staging/production, PRO-270; the legacy `POST /webhook` and its token were removed in PRO-254; idempotency via Redis `SET NX`; rate limiting 10 req/60 s per `chat_id`)
 - Extracts text/media from payload (text, extended text, numeric/keyword replies, location, image, audio, video)
 - Enqueues `process_message_task` to Redis via ARQ
 - Returns `200 OK` immediately (prevents webhook retries)
@@ -46,7 +46,7 @@ Customer (WhatsApp)
 
 **ARQ task:** `process_message_task` → `workflow_service.process_incoming_message`
 
-**APScheduler jobs (11 total):**
+**APScheduler jobs (14 total; 11 everywhere, plus 3 registered only when `ENVIRONMENT=production`):**
 
 | Job | Schedule | Function |
 |-----|----------|----------|
@@ -61,6 +61,9 @@ Customer (WhatsApp)
 | Slot Regeneration | Sunday 01:00 IL | Regenerate appointment slots from recurring weekly templates |
 | Daily Backup | 02:00 IL (daily), production only (PRO-127) | Create gzipped `mongodump`; upload to S3 if `BACKUP_S3_BUCKET` is configured |
 | WhatsApp Deauth Watchdog | Every 2 min | Poll the configured WhatsApp provider's account state (skipped for a non-transmitting provider, e.g. dry-run); page on-call via `send_oncall_alert` if non-authorized > 5 min |
+| WhatsApp Quality Watchdog | Every 15 min, plus once after boot (PRO-90) | Read the number's quality rating, messaging limit and WABA health, and every armed template's status and category; page at most once per condition per 24 h. Shares the `whatsapp_monitor_active` toggle |
+| Pipeline Watch | Every 10 min, production only (PRO-17) | `pipeline_watch.run_pipeline_watch`: page the operator on a pending-review backlog or a stuck-`contacted` climb, and check in to the Sentry Crons monitor `worker-pipeline-watch`; no toggle |
+| Backup Freshness Watchdog | Every 60 min, plus once after boot, production only (PRO-185) | Page when the last successful backup is older than `BACKUP_MAX_AGE_HOURS` (48) |
 
 **Startup/shutdown:** Verifies DB + Redis connectivity, starts APScheduler, updates `worker:heartbeat` key in Redis every 60 s (120 s expiry).
 
@@ -83,7 +86,7 @@ Customer (WhatsApp)
 - Bilingual Hebrew/English with RTL support
 - Auto-refresh (PRO-141): a client-side timer (`streamlit-autorefresh`), not a blocking sleep — it pauses while a `st.data_editor` holds unsaved rows (`admin_panel/core/refresh.py`)
 
-**Security:** Cookie-based auth with bcrypt password hashing and `secrets.token_hex(32)` session tokens, server-side validated on every request.
+**Security:** Cookie-based auth (the cookie is `Secure`) with bcrypt password hashing and `secrets.token_hex(32)` session tokens, stored server-side only as their sha256 hash and validated on every request; failed logins are counted per user and globally (`GLOBAL_MAX_FAILED_ATTEMPTS`).
 
 **Database:** Synchronous PyMongo client (separate from the async Motor client used by API + Worker).
 
@@ -106,6 +109,11 @@ process_incoming_message(chat_id, text, media_url, message_id)
         ├─ Reset keyword? → clear state + context, silently (no confirmation message)
         │
         ├─ Help keyword ("תפריט"/"עזרה", non-pro)? → send HELP_INFO, leave state intact
+        │
+        ├─ Life-threatening report (PRO-222; after the inbound rate limit, before consent)?
+        │      └─ is_life_threatening_text → LIFE_THREATENING (emergency numbers, no pro),
+        │         open lead → PENDING_ADMIN_REVIEW, FSM state cleared, operator paged
+        │         once per chat per 10 min; nothing logged or created
         │
         ├─ Politeness ("תודה" etc., non-pro)? → send YOU_ARE_WELCOME, return
         │
@@ -354,6 +362,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | `consent` | Privacy consent acknowledgements |
 | `audit_log` | Admin action history |
 | `admins` | Admin accounts with bcrypt-hashed passwords and RBAC roles |
+| `wa_delivery` | Per-`wamid` outbound delivery statuses (PRO-89), kept out of `messages` so status callbacks are never replayed into the AI context |
 
 ### Redis Keys
 
@@ -368,6 +377,8 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | `worker:heartbeat` | Worker liveness | 120 s |
 | `lock:chat:{chat_id}` | Per-chat FSM lock (machine-gun deferral) | 30 s |
 | `lock:job:{job_name}` | APScheduler distributed lock | 5 min |
+| `chat_order:{chat_id}`, `chat_order_seen:{job_id}` | Per-chat arrival order of queued turns (PRO-214, `app/core/chat_order.py`): a sorted set of job ids, and each job's presence key | 1 h / 60 s |
+| `life_threat_paged:{chat_id}` | One operator page per chat for a life-threatening report (PRO-222) | 10 min |
 | `geo:city:{normalized_name}` | Resolved coordinates cache (Google Geocoding). Value is a `[lon, lat]` pair, `__NULL__` for a definitive miss, or `__RETRY__` for a transient one — distinct sentinels so the pro-approval check can tell "unknown name" from "geocoder was down" without a network call | ∞ (positive) / 24 h (definitive miss) / 60 s (transient failure) |
 | `geo:unavailable` | Geocoding circuit breaker — set after a transient Google failure; while present, lookups skip Google instead of each paying the 5 s timeout. Opening it logs `CRITICAL` (→ Sentry page) | `GEOCODING_TRANSIENT_TTL_SECONDS` (60 s) |
 
@@ -380,7 +391,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | Language | Python 3.12+ | |
 | API framework | FastAPI | Async, OpenAPI built-in |
 | Task queue | ARQ | Lightweight, Redis-backed |
-| Scheduler | APScheduler | 11 cron/interval jobs |
+| Scheduler | APScheduler | 14 cron/interval jobs (3 production-only) |
 | AI | Google Gemini (google-genai) | Flash Lite 3.1 → Flash 3.8 → Flash 3.6 fallback |
 | Database | MongoDB 6.0 + Motor | Async driver |
 | Cache/State | Redis | Context, FSM, rate limit, idempotency |

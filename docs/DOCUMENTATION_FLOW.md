@@ -155,8 +155,11 @@ All jobs run inside the Worker process via APScheduler.
 | Slot Regeneration | Sunday 01:00 IL | Generates appointment slots from recurring weekly templates |
 | Daily Backup | 02:00 IL (daily), production only (PRO-127) | Creates gzipped `mongodump`; uploads to S3 if configured |
 | WhatsApp Deauth Watchdog | Every 2 min | Polls the WhatsApp provider's account state (skipped for a non-transmitting provider); pages on-call if non-authorized > 5 min |
+| WhatsApp Quality Watchdog | Every 15 min, plus once after boot (PRO-90) | Reads the number's quality rating, messaging limit and WABA health, and each armed template's status and category; pages at most once per condition per 24 h |
+| Pipeline Watch | Every 10 min, production only (PRO-17) | Pages the operator on a pending-review backlog or a stuck-`contacted` climb and checks in to the Sentry Crons monitor `worker-pipeline-watch`; no toggle |
+| Backup Freshness Watchdog | Every 60 min, plus once after boot, production only (PRO-185) | Pages when the last successful backup is older than 48 h |
 
-Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "scheduler_config"}` with fields `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `lead_janitor_active`, `sla_monitor_active`. The last two, plus `sos_healer_active`, gate cold customer-facing re-engagement jobs and default OFF (pilot safety, PRO-73) until enabled post warm-up.
+Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "scheduler_config"}` with fields `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `whatsapp_monitor_active`, `lead_janitor_active`, `sla_monitor_active`. The last two, plus `sos_healer_active`, gate cold customer-facing re-engagement jobs and default OFF (pilot safety, PRO-73) until enabled post warm-up.
 
 ---
 

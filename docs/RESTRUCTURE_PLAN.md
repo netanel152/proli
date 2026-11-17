@@ -14,8 +14,11 @@
 > |---|---|---|
 > | 0 | `tests/test_architecture_layers.py`: טסט AST לכיוון התלויות, עם טבלאות חריגים שרק מצטמצמות | #245 |
 > | 1 | מחיקת `seed_analytics_data.py`, `docker-compose.prod.yml` + `nginx.prod.conf`, ה-override ושני סקריפטי ה-shell של Railway; guard סביבה ל-`clear_history.py` ול-`reset_test.py`; הסרת `gunicorn` | #246 |
-> | 2 | B1 = PRO-247 (#247), B2 = PRO-248 (#248), B5 = PRO-251 (#249), B3 = PRO-249 (#250), B4 = PRO-250 (#251), B8 = PRO-252 (#252); וגם: אין `/docs`, `/redoc`, `/openapi.json` ב-production (#253). B9 (PRO-253) ו-B6/B7 (PRO-254) עדיין פתוחים | ראו ליד כל באג |
+> | 2 | B1 = PRO-247 (#247), B2 = PRO-248 (#248), B5 = PRO-251 (#249), B3 = PRO-249 (#250), B4 = PRO-250 (#251), B8 = PRO-252 (#252); וגם: אין `/docs`, `/redoc`, `/openapi.json` ב-production (#253). B9 = PRO-253 (#268: ה-fallback של `get_chat_history` מחזיר את ההודעות החדשות ביותר, ואינדקס `messages (chat_id, timestamp)` חדש); B6/B7 = PRO-254 נסגרו בהסרת ה-route הישן `POST /webhook` (#265), יחד עם `app/schemas/whatsapp.py`, ההגדרה `WEBHOOK_TOKEN` ובלוק ה-`/webhook` ב-nginx, שמחזיק עכשיו location מפורש ל-`/webhook/meta`. כל תיקוני שלב 2 נכנסו | ראו ליד כל באג |
 > | 3 | `create_indexes` ו-`backup` עברו ל-`app/db/` (הגיבוי רץ כ-`python -m app.db.backup`); `app/` כבר לא מייבא ולא מריץ את `scripts/`. האריזה של `app/worker/` (סעיף 3.3 למטה) נדחתה לאחרי הפיילוט | #254 |
+> | 4–9 | שכבת נתונים, פירוק ה-dispatcher וה-services, פאנל האדמין, סקריפטים, קונפיגורציה, תיעוד: **מחכים לאחרי הפיילוט** (החלטת בעלים למעלה). `app/worker.py` ו-`app/core/arq_worker.py` עדיין לא בחבילת `app/worker/` | — |
+>
+> שלבים 0–3 הושלמו. תוצאת ההזזות בפועל: `app/db/indexes.py` (שם נמצא `INDEX_SPECS`, והוא רץ בכל עליית API) ו-`app/db/backup.py` (ה-scheduler מריץ `python -m app.db.backup --upload-s3`), במקום היעד המתוכנן `app/worker/jobs/backup.py` שבסעיף 7.
 >
 > **סקירות read-only (2026-11-17):** אבטחה (`[DEAL]` prompt injection, חתימת Meta, הרשאות ונעילה בפאנל) ו-races (double-booking של slots, ליד אצל שני מקצוענים). כל ממצא מאומת נפתח כ-issue נפרד: PRO-267 עד PRO-285, ו-PRO-266 (כפתורי Scheduler מתים, נמצא בזמן PRO-249). שום תיקון לא נכנס בתוך הסקירה.
 >

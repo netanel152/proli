@@ -12,13 +12,13 @@
 
 ### WhatsApp Bot (Customer-facing)
 
-- **Bulletproof Text-Based Menus** — All interactions use simple numeric (e.g., "1", "2") or keyword (e.g., "אשר", "דחה") replies. No reliance on fragile interactive buttons.
+- **Bulletproof Text-Based Menus** — All interactions use simple numeric (e.g., "1", "2") or keyword (e.g., "אשר", "דחה") replies. Quick-reply buttons (a pro's offer, the consent request, the completion check) only mirror the keywords the text already advertises, so a tap and the typed reply reach the same handler.
 - **Customer Status Pull** — Customers send `סטטוס`, `status`, or `?` (exact) at any time to receive an instant, deterministic summary of their active lead. Zero AI cost, works in every state.
 - **Dynamic Pro Dashboard** — Professionals receive a real-time status overview (rating, active jobs, availability) when they access the menu or send unknown commands.
 - **Availability & Vacation Mode** — Pros can toggle their status ("זמין" / "הפסקה") to control lead flow directly from WhatsApp.
 - **Multi-Job Finish** — Pros with multiple active bookings are guided through a selection menu to close the correct job.
 - **Zero-Touch Intent Detection** — AI automatically detects if a registered professional needs a service for their own home and seamlessly toggles them into `CUSTOMER_MODE` without manual switching.
-- **Emergency Express Lane** — Urgent issues (leaks, electrical fires) bypass strict address requirements if a city is identified, speeding up help when it matters most.
+- **Emergency Express Lane** — Urgent issues (leaks, electrical fires) bypass strict address requirements if a city is identified, speeding up help when it matters most. A report of fire, smoke, gas, an explosion or electrocution sends the customer the emergency numbers (102/101/100) instead and goes straight to admin review, with no pro offered.
 - **Loyalty Matchmaking** — Returning customers are automatically offered their previous successful professional before new matching begins.
 - **Self-Service Rescheduling** — Customers with confirmed bookings can reschedule by picking from the professional's live available slots directly in WhatsApp.
 - **Progressive Geo Routing** — Finds the best pro within 10 km, expanding to 20 km then 30 km if needed. Falls back to city-name matching for non-geo queries.
@@ -57,7 +57,7 @@
 | Admin UI | Streamlit |
 | Media | Cloudinary |
 | WhatsApp | Provider facade (`app/providers/whatsapp/`, PRO-86) — dry-run by default; Meta Cloud API (`CloudAPIProvider`, PRO-89) is code-complete but not yet onboarded (PRO-87) |
-| Security | Bcrypt, webhook token verification, session cookies |
+| Security | Bcrypt, Meta webhook HMAC signature verification, hashed session tokens in Secure cookies |
 | Infrastructure | Docker Compose / Railway |
 
 ---
@@ -91,8 +91,8 @@ ADMIN_PHONE=972501234567             # WhatsApp number for SOS alerts
 ONCALL_PHONE=972501234567            # on-call number for infra alerts (defaults to ADMIN_PHONE)
 WHATSAPP_PROVIDER=dryrun             # dryrun (default) | cloud — cloud selects the PRO-89 CloudAPIProvider (Meta Graph API)
 META_ACCESS_TOKEN=...                # secret — required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
-META_APP_SECRET=...                  # secret — signs inbound /webhook/meta; required for cloud in staging/production
-META_VERIFY_TOKEN=...                # secret — Meta subscription handshake; required for cloud in staging/production
+META_APP_SECRET=...                  # secret — signs inbound /webhook/meta; the API refuses to boot in staging/production without it (non-empty), whatever the provider
+META_VERIFY_TOKEN=...                # secret — Meta subscription handshake; same rule as META_APP_SECRET
 META_PHONE_NUMBER_ID=...             # not secret — Graph API phone-number node id
 PUBLIC_BASE_ORIGIN=https://...       # public https origin, no path, on a host that serves /privacy and /terms; unset = messages carry no link
 TERMS_ENABLED=false                  # true publishes /terms and its links, only once app/static/terms.html is the approved text
