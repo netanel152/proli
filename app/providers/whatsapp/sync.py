@@ -12,7 +12,7 @@ It is a bridge, not a second egress: everything still goes through
 :class:`~app.providers.whatsapp.facade.WhatsAppFacade`, breaker included.
 """
 
-from typing import Any
+from typing import Any, Sequence
 
 from app.core.logger import logger
 from app.core.sync_bridge import run_blocking
@@ -44,13 +44,16 @@ def send_text_sync(
     *,
     template_key: str | None = None,
     params: dict[str, Any] | None = None,
+    buttons: Sequence[Any] | None = None,
 ) -> bool:
     """Send one text message from sync code.
 
     A panel send is business-initiated, since an operator's click is what
     triggers it, so it names its template as the worker's sends do: a recipient
     whose 24h window is closed gets that template once it is approved. A send
-    that names none is exactly the call it was before.
+    that names none is exactly the call it was before. ``buttons`` are the
+    replies the text advertises, as the facade's ``send_message`` takes them
+    (PRO-105).
 
     Returns True only when the facade actually handed the message to a provider.
     A suppressed send — breaker engaged, kill switch set, or (PRO-159) a closed
@@ -76,6 +79,8 @@ def send_text_sync(
             if template_key is None
             else {"template_key": template_key, "params": params}
         )
+        if buttons:
+            template["buttons"] = tuple(buttons)
         result = _run_blocking(
             facade.send_message(chat_id, text, **template), _SEND_TIMEOUT_SECONDS
         )

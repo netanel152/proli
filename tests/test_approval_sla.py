@@ -20,6 +20,7 @@ from unittest.mock import ANY, patch, AsyncMock, MagicMock
 
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
+from app.providers.whatsapp import template_registry
 from app.services.monitor_service import check_pro_approval_sla
 import app.services.workflow_service
 from app.services.workflow_service import process_incoming_message
@@ -119,6 +120,9 @@ async def test_nudge_fires_at_t_plus_10_non_emergency(
         ),
         template_key="approval_nudge",
         params=ANY,
+        # PRO-104: the nudge's אשר/דחה buttons name the lead it is about.
+        buttons=template_registry.buttons_for("approval_nudge"),
+        reply_ref=str(lead_id),
     )
 
     updated = await mock_db.leads.find_one({"_id": lead_id})
@@ -234,6 +238,8 @@ async def test_blocked_offer_send_does_not_swallow_the_pro_nudge_on_the_same_tic
         ),
         template_key="approval_nudge",
         params=ANY,
+        buttons=template_registry.buttons_for("approval_nudge"),
+        reply_ref=ANY,
     )
 
 
@@ -316,6 +322,8 @@ async def test_nudge_is_idempotent_across_runs(
         ),
         template_key="approval_nudge",
         params=ANY,
+        buttons=template_registry.buttons_for("approval_nudge"),
+        reply_ref=ANY,
     )
 
 
@@ -340,6 +348,8 @@ async def test_emergency_lead_uses_halved_thresholds(
         Messages.Pro.APPROVAL_NUDGE.format(minutes=halved_nudge),
         template_key="approval_nudge",
         params=ANY,
+        buttons=template_registry.buttons_for("approval_nudge"),
+        reply_ref=ANY,
     )
 
     updated = await mock_db.leads.find_one({"_id": lead_id})

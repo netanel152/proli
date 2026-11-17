@@ -43,6 +43,7 @@ from app.core.messages import Messages
 from app.core.phone import to_chat_id, to_local_phone, strip_suffix, mask_chat_id
 from app.core.redis_client import get_redis_client
 from app.core.text_matching import contains_keyword, is_life_threatening_text
+from app.providers.whatsapp.template_registry import QuickReply
 
 
 class _Handled:
@@ -90,6 +91,9 @@ class DispatchContext:
     #: The inbound wamid, when the provider gave one. Only the PRO-133 read
     #: receipt + typing indicator reads it.
     message_id: Optional[str] = None
+    #: PRO-104: the lead a tapped button named (its 24-hex id), when the reply
+    #: came from a lead offer's button. Only the pro's אשר/דחה reads it.
+    reply_ref: Optional[str] = None
 
     async def refresh_state(self, state_manager) -> Optional[str]:
         """Re-read the FSM state after a guard may have changed it.
@@ -488,6 +492,21 @@ async def _replay_held_messages(
     return True
 
 
+#: PRO-105: the consent request's two reply buttons. Each id is the first word
+#: the gate below already accepts typed, so a tap and the typed word are one
+#: and the same message; nothing about a tap is read or stored before consent.
+CONSENT_BUTTONS = (
+    QuickReply(Messages.Consent.ACCEPT_BUTTON, Messages.Consent.ACCEPT_KEYWORDS[0]),
+    QuickReply(Messages.Consent.DECLINE_BUTTON, Messages.Consent.DECLINE_KEYWORDS[0]),
+)
+
+
+async def _send_consent_request(ctx: DispatchContext, deps: GuardDeps) -> None:
+    await deps.whatsapp.send_message(
+        ctx.chat_id, consent_request_text(), buttons=CONSENT_BUTTONS
+    )
+
+
 async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
     """Consent check (skip for professionals — they're added by admin).
 
@@ -545,15 +564,13 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
                 else:
                     # Repeat consent request if unclear response
                     await _hold_pre_consent_message(ctx, deps)
-                    await deps.whatsapp.send_message(
-                        ctx.chat_id, consent_request_text()
-                    )
+                    await _send_consent_request(ctx, deps)
                     return HANDLED
 
             if consent_status is None:
                 # First contact — send consent request
                 await _hold_pre_consent_message(ctx, deps)
-                await deps.whatsapp.send_message(ctx.chat_id, consent_request_text())
+                await _send_consent_request(ctx, deps)
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
                 )
@@ -562,7 +579,7 @@ async def guard_consent_gate(ctx: DispatchContext, deps: GuardDeps):
             if consent_status is False:
                 # User previously declined — re-ask on new contact
                 await _hold_pre_consent_message(ctx, deps)
-                await deps.whatsapp.send_message(ctx.chat_id, consent_request_text())
+                await _send_consent_request(ctx, deps)
                 await deps.state_manager.set_state(
                     ctx.chat_id, UserStates.AWAITING_CONSENT
                 )
@@ -1265,6 +1282,12 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
     return None
 
 
+def _reply_ref_kwarg(ctx: DispatchContext) -> dict:
+    """PRO-104: the lead a tapped offer button named, for the pro's אשר/דחה.
+    Empty for every other message, so their call is unchanged."""
+    return {"reply_ref": ctx.reply_ref} if ctx.reply_ref else {}
+
+
 async def guard_pro_mode_routing(ctx: DispatchContext, deps: GuardDeps):
     """Pro Mode — and every prompt pro_flow is holding open (PRO-186)."""
     from app.services import workflow_service as wf
@@ -1273,7 +1296,12 @@ async def guard_pro_mode_routing(ctx: DispatchContext, deps: GuardDeps):
         return None
 
     pro_resp = await wf._handle_pro_cmd(
-        ctx.chat_id, ctx.user_text, deps.whatsapp, wf.lead_manager, ai=wf.ai
+        ctx.chat_id,
+        ctx.user_text,
+        deps.whatsapp,
+        wf.lead_manager,
+        ai=wf.ai,
+        **_reply_ref_kwarg(ctx),
     )
     if pro_resp:
         await deps.whatsapp.send_message(ctx.chat_id, pro_resp)
@@ -1588,7 +1616,12 @@ async def guard_pro_autodetect(ctx: DispatchContext, deps: GuardDeps):
 
     await deps.state_manager.set_state(ctx.chat_id, UserStates.PRO_MODE)
     pro_resp = await wf._handle_pro_cmd(
-        ctx.chat_id, ctx.user_text, deps.whatsapp, wf.lead_manager, ai=wf.ai
+        ctx.chat_id,
+        ctx.user_text,
+        deps.whatsapp,
+        wf.lead_manager,
+        ai=wf.ai,
+        **_reply_ref_kwarg(ctx),
     )
     if pro_resp:
         await deps.whatsapp.send_message(ctx.chat_id, pro_resp)

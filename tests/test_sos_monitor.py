@@ -69,7 +69,12 @@ async def test_detect_stale_lead(mock_db, monkeypatch, mock_whatsapp, mock_match
 
         # Verify new pro notification
         mock_whatsapp.send_message.assert_any_call(
-            "972500000000@c.us", ANY, template_key="lead_offer_reassigned", params=ANY
+            "972500000000@c.us",
+            ANY,
+            template_key="lead_offer_reassigned",
+            params=ANY,
+            buttons=ANY,
+            reply_ref=ANY,
         )
 
 

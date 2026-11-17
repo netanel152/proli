@@ -222,6 +222,19 @@ class RecordingProvider(WhatsAppProvider):
         payload = {"chatId": chat_id, "template": template_name, "params": params or {}}
         return self._rec._append("sendTemplate", chat_id, template_name, payload)
 
+    async def send_buttons(self, chat_id: str, text: str, buttons):
+        """PRO-104/PRO-105: a message with reply buttons is still a message, so
+        it records as ``sendMessage`` and every text assertion reads it; the
+        ``(label, id)`` pairs ride in the payload for the tests that check them.
+        The base provider's ``send_business_initiated`` arrives here too, with
+        each id already carrying its ``#<lead_id>``."""
+        payload = {
+            "chatId": chat_id,
+            "message": text,
+            "buttons": [(b.label, b.payload) for b in buttons],
+        }
+        return self._rec._append("sendMessage", chat_id, text, payload)
+
     async def send_interactive(self, chat_id: str, body: str, options: list[str]):
         payload = {"chatId": chat_id, "message": body, "options": list(options)}
         return self._rec._append("sendInteractive", chat_id, body, payload)

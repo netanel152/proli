@@ -984,6 +984,12 @@ class Messages:
             "מסכימה",
         ]
         DECLINE_KEYWORDS = ["לא", "no", "ביטול", "cancel"]
+        # PRO-105: reply-button titles on REQUEST, the two lines it advertises.
+        # A tap sends ACCEPT_KEYWORDS[0] / DECLINE_KEYWORDS[0], the words typed
+        # (dispatch_guards.CONSENT_BUTTONS), so the label may say more. Meta
+        # caps a reply-button title at 20 characters.
+        ACCEPT_BUTTON = "כן להמשיך"
+        DECLINE_BUTTON = "לא לביטול"
 
     class Onboarding:
         _WELCOME_INTRO = (

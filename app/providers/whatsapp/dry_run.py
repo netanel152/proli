@@ -8,11 +8,15 @@ vendor client in the process at all.
 This is what the offline test suite and the PRO-83 E2E harness run against.
 """
 
-from typing import Any
+from typing import Any, Sequence
 
 from app.core.logger import logger
 from app.providers.whatsapp import template_registry
 from app.providers.whatsapp.base import NormalizedMessage, WhatsAppProvider
+
+
+def _pairs(buttons: Sequence[Any]) -> list[tuple[str, str]]:
+    return [(b.label, b.payload) for b in buttons]
 
 
 class DryRunProvider(WhatsAppProvider):
@@ -67,6 +71,9 @@ class DryRunProvider(WhatsAppProvider):
         text: str,
         template_key: str,
         params: dict[str, Any] | None = None,
+        *,
+        buttons: Sequence[Any] | None = None,
+        reply_ref: str | None = None,
     ) -> dict[str, Any] | None:
         """The text, as every provider with no window sends it, plus what the
         template would have carried.
@@ -77,16 +84,36 @@ class DryRunProvider(WhatsAppProvider):
         them while every template is still a draft. Named for the template and
         not the send on purpose: on an open window Cloud sends plain text, and
         the recipient of this very send sees no buttons at all.
+
+        PRO-104: a send that offers ``buttons`` also records ``buttons``, the
+        ``(label, id)`` pairs an open window would show, with ``reply_ref`` in
+        each id, as :meth:`send_buttons` does.
         """
         spec = template_registry.TEMPLATES.get(template_key)
-        buttons = [(b.label, b.payload) for b in spec.buttons] if spec else []
+        template_buttons = [(b.label, b.payload) for b in spec.buttons] if spec else []
+        extra = {}
+        if buttons:
+            extra["buttons"] = _pairs(
+                template_registry.buttons_with_reply_ref(buttons, reply_ref)
+            )
         return self._record(
             "text",
             chat_id,
             text=text,
             template_key=template_key,
-            template_buttons=buttons,
+            template_buttons=template_buttons,
+            **extra,
         )
+
+    async def send_buttons(
+        self,
+        chat_id: str,
+        text: str,
+        buttons: Sequence[Any],
+    ) -> dict[str, Any] | None:
+        """A ``text`` entry, as ``send_text`` records, plus the ``(label, id)``
+        pairs of its reply buttons (PRO-105)."""
+        return self._record("text", chat_id, text=text, buttons=_pairs(buttons))
 
     async def send_interactive(
         self,

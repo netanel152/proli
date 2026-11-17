@@ -24,7 +24,7 @@ intact for the API process even when it runs with ``WHATSAPP_PROVIDER=dryrun``
 """
 
 import mimetypes
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import urlparse
 
 import httpx
@@ -102,6 +102,39 @@ def _split_text(text: str, limit: int = _TEXT_BODY_LIMIT) -> list[str]:
     if remaining:
         chunks.append(remaining)
     return chunks
+
+
+def _reply_buttons(text: str, buttons: Sequence[Any]) -> dict[str, Any] | None:
+    """The interactive reply-button message for ``text`` and ``buttons``, or
+    ``None`` when Meta would refuse it (PRO-104/PRO-105).
+
+    Each button's id is its payload, the string the flow accepts typed, plus
+    ``#<lead_id>`` when it carries one; its title is the label. Nothing is
+    truncated: a label over the title limit, more than three buttons, a body
+    over 1024 characters or two equal titles all mean ``None``, and the caller
+    sends the plain text, which still says what to type.
+    """
+    buttons = list(buttons)
+    titles = [b.label for b in buttons]
+    if (
+        not buttons
+        or len(buttons) > _MAX_BUTTONS
+        or not text
+        or len(text) > _INTERACTIVE_BODY_LIMIT
+        or any(not t or len(t) > _BUTTON_TITLE_LIMIT for t in titles)
+        or len(set(titles)) != len(titles)
+    ):
+        return None
+    return {
+        "type": "button",
+        "body": {"text": text},
+        "action": {
+            "buttons": [
+                {"type": "reply", "reply": {"id": b.payload, "title": b.label}}
+                for b in buttons
+            ]
+        },
+    }
 
 
 # ``ServiceWindowClosedError`` and ``TemplateNotRegisteredError`` are imported
@@ -301,7 +334,10 @@ class CloudAPIProvider(WhatsAppProvider):
         chat_id: str,
         template_name: str,
         params: dict[str, Any] | None = None,
+        reply_ref: str | None = None,
     ) -> dict[str, Any] | None:
+        """``reply_ref`` (PRO-104) is the lead a tap names: each quick-reply
+        payload goes out as ``"<payload>#<lead_id>"``."""
         spec = template_registry.resolve(template_name)
         if spec is None:
             page_critical(
@@ -347,14 +383,16 @@ class CloudAPIProvider(WhatsAppProvider):
             )
         # PRO-230: a quick-reply button's label was submitted with the template;
         # what a tap sends back is set here, one component per button, by its
-        # position. `normalize_meta_message` reads it back as the message text.
+        # position. `normalize_meta_message` reads it back as the message text,
+        # and (PRO-104) a `#<lead_id>` suffix as the reply's `reply_ref`.
         for index, button in enumerate(spec.buttons):
+            payload = template_registry.with_reply_ref(button.payload, reply_ref)
             components.append(
                 {
                     "type": "button",
                     "sub_type": "quick_reply",
                     "index": str(index),
-                    "parameters": [{"type": "payload", "payload": button.payload}],
+                    "parameters": [{"type": "payload", "payload": payload}],
                 }
             )
         if components:
@@ -369,6 +407,9 @@ class CloudAPIProvider(WhatsAppProvider):
         text: str,
         template_key: str,
         params: dict[str, Any] | None = None,
+        *,
+        buttons: Sequence[Any] | None = None,
+        reply_ref: str | None = None,
     ) -> dict[str, Any] | None:
         """The template when the window is closed and it is approved, else text.
 
@@ -376,16 +417,29 @@ class CloudAPIProvider(WhatsAppProvider):
         send is exactly ``send_text``: open window sends, closed window pages and
         raises. ``sent_as_template`` tells the caller the text did not go out,
         for whatever only the text could carry.
+
+        PRO-104: with ``buttons``, an open window gets the text as an
+        interactive reply-button message (ids ``payload#reply_ref``) when Meta's
+        limits allow, else the plain text; a closed window gets the template,
+        whose quick-reply payloads carry ``reply_ref`` the same way. An unarmed
+        template behaves as :meth:`send_buttons`.
         """
+        reply_buttons = template_registry.buttons_with_reply_ref(
+            buttons or (), reply_ref
+        )
         if template_registry.resolve(template_key) is None:
+            if reply_buttons:
+                return await self.send_buttons(chat_id, text, reply_buttons)
             return await self.send_text(chat_id, text)
         if await is_service_window_open(chat_id):
             # Straight to the wire: `send_text` would read the window again, and
             # a window that closed between the two reads would page and drop a
             # message whose template is approved.
-            return await self._post_text(chat_id, text)
+            return await self._post_open_window(chat_id, text, reply_buttons)
         try:
-            result = await self.send_template(chat_id, template_key, params)
+            result = await self.send_template(
+                chat_id, template_key, params, reply_ref=reply_ref
+            )
         except httpx.HTTPStatusError as e:
             # PRO-232: Meta refused an armed template (paused, disabled, not on
             # this account, a parameter it won't take). `_post_message` has
@@ -401,6 +455,34 @@ class CloudAPIProvider(WhatsAppProvider):
                 f"Meta refused template {template_key!r} for {_mask(chat_id)}"
             ) from e
         return {**result, "sent_as_template": template_key}
+
+    async def send_buttons(
+        self,
+        chat_id: str,
+        text: str,
+        buttons: Sequence[Any],
+    ) -> dict[str, Any] | None:
+        """``text`` with reply buttons on an open window (PRO-105).
+
+        A closed window behaves exactly as :meth:`send_text` does, and so does a
+        message Meta's interactive limits would refuse: it goes as plain text.
+        """
+        fallback = await self._window_fallback(chat_id, "text")
+        if fallback is not None:
+            return await self.send_template(chat_id, fallback.key)
+        return await self._post_open_window(chat_id, text, buttons)
+
+    async def _post_open_window(
+        self, chat_id: str, text: str, buttons: Sequence[Any]
+    ) -> dict[str, Any] | None:
+        """Transmit ``text``, as reply buttons when it has any Meta would take.
+        The caller has already answered for the window."""
+        interactive = _reply_buttons(text, buttons) if buttons else None
+        if interactive is None:
+            return await self._post_text(chat_id, text)
+        return await self._post_message(
+            chat_id, {"type": "interactive", "interactive": interactive}, "interactive"
+        )
 
     async def _report_refused_template(
         self, chat_id: str, template_key: str, error: httpx.HTTPStatusError
@@ -750,6 +832,10 @@ def normalize_meta_message(
     Interactive replies normalize to their reply *id* (``"1"``, ``"2"``, …),
     not their title — the id is what ``send_interactive`` assigned, so the FSM
     receives exactly the string a typed numeric reply would have produced.
+
+    PRO-104: an id or template payload of the form ``"<keyword>#<24 hex>"``
+    names the lead it answers. It becomes ``text="<keyword>"`` and
+    ``reply_ref="<lead id>"``; anything else is read whole, with no ref.
     """
     sender = message.get("from")
     if not sender:
@@ -764,6 +850,7 @@ def normalize_meta_message(
 
     text = ""
     media_url = None
+    reply_ref = None
     message_type = message.get("type")
 
     if message_type == "text":
@@ -771,7 +858,7 @@ def normalize_meta_message(
     elif message_type == "interactive":
         interactive = message.get("interactive") or {}
         reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
-        text = reply.get("id") or ""
+        text, reply_ref = template_registry.split_reply_ref(reply.get("id") or "")
     elif message_type == "button":
         # Template quick-reply (PRO-230). The payload is what `send_template`
         # attached: a pro keyword, or the digit of a customer menu — in both
@@ -781,7 +868,7 @@ def normalize_meta_message(
         # than routing words no handler reads.
         button = message.get("button") or {}
         label = button.get("text") or ""
-        text = button.get("payload") or ""
+        text, reply_ref = template_registry.split_reply_ref(button.get("payload") or "")
         if not text or text == label:
             text = template_registry.payload_for_label(label) or text or label
     elif message_type == "location":
@@ -819,6 +906,7 @@ def normalize_meta_message(
         media_url=media_url,
         sender_name=sender_name,
         message_id=message.get("id"),
+        reply_ref=reply_ref,
     )
 
 

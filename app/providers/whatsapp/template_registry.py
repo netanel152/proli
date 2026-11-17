@@ -40,6 +40,12 @@ with the template; the payload goes with each send and is exactly the string the
 flow accepts when typed, so a tap and a typed reply reach the same handler. The
 keywords stay in the body, so typing keeps working on a client that shows no
 buttons.
+
+PRO-104/PRO-105: the same buttons (``buttons_for``) also go on the free-form
+send of an open window, as interactive reply buttons, for the pro lead offers
+and the customer completion check. A pro offer's button carries its lead
+(``with_reply_ref``: ``"אשר#<lead_id>"``), so a tap acts on that lead and never
+on another waiting offer.
 """
 
 import re
@@ -448,6 +454,46 @@ TEMPLATES: dict[str, TemplateSpec] = {
         ),
     )
 }
+
+
+# PRO-104: a reply can name the lead it answers. A button's id (an interactive
+# reply) or its quick-reply payload (a template) is then "<keyword>#<lead_id>",
+# and `normalize_meta_message` splits it back into the keyword, which is the
+# message text, and the lead id, which travels beside it as `reply_ref`.
+REPLY_REF_SEPARATOR = "#"
+_REPLY_WITH_REF = re.compile(r"(.+)#([0-9a-fA-F]{24})", flags=re.S)
+
+
+def buttons_for(key: str) -> tuple[QuickReply, ...]:
+    """The quick replies the template ``key`` carries, ``()`` for none or an
+    unknown key. Whatever its status: a free-form send of the same message offers
+    the same replies on an open window (PRO-104/PRO-105)."""
+    spec = TEMPLATES.get(key)
+    return spec.buttons if spec else ()
+
+
+def with_reply_ref(payload: str, reply_ref: str | None) -> str:
+    """``payload`` carrying ``reply_ref``, or ``payload`` itself without one."""
+    return f"{payload}{REPLY_REF_SEPARATOR}{reply_ref}" if reply_ref else payload
+
+
+def buttons_with_reply_ref(buttons, reply_ref: str | None) -> tuple[QuickReply, ...]:
+    """``buttons`` with ``reply_ref`` appended to each payload (labels unchanged)."""
+    return tuple(
+        QuickReply(b.label, with_reply_ref(b.payload, reply_ref)) for b in buttons
+    )
+
+
+def split_reply_ref(value: str) -> tuple[str, str | None]:
+    """``(keyword, lead_id)`` for ``"<keyword>#<24 hex>"``, else ``(value, None)``.
+
+    Anything else, a malformed suffix included, comes back whole: it is read as
+    the words it is, exactly as before PRO-104.
+    """
+    match = _REPLY_WITH_REF.fullmatch(value or "")
+    if not match:
+        return value, None
+    return match.group(1), match.group(2).lower()
 
 
 def _payloads_by_label() -> dict[str, str]:

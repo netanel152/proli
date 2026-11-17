@@ -25,6 +25,7 @@ from app.services.notification_service import (
     send_oncall_alert,
     issue_param,
     notify_pro_new_lead,
+    offer_buttons,
     page_operator,
 )
 from app.core.messages import Messages
@@ -1330,6 +1331,8 @@ async def check_pro_approval_sla():
                                 "issue_type": issue_param(lead),
                                 "minutes": nudge_after,
                             },
+                            # PRO-104: a tap answers this lead, not the newest.
+                            **offer_buttons("approval_nudge", lead),
                         )
                     logger.info(
                         f"⏰ [Approval SLA] Nudged pro for lead {lead['_id']} "

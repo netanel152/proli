@@ -227,6 +227,13 @@ async def meta_webhook_endpoint(request: Request):
                         message_id=normalized.message_id,
                         trace_id=trace_id,
                         _job_id=job_id,
+                        # PRO-104: the lead a tapped button names. Only sent
+                        # when there is one, so every other job is unchanged.
+                        **(
+                            {"reply_ref": normalized.reply_ref}
+                            if normalized.reply_ref
+                            else {}
+                        ),
                     )
                 except Exception:
                     try:
