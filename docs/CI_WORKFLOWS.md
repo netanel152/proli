@@ -16,7 +16,7 @@ What each workflow does, what a red run means, and the incidents behind the odd-
 
 Every workflow declares `permissions` (`contents: read`; promote adds what it needs to push and to read check runs) and a job timeout, pins actions to a full SHA with a `# vX.Y.Z` comment, and passes secrets and step outputs to scripts through `env:`. Only promote's checkout keeps its credentials. Nothing uses `pull_request_target`: this repo is public, and `pull_request` never exposes secrets to a fork.
 
-Dependabot bumps the action pins in one weekly PR. It cannot see the two versions that live in scripts, so bump those by hand: actionlint in `tests.yml` (version and SHA-256 from the release's checksums file) and `@railway/cli` in the stop workflow.
+Dependabot bumps the action pins in one weekly PR. Its `pip` entry (`.github/dependabot.yml`) sets `open-pull-requests-limit: 0`, so no routine version-bump PR opens for `requirements.txt`; only security updates do (they ignore that limit), and only while "Dependabot security updates" is on in the repository's Code security settings. It cannot see the two versions that live in scripts, so bump those by hand: actionlint in `tests.yml` (version and SHA-256 from the release's checksums file) and `@railway/cli` in the stop workflow.
 
 ## The test floor
 

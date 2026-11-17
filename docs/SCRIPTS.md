@@ -174,7 +174,44 @@ python scripts/simulate_approval_sla.py 972501234567 offer   # → customer reas
 
 ---
 
+## WhatsApp / Meta
+
+### `submit_whatsapp_templates.py`
+
+Submits the template registry (`app/providers/whatsapp/template_registry.py`) to Meta and reports what Meta holds. The default is a dry run that prints every payload and touches nothing; `--status --waba-id <id>` prints each template's status and category and reports drift from the registry (exit 3 if Meta holds any template outside UTILITY, 1 on any other drift, 0 when they agree); `--apply --waba-id <id> --confirm-name "<account name>"` creates what Meta does not have, and refuses Meta's test account. It never edits the registry. See `docs/WHATSAPP_TEMPLATE_CATALOG.md`.
+
+```bash
+python scripts/submit_whatsapp_templates.py
+python scripts/submit_whatsapp_templates.py --status --waba-id <id>
+```
+
+### `probe_template_delivery.py`
+
+Staging's proof of a closed-window template delivery (PRO-232): sends one message to `--to <number>` through the facade, as Meta's `hello_world` template when the device's 24h window is closed, as plain text when it is open. Exit 0 sent as the template, 3 sent as text (the window was open, so nothing was proven), 4 not sent.
+
+```bash
+python scripts/probe_template_delivery.py --to 9725XXXXXXXX
+```
+
+### `meta_healthcheck.py`
+
+Read-only Meta Cloud API connectivity check (PRO-89): config presence (masked), access-token and app-secret validity, the phone-number node, the WABA's phone numbers, webhook configuration and subscribed apps, and optionally a deployed webhook's handshake with `--staging-url`. Exit 0 only when every non-optional check passed.
+
+```bash
+python scripts/meta_healthcheck.py
+```
+
+---
+
 ## Analytics & Reports
+
+### `verify_analytics.py`
+
+Manual smoke-check of the admin panel's analytics aggregations (`admin_panel/core/analytics_queries`) against whatever database `MONGO_URI` points at.
+
+```bash
+python scripts/verify_analytics.py
+```
 
 ### `finops_report.py`
 
