@@ -2316,9 +2316,7 @@ def test_strip_deal_marker_also_strips_urgent_tag_and_it_is_not_a_deal_signal():
     """PRO-169: pros approved before the copy rewrite keep a stored persona
     that still asks the model to open with a literal "[URGENT]" tag - nothing
     ever parsed it, so it reached the customer verbatim. It is stripped at the
-    same seam as [DEAL:...], but checked separately because DEAL_MARKER_RE.search()
-    doubles as the fallback deal-detection signal, and an emergency tag must
-    never be mistaken for a closed deal.
+    same seam as [DEAL:...], by a separate pattern.
     """
     combined = "[URGENT] לסגור את השיבר הראשי מיד. " "[DEAL: מחר | תל אביב | נזילה]"
     assert _strip_deal_marker(combined) == "לסגור את השיבר הראשי מיד."
@@ -2330,16 +2328,15 @@ def test_strip_deal_marker_also_strips_urgent_tag_and_it_is_not_a_deal_signal():
 
 
 @pytest.mark.asyncio
-async def test_assigned_pro_fast_path_strips_deal_marker_and_finalizes(
+async def test_assigned_pro_fast_path_strips_deal_marker_and_does_not_finalize(
     wf_mocks, mock_db
 ):
     """
-    Regression PRO-44: on the "pro already assigned" fast path, a raw [DEAL:...]
-    marker embedded in reply_to_user (fallback signal because the AI didn't set
-    the structured is_deal flag) must be stripped before the text is sent/logged,
-    while the surrounding customer-facing text is preserved. The deal must still
-    be finalized (booking side effects fire) because detection runs on the raw
-    text before cleaning.
+    PRO-44 + PRO-272: on the "pro already assigned" fast path, a raw [DEAL:...]
+    marker in reply_to_user is stripped before the text is sent/logged, while
+    the surrounding customer-facing text is preserved. With is_deal=False the
+    marker decides nothing: a customer can get the model to echo one, so the
+    lead must not finalize.
     """
     mock_wa, mock_state, mock_ctx, mock_ai, mock_lm = wf_mocks
 
@@ -2378,7 +2375,7 @@ async def test_assigned_pro_fast_path_strips_deal_marker_and_finalizes(
                 apartment="4",
                 appointment_time="10:00",
             ),
-            # Structured flag missed by the AI — the marker is the fallback signal.
+            # The model did not close the deal; only the text carries a marker.
             transcription=None,
             is_deal=False,
         )
@@ -2400,34 +2397,29 @@ async def test_assigned_pro_fast_path_strips_deal_marker_and_finalizes(
     for call in mock_lm.log_message.call_args_list:
         assert "[DEAL" not in str(call.args[-1])
 
-    # Deal still finalized despite is_deal=False: customer moved to
-    # AWAITING_PRO_APPROVAL and the pro received the approval request.
-    mock_state.set_state.assert_any_call(
-        chat_id,
-        UserStates.AWAITING_PRO_APPROVAL,
-        ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
-    )
+    # No deal: is_deal=False, and the marker is not a signal (PRO-272).
+    for call in mock_state.set_state.call_args_list:
+        assert UserStates.AWAITING_PRO_APPROVAL not in call.args
     pro_calls = [
         c
         for c in mock_wa.send_message.call_args_list
         if c.args[0] == "972500009999@c.us"
     ]
-    assert len(pro_calls) >= 1
+    assert pro_calls == []
 
     updated_lead = await mock_db.leads.find_one({"_id": lead_id})
-    assert updated_lead["status"] == LeadStatus.NEW
-    assert updated_lead["pro_id"] == pro_id
+    assert updated_lead["status"] == LeadStatus.CONTACTED
 
 
 @pytest.mark.asyncio
-async def test_dispatcher_path_with_best_pro_strips_deal_marker_and_finalizes(
+async def test_dispatcher_path_with_best_pro_strips_deal_marker_and_does_not_finalize(
     wf_mocks, monkeypatch, mock_db
 ):
     """
-    Regression PRO-44: same marker-stripping guarantee on the main dispatcher
-    path (no pro assigned yet -> matching finds best_pro -> pro-persona reply
-    used as final_response). Marker must be stripped from the sent/logged text
-    but the deal must still be finalized.
+    PRO-44 + PRO-272: same guarantees on the main dispatcher path (no pro
+    assigned yet -> matching finds best_pro -> pro-persona reply used as
+    final_response). The marker is stripped from the sent/logged text, and with
+    is_deal=False the deal does not finalize.
     """
     mock_wa, mock_state, _, mock_ai, mock_lm = wf_mocks
 
@@ -2477,7 +2469,7 @@ async def test_dispatcher_path_with_best_pro_strips_deal_marker_and_finalizes(
             apartment="4",
             appointment_time="10:00",
         ),
-        # Structured flag missed by the AI — the marker is the fallback signal.
+        # The model did not close the deal; only the text carries a marker.
         transcription=None,
         is_deal=False,
     )
@@ -2503,23 +2495,11 @@ async def test_dispatcher_path_with_best_pro_strips_deal_marker_and_finalizes(
     for call in mock_wa.send_message.call_args_list:
         assert "[DEAL" not in str(call.args[1])
 
-    # Deal still finalized despite is_deal=False: customer moved to
-    # AWAITING_PRO_APPROVAL and the pro received the approval request.
-    mock_state.set_state.assert_any_call(
-        chat_id,
-        UserStates.AWAITING_PRO_APPROVAL,
-        ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
-    )
-    pro_calls = [
-        c
-        for c in mock_wa.send_message.call_args_list
-        if c.args[0] == "972500001111@c.us"
-    ]
-    assert len(pro_calls) >= 1
-
+    # No deal: is_deal=False, and the marker is not a signal (PRO-272).
+    for call in mock_state.set_state.call_args_list:
+        assert UserStates.AWAITING_PRO_APPROVAL not in call.args
     updated_lead = await mock_db.leads.find_one({"_id": lead_id})
-    assert updated_lead["status"] == LeadStatus.NEW
-    assert updated_lead["pro_id"] == pro_id
+    assert updated_lead["status"] == LeadStatus.CONTACTED
 
 
 # --- PRO-55: quoted-price sanitizer/validator (injection guard) ---

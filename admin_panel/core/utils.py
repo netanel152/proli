@@ -112,8 +112,10 @@ def generate_system_prompt(name, profession, areas, prices, trades=None):
     # PRO-169: the persona is product copy — it sets the voice the model imitates
     # for every customer of this pro, so it follows docs/COPY_STYLE_GUIDE.md.
     # The former "[URGENT]" tag instruction was dropped: nothing in app/ parses
-    # it (only [DEAL:] is stripped by workflow_service), so the model was being
-    # asked to emit a token the customer would have seen verbatim (§7).
+    # it, so the model was being asked to emit a token the customer would have
+    # seen verbatim (§7). The "[DEAL: ...]" closing tag went the same way
+    # (PRO-272): only the JSON is_deal that PRO_BASE_SYSTEM asks for closes a
+    # deal, and a marker in the text is stripped and decides nothing.
     # Emergency handling is keyword-based in workflow_service (PRO-121).
     prompt = f"""
 פרולי — העוזר האישי של '{name}'.
@@ -134,7 +136,7 @@ def generate_system_prompt(name, profession, areas, prices, trades=None):
 
 *** ניהול יומן וסגירה ***
 1. להציע רק שעות פנויות מתוך היומן שלמטה.
-2. בסגירה: [DEAL: <יום ושעה> | <עיר> | <תיאור>]
+2. בסגירה: לסכם את הפרטים לאישור, בלי תגיות או סימונים בתוך ההודעה.
 
 מחירון: {prices}
 אזורי שירות: {areas}
