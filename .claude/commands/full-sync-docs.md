@@ -28,7 +28,7 @@ Pay special attention to: `pro_flow.py`, `workflow_service.py`, `customer_flow.p
 ### 1.3 `app/scheduler.py` — Scheduler Jobs
 Read `app/scheduler.py` (the actual APScheduler setup — not `app/worker.py`). List every `scheduler.add_job(...)` call with its trigger (cron/interval) and job function name. This is the authoritative job count.
 
-### 1.4 Routes — `app/api/routes/webhook.py` and `app/api/routes/health.py`
+### 1.4 Routes — every module under `app/api/routes/` (`meta_webhook.py`, `health.py`, `privacy.py`, `terms.py`)
 List every `@router.get` / `@router.post` decorator with method, path, and one-line description.
 
 ### 1.5 `app/core/messages.py` — Keyword Lists

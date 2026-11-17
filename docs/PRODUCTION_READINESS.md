@@ -20,7 +20,7 @@ All 19 issues from the March 2026 code review had been resolved at the time of w
 |---|---|---|---|
 | 1 | Security | XSS in admin chat bubbles | Fixed — `html.escape()` |
 | 2 | Security | Auth cookie forgeable | Fixed — random session tokens per login |
-| 3 | Security | No webhook verification | Fixed — `WEBHOOK_TOKEN` env var with query param check |
+| 3 | Security | No webhook verification | Fixed — `WEBHOOK_TOKEN` env var with query param check (superseded: that route was removed in PRO-254; the only inbound route, `/webhook/meta`, is HMAC-authenticated) |
 | 4 | Security | Admin phone hardcoded | Fixed — moved to `settings.ADMIN_PHONE` env var |
 | 5 | Testing | `reviews_collection` not mocked | Fixed — added to both unit and integration fixtures |
 | 6 | Deployment | Railway single-container | Fixed — multi-service Dockerfile + docs |

@@ -136,7 +136,6 @@ async def world(
     import app.services.workflow_service as workflow_service
     import app.core.arq_worker  # noqa: F401
     from app.api.routes import meta_webhook as meta_webhook_route
-    from app.api.routes import webhook as webhook_route
     from app.services.context_manager_service import ContextManager
     from app.services.data_management_service import has_consent
     from app.providers.whatsapp.facade import WhatsAppFacade
@@ -145,7 +144,6 @@ async def world(
     monkeypatch.setattr(settings, "WHATSAPP_DRY_RUN", True)
     monkeypatch.setattr(settings, "ADMIN_PHONE", R.ADMIN)
     monkeypatch.setattr(settings, "ONCALL_PHONE", R.ONCALL)
-    monkeypatch.setattr(settings, "WEBHOOK_TOKEN", None)
     # Pinned, not inherited from a developer's .env: every `World.deliver()`
     # then signs its body and the Meta route verifies it, on every machine.
     monkeypatch.setattr(settings, "META_APP_SECRET", SecretStr("e2e-app-secret"))
@@ -238,7 +236,6 @@ async def world(
         return _CapturingArqPool()
 
     monkeypatch.setattr(meta_webhook_route, "get_arq_pool", _fake_get_arq_pool)
-    monkeypatch.setattr(webhook_route, "get_arq_pool", _fake_get_arq_pool)
 
     w = World(mock_db, recorder, ai, monkeypatch, fake_redis)
     w.client = client

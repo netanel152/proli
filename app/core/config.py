@@ -149,7 +149,9 @@ class Settings(BaseSettings):
     # When unset, falls back to ADMIN_PHONE. Set to a separate operator's
     # number to route paging away from the day-to-day admin channel.
     ONCALL_PHONE: str | None = None
-    WEBHOOK_TOKEN: SecretStr | None = None
+    # WEBHOOK_TOKEN is gone with the legacy `POST /webhook` route (PRO-254).
+    # A deployment that still sets it boots fine: `extra="ignore"` below.
+
     # PRO-136: authenticates the detailed /health payload and all of
     # /health/leads (X-Health-Token header). Unset in a prod-like environment
     # means nothing can authenticate — the detailed views fail closed, while
@@ -426,16 +428,6 @@ class Settings(BaseSettings):
     # retry churn" also extends how long geocoding stays globally disabled
     # after a single blip.
     GEOCODING_TRANSIENT_TTL_SECONDS: int = Field(default=60, ge=1, le=600)
-
-    @model_validator(mode="after")
-    def require_webhook_auth_in_prod_like(self):
-        if self.is_prod_like and not self.WEBHOOK_TOKEN:
-            raise ValueError(
-                "WEBHOOK_TOKEN is required when ENVIRONMENT is staging or "
-                "production: it is the only thing authenticating POST /webhook "
-                "since PRO-86 removed the sender instance-id check."
-            )
-        return self
 
     @model_validator(mode="after")
     def require_cloud_provider_config(self):

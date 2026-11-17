@@ -167,7 +167,6 @@ The existing top level stays as it is. What it means:
 | `app/core/`       | Cross-cutting infrastructure: config, constants, messages, DB/Redis clients, logging, prompts. |
 | `app/db/`         | Data-layer code production runs: the index table (`indexes.py`) and the nightly backup (`backup.py`). |
 | `app/providers/`  | External transport adapters. Today: `whatsapp/` — the single outbound egress (PRO-86).       |
-| `app/schemas/`    | Pydantic models for inbound payloads.                                                        |
 | `app/services/`   | The domain layer. One module per domain responsibility.                                      |
 | `app/worker.py`   | Worker entry point; `app/core/arq_worker.py` and `app/scheduler.py` wire ARQ + APScheduler.  |
 | `admin_panel/`    | Streamlit admin app: `core/` (auth, rbac, config), `ui/`, `views/`.                          |
@@ -515,8 +514,8 @@ Two files, two jobs, and the distinction is the rule:
 - **`app/core/config.py`** (pydantic-settings) holds anything that varies by
   *environment* — URIs, keys, provider selection, feature toggles an
   operator flips. It validates at startup and refuses to boot on invalid
-  combinations (`ENVIRONMENT` validation, the PRO-86 `WEBHOOK_TOKEN`
-  requirement in prod-like environments). New settings follow that pattern:
+  combinations (`ENVIRONMENT` validation, the PRO-270 `META_APP_SECRET`/
+  `META_VERIFY_TOKEN` requirement in prod-like environments). New settings follow that pattern:
   **a misconfiguration that would be dangerous at runtime MUST be a startup
   failure instead.**
 - **`app/core/constants.py`** holds anything that varies by *product
@@ -579,7 +578,7 @@ This codebase makes both choices, on purpose, and the pattern generalises:
 | Daily AI cost cap                            | Fail-open    | Same: availability beats cost control for minutes-long windows.         |
 | Outbound egress on missing `wa:instance:state` | Fail-closed | Sending through a deauthorized instance is the incident (PRO-82). Worst case of blocking: a delayed message. |
 | Kill switch on Redis error                   | Fail-open    | The pause key is an operator tool; its absence of *evidence* must not halt the product. |
-| `ENVIRONMENT` / `WEBHOOK_TOKEN` validation   | Fail-closed (at boot) | An unauthenticated prod webhook must never come up at all.        |
+| `ENVIRONMENT` / Meta webhook-secret validation | Fail-closed (at boot) | An unauthenticated prod webhook must never come up at all.        |
 
 The rule for new work: **every new gate, check or guard states its failure
 direction in its docstring, with the one-line reason** — which is worse, the

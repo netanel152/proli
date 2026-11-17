@@ -41,10 +41,6 @@ _REQUIRED_SETTINGS_FIELDS = dict(
     CLOUDINARY_CLOUD_NAME="test-cloud",
     CLOUDINARY_API_KEY="test-cloud-key",
     CLOUDINARY_API_SECRET="test-cloud-secret",
-    # PRO-86: required whenever ENVIRONMENT is prod-like, because it is the only
-    # thing authenticating /webhook once the sender instance-id check is gone.
-    # Stubbed here so the environment tests keep testing ENVIRONMENT.
-    WEBHOOK_TOKEN="test-webhook-token",
 )
 
 
@@ -343,30 +339,31 @@ def test_admin_panel_utils_uses_the_prod_like_helper():
 
 
 # ---------------------------------------------------------------------------
-# PRO-86: WEBHOOK_TOKEN is mandatory once ENVIRONMENT is prod-like
+# PRO-254: WEBHOOK_TOKEN went with the legacy POST /webhook route
 #
-# The sender instance-id check on /webhook died with the Green provider, so an
-# unset token means the route has no authentication at all.
+# PRO-86 made it mandatory in prod-like environments because it was the only
+# thing authenticating that route. The route is gone, so the requirement and
+# the field are too — and a Railway service that still has the variable set
+# (until ops removes it) must keep booting rather than trip on an unknown name.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("env", [STAGING_ENV, PRODUCTION_ENV])
-def test_prod_like_requires_a_webhook_token(env):
-    with pytest.raises(ValidationError, match="WEBHOOK_TOKEN is required"):
-        make_settings(ENVIRONMENT=env, WEBHOOK_TOKEN=None)
-
-
-def test_development_does_not_require_a_webhook_token():
-    """A local checkout must still run without ceremony."""
-    s = make_settings(ENVIRONMENT=DEVELOPMENT_ENV, WEBHOOK_TOKEN=None)
-    assert s.WEBHOOK_TOKEN is None
+@pytest.mark.parametrize("env", [DEVELOPMENT_ENV, STAGING_ENV, PRODUCTION_ENV])
+def test_settings_boot_without_a_webhook_token(env, monkeypatch):
+    monkeypatch.delenv("WEBHOOK_TOKEN", raising=False)
+    s = make_settings(ENVIRONMENT=env)
+    assert s.ENVIRONMENT == env
 
 
 @pytest.mark.parametrize("env", [STAGING_ENV, PRODUCTION_ENV])
-def test_prod_like_accepts_a_present_webhook_token(env):
-    s = make_settings(ENVIRONMENT=env, WEBHOOK_TOKEN="a-real-token")
-    # PRO-94: SecretStr — the value survives, but only via get_secret_value().
-    assert s.WEBHOOK_TOKEN.get_secret_value() == "a-real-token"
+def test_a_leftover_webhook_token_env_var_is_ignored(env, monkeypatch):
+    """The variable is still set on Railway until ops removes it. Settings
+    ignores unknown names (``extra="ignore"``), so it must neither crash boot
+    nor reappear as a field."""
+    monkeypatch.setenv("WEBHOOK_TOKEN", "left-over-railway-value")
+    s = make_settings(ENVIRONMENT=env)
+    assert not hasattr(s, "WEBHOOK_TOKEN")
+    assert "WEBHOOK_TOKEN" not in Settings.model_fields
 
 
 # ---------------------------------------------------------------------------

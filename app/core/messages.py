@@ -1077,9 +1077,9 @@ class Messages:
     class System:
         # RESET_SUCCESS was removed 2026-08-27 (operator decision): a global
         # reset clears state/context silently, with no confirmation message.
-        # PRO-166: the textual rendering of an inbound location message, shared
-        # by app/api/routes/webhook.py and the Cloud API inbound parser so the
-        # two cannot drift.
+        # PRO-166: the textual rendering of an inbound location message, used
+        # by the Cloud API inbound parser (it was shared with the legacy
+        # webhook route until that was removed, PRO-254).
         LOCATION_AS_TEXT = "מיקום: {latitude}, {longitude}"
         # PRO-166: the list-picker button label on the (unused — see CLAUDE.md)
         # interactive-list transport path in cloud_api.py.

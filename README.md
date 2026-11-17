@@ -89,7 +89,6 @@ MONGO_TEST_URI=mongodb+srv://...     # required only for integration tests
 ADMIN_PASSWORD=...                   # generate hash: python scripts/generate_admin_hash.py
 ADMIN_PHONE=972501234567             # WhatsApp number for SOS alerts
 ONCALL_PHONE=972501234567            # on-call number for infra alerts (defaults to ADMIN_PHONE)
-WEBHOOK_TOKEN=...                    # enables ?token=<value> webhook auth — required if ENVIRONMENT is staging/production
 WHATSAPP_PROVIDER=dryrun             # dryrun (default) | cloud — cloud selects the PRO-89 CloudAPIProvider (Meta Graph API)
 META_ACCESS_TOKEN=...                # secret — required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
 META_APP_SECRET=...                  # secret — signs inbound /webhook/meta; required for cloud in staging/production

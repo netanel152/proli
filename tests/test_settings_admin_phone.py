@@ -31,11 +31,6 @@ _BASE_REQUIRED = dict(
     CLOUDINARY_API_SECRET="s",
 )
 
-# A prod-like construction additionally satisfies `require_webhook_auth_in_prod_like`
-# (PRO-86). Kept separate from _BASE_REQUIRED so the development-environment
-# cases stay minimal and it is obvious which field exists for which validator.
-_PROD_LIKE_REQUIRED = dict(_BASE_REQUIRED, WEBHOOK_TOKEN="t")
-
 # Read off the model rather than hardcoding it a second time here — if the
 # default ever changes, this test moves with it instead of silently comparing
 # against a stale literal.
@@ -140,14 +135,14 @@ def test_the_report_fires_only_in_a_prod_like_environment(caplog, monkeypatch):
     )
 
     for env in ("staging", "production"):
-        s = Settings(_env_file=None, ENVIRONMENT=env, **_PROD_LIKE_REQUIRED)
+        s = Settings(_env_file=None, ENVIRONMENT=env, **_BASE_REQUIRED)
         assert warn_if_admin_phone_unconfigured(s) is True, f"{env} must report"
 
     configured = Settings(
         _env_file=None,
         ENVIRONMENT="production",
         ADMIN_PHONE="972501234567",
-        **_PROD_LIKE_REQUIRED,
+        **_BASE_REQUIRED,
     )
     assert warn_if_admin_phone_unconfigured(configured) is False
 
@@ -156,7 +151,7 @@ def test_the_report_names_the_number_by_its_last_four_only(monkeypatch):
     """A full number in a log line is the thing PRO-191/PRO-195 spent two days
     removing; four digits answer "is that warning about me?" without it."""
     monkeypatch.delenv("ADMIN_PHONE", raising=False)  # see the test above
-    s = Settings(_env_file=None, ENVIRONMENT="production", **_PROD_LIKE_REQUIRED)
+    s = Settings(_env_file=None, ENVIRONMENT="production", **_BASE_REQUIRED)
 
     records = []
     sink_id = loguru_logger.add(records.append, level="ERROR")

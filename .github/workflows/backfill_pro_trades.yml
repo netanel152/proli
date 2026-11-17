@@ -94,8 +94,9 @@ jobs:
           CLOUDINARY_CLOUD_NAME: unused-by-this-script
           CLOUDINARY_API_KEY: unused-by-this-script
           CLOUDINARY_API_SECRET: unused-by-this-script
-          # Deliberately `development`: `staging`/`production` would demand
-          # WEBHOOK_TOKEN and HEALTH_TOKEN. The branch picks the data, not this.
+          # Deliberately `development`: `staging`/`production` would arm the
+          # boot checks meant for the deployed services. The branch picks the
+          # data, not this.
           ENVIRONMENT: development
           TARGET_ENV: ${{ steps.target.outputs.target }}
           APPLY: ${{ inputs.apply }}

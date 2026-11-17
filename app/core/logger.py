@@ -20,12 +20,13 @@ def mask_pii(message: str) -> str:
 
 
 # PRO-80: secret values that must never appear in logs, redacted wherever they
-# occur — a URL query string (uvicorn access log: `/webhook?token=<WEBHOOK_TOKEN>`),
-# a URL path, or an exception string. Built once at import from settings;
+# occur — a URL query string (uvicorn access log: `?token=<secret>`; the legacy
+# `/webhook?token=` route that once put one there is gone, PRO-254), a URL
+# path, or an exception string. Built once at import from settings;
 # empty/unset secrets are skipped so nothing over-redacts.
 #
-# PRO-94 replaced the hand-maintained tuple (WEBHOOK_TOKEN only, after PRO-86
-# dropped the Green token) with every SecretStr field on Settings. The old list
+# PRO-94 replaced the hand-maintained tuple (then the legacy route's token
+# only) with every SecretStr field on Settings. The old list
 # carried a standing "remember to append the next credential here" comment —
 # exactly the kind of instruction that gets missed. Typing a new field
 # SecretStr now enrolls it in redaction automatically.

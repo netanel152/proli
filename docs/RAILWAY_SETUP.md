@@ -117,7 +117,7 @@ Two guards are worth knowing about, because both encode a mistake that has alrea
 - **A missing `MONGO_URI` fails the job rather than falling back.** `Settings.MONGO_URI` defaults to localhost, so an unset secret would connect to an empty database on the runner and report *"0 pros, everything fine"* — indistinguishable from a genuine clean result, and exactly the false green this check exists to prevent.
 - **The run prints the database name** parsed from the URI, and nothing else from it — never the host, never the credentials. When production first came back empty, "which database did this actually read?" was the open question; now the answer is in the log.
 
-`ENVIRONMENT` is set to `development` for that job. It is deliberate: `staging`/`production` would make `Settings` demand `WEBHOOK_TOKEN` and fail closed on `HEALTH_TOKEN`, neither of which the script uses, and nothing it does is gated on `ENVIRONMENT`. The consequence is worth stating plainly — **`ENVIRONMENT` no longer describes the data being touched in that job.** The branch and the secret it selects do, and the printed database name is what makes that visible rather than assumed.
+`ENVIRONMENT` is set to `development` for that job. It is deliberate: `staging`/`production` would make `Settings` fail closed on `HEALTH_TOKEN`, which the script does not use, and nothing it does is gated on `ENVIRONMENT`. The consequence is worth stating plainly — **`ENVIRONMENT` no longer describes the data being touched in that job.** The branch and the secret it selects do, and the printed database name is what makes that visible rather than assumed.
 
 ## Step 4: Environment Variables
 
@@ -133,7 +133,6 @@ CLOUDINARY_API_SECRET=...
 ADMIN_PASSWORD_HASH=...  # Generate with: python scripts/generate_admin_hash.py
 ADMIN_PHONE=972501234567  # Admin WhatsApp number for SOS alerts
 HEALTH_TOKEN=...  # X-Health-Token header value for the detailed /health payload + /health/leads (PRO-136); unset = those views fail closed in staging/production
-WEBHOOK_TOKEN=...  # Random string for webhook auth — required (boot fails without it) once ENVIRONMENT is staging/production (PRO-86)
 WHATSAPP_PROVIDER=dryrun  # dryrun (default) | cloud — cloud selects the PRO-89 CloudAPIProvider (Meta Graph API)
 META_ACCESS_TOKEN=...        # secret — required once WHATSAPP_PROVIDER=cloud and WHATSAPP_DRY_RUN is not true
 META_APP_SECRET=...          # secret — signs inbound /webhook/meta; api: required (non-empty) in staging/production whatever the provider (PRO-270); other services: for cloud
@@ -158,8 +157,7 @@ how the two silently re-merge.
 |---|---|---|
 | `MONGO_URI`, `REDIS_URL` | **always distinct** | separate datastores; see the seed-guard invariant below |
 | `ENVIRONMENT` | **always distinct** | by definition — see PRO-34 above |
-| `WEBHOOK_TOKEN` | **distinct** | a shared token means a staging leak authenticates against the production webhook |
-| `HEALTH_TOKEN` | **distinct** | authenticates the detailed `/health` payload and `/health/leads` KPIs (PRO-136); same leak logic as the webhook token. Production's value is also the `PRODUCTION_HEALTH_TOKEN` GitHub secret, so rotate both together or the lead pipeline monitor pages |
+| `HEALTH_TOKEN` | **distinct** | authenticates the detailed `/health` payload and `/health/leads` KPIs (PRO-136); a shared token means a staging leak authenticates against production. Production's value is also the `PRODUCTION_HEALTH_TOKEN` GitHub secret, so rotate both together or the lead pipeline monitor pages |
 | `ADMIN_PASSWORD_HASH` | **distinct** | one admin credential must not open both panels |
 | `SENTRY_DSN` | **distinct** | separate Sentry project per environment, so staging noise cannot pollute production ingest and a leaked staging DSN is worthless |
 | `GEMINI_API_KEY` | **distinct** | a staging leak or quota burn must not affect production |
@@ -307,11 +305,16 @@ verify token matching `META_VERIFY_TOKEN`:
 ```
 https://api-production-XXXX.up.railway.app/webhook/meta
 ```
-The legacy `/webhook` route (legacy-vendor payload shape) remains for local/manual testing
-(`docs/MANUAL_TEST_PLAN.md`) — no live vendor points at it either:
-```
-https://api-production-XXXX.up.railway.app/webhook?token=YOUR_WEBHOOK_TOKEN
-```
+There is no other inbound route. The legacy `POST /webhook` (the retired vendor's
+payload shape, authenticated by `?token=<WEBHOOK_TOKEN>`) was removed in PRO-254 and
+answers `404`; local and manual testing posts to `/webhook/meta` too
+(`python tests/simulate_webhook.py`).
+
+**Ops follow-up — remove `WEBHOOK_TOKEN` from Railway.** Nothing reads it any more.
+`Settings` ignores unknown variables (`extra="ignore"`), so a leftover value cannot
+break a boot, but it is a dead credential: once the PRO-254 change has deployed to an
+environment, delete `WEBHOOK_TOKEN` from that environment's shared variables (staging
+and production). Not done by the code change itself.
 
 ## Notes
 

@@ -8,7 +8,7 @@ Proli connects WhatsApp customers with service professionals through a three-pro
 Customer (WhatsApp)
        │
        ▼
-  WhatsApp provider ──► POST /webhook
+  Meta Cloud API ────► POST /webhook/meta
                      │
               FastAPI Backend      ← validates, deduplicates, enqueues
                      │

@@ -1,8 +1,8 @@
 """Inbound webhook, end to end through the FastAPI app: ``POST /webhook/meta``.
 
-These used to drive the legacy ``POST /webhook`` envelope. That route is being
-retired, so every ingress check here now goes through the Meta Cloud API route
-instead. What the legacy route alone did (the ``?token=`` WEBHOOK_TOKEN check,
+These used to drive the legacy ``POST /webhook`` envelope. That route has been
+removed (PRO-254), so every ingress check here goes through the Meta Cloud API
+route instead. What the legacy route alone did (the ``?token=`` WEBHOOK_TOKEN check,
 the ``@g.us`` group filter) has no Meta counterpart: Cloud API authenticates
 with the ``X-Hub-Signature-256`` HMAC, which the signature tests below cover,
 and does not deliver group traffic to business numbers.
