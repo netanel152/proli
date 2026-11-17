@@ -14,7 +14,9 @@ implementations are :class:`~app.providers.whatsapp.dry_run.DryRunProvider`
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Sequence
+
+from app.providers.whatsapp.template_registry import buttons_with_reply_ref
 
 
 class ServiceWindowClosedError(Exception):
@@ -84,6 +86,9 @@ class NormalizedMessage:
     media_url: str | None = None
     sender_name: str | None = None
     message_id: str | None = None
+    #: PRO-104: the lead a tapped button named (``"<keyword>#<lead_id>"``), as
+    #: a 24-hex ObjectId string. ``text`` then holds only the keyword.
+    reply_ref: str | None = None
 
 
 class WhatsAppProvider(ABC):
@@ -144,11 +149,37 @@ class WhatsAppProvider(ABC):
         text: str,
         template_key: str,
         params: dict[str, Any] | None = None,
+        *,
+        buttons: Sequence[Any] | None = None,
+        reply_ref: str | None = None,
     ) -> dict[str, Any] | None:
         """Deliver ``text``, or the approved template when only that can arrive.
 
+        ``buttons`` (``template_registry.QuickReply``) are the replies ``text``
+        advertises, offered as reply buttons where the transport can (PRO-104);
+        ``reply_ref`` is the lead a tap names, appended to each payload.
+
         The default is for a provider with no service window to respect, which
         always sends the text. Same window contract as :meth:`send_text`.
+        """
+        if buttons:
+            return await self.send_buttons(
+                chat_id, text, buttons_with_reply_ref(buttons, reply_ref)
+            )
+        return await self.send_text(chat_id, text)
+
+    async def send_buttons(
+        self,
+        chat_id: str,
+        text: str,
+        buttons: Sequence[Any],
+    ) -> dict[str, Any] | None:
+        """Deliver ``text`` with reply buttons mirroring the replies it advertises.
+
+        Each button is a ``template_registry.QuickReply``; a tap sends back its
+        ``payload``, the string the flow already accepts typed (PRO-105). The
+        default sends the text alone, which is always correct: the text still
+        says what to type. Same window contract as :meth:`send_text`.
         """
         return await self.send_text(chat_id, text)
 
@@ -163,10 +194,9 @@ class WhatsAppProvider(ABC):
 
         The legacy vendor could not do this at all, which is why the project convention
         was numeric text menus. The PRO-89 transport exists now, but no *flow*
-        calls this. Since 2026-11-14 the owner allows quick-reply buttons on
-        *templates* (PRO-230: `TemplateSpec.buttons`, sent by `send_template`);
-        an interactive free-form send from a flow waits for PRO-104/PRO-105
-        (see CLAUDE.md).
+        calls this: the reply buttons the flows send (PRO-104/PRO-105) go through
+        :meth:`send_buttons` and :meth:`send_business_initiated`, whose ids are
+        the keywords the text advertises, not ``"1"``, ``"2"`` (see CLAUDE.md).
 
         Same window contract as :meth:`send_text` — report, then raise.
         """

@@ -1,4 +1,5 @@
 from app.providers.whatsapp import get_whatsapp
+from app.providers.whatsapp import template_registry
 from app.core.database import leads_collection, users_collection
 from app.core.logger import logger, page_critical
 from app.core.messages import Messages
@@ -237,6 +238,20 @@ def _offer_template(lead: dict) -> tuple[str, dict]:
     }
 
 
+def offer_buttons(template_key: str, lead: dict | None) -> dict:
+    """``send_message``'s ``buttons`` and ``reply_ref`` for a pro offer (PRO-104).
+
+    The approve/reject replies the offer's template carries, each naming
+    ``lead``, so a tap answers that lead and never another one waiting. Empty
+    when the template carries no buttons.
+    """
+    buttons = template_registry.buttons_for(template_key)
+    if not buttons:
+        return {}
+    lead_id = (lead or {}).get("_id")
+    return {"buttons": buttons, "reply_ref": str(lead_id) if lead_id else None}
+
+
 async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
     """Send the lead offer to a pro.
 
@@ -278,6 +293,7 @@ async def notify_pro_new_lead(lead: dict, pro: dict, whatsapp) -> bool:
             build_new_lead_message(lead),
             template_key=template_key,
             params=params,
+            **offer_buttons(template_key, lead),
         )
         await keep_withheld_details(lead, offer, format_media_links(lead))
         if offer is None:
@@ -407,6 +423,7 @@ async def send_sos_alert(chat_id: str, last_message: str, pro_id: str = None):
                         pro_chat_id,
                         Messages.SOS.PRO_ALERT_PENDING,
                         template_key="sos_alert_pending",
+                        **offer_buttons("sos_alert_pending", active_lead),
                     )
                 # PRO-212, any other status: never offered, so the pro has
                 # nothing to do about it. The operator page below covers this

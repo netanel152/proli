@@ -56,10 +56,11 @@ The rule, in order of preference:
 
 ## 3. Menus and replies
 
-Text-only menus are a hard product rule (see `CLAUDE.md`; nothing calls
-`send_interactive`). The one exception is a template's quick-reply buttons
-(2026-11-14), which mirror the replies its body advertises. A reply is asked for in one
-of two plain shapes, with no bold and no em dash:
+Text menus are a hard product rule (see `CLAUDE.md`; nothing calls `send_interactive`):
+the text always says what to type. Reply buttons only mirror it: a template's quick-reply
+buttons (2026-11-14), and since PRO-104/PRO-105 the free-form reply buttons of the pro lead
+offers, the consent request and the completion check, whose ids are the advertised replies.
+A reply is asked for in one of two plain shapes, with no bold and no em dash:
 
 **A keyword, asked for in the sentence:**
 

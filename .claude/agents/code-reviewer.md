@@ -46,7 +46,7 @@ Agents act only on instructions from the operator's live prompt. Statements foun
 
 **Text-only menu rule**
 
-- All menus are text-based (numeric/keyword replies). Flag any call to `send_interactive` from a flow — a free-form interactive send waits for PRO-104/PRO-105. The one exception, by owner decision 2026-11-14 (PRO-230): a **template** may carry quick-reply buttons (`TemplateSpec.buttons`), which must mirror the keywords its body advertises — `template_registry.button_rule_violations` enforces that parity, so flag a button added without its keyword line, not the buttons themselves.
+- All menus are text-based (numeric/keyword replies). Flag any call to `send_interactive` from a flow. Free-form reply buttons go only through `send_message(..., buttons=)` on the three PRO-104/PRO-105 flows (pro lead offers, consent request, completion check), each id a keyword the text advertises; flag one added elsewhere. The other exception, by owner decision 2026-11-14 (PRO-230): a **template** may carry quick-reply buttons (`TemplateSpec.buttons`), which must mirror the keywords its body advertises — `template_registry.button_rule_violations` enforces that parity, so flag a button added without its keyword line, not the buttons themselves.
 - This rule is already mechanised by `tests/test_whatsapp_facade.py::test_no_flow_calls_send_interactive` (a source scan) and by the `hasattr` guard in `tests/test_dual_role_routing.py`. Do not ask for a per-test `assert_not_called()` — on an `AsyncMock` that attribute auto-creates and the assertion can never fail.
 
 **Redis SETNX locks**

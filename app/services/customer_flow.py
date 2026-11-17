@@ -10,6 +10,7 @@ from app.core.text_matching import contains_keyword, is_emergency_text
 from app.core.constants import LeadStatus, Defaults, Actor, WorkerConstants
 from app.core.phone import mask_chat_id, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
+from app.providers.whatsapp import template_registry
 from app.services.notification_service import page_operator
 from app.services.scheduling_service import record_no_show
 from app.services.matching_service import overlapping_taken_slot
@@ -118,6 +119,9 @@ async def send_customer_completion_check(
             Messages.Customer.COMPLETION_CHECK.format(pro_name=pro_name),
             template_key="completion_check",
             params={"pro_name": pro_name},
+            # PRO-105: the 1/2/3 the text advertises, as buttons on an open
+            # window; each id is the digit the completion handler reads.
+            buttons=template_registry.buttons_for("completion_check"),
         )
         sent_no = lead.get("completion_check_sent_count", 0) + 1
         logger.success(

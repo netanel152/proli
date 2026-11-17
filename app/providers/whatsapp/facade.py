@@ -28,12 +28,13 @@ their test doubles keep working unchanged.
 
 import asyncio
 import urllib.parse
-from typing import Any
+from typing import Any, Sequence
 
 from app.core.constants import WorkerConstants
 from app.core.logger import logger
 from app.core.phone import mask_chat_id as _mask
 from app.core.redis_client import get_redis_client
+from app.providers.whatsapp import template_registry
 from app.providers.whatsapp.base import (
     NormalizedMessage,
     ServiceWindowClosedError,
@@ -214,12 +215,21 @@ class WhatsAppFacade:
         template_key: str | None = None,
         params: dict[str, Any] | None = None,
         untemplated: str | None = None,
+        buttons: Sequence[Any] | None = None,
+        reply_ref: str | None = None,
     ):
         """Send ``text``. A business-initiated send also names its template.
 
         With ``template_key``, a recipient whose window is closed gets that
         template with ``params``, if it is armed. Otherwise nothing differs
         from a send that named no template.
+
+        ``buttons`` (``template_registry.QuickReply``, PRO-104/PRO-105) are the
+        replies ``text`` advertises: an open window gets them as reply buttons
+        where the provider can send them. ``reply_ref`` is the lead a tap names,
+        carried in each button's id (and, on a closed window, in the template's
+        quick-reply payloads). Without ``buttons`` the send is exactly what it
+        was before, and ``reply_ref`` is ignored.
 
         ``untemplated`` marks a cross-party send that has no template **on
         purpose** and says why (PRO-232). To a closed window it is dropped
@@ -234,7 +244,22 @@ class WhatsAppFacade:
         if template_key is None and await self._dropped_by_design(chat_id, untemplated):
             return None
         try:
-            if template_key is None:
+            if buttons and template_key is None:
+                result = await self._provider.send_buttons(
+                    chat_id,
+                    text,
+                    template_registry.buttons_with_reply_ref(buttons, reply_ref),
+                )
+            elif buttons:
+                result = await self._provider.send_business_initiated(
+                    chat_id,
+                    text,
+                    template_key,
+                    params,
+                    buttons=tuple(buttons),
+                    reply_ref=reply_ref,
+                )
+            elif template_key is None:
                 result = await self._provider.send_text(chat_id, text)
             else:
                 result = await self._provider.send_business_initiated(

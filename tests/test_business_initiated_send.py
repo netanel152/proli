@@ -986,7 +986,12 @@ async def test_sos_alert_on_an_unapproved_offer_carries_no_phone_and_no_words(
 
     call = whatsapp.send_message.call_args
     assert call.args[1] == Messages.SOS.PRO_ALERT_PENDING
-    assert call.kwargs == {"template_key": "sos_alert_pending"}
+    assert call.kwargs["template_key"] == "sos_alert_pending"
+    # PRO-104: its אשר/דחה buttons name the offered lead, and carry nothing else.
+    assert call.kwargs["buttons"] == template_registry.buttons_for("sos_alert_pending")
+    lead = await mock_db.leads.find_one({"pro_id": pro_id})
+    assert call.kwargs["reply_ref"] == str(lead["_id"])
+    assert "params" not in call.kwargs
     assert template_registry.TEMPLATES["sos_alert_pending"].params == ()
     assert "0501234567" not in call.args[1]
     assert "pro_notified=True" in sos_pages.call_args.args[0]

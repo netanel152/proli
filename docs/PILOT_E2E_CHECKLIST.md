@@ -33,8 +33,13 @@ the first real test.
 
 Keywords used below (from `app/core/messages.py`, exact): emergency `הצפה`/`דחוף` · SOS
 `נציג`/`אנושי`/`מנהל` · status `סטטוס`/`?` · cancel `בטל` · reschedule `מועד אחר` ·
-register `הרשמה` · reset `התחלה` · rating `1`–`5` · admin wizard `ניהול`. Pro approval is
-**text, not buttons** — nothing may send an interactive message (the PRO-89 transport exists, but no template is approved and adopting buttons is a product decision not yet made — see CLAUDE.md) — the pro replies per the prompt (e.g. `אשר`). A bare `1` only opens a numbered list, whose own `1` then approves.
+register `הרשמה` · reset `התחלה` · rating `1`–`5` · admin wizard `ניהול`. Every prompt
+states its replies as text, and typing them always works. Three prompts also show **reply
+buttons** on an open window (PRO-104/PRO-105, see CLAUDE.md): the pro's lead offer and nudge
+(`אשר`/`דחה`, each tap naming its own lead), the customer's consent request (`כן`/`לא`) and the
+completion check (`1`/`2`/`3`). Typed `אשר` with more than one offer waiting opens a numbered
+list, and a bare `1` only opens a list whose own `1` then approves. Scenario 12 checks the
+buttons.
 
 ### Pre-flight (must all be green before starting)
 
@@ -163,11 +168,30 @@ verified.
 reflects real current lead states (no stale columns). Mutations show success feedback.
 - [ ] Pass  · [ ] File: ______
 
+### 12. Reply buttons  ·  regresses PRO-104, PRO-105
+Each step on a phone whose 24h window is open (it wrote to the bot within the day).
+**Steps:**
+1. **(C)** From a number with no consent on record, write anything. → The consent request shows
+   two buttons, `כן להמשיך` and `לא לביטול`. Tap `כן להמשיך` → the same reply typing `כן` gives
+   (the ack, and the opening message answered). On another fresh number, tap `לא לביטול` → the
+   decline message, and nothing about that chat in the panel.
+2. **(P)** Have two offers waiting for P at once (two customers, or a second lead routed to P).
+   On the **older** offer's message tap `אשר` → **that** lead is booked and its customer's
+   details arrive; no numbered list opens, and the other offer is still waiting.
+3. **(P)** Tap `אשר` (or `דחה`) on an offer that has since moved on (reassigned to another pro
+   by the SLA, or booked already) → "the list changed" / "no pending approvals" reply, and
+   nothing is booked or rejected — not even the other waiting offer.
+4. **(P)** With two offers waiting, **type** `אשר` → the numbered list, exactly as before.
+5. **(C)** On a booked job, trigger the completion check (admin panel). → Three buttons,
+   `כן הסתיים`, `עדיין לא`, `לא הגיע`. Tap `כן הסתיים` → the job completes and the rating
+   prompt arrives, as typing `1` would.
+- [ ] Pass  · [ ] File: ______
+
 ---
 
 ## Exit criteria
 
-- [ ] **All 11 scenarios Pass** on a single clean run (production config) — PRO-55 and PRO-56 are now in code (see the dependency table).
+- [ ] **All 12 scenarios Pass** on a single clean run (production config) — PRO-55 and PRO-56 are now in code (see the dependency table).
 - [ ] Every failure encountered has a linked Linear ticket, fixed and re-verified.
 - [ ] The run is signed off below.
 

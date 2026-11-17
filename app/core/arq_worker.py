@@ -106,6 +106,7 @@ async def process_message_task(
     media_url: str = None,
     message_id: str = None,
     trace_id: str = None,
+    reply_ref: str = None,
     **_ignored,
 ):
     """
@@ -121,6 +122,9 @@ async def process_message_task(
     `run_job`, and the message is gone rather than deferred. It does not
     retroactively protect this deploy (the worker running then is the old
     one), but it means the next kwarg added here costs nothing.
+
+    ``reply_ref`` (PRO-104) is the lead a tapped button named; a job without it
+    is every other message, and an old job never has it.
     """
     # PRO-174: the correlation id the webhook minted for this turn, rebound
     # here so every line the worker emits — and everything the flows log
@@ -129,11 +133,18 @@ async def process_message_task(
     # match the api's half of that turn, but it still groups the worker's,
     # which is what makes those lines readable at all.
     with logger.contextualize(trace_id=trace_id or new_trace_id()):
-        await _process_message(ctx, chat_id, user_text, media_url, message_id)
+        await _process_message(
+            ctx, chat_id, user_text, media_url, message_id, reply_ref=reply_ref
+        )
 
 
 async def _process_message(
-    ctx, chat_id: str, user_text: str, media_url: str = None, message_id: str = None
+    ctx,
+    chat_id: str,
+    user_text: str,
+    media_url: str = None,
+    message_id: str = None,
+    reply_ref: str = None,
 ):
     """The task body, split out so all of it — the ``except`` arms included —
     runs inside the ``trace_id`` binding."""
@@ -159,6 +170,7 @@ async def _process_message(
             job_id,
             job_try,
             enqueued_at=ctx.get("enqueue_time"),
+            reply_ref=reply_ref,
         )
     finally:
         logger.info(
@@ -272,13 +284,22 @@ async def _wait(chat_id, user_text, job_id, job_try, why: str):
 
 
 async def _run_message(
-    chat_id, user_text, media_url, message_id, job_id, job_try, enqueued_at=None
+    chat_id,
+    user_text,
+    media_url,
+    message_id,
+    job_id,
+    job_try,
+    enqueued_at=None,
+    reply_ref=None,
 ):
     if not await _my_turn(chat_id, job_id, enqueued_at):
         await _wait(chat_id, user_text, job_id, job_try, "an earlier message is queued")
         return
     try:
-        await _run_turn(chat_id, user_text, media_url, message_id, job_id, job_try)
+        await _run_turn(
+            chat_id, user_text, media_url, message_id, job_id, job_try, reply_ref
+        )
     except Retry:
         raise  # still waiting: keep the place in the queue
     except BaseException as e:
@@ -290,7 +311,9 @@ async def _run_message(
     await _leave_queue(chat_id, job_id)
 
 
-async def _run_turn(chat_id, user_text, media_url, message_id, job_id, job_try):
+async def _run_turn(
+    chat_id, user_text, media_url, message_id, job_id, job_try, reply_ref=None
+):
     if sentry_active():
         # PRO-134: tags set at task start (not in an except) so they ride
         # every event and breadcrumb this job produces. ArqIntegration
@@ -304,7 +327,12 @@ async def _run_turn(chat_id, user_text, media_url, message_id, job_id, job_try):
             scope.set_tag("wamid", message_id)
     try:
         await process_incoming_message(
-            chat_id, user_text, media_url, message_id=message_id
+            chat_id,
+            user_text,
+            media_url,
+            message_id=message_id,
+            # Only a tap that named a lead passes it (PRO-104).
+            **({"reply_ref": reply_ref} if reply_ref else {}),
         )
     except ChatLockBusyError:
         # Another worker is mid-flight for this chat_id — defer so we preserve

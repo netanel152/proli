@@ -45,8 +45,10 @@ guide it points at; nothing here is a value to trust over them.
    A menu option with no handler is the defect §7 exists to prevent.
 4. **Placeholders**: `str.format` names that describe the value, formatted at the send site;
    any value that can be empty goes through `Messages.Fallbacks` first.
-5. **Menus are text-only.** Nothing may call `send_interactive` (CLAUDE.md, CRITICAL). Only a
-   template may carry quick-reply buttons (PRO-230), and they must equal the replies its body
+5. **Menus are text first.** Nothing may call `send_interactive` (CLAUDE.md, CRITICAL). A
+   template's quick replies (PRO-230), and the free-form reply buttons of the PRO-104/PRO-105
+   flows (pro offers, consent, completion check), only mirror the replies the text advertises.
+   A free-form button title is at most 20 characters. A template's buttons must equal the replies its body
    advertises (`template_registry.button_rule_violations`).
 
 ## Tests that pin this

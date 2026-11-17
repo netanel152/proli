@@ -142,14 +142,16 @@ owns the shared instances. That is what lets every unit test inject a mock
 without patching module globals, and it is why the test suite runs with no
 network, no Mongo and no Redis. New handlers follow the same shape.
 
-**5. Text-only menus.** Every WhatsApp menu is numeric or keyword replies —
-`"Reply '1' to approve, '2' to reject"` — never interactive buttons.
-`send_interactive` exists on the provider ABC and the PRO-89 `CloudAPIProvider`
-transport can send it, but nothing in any flow may call it: no template is
-approved yet (PRO-150 owns approval), and a free-form interactive send waits for
-PRO-104/PRO-105. The one exception, by the owner's decision of 2026-11-14 (PRO-230):
-a template may carry quick-reply buttons mirroring the replies its body advertises.
-This is a CLAUDE.md-level rule and reviewers enforce it.
+**5. Text menus first.** Every WhatsApp menu is numeric or keyword replies —
+`"Reply '1' to approve, '2' to reject"` — spelled out in the text, and typing
+always works. Buttons only mirror those replies: a template may carry quick-reply
+buttons (owner decision 2026-11-14, PRO-230), and since PRO-104/PRO-105 exactly
+three flows send free-form reply buttons through `send_message(..., buttons=)`:
+the pro lead offers (a tap carries its lead, `אשר#<lead_id>`), the consent
+request and the completion check. Everything else stays text until after launch.
+`send_interactive` (numeric ids) exists on the provider ABC and the PRO-89
+`CloudAPIProvider` can send it, but no flow may call it. This is a
+CLAUDE.md-level rule and reviewers enforce it.
 
 **6. Every safety check states its failure direction.** Rate limiting fails
 open; the outbound egress fails closed. Neither is an accident, and neither
@@ -335,9 +337,9 @@ Rules:
 - Nothing outside `app/providers/whatsapp/` constructs a provider. Ever.
 - No HTTP client at a vendor messaging endpoint anywhere in the repo.
 - `send_interactive` is defined on the ABC and MUST NOT be called from any
-  flow — the PRO-89 transport exists, but no template is approved (PRO-150)
-  and a free-form interactive send waits for PRO-104/PRO-105. A template's
-  quick-reply buttons are allowed (2026-11-14, PRO-230).
+  flow. A template's quick-reply buttons are allowed (2026-11-14, PRO-230),
+  and so are the free-form reply buttons of the three PRO-104/PRO-105 flows
+  (`send_message(..., buttons=)`, ids mirroring the advertised keywords).
 - Two CI guards enforce this mechanically (the "Guard" steps in
   `.github/workflows/tests.yml`): the build fails on any reference to the
   old vendor's domain **in code** — `*.md` is excluded, so prose may name the
@@ -495,8 +497,8 @@ await whatsapp.send_message(chat_id, Messages.Customer.PRO_ASSIGNED)
 - Placeholders use `str.format` names (`{pro_name}`), and the format call
   happens at the send site, where the values are.
 - **Every menu is text-only** — numbered or keyword replies, with the
-  options spelled out in the message itself. See Principle 5; the only
-  exception is a template's quick-reply buttons, which mirror those options.
+  options spelled out in the message itself. See Principle 5: a template's
+  quick replies and the PRO-104/PRO-105 reply buttons only mirror those options.
 - Messages are grouped by audience (`Customer`, `Pro`, `Admin`, `Errors`)
   and new ones join the right group rather than a new top-level.
 - RTL and emoji conventions follow the surrounding catalog; a message that

@@ -70,7 +70,7 @@ template path PRO-64 can exercise later.
 
 ## Part 3 — Product scenarios
 
-Run **all 11 scenarios of `docs/PILOT_E2E_CHECKLIST.md`** on the devices above
+Run **all 12 scenarios of `docs/PILOT_E2E_CHECKLIST.md`** on the devices above
 (C=D1, P=D2, second pro=D3, Admin=D4, fresh signup=D5), staging config instead of
 production. Record Pass/File **in that checklist's own table** and attach the
 signed-off copy to PRO-101. Sandbox deltas to expect:

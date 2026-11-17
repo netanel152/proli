@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.constants import UserStates
 from app.core.messages import Messages
 from app.services.workflow_service import process_incoming_message
+from app.services.dispatch_guards import CONSENT_BUTTONS
 import app.services.workflow_service
 
 
@@ -49,7 +50,7 @@ async def test_first_contact_sends_consent_request(consent_mocks):
     await process_incoming_message("972501111111@c.us", "שלום")
 
     mock_wa.send_message.assert_called_once_with(
-        "972501111111@c.us", Messages.Consent.REQUEST
+        "972501111111@c.us", Messages.Consent.REQUEST, buttons=CONSENT_BUTTONS
     )
     mock_state.set_state.assert_called_with(
         "972501111111@c.us", UserStates.AWAITING_CONSENT
@@ -129,7 +130,7 @@ async def test_unclear_consent_response(consent_mocks):
 
     mock_record.assert_not_called()
     mock_wa.send_message.assert_called_once_with(
-        "972501111111@c.us", Messages.Consent.REQUEST
+        "972501111111@c.us", Messages.Consent.REQUEST, buttons=CONSENT_BUTTONS
     )
 
 
@@ -143,7 +144,7 @@ async def test_declined_user_contacts_again(consent_mocks):
     await process_incoming_message("972501111111@c.us", "שלום שוב")
 
     mock_wa.send_message.assert_called_once_with(
-        "972501111111@c.us", Messages.Consent.REQUEST
+        "972501111111@c.us", Messages.Consent.REQUEST, buttons=CONSENT_BUTTONS
     )
     mock_state.set_state.assert_called_with(
         "972501111111@c.us", UserStates.AWAITING_CONSENT

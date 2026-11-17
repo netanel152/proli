@@ -321,7 +321,11 @@ async def send_pro_reminder(lead_id: str, triggered_by: str = "auto"):
 
 
 async def process_incoming_message(
-    chat_id: str, user_text: str, media_url: str = None, message_id: str = None
+    chat_id: str,
+    user_text: str,
+    media_url: str = None,
+    message_id: str = None,
+    reply_ref: str = None,
 ):
     """
     Entry point for all incoming customer/pro messages.
@@ -333,7 +337,8 @@ async def process_incoming_message(
     proceed in degraded mode.
 
     ``message_id`` is the inbound wamid, carried to the rate-limit guard for
-    the PRO-133 read receipt + typing indicator.
+    the PRO-133 read receipt + typing indicator. ``reply_ref`` is the lead a
+    tapped button named (PRO-104), carried to the pro's אשר/דחה.
     """
     token = uuid.uuid4().hex
     acquired = await acquire_chat_lock(chat_id, token=token)
@@ -346,7 +351,7 @@ async def process_incoming_message(
     renewal = asyncio.create_task(keep_chat_lock(chat_id, token))
     try:
         await _process_incoming_message_inner(
-            chat_id, user_text, media_url, message_id=message_id
+            chat_id, user_text, media_url, message_id=message_id, reply_ref=reply_ref
         )
     finally:
         renewal.cancel()
@@ -784,7 +789,11 @@ async def _escalate_emergency(chat_id: str, current_state, user_text: str = ""):
 
 
 async def _process_incoming_message_inner(
-    chat_id: str, user_text: str, media_url: str = None, message_id: str = None
+    chat_id: str,
+    user_text: str,
+    media_url: str = None,
+    message_id: str = None,
+    reply_ref: str = None,
 ):
     normalized_text = (user_text or "").strip().lower()
 
@@ -806,6 +815,7 @@ async def _process_incoming_message_inner(
         # Get state early — needed to skip global checks for pros
         current_state=await StateManager.get_state(chat_id),
         message_id=message_id,
+        reply_ref=reply_ref,
     )
     deps = GuardDeps(
         whatsapp=whatsapp,
@@ -1243,6 +1253,8 @@ async def _finalize_deal(
                             bool(emergency_header)
                         ),
                     },
+                    # PRO-104: אשר/דחה buttons that name this lead.
+                    **notification_service.offer_buttons("lead_offer", lead),
                 )
             except Exception as e:
                 logger.error(f"Offer for lead {lead['_id']} not sent: {e}")

@@ -114,10 +114,13 @@ def _normalize(text: str) -> str:
 
 
 async def handle_pro_text_command(
-    chat_id: str, text: str, whatsapp, lead_manager, ai=None
+    chat_id: str, text: str, whatsapp, lead_manager, ai=None, reply_ref=None
 ):
     """
     Handles text commands from Professionals.
+
+    ``reply_ref`` (PRO-104) is the lead a tapped offer button named. Only אשר
+    and דחה read it: they act on that lead or on none, never open the picker.
 
     Return contract (tri-state):
       - None  → no match, caller should send PRO_HELP_MENU
@@ -199,10 +202,12 @@ async def handle_pro_text_command(
         return await _show_pro_dashboard(pro)
 
     if text in Messages.Keywords.APPROVE_COMMANDS:
-        return await _handle_approve(pro, lead_manager, whatsapp, chat_id, text)
+        return await _handle_approve(
+            pro, lead_manager, whatsapp, chat_id, text, reply_ref=reply_ref
+        )
 
     if text in Messages.Keywords.REJECT_COMMANDS:
-        return await _handle_reject(pro, whatsapp, chat_id, text)
+        return await _handle_reject(pro, whatsapp, chat_id, text, reply_ref=reply_ref)
 
     if text in Messages.Keywords.FINISH_COMMANDS:
         return await _handle_finish(pro, whatsapp, chat_id, text)
@@ -479,7 +484,38 @@ async def _resolve_offer(pro, chat_id, state, text):
     return leads[0], None
 
 
-async def _handle_approve(pro, lead_manager, whatsapp, chat_id, text):
+async def _referenced_offer(pro, reply_ref):
+    """PRO-104: the NEW lead a tapped offer button named, if it is still this
+    pro's to answer. Returns ``(lead, None)`` or ``(None, reply)``.
+
+    A tap carries the lead it was sent with, so it never needs the PRO-212
+    picker and must never act on another lead: a lead that is gone, no longer
+    NEW, or now another pro's gets the same answer a lost picker choice does.
+    The read is only the first check; the write after it pins status and owner
+    again (PRO-123/PRO-117), so a change in between still books nothing.
+    """
+    try:
+        lead_id = ObjectId(reply_ref)
+    except Exception:
+        return None, await _no_offer_reply(pro["_id"])
+    lead = await leads_collection.find_one(
+        {"_id": lead_id, "pro_id": pro["_id"], "status": LeadStatus.NEW}
+    )
+    if not lead:
+        logger.info(
+            f"Pro {pro['_id']} tapped an offer for lead {lead_id}, which is no "
+            "longer theirs to answer: nothing done."
+        )
+        return None, await _no_offer_reply(pro["_id"], lead_id)
+    return lead, None
+
+
+async def _handle_approve(pro, lead_manager, whatsapp, chat_id, text, reply_ref=None):
+    if reply_ref:
+        lead, reply = await _referenced_offer(pro, reply_ref)
+        if not lead:
+            return reply
+        return await _approve_lead(lead, pro, lead_manager, whatsapp, picked=True)
     lead, reply = await _resolve_offer(
         pro, chat_id, UserStates.PRO_SELECTING_JOB_TO_APPROVE, text
     )
@@ -636,7 +672,12 @@ async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
     return response_text
 
 
-async def _handle_reject(pro, whatsapp, chat_id, text):
+async def _handle_reject(pro, whatsapp, chat_id, text, reply_ref=None):
+    if reply_ref:
+        lead, reply = await _referenced_offer(pro, reply_ref)
+        if not lead:
+            return reply
+        return await _reject_lead(lead, pro, whatsapp, picked=True, pin_owner=True)
     lead, reply = await _resolve_offer(
         pro, chat_id, UserStates.PRO_SELECTING_JOB_TO_REJECT, text
     )
@@ -645,7 +686,7 @@ async def _handle_reject(pro, whatsapp, chat_id, text):
     return await _reject_lead(lead, pro, whatsapp)
 
 
-async def _reject_lead(lead, pro, whatsapp, picked=False):
+async def _reject_lead(lead, pro, whatsapp, picked=False, pin_owner=False):
     # PRO-117: claim the rejection atomically. expected_status=NEW makes a
     # concurrent writer (the Healer's own reassignment tick, or a double-tapped
     # דחה) lose cleanly instead of double-assigning the lead. rejected_by
@@ -660,7 +701,10 @@ async def _reject_lead(lead, pro, whatsapp, picked=False):
     # status at NEW, so this pro can "reject" a lead that just moved to a
     # third pro. Millisecond window; the SLA monitor self-heals it, and an
     # expected_pro_id guard on set_lead_status is not worth the churn today.
+    # PRO-104: a tapped offer button names its lead, so that path pins the
+    # owner too (`pin_owner`): a tap must never reject a lead now someone else's.
     rejected_by = list(lead.get("rejected_by") or []) + [pro["_id"]]
+    owner_guard = {"expected_pro_id": pro["_id"]} if pin_owner else {}
     claimed = await set_lead_status(
         lead["_id"],
         LeadStatus.REJECTED,
@@ -670,6 +714,7 @@ async def _reject_lead(lead, pro, whatsapp, picked=False):
             "last_rejected_at": datetime.now(timezone.utc),
         },
         expected_status=LeadStatus.NEW,
+        **owner_guard,
     )
     if claimed is None:
         return await _no_offer_reply(pro["_id"], lead["_id"] if picked else None)

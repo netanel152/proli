@@ -195,6 +195,7 @@ def send_completion_check_sync(lead_id: str):
     from app.core.constants import Defaults
     from app.core.messages import Messages
     from app.core.phone import to_chat_id
+    from app.providers.whatsapp import template_registry
     from app.providers.whatsapp.sync import send_text_sync
 
     lead = leads_collection.find_one({"_id": ObjectId(lead_id)})
@@ -215,6 +216,7 @@ def send_completion_check_sync(lead_id: str):
         message_text,
         template_key="completion_check",
         params={"pro_name": pro_name},
+        buttons=template_registry.buttons_for("completion_check"),
     )
 
     # Stamp the lead exactly like the async path does. An operator send bypasses
