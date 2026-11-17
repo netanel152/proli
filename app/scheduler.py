@@ -38,6 +38,7 @@ import time
 import pytz
 from app.services.scheduling_service import regenerate_all_templates
 from app.services import agenda_service
+from app.services import pipeline_watch
 from app.core.logger import logger, page_critical, redact_secrets
 from app.core.redis_client import with_scheduler_lock
 
@@ -307,6 +308,15 @@ async def _customer_cold_job_allowed(toggle_key: str) -> bool:
         return False
     config = await settings_collection.find_one({"_id": SCHEDULER_CONFIG_ID})
     return scheduler_toggle(config, toggle_key)
+
+
+@with_scheduler_lock("run_pipeline_watch", ttl=500)
+@track_mongo_auth_failures
+async def run_pipeline_watch():
+    """PRO-17 — the lead-pipeline watch plus its Sentry Crons heartbeat.
+    Pages the operator only (no customer), so no business-hours gate; production
+    only, registered below."""
+    await pipeline_watch.run_pipeline_watch()
 
 
 @with_scheduler_lock("run_sos_healer", ttl=500)
@@ -916,6 +926,14 @@ def start_scheduler():
     # that is not meant to back up. Registration-time gate: the job never
     # enters the scheduler outside production.
     if settings.is_production:
+        # PRO-17: replaces the GitHub-scheduled lead-pipeline monitor as the
+        # primary watch; every 10 minutes, matching its Sentry Crons schedule.
+        scheduler.add_job(
+            run_pipeline_watch,
+            IntervalTrigger(minutes=10),
+            id="pipeline_watch",
+            replace_existing=True,
+        )
         scheduler.add_job(
             run_daily_backup,
             CronTrigger(hour=2, minute=0, timezone=IL_TZ),

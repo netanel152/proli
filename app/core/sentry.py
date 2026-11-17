@@ -367,3 +367,38 @@ def init_sentry(service: str) -> bool:
     )
     _active = True
     return True
+
+
+#: PRO-17 — the worker's heartbeat monitor in Sentry Crons. The SDK upserts it
+#: from ``PIPELINE_WATCH_MONITOR_CONFIG`` on the first check-in, so nothing has
+#: to be created by hand, and Sentry opens an issue when a check-in is missed
+#: (worker dead or its scheduler stopped) or reports an error.
+PIPELINE_WATCH_MONITOR_SLUG = "worker-pipeline-watch"
+PIPELINE_WATCH_MONITOR_CONFIG = {
+    "schedule": {"type": "interval", "value": 10, "unit": "minute"},
+    # A deploy restarts the worker; one late tick is not an outage.
+    "checkin_margin": 5,
+    "max_runtime": 5,
+    "failure_issue_threshold": 2,
+    "recovery_threshold": 1,
+}
+
+
+def cron_checkin(status: str, check_in_id: str | None = None, duration=None):
+    """One Sentry Crons check-in for the pipeline watch, or None when Sentry is
+    off. Never raises: a monitoring hiccup must not fail the job it monitors."""
+    if not sentry_active():
+        return None
+    try:
+        from sentry_sdk.crons import capture_checkin
+
+        return capture_checkin(
+            monitor_slug=PIPELINE_WATCH_MONITOR_SLUG,
+            check_in_id=check_in_id,
+            status=status,
+            duration=duration,
+            monitor_config=PIPELINE_WATCH_MONITOR_CONFIG,
+        )
+    except Exception as e:
+        logger.warning(f"Sentry cron check-in failed ({status}): {e}")
+        return None
