@@ -100,6 +100,15 @@ def test_dependabot_groups_action_updates_into_one_weekly_pr():
     assert [g["patterns"] for g in update["groups"].values()] == [["*"]]
 
 
+def test_dependabot_watches_pip_for_security_updates_only():
+    """Security PRs for requirements.txt open regardless of the limit; routine
+    version bumps stay off until the post-pilot upgrade."""
+    config = yaml.safe_load((ROOT / ".github" / "dependabot.yml").read_text("utf-8"))
+    update = next(u for u in config["updates"] if u["package-ecosystem"] == "pip")
+    assert update["directory"] == "/"
+    assert update["open-pull-requests-limit"] == 0
+
+
 # --- tests.yml ---
 
 

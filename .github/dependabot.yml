@@ -8,3 +8,13 @@ updates:
       github-actions:
         patterns:
           - "*"
+  # Security updates only (PRO-218's pre-launch slice). A limit of 0 turns off
+  # Dependabot's routine version-bump PRs for pip, which stay a deliberate
+  # post-pilot upgrade; security PRs ignore this limit and still open, as long
+  # as "Dependabot security updates" is on in the repository's Code security
+  # settings.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
