@@ -123,9 +123,9 @@ db.settings.update_one(
 )
 ```
 
-Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `whatsapp_monitor_active`, `lead_janitor_active`, `sla_monitor_active`.
+Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `whatsapp_monitor_active`, `lead_janitor_active`, `sla_monitor_active`. Their defaults live once, in `app/core/scheduler_config.py` (`SCHEDULER_CONFIG_DEFAULTS`): the worker and the admin panel's Settings page both insert that document and read every toggle through `scheduler_toggle`, so a missing key shows in the panel as exactly what the worker does with it (PRO-249 — the panel used to show a missing `sos_healer_active` as on while the worker kept it off).
 
-**PRO-73 pilot posture:** `sos_healer_active`, `lead_janitor_active`, and `sla_monitor_active` gate *cold, customer-facing* re-engagement jobs and **default OFF** in the config `$setOnInsert` — they stay dark until an operator turns them on after the WhatsApp number is warmed up. Even when on, these three only run inside business hours (08:00–21:00 Israel time; see `within_business_hours()` in `app/core/datetime_utils.py`). Enable one via the same `settings_collection.update_one` pattern above, e.g. `{"$set": {"lead_janitor_active": True}}`.
+**PRO-73 pilot posture:** `sos_healer_active`, `lead_janitor_active`, and `sla_monitor_active` gate *cold, customer-facing* re-engagement jobs and **default OFF** — they stay dark until an operator turns them on after the WhatsApp number is warmed up. Even when on, these three only run inside business hours (08:00–21:00 Israel time; see `within_business_hours()` in `app/core/datetime_utils.py`). Enable one via the same `settings_collection.update_one` pattern above, e.g. `{"$set": {"lead_janitor_active": True}}`.
 
 ---
 

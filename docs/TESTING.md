@@ -153,6 +153,7 @@ pytest -m integration
 | `test_db_integration.py` | Real MongoDB read/write: lead persistence, status flow, chat history, pro lifecycle |
 | `test_integration_webhook.py` | HTTP POST to `/webhook` endpoint |
 | `test_scheduler.py` | Daily reminders, stale monitor timing |
+| `test_scheduler_config_defaults.py` | PRO-249: `SCHEDULER_CONFIG_DEFAULTS` pins PRO-73 (the three cold customer-facing toggles off, the rest on); a missing key or document reads as its default and a stored value wins; every toggle-gated worker job runs exactly when `scheduler_toggle` says the panel shows it on, with no document and with the old partial panel document; the worker upsert writes the shared defaults; and on source, neither `settings.py` nor `scheduler.py` reads a toggle with its own default, every panel checkbox goes through `scheduler_toggle`, both insert `SCHEDULER_CONFIG_DEFAULTS`, and `"scheduler_config"` is spelled only in `app/core/scheduler_config.py` |
 | `test_sos_monitor.py` | Auto-healing and admin reporting for stuck leads |
 
 ---
