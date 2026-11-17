@@ -17,7 +17,7 @@ from app.core.http_client import close_http_client as _close_shared_http_client
 from app.core.database import client as mongo_client
 from app.core.logger import logger, page_critical
 from app.core.sentry import init_sentry, sentry_active
-from scripts.create_indexes import create_all_indexes
+from app.db.indexes import create_all_indexes
 
 
 # One shared init for all three services (app/core/sentry.py): explicit
@@ -108,11 +108,19 @@ async def lifespan(app: FastAPI):
     warn_if_public_origin_malformed(settings)
 
     # Ensure all MongoDB indexes exist (idempotent — safe to run on every startup)
+    # PRO-250: "verified" only when every index is in place; each failure is
+    # already logged at ERROR by create_all_indexes. Non-fatal either way.
     try:
-        await create_all_indexes(silent=True)
-        logger.info("✅ MongoDB indexes verified.")
+        failed = await create_all_indexes(silent=True) or []
+        if failed:
+            logger.error(
+                f"❌ {len(failed)} MongoDB index(es) could not be created: "
+                + ", ".join(f"{f['label']} {f['keys']}" for f in failed)
+            )
+        else:
+            logger.info("✅ MongoDB indexes verified.")
     except Exception as e:
-        logger.warning(f"⚠️ Index creation failed (non-fatal): {e}")
+        logger.error(f"❌ Index creation failed (non-fatal): {e}")
 
     yield
 
@@ -122,7 +130,19 @@ async def lifespan(app: FastAPI):
     logger.info("API shut down cleanly.")
 
 
-app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+def api_docs_kwargs(cfg) -> dict:
+    """FastAPI's interactive docs (``/docs``, ``/redoc``) and the schema behind
+    them (``/openapi.json``) list every route and payload shape, so production
+    serves none of the three; development and staging keep them for debugging.
+    ``None`` is FastAPI's documented way to switch each one off."""
+    if cfg.is_production:
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {}
+
+
+app = FastAPI(
+    title=settings.PROJECT_NAME, lifespan=lifespan, **api_docs_kwargs(settings)
+)
 
 # --- Middleware ---
 app.add_middleware(RequestIDMiddleware)
