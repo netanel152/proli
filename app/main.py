@@ -122,7 +122,19 @@ async def lifespan(app: FastAPI):
     logger.info("API shut down cleanly.")
 
 
-app = FastAPI(title=settings.PROJECT_NAME, lifespan=lifespan)
+def api_docs_kwargs(cfg) -> dict:
+    """FastAPI's interactive docs (``/docs``, ``/redoc``) and the schema behind
+    them (``/openapi.json``) list every route and payload shape, so production
+    serves none of the three; development and staging keep them for debugging.
+    ``None`` is FastAPI's documented way to switch each one off."""
+    if cfg.is_production:
+        return {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    return {}
+
+
+app = FastAPI(
+    title=settings.PROJECT_NAME, lifespan=lifespan, **api_docs_kwargs(settings)
+)
 
 # --- Middleware ---
 app.add_middleware(RequestIDMiddleware)

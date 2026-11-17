@@ -4,6 +4,10 @@
 Local: `http://localhost:8000`
 Production: Your Railway or custom domain with HTTPS.
 
+## Interactive docs
+
+FastAPI's `/docs` (Swagger UI), `/redoc` and the `/openapi.json` schema behind them are served in development and staging only. With `ENVIRONMENT=production` all three return 404 (`app.main.api_docs_kwargs`), because the schema lists every route and payload shape of an internet-facing API.
+
 ## Endpoints
 
 ### 1. Health Check
