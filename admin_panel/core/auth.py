@@ -2,6 +2,7 @@ from functools import partial
 import streamlit as st
 import os
 import time
+import hashlib
 import hmac
 import secrets
 import extra_streamlit_components as stx
@@ -394,8 +395,15 @@ def check_password(cookies):
                         }
                         _active_sessions[secure_token] = session_data
                         _persist_session(secure_token, session_data)
+                        # PRO-275: Secure, so the token never crosses plain
+                        # HTTP. It cannot be HttpOnly — the component sets it
+                        # from JavaScript — which is why the panel escapes
+                        # every stored string it renders as HTML.
                         cookie_manager.set(
-                            "proli_auth_token", secure_token, expires_at=expires
+                            "proli_auth_token",
+                            secure_token,
+                            expires_at=expires,
+                            secure=True,
                         )
 
                     # No `st.success` + `time.sleep(1)`: the rerun discards
@@ -446,11 +454,23 @@ def logout(cookie_manager, T):
         st.rerun()
 
 
+def _token_key(token: str) -> str:
+    """What ``admin_sessions._token`` holds: the token's SHA-256, never the token.
+
+    PRO-275: the raw token is a bearer credential, so anyone who can read that
+    collection, or a backup of it, could replay any live session. A hash still
+    finds the session for the cookie that carries the token, and is useless
+    without it. Sessions stored raw before this simply stop matching and expire.
+    """
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def _persist_session(token: str, session_data: dict):
     """Persist a session to MongoDB so it survives restarts."""
+    key = _token_key(token)
     try:
         _sessions_col.update_one(
-            {"_token": token}, {"$set": {"_token": token, **session_data}}, upsert=True
+            {"_token": key}, {"$set": {"_token": key, **session_data}}, upsert=True
         )
     except Exception as e:
         logger.warning(f"Failed to persist admin session: {e}")
@@ -459,7 +479,7 @@ def _persist_session(token: str, session_data: dict):
 def _load_session(token: str) -> dict | None:
     """Load a session from MongoDB (used when local cache is cold after restart)."""
     try:
-        doc = _sessions_col.find_one({"_token": token})
+        doc = _sessions_col.find_one({"_token": _token_key(token)})
         if doc:
             return {
                 "expiry": _as_utc(doc["expiry"]),
@@ -474,7 +494,7 @@ def _load_session(token: str) -> dict | None:
 def _delete_session(token: str):
     """Remove a session from MongoDB on logout."""
     try:
-        _sessions_col.delete_one({"_token": token})
+        _sessions_col.delete_one({"_token": _token_key(token)})
     except Exception as e:
         logger.warning(f"Failed to delete admin session: {e}")
 
