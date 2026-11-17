@@ -196,6 +196,17 @@ seams built for it (`app.providers.whatsapp.sync.send_text_sync` for sends;
 direct Mongo reads through its own config). It is a synchronous process
 looking at the same database, not a fourth caller of the async service layer.
 
+**The import direction is enforced, not just written down.**
+`tests/test_architecture_layers.py` is a pure-`ast` check of these rules:
+`app.core` never imports services, providers or the runtime entry points;
+providers never import services; `app/` never imports `admin_panel` and never
+imports or runs `scripts/`; the panel reaches `app.services` only through a
+named allowlist; and a first-party import inside a function carries a
+`# cycle:` comment saying which cycle it breaks. Each rule holds a table of
+the violations that exist today. The tables are a ratchet: a new violation
+fails the build, and so does a table row that no longer occurs, so the row is
+deleted in the PR that fixes it (`docs/RESTRUCTURE_PLAN.md`, phase 0).
+
 ## 5. The Service Module
 
 A service is a **module of async functions**, not a class. That is the
