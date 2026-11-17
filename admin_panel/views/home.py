@@ -67,6 +67,7 @@ from app.services.matching_service import APPROVED_PRO_FILTER
 import pytz
 import os
 import sys
+from app.core.datetime_utils import IL_TZ
 from app.core.logger import logger
 from app.core.constants import AdminDefaults, LeadStatus, Actor
 from app.core.phone import mask_chat_id, to_chat_id, strip_suffix
@@ -892,7 +893,7 @@ def view_leads_dashboard(T):
             st.download_button(
                 label=T.get("export_csv", "Export CSV"),
                 data=csv,
-                file_name=f'proli_leads_{datetime.now().strftime("%Y-%m-%d")}.csv',
+                file_name=f'proli_leads_{datetime.now(IL_TZ).strftime("%Y-%m-%d")}.csv',
                 mime="text/csv",
                 key="export_leads_csv",
             )

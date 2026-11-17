@@ -2,7 +2,7 @@ import sys
 import os
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 
 # Add project root to path
@@ -102,7 +102,7 @@ with st.sidebar:
 
     if selected_lang != st.session_state.lang_code:
         st.session_state.lang_code = selected_lang
-        expires = datetime.now() + timedelta(days=365)
+        expires = datetime.now(timezone.utc) + timedelta(days=365)
         cookie_manager.set("proli_lang", selected_lang, expires_at=expires)
         time.sleep(0.05)
         st.rerun()

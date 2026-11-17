@@ -19,7 +19,7 @@ Usage:
 
 import sys
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.core.config import settings
@@ -35,8 +35,10 @@ def run_mongodump() -> Path | None:
     """Run mongodump and return the archive path."""
     BACKUP_DIR.mkdir(exist_ok=True)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    weekday = datetime.now().strftime("%A").lower()
+    # UTC, read once: the name's time and weekday come from the same instant.
+    started = datetime.now(timezone.utc)
+    timestamp = started.strftime("%Y%m%d_%H%M%S")
+    weekday = started.strftime("%A").lower()
     archive_name = f"proli_{timestamp}_{weekday}.gz"
     archive_path = BACKUP_DIR / archive_name
 
@@ -126,14 +128,14 @@ def cleanup_old_backups():
     if not all_backups:
         return
 
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     cutoff_weekly = now - timedelta(weeks=WEEKLY_RETENTION)
 
     kept = []
     weekly_kept = set()
 
     for backup in all_backups:
-        mtime = datetime.fromtimestamp(backup.stat().st_mtime)
+        mtime = datetime.fromtimestamp(backup.stat().st_mtime, timezone.utc)
         age_days = (now - mtime).days
 
         # Keep all within daily retention
