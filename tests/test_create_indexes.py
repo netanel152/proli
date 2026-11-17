@@ -17,7 +17,7 @@ from mongomock_motor import AsyncMongoMockClient
 from pymongo import ASCENDING, DESCENDING
 
 import app.main as main_module
-import scripts.create_indexes as create_indexes
+import app.db.indexes as create_indexes
 from app.main import app
 
 

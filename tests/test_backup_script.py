@@ -1,4 +1,4 @@
-"""PRO-111 — scripts/backup.py strict --upload-s3 exit codes.
+"""PRO-111 — app/db/backup.py (scripts/backup.py wraps it) strict --upload-s3 exit codes.
 
 Before PRO-111, `--upload-s3` failing to land the archive in S3 (missing
 bucket, boto3 error, etc.) still exited 0 — the scheduler then logged "backup
@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import scripts.backup as backup_module
+import app.db.backup as backup_module
 
 
 def _archive_path_from_cmd(cmd: list[str]) -> Path:
@@ -187,3 +187,76 @@ def test_run_mongodump_timeout_returns_none_and_unlinks_partial_file(
 
     assert result is None
     assert not captured["path"].exists()
+
+
+# --- Restructure phase 3: production runs app.db.backup, not scripts/ -------
+
+import os  # noqa: E402
+import sys  # noqa: E402
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_backup_dir_is_still_the_repository_root_backups_folder():
+    """Moving the module from scripts/ to app/db/ must not move where the
+    archives land (``.dockerignore`` and the retention sweep expect it)."""
+    assert backup_module.BACKUP_DIR == _ROOT / "backups"
+
+
+@pytest.mark.asyncio
+async def test_nightly_job_runs_the_module_from_the_repository_root(
+    monkeypatch, fake_redis
+):
+    import app.scheduler as scheduler_module
+
+    run = MagicMock(return_value=MagicMock(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(subprocess, "run", run)
+
+    await scheduler_module.run_daily_backup()
+
+    cmd = run.call_args.args[0]
+    assert cmd == [sys.executable, "-m", "app.db.backup", "--upload-s3"]
+    assert Path(run.call_args.kwargs["cwd"]) == _ROOT
+    assert not any("scripts" in str(part) for part in cmd)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [["-m", "app.db.backup", "--help"], ["scripts/backup.py", "--help"]],
+    ids=["module", "cli-wrapper"],
+)
+def test_both_entry_points_start(argv):
+    """The scheduler's `-m` form and the operator's script both resolve and
+    parse their flags (``--help`` exits before any dump)."""
+    env = {**os.environ, "PYTHONPATH": ""}
+    result = subprocess.run(
+        [sys.executable, *argv],
+        cwd=_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, result.stderr[-800:]
+    assert "--upload-s3" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["backup.py", "create_indexes.py"])
+def test_cli_wrappers_hold_no_second_copy_of_the_logic(name):
+    """A wrapper that re-declared INDEX_SPECS or the dump would be a second
+    source of truth, and a test patching it would check nothing."""
+    import ast
+
+    tree = ast.parse((_ROOT / "scripts" / name).read_text(encoding="utf-8"))
+    defined = {
+        n.name
+        for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    } | {
+        t.id
+        for n in tree.body
+        if isinstance(n, ast.Assign)
+        for t in n.targets
+        if isinstance(t, ast.Name)
+    }
+    assert defined == set()

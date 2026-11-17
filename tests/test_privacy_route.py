@@ -51,7 +51,7 @@ async def test_get_privacy_body_contains_hebrew_and_english_titles():
 @pytest.mark.asyncio
 async def test_get_privacy_body_states_90_day_retention():
     """This wording must stay in sync with the messages-collection TTL index
-    in scripts/create_indexes.py (expireAfterSeconds=7776000, i.e. 90 days).
+    in app/db/indexes.py (expireAfterSeconds=7776000, i.e. 90 days).
     If that TTL ever changes, this page's retention statement (and this
     assertion) must change with it, in both languages."""
     resp = await _get_privacy()

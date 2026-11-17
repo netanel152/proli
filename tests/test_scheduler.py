@@ -388,7 +388,7 @@ async def test_monitor_tier2_nudges_customer_once_not_every_tick(mock_db, monkey
 
 # --- PRO-111: nightly backup failure escalation ---------------------------
 #
-# run_daily_backup shells out to scripts/backup.py --upload-s3 via
+# run_daily_backup shells out to `python -m app.db.backup --upload-s3` via
 # subprocess.run (imported inside the function — patched globally on the
 # `subprocess` module, which is the same module object regardless of where
 # it's imported from). Redis touches (BACKUP_FAILURE_COUNT_KEY, plus the

@@ -165,12 +165,13 @@ The existing top level stays as it is. What it means:
 | ----------------- | -------------------------------------------------------------------------------------------- |
 | `app/api/`        | FastAPI routes. Thin: validate, enqueue, return. No business logic.                          |
 | `app/core/`       | Cross-cutting infrastructure: config, constants, messages, DB/Redis clients, logging, prompts. |
+| `app/db/`         | Data-layer code production runs: the index table (`indexes.py`) and the nightly backup (`backup.py`). |
 | `app/providers/`  | External transport adapters. Today: `whatsapp/` — the single outbound egress (PRO-86).       |
 | `app/schemas/`    | Pydantic models for inbound payloads.                                                        |
 | `app/services/`   | The domain layer. One module per domain responsibility.                                      |
 | `app/worker.py`   | Worker entry point; `app/core/arq_worker.py` and `app/scheduler.py` wire ARQ + APScheduler.  |
 | `admin_panel/`    | Streamlit admin app: `core/` (auth, rbac, config), `ui/`, `views/`.                          |
-| `scripts/`        | Operational one-shots: seeding, indexes, history cleanup. Documented in `docs/SCRIPTS.md`.   |
+| `scripts/`        | Operational one-shots: seeding, history cleanup, CLI wrappers. Never imported or run by `app/`. Documented in `docs/SCRIPTS.md`. |
 | `tests/`          | The whole test suite, including `tests/e2e/`. See [Testing](#14-testing).                    |
 | `docs/`           | Operator and developer documentation.                                                        |
 

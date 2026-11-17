@@ -183,10 +183,8 @@ def test_services_do_not_import_runtime_entry_points():
 # Rule 4 — app/ never depends on admin_panel/ or scripts/
 # ---------------------------------------------------------------------------
 
-# Phase 3 moves the index specs into app/ and empties this table.
-_APP_IMPORTS_SCRIPTS_EXCEPTIONS = {
-    ("app/main.py", "scripts.create_indexes"): 1,
-}
+# Emptied by restructure phase 3 (the index table moved to app/db/indexes.py).
+_APP_IMPORTS_SCRIPTS_EXCEPTIONS: dict = {}
 
 
 def test_app_does_not_import_admin_panel():
@@ -201,11 +199,9 @@ def test_app_does_not_import_scripts():
 
 _SCRIPT_PATH = re.compile(r"scripts(/[\w./-]+\.(py|sh))?")
 
-# The nightly backup runs scripts/backup.py by file path (built with
-# os.path.join(..., "scripts", "backup.py")). Phase 3 moves it into app/.
-_APP_RUNS_SCRIPTS_EXCEPTIONS = {
-    ("app/scheduler.py", "scripts"): 1,
-}
+# Emptied by restructure phase 3: the nightly backup used to run
+# scripts/backup.py by file path; it now runs `python -m app.db.backup`.
+_APP_RUNS_SCRIPTS_EXCEPTIONS: dict = {}
 
 
 def test_app_does_not_run_scripts_by_path():

@@ -308,7 +308,7 @@ The runtime Docker image installs `mongodb-database-tools` from MongoDB's offici
 | Lifecycle rule 1 | `expire-backups-after-35-days` — objects deleted after 35 days (≈ the documented 7 daily + 4 weekly coverage) |
 | Lifecycle rule 2 | `abort-stuck-multipart-uploads-after-1-day` — interrupted uploads can't linger as billable parts |
 
-**Retention is bucket-side, deliberately.** `scripts/backup.py::cleanup_old_backups` deletes **local files only**; on Railway's ephemeral disk that path is a no-op in practice, and nothing app-side ever deletes uploaded objects. The lifecycle rules above are the real retention mechanism — enforced by the storage provider rather than by a job that must succeed in order to clean up. Local retention (relevant for local/dev runs only): 7 daily + 4 weekly.
+**Retention is bucket-side, deliberately.** `app/db/backup.py::cleanup_old_backups` (which `scripts/backup.py` wraps) deletes **local files only**; on Railway's ephemeral disk that path is a no-op in practice, and nothing app-side ever deletes uploaded objects. The lifecycle rules above are the real retention mechanism — enforced by the storage provider rather than by a job that must succeed in order to clean up. Local retention (relevant for local/dev runs only): 7 daily + 4 weekly.
 
 ### Failure escalation (PRO-111)
 
