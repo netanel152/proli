@@ -104,9 +104,8 @@ def test_admin_phone_from_a_real_env_var_is_configured(monkeypatch):
 def test_an_explicitly_empty_admin_phone_counts_as_unconfigured(monkeypatch):
     """``ADMIN_PHONE=`` is worse than the default, not better.
 
-    Railway allows an empty variable and ``docker-compose.prod.yml`` uses the
-    bare ``VAR=`` idiom deliberately, so this is a shape the repo really
-    produces. The field lands in ``model_fields_set``, so a provenance-only
+    Railway allows an empty variable and compose's bare ``VAR=`` idiom sets
+    one, so this is a shape a deployment really produces. The field lands in ``model_fields_set``, so a provenance-only
     check would call it configured — while ``to_chat_id("")`` sends nowhere and
     the masked log line degrades to ``"***"``, which cannot even say who was
     missed. ``validate_environment`` rejects an empty ENVIRONMENT for the same

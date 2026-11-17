@@ -92,7 +92,7 @@ python scripts/create_indexes.py
 
 ### `clear_history.py`
 
-Wipes all conversation history from the `messages` collection and clears Redis context keys.
+Deletes every document in `messages`, `leads` and `reviews` (pros and slots stay), after a `y/n` prompt. Refuses to run unless `ENVIRONMENT` is `development` or `staging`, checked before the prompt.
 
 ```bash
 python scripts/clear_history.py
@@ -186,11 +186,11 @@ python scripts/finops_report.py
 
 ### `reset_test.py`
 
-Clears test state: deletes test leads/messages from MongoDB, wipes Redis state/context/webhook keys.
+Clears test state: deletes test leads/messages from MongoDB, wipes Redis state/context/webhook keys. Refuses to run unless `ENVIRONMENT` is `development` or `staging`, checked before it connects to anything.
 
 ```bash
-python scripts/reset_test.py --all            # Full environment wipe
-python scripts/reset_test.py 972501234567     # Wipe specific customer only
+python scripts/reset_test.py --all                        # Full environment wipe
+python scripts/reset_test.py --customer 972501234567      # Wipe specific customer only
 ```
 
 ### `init_production.py`
