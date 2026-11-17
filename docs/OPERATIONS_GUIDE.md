@@ -80,7 +80,21 @@ Log patterns to watch:
 | `⛔ Outbound halted` | Circuit breaker suppressing sends — instance not authorized |
 | `Geocoding unavailable — circuit opened` | `page_critical` → Sentry page; Google Geocoding is failing transiently (missing key, quota, network) and the `geo:unavailable` breaker is open (PRO-19) |
 
-### Lead pipeline monitor
+### Monitors that do not depend on GitHub (PRO-17)
+
+GitHub's schedule is best effort and nothing watches it, so the primary watch now runs in the worker, and Sentry watches the worker and the API from outside. No token is stored in Sentry.
+
+| monitor | what it checks | alerts when | where |
+|---|---|---|---|
+| **Pipeline watch** (`run_pipeline_watch`, production worker, every 10 min) | reads `pending_review_count` and `stuck_contacted_count` straight from Mongo (the `/health/leads` queries, no HTTP, no token) and applies the rules in the table below; state in Redis `pipeline_watch:state` | a rule breaches → `page_operator` (Sentry `fatal` → email) | `app/services/pipeline_watch.py` |
+| **Sentry Crons `worker-pipeline-watch`** | every pipeline-watch tick checks in (`in_progress` → `ok`/`error`); the SDK upserts the monitor (10-min interval, 5-min margin, 5-min max runtime) on the first check-in | a check-in is **missed** (worker or its scheduler dead, or the deploy stuck) or reports `error` (Mongo/Redis unreadable), 2 in a row → Sentry issue | `app/core/sentry.py` `cron_checkin` |
+| **Sentry uptime "Production API /health (public)"** | `GET https://api-production-d95db.up.railway.app/health` every 5 min, no headers | 2 failed checks in a row → Sentry uptime issue (env `production`) | Sentry → Monitors (id 2694680) |
+
+Both Sentry monitors open issues; the project's alert rule ([`SENTRY_SETUP.md`](SENTRY_SETUP.md)) routes new issues by email. **Check after deploy:** Sentry → Crons shows `worker-pipeline-watch` with recent `ok` check-ins within 10 minutes of the worker starting; if it never appears, `SENTRY_DSN` is unset on production's worker. To prove the missed-check-in alert, stop the production worker for ~25 minutes in a quiet window and watch for the issue.
+
+The GitHub workflow below still runs the same rules from outside and stays as a second opinion; it is no longer what the pipeline depends on.
+
+### Lead pipeline monitor (GitHub workflow, secondary)
 
 The `🩺 Lead pipeline monitor` workflow (`.github/workflows/health-leads-monitor.yml`, logic in `scripts/check_health_leads.py`) polls production's `/health/leads` every 10 minutes and pages through Sentry, the same `fatal` → email route as `page_critical`.
 
@@ -112,7 +126,7 @@ The `🩺 Lead pipeline monitor` workflow (`.github/workflows/health-leads-monit
 
 ## Scheduler Jobs
 
-All jobs run in the Worker process. Individual jobs can be toggled via MongoDB:
+All jobs run in the Worker process. Production also runs the lead-pipeline watch every 10 minutes (`pipeline_watch`, PRO-17 — see "Monitors that do not depend on GitHub" above); it pages only and has no toggle. Individual jobs can be toggled via MongoDB:
 
 ```python
 # Disable the SOS healer (e.g. during maintenance)
