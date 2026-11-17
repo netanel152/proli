@@ -34,6 +34,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from mongomock_motor import AsyncMongoMockClient
+from pydantic import SecretStr
 
 from app.core.config import settings
 
@@ -134,6 +135,7 @@ async def world(
     import app.services.scheduling_service  # noqa: F401
     import app.services.workflow_service as workflow_service
     import app.core.arq_worker  # noqa: F401
+    from app.api.routes import meta_webhook as meta_webhook_route
     from app.api.routes import webhook as webhook_route
     from app.services.context_manager_service import ContextManager
     from app.services.data_management_service import has_consent
@@ -144,6 +146,9 @@ async def world(
     monkeypatch.setattr(settings, "ADMIN_PHONE", R.ADMIN)
     monkeypatch.setattr(settings, "ONCALL_PHONE", R.ONCALL)
     monkeypatch.setattr(settings, "WEBHOOK_TOKEN", None)
+    # Pinned, not inherited from a developer's .env: every `World.deliver()`
+    # then signs its body and the Meta route verifies it, on every machine.
+    monkeypatch.setattr(settings, "META_APP_SECRET", SecretStr("e2e-app-secret"))
 
     # --- 2. One real facade, recording at the provider ------------------------
     # PRO-86: the swap moved up a layer. It used to be an httpx MockTransport under
@@ -219,15 +224,20 @@ async def world(
     )
 
     # --- 7. Webhook → in-memory queue instead of Redis/ARQ -------------------
+    # The harness drives the Meta route (`/webhook/meta`). The legacy route is
+    # patched too while it still exists, so nothing reaching it can enqueue to
+    # a real Redis. Keyword arguments (message_id, trace_id) are kept and
+    # replayed by `World.drain()`, so the worker sees the wamid as in production.
     enqueued: list[tuple] = []
 
     class _CapturingArqPool:
         async def enqueue_job(self, name, *args, **kwargs):
-            enqueued.append((name, args))
+            enqueued.append((name, args, kwargs))
 
     async def _fake_get_arq_pool():
         return _CapturingArqPool()
 
+    monkeypatch.setattr(meta_webhook_route, "get_arq_pool", _fake_get_arq_pool)
     monkeypatch.setattr(webhook_route, "get_arq_pool", _fake_get_arq_pool)
 
     w = World(mock_db, recorder, ai, monkeypatch, fake_redis)

@@ -1388,17 +1388,25 @@ async def test_reset_mid_flow_clears_state_and_context(world):
 
 @pytest.mark.asyncio
 async def test_duplicate_webhook_is_processed_once(world):
-    """Idempotency lives in the webhook route, so this drives the real HTTP path."""
+    """Idempotency lives in the webhook route, so this drives the real HTTP path.
+
+    The Meta route answers 200 to a redelivery (Meta must not retry it) and
+    reports that nothing was enqueued; the proof is that no job ran and no
+    second reply went out."""
     await world.standard_cast()
     world.ai.script(reply("שלום! מה קרה?"))
 
-    first = await world.deliver("היי", id_message="dup-1")
+    first = await world.deliver("היי", id_message="wamid.dup-1")
     assert first["status"] == "processing_message"
     sends_after_first = len(world.recorder.sends)
 
-    second = await world.deliver("היי", id_message="dup-1")
+    second = await world.post_webhook(
+        world.webhook_payload("היי", id_message="wamid.dup-1")
+    )
 
-    assert second["detail"] == "duplicate"
+    assert second["status"] == "ignored_type"
+    assert world._enqueued == [], "a replayed wamid must not be enqueued again"
+    await world.drain()
     assert (
         len(world.recorder.sends) == sends_after_first
     ), "a replayed webhook must not produce a second reply"
@@ -1415,8 +1423,9 @@ async def test_out_of_order_webhooks_do_not_corrupt_the_lead(world):
         reply("מה הכתובת?"),
     )
 
-    await world.deliver("אני דנה מתל אביב", id_message="ooo-1")
-    await world.deliver("יש לי נזילה מתחת לכיור", id_message="ooo-2")
+    first = await world.deliver("אני דנה מתל אביב", id_message="wamid.ooo-1")
+    second = await world.deliver("יש לי נזילה מתחת לכיור", id_message="wamid.ooo-2")
+    assert first["status"] == second["status"] == "processing_message"
 
     lead = await world.lead()
     assert lead["customer_name"] == "דנה"

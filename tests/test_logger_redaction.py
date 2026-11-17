@@ -19,10 +19,16 @@ def test_mask_pii_unchanged():
 
 
 def test_redact_secrets_replaces_webhook_token_in_query(monkeypatch):
-    # The exact leak PRO-80 fixes: uvicorn access log line with the token in the query string.
+    # The leak PRO-80 fixes: a uvicorn access log line with a secret in the query
+    # string. The legacy `?token=` route is being retired; Meta's subscription
+    # handshake puts META_VERIFY_TOKEN in the query string the same way.
     monkeypatch.setattr(logmod, "_SECRET_VALUES", ["webhooktok456"])
-    out = redact_secrets('POST /webhook?token=webhooktok456 HTTP/1.1" 200')
+    out = redact_secrets(
+        "GET /webhook/meta?hub.mode=subscribe&hub.verify_token=webhooktok456"
+        '&hub.challenge=123 HTTP/1.1" 200'
+    )
     assert "webhooktok456" not in out
+    assert "hub.challenge=123" in out
     assert "***REDACTED***" in out
 
 
