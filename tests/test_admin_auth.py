@@ -134,3 +134,103 @@ def test_lockout_fails_open_on_redis_exception(monkeypatch):
     assert auth._is_locked("bob") == (False, 0)
     auth._record_failed_attempt("bob")
     auth._reset_attempts("bob")
+
+
+# --- PRO-252: session expiry is UTC, whatever the container clock says ---
+
+import time as _time  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
+
+import mongomock  # noqa: E402
+
+
+@pytest.fixture
+def israel_clock(monkeypatch):
+    """Run the test with the process in Israel time (UTC+2/+3), the clock a
+    non-Railway host would have. ``datetime.now()`` follows it; Mongo's TTL
+    monitor does not."""
+    monkeypatch.setenv("TZ", "Asia/Jerusalem")
+    _time.tzset()
+    assert datetime.now().hour != datetime.now(timezone.utc).replace(tzinfo=None).hour
+    yield
+    monkeypatch.undo()
+    _time.tzset()
+
+
+@pytest.fixture
+def sessions(monkeypatch):
+    col = mongomock.MongoClient().proli_test.admin_sessions
+    monkeypatch.setattr(auth, "_sessions_col", col)
+    monkeypatch.setattr(auth, "_active_sessions", {})
+    return col
+
+
+def test_new_session_expiry_is_seven_days_of_utc(israel_clock):
+    expires = auth._utcnow() + auth.SESSION_LIFETIME
+    assert expires.tzinfo is not None
+    delta = expires - datetime.now(timezone.utc)
+    assert timedelta(days=7) - timedelta(seconds=5) < delta <= timedelta(days=7)
+
+
+def test_persisted_session_round_trips_through_mongo_as_utc(israel_clock, sessions):
+    """Written aware, read back naive (pymongo's shape), compared aware: a
+    session with an hour left is live, not two-three hours expired."""
+    expiry = auth._utcnow() + timedelta(hours=1)
+    auth._persist_session("tok", {"expiry": expiry, "username": "a", "role": "owner"})
+
+    stored = sessions.find_one({"_token": "tok"})["expiry"]
+    assert abs(stored.replace(tzinfo=timezone.utc) - expiry) < timedelta(seconds=1)
+
+    loaded = auth._load_session("tok")
+    assert loaded["expiry"].tzinfo is not None
+    assert auth._session_live(loaded) is True
+
+
+def test_a_naive_utc_expiry_from_mongo_is_judged_in_utc(israel_clock):
+    """The bug: the old check compared Mongo's naive-UTC expiry against naive
+    *local* now(), so in Israel time a session with an hour left read as
+    already expired."""
+    naive_utc_expiry = (datetime.now(timezone.utc) + timedelta(hours=1)).replace(
+        tzinfo=None
+    )
+    assert not naive_utc_expiry > datetime.now()  # what the old code concluded
+    assert auth._session_live({"expiry": naive_utc_expiry}) is True
+    assert (
+        auth._session_live({"expiry": naive_utc_expiry - timedelta(hours=2)}) is False
+    )
+
+
+def test_cleanup_drops_expired_and_keeps_live_sessions_in_utc(israel_clock, sessions):
+    now = auth._utcnow()
+    live = {"expiry": now + timedelta(minutes=30), "username": "a", "role": "owner"}
+    dead = {"expiry": now - timedelta(minutes=30), "username": "b", "role": "owner"}
+    legacy = {  # a pre-PRO-252 naive document, still within its lifetime
+        "expiry": (now + timedelta(days=1)).replace(tzinfo=None),
+        "username": "c",
+        "role": "owner",
+    }
+    for token, data in (("live", live), ("dead", dead), ("legacy", legacy)):
+        auth._active_sessions[token] = data
+        auth._persist_session(token, data)
+
+    auth._cleanup_expired_sessions()
+
+    assert set(auth._active_sessions) == {"live", "legacy"}
+    assert {d["_token"] for d in sessions.find()} == {"live", "legacy"}
+
+
+def test_session_check_never_compares_against_naive_local_time():
+    """Source pin: no argument-less ``datetime.now()`` call left in auth.py."""
+    import ast
+    import inspect
+
+    bare = [
+        node.lineno
+        for node in ast.walk(ast.parse(inspect.getsource(auth)))
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "now"
+        and not node.args
+        and not node.keywords
+    ]
+    assert bare == []
