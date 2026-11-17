@@ -19,11 +19,58 @@ from app.core.database import (  # noqa: F401 — slots_collection is a monkeypa
     slots_collection,  # unused here; tests/conftest.py rebinds it, so it must exist
     messages_collection,
     reviews_collection,
+    wa_delivery_collection,
 )
+from app.core.redis_client import get_redis_client
 from app.services.state_manager_service import StateManager
 from app.services.context_manager_service import ContextManager
 from app.core.phone import mask_chat_id, strip_suffix
 from app.core.logger import logger
+
+# Every Redis key that carries a chat_id, beyond what StateManager.clear_state
+# (state:, state_meta:, consent_hold:) and ContextManager.clear_context
+# (context:) already remove. tests/test_data_management.py scans app/ for
+# chat-keyed f-strings and fails when a family is missing from this list.
+#
+# Not listed: ``lock:chat:{chat_id}``. It is the per-chat mutual-exclusion lock
+# (a random token, no personal data, TTL in seconds), and deleting it while a
+# turn holds it would let a second turn run concurrently.
+_PER_CHAT_KEY_TEMPLATES = (
+    "rate_limit:{chat_id}",
+    "rate_limit:pro_search:{chat_id}",
+    "rl:inbound:{chat_id}",
+    "rl:trips:{chat_id}",
+    "retry_notice:{chat_id}",
+    "wa:window:{chat_id}",
+    "wa:window:page:{chat_id}",
+)
+# Families with a suffix after the chat_id (one key per day).
+_PER_CHAT_KEY_PATTERNS = ("ai:daily:{chat_id}:*",)
+# Sorted sets that hold the chat_id as a member, not in the key name.
+_PER_CHAT_ZSET_MEMBERS = ("wa:quality:business_initiated",)
+
+
+def _reviews_filter(chat_id: str) -> dict:
+    """Reviews are written under ``customer_chat_id`` (customer_flow); the
+    ``chat_id`` branch keeps any older document written under that name."""
+    return {"$or": [{"customer_chat_id": chat_id}, {"chat_id": chat_id}]}
+
+
+async def _delete_per_chat_redis_keys(chat_id: str) -> int:
+    """Remove every chat-keyed Redis entry not owned by StateManager/ContextManager.
+
+    Returns how many keys or set members were removed.
+    """
+    redis = await get_redis_client()
+    keys = [t.format(chat_id=chat_id) for t in _PER_CHAT_KEY_TEMPLATES]
+    for pattern in _PER_CHAT_KEY_PATTERNS:
+        keys.extend(
+            [k async for k in redis.scan_iter(match=pattern.format(chat_id=chat_id))]
+        )
+    removed = await redis.delete(*keys) if keys else 0
+    for zset in _PER_CHAT_ZSET_MEMBERS:
+        removed += await redis.zrem(zset, chat_id)
+    return removed
 
 
 async def record_consent(chat_id: str, accepted: bool) -> None:
@@ -59,7 +106,12 @@ async def export_user_data(chat_id: str) -> dict:
     user = await users_collection.find_one({"phone_number": {"$in": [phone, chat_id]}})
     leads = await leads_collection.find({"chat_id": chat_id}).to_list(length=500)
     messages = await messages_collection.find({"chat_id": chat_id}).to_list(length=5000)
-    reviews = await reviews_collection.find({"chat_id": chat_id}).to_list(length=100)
+    reviews = await reviews_collection.find(_reviews_filter(chat_id)).to_list(
+        length=100
+    )
+    deliveries = await wa_delivery_collection.find({"chat_id": chat_id}).to_list(
+        length=5000
+    )
     consent = await consent_collection.find_one({"chat_id": chat_id})
 
     # Convert ObjectIds to strings for JSON serialization
@@ -81,6 +133,7 @@ async def export_user_data(chat_id: str) -> dict:
         "leads": [serialize(lead) for lead in leads],
         "messages": [serialize(m) for m in messages],
         "reviews": [serialize(r) for r in reviews],
+        "message_deliveries": [serialize(d) for d in deliveries],
         "consent": serialize(consent),
     }
 
@@ -95,15 +148,19 @@ async def delete_user_data(chat_id: str) -> dict:
         await leads_collection.delete_many({"chat_id": chat_id})
     ).deleted_count
     results["reviews"] = (
-        await reviews_collection.delete_many({"chat_id": chat_id})
+        await reviews_collection.delete_many(_reviews_filter(chat_id))
+    ).deleted_count
+    results["message_deliveries"] = (
+        await wa_delivery_collection.delete_many({"chat_id": chat_id})
     ).deleted_count
     results["consent"] = (
         await consent_collection.delete_many({"chat_id": chat_id})
     ).deleted_count
 
-    # Clear Redis state and context
+    # Clear Redis: state + state_meta + consent_hold, context, then the rest.
     await StateManager.clear_state(chat_id)
     await ContextManager.clear_context(chat_id)
+    results["redis_keys"] = await _delete_per_chat_redis_keys(chat_id)
 
     # Mark consent as deleted (not remove user profile if they're a pro)
     logger.info(f"Deleted user data for {mask_chat_id(chat_id)}: {results}")
