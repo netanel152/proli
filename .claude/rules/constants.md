@@ -55,6 +55,7 @@ file is audited by the docs-syncer subagent.
 - `WorkerConstants.WA_QUALITY_PAGE_COOLDOWN_HOURS = 24`: at most one page per condition per window, standing or flapping, via `wa:quality:paged:<condition>` (SET NX EX); each page gets its own Sentry fingerprint so a repeat opens a new issue
 - `WorkerConstants.WA_BUSINESS_INITIATED_ALERT_RATIO = 0.8`: page at this share of the cap. The cap is the live messaging limit, else `Settings.WA_BUSINESS_INITIATED_CAP` (default 250)
 - `WorkerConstants.PENDING_REVIEW_SHORTCIRCUIT_HOURS = 24`: how long a PENDING_ADMIN_REVIEW lead short-circuits the customer's chat before their next message proceeds to the normal dispatcher (PRO-63)
+- `WorkerConstants.HEALTH_DB_PING_TIMEOUT_SECONDS = 2.0`: how long `GET /health` waits on `database.ping_db` (the Motor ping under `asyncio.wait_for`) before reporting Mongo down; the old blocking `sync_client` ping froze the API's event loop, webhook intake included, for the 30s server-selection timeout while Mongo was unreachable (PRO-251)
 - `WorkerConstants.SCHEDULER_MONGO_AUTH_TRIP_THRESHOLD = 3`: Mongo auth failures within the rolling window before a scheduler job pages CRITICAL (PRO-112)
 - `WorkerConstants.SCHEDULER_MONGO_AUTH_WINDOW_SECONDS = 1800`: 30-minute rolling window for counting Mongo auth failures across scheduler jobs
 - `WorkerConstants.SCHEDULER_MONGO_AUTH_REALERT_SECONDS = 3600`: re-page interval while scheduler jobs keep hitting Mongo auth failures

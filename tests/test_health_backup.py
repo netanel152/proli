@@ -43,7 +43,7 @@ def _redis_with_backup(raw_value):
 def _mock_mongo_and_whatsapp(monkeypatch):
     """Keep mongo/whatsapp fast and deterministic — this file only cares
     about the backup branch of GET /health."""
-    monkeypatch.setattr(health_route, "check_db_connection", lambda: True)
+    monkeypatch.setattr(health_route, "ping_db", AsyncMock(return_value=True))
 
     provider = MagicMock()
     provider.name = "stub"
