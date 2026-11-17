@@ -17,7 +17,7 @@ Follows the PRO-140 ``analytics_queries.py`` precedent: the collection is
 injected, tests pass mongomock.
 """
 
-from datetime import datetime, time as dt_time
+from datetime import date, datetime, timedelta, time as dt_time, timezone
 
 import pandas as pd
 import pytz
@@ -25,11 +25,20 @@ from bson.objectid import ObjectId
 from pymongo.errors import DuplicateKeyError
 
 from app.core.constants import LeadStatus
+from app.core.datetime_utils import IL_TZ
 from app.core.slot_writes import insert_slots_sync
 
 #: The editor frame's schema. The view builds its DataFrame with exactly these
 #: columns so they exist even when the day has no slots yet (PRO-158).
 EDITOR_COLUMNS = ["_id", "start_time", "end_time", "is_taken"]
+
+
+def bulk_generator_default_dates(now: datetime | None = None) -> tuple[date, date]:
+    """The bulk generator's default range: tomorrow to a week from today, by
+    the Israel calendar. The server runs on UTC, so between midnight in Israel
+    and midnight UTC a server-local "today" is still yesterday."""
+    today_il = (now or datetime.now(timezone.utc)).astimezone(IL_TZ).date()
+    return today_il + timedelta(days=1), today_il + timedelta(days=7)
 
 
 def _is_missing(value) -> bool:

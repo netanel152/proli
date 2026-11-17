@@ -3,7 +3,11 @@ import pandas as pd
 from datetime import datetime, timedelta, time
 from admin_panel.core.utils import users_collection, slots_collection, leads_collection
 from admin_panel.core.labels import pro_option_map
-from admin_panel.core.schedule_queries import EDITOR_COLUMNS, save_daily_schedule
+from admin_panel.core.schedule_queries import (
+    EDITOR_COLUMNS,
+    bulk_generator_default_dates,
+    save_daily_schedule,
+)
 from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
 from app.core.slot_writes import insert_slots_sync
 from app.core.config import settings
@@ -192,18 +196,19 @@ def view_schedule_editor(T):
             st.subheader(T["sch_config_title"])
 
             with st.container(border=True):
+                default_start, default_end = bulk_generator_default_dates()
                 c1, c2 = st.columns(2)
                 with c1:
                     start_date = st.date_input(
                         T["sch_start_date"],
-                        value=datetime.now().date() + timedelta(days=1),
+                        value=default_start,
                     )
                     start_hour = st.number_input(T["sch_start_hour"], 0, 23, 8)
                     duration = st.number_input(T["sch_duration"], 15, 120, 60, step=15)
                 with c2:
                     end_date = st.date_input(
                         T["sch_end_date"],
-                        value=datetime.now().date() + timedelta(days=7),
+                        value=default_end,
                     )
                     end_hour = st.number_input(T["sch_end_hour"], 0, 23, 18)
 
