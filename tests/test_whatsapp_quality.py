@@ -1031,7 +1031,7 @@ def test_the_gate_has_exactly_one_call_in_each_allowed_file():
 
 @pytest.fixture
 def health_client(monkeypatch):
-    monkeypatch.setattr(health_route, "check_db_connection", lambda: True)
+    monkeypatch.setattr(health_route, "ping_db", AsyncMock(return_value=True))
     monkeypatch.setattr(settings, "HEALTH_TOKEN", MagicMock())
     settings.HEALTH_TOKEN.get_secret_value.return_value = "health-secret"
     provider = MagicMock()

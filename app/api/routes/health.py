@@ -8,7 +8,7 @@ import math
 
 from app.core.config import settings
 from app.core.constants import BACKUP_LAST_SUCCESS_KEY, LeadStatus, WorkerConstants
-from app.core.database import check_db_connection, leads_collection
+from app.core.database import leads_collection, ping_db
 from app.core.logger import logger
 from app.core.redis_client import get_redis_client
 from app.providers.whatsapp import get_whatsapp
@@ -94,7 +94,7 @@ async def health_check(request: Request, response: Response):
     mongo_latency = None
     t0 = time.time()
     try:
-        mongo_up = check_db_connection()
+        mongo_up = await ping_db()
         mongo_latency = round((time.time() - t0) * 1000, 1)
     except Exception as e:
         logger.error(f"Health Check: MongoDB failed: {e}")
