@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta, time
-from admin_panel.core.utils import users_collection, slots_collection
+from admin_panel.core.utils import users_collection, slots_collection, leads_collection
 from admin_panel.core.labels import pro_option_map
 from admin_panel.core.schedule_queries import EDITOR_COLUMNS, save_daily_schedule
 from admin_panel.ui.components import mark_row_inline, render_flash, set_flash
+from app.core.slot_writes import insert_slots_sync
 from app.core.config import settings
 import pytz
 
@@ -14,6 +15,17 @@ def get_active_professionals():
     # `role` as well as `is_active`: `users` holds customers too, and a
     # customer document with the flag set would otherwise get a schedule.
     return list(users_collection.find({"is_active": True, "role": "professional"}))
+
+
+def _warn_rows_left_alone(T, result):
+    """PRO-277/PRO-278: rows a save deliberately did not write."""
+    for key, message in (
+        ("held", T["sch_msg_rows_held"]),
+        ("stale", T["sch_msg_rows_stale"]),
+        ("duplicates", T["sch_msg_rows_duplicate"]),
+    ):
+        if result.get(key):
+            st.warning(message.format(n=result[key]))
 
 
 def view_schedule_editor(T):
@@ -62,6 +74,7 @@ def view_schedule_editor(T):
                     f"{T.get('sch_success', 'Schedule updated!')} "
                     f"(+{flash['inserted']} / ~{flash['updated']} / -{flash['deleted']})"
                 )
+                _warn_rows_left_alone(T, flash)
                 if flash.get("skipped"):
                     # A partial save destroys the skipped rows (the editor
                     # resets from DB on rerun) — say so next to the success,
@@ -148,15 +161,20 @@ def view_schedule_editor(T):
                 result = save_daily_schedule(
                     slots_collection,
                     edited_df,
-                    original_ids,
+                    original_slots,
                     pro["_id"],
                     selected_date,
                     tz,
+                    leads_collection=leads_collection,
                 )
 
                 if result["deleted"] or result["updated"] or result["inserted"]:
                     st.session_state["sch_flash"] = result
                     st.rerun()
+                elif result["held"] or result["stale"] or result["duplicates"]:
+                    # Nothing written, and the reason is not the times: say
+                    # which rows were left alone and why (PRO-277/PRO-278).
+                    _warn_rows_left_alone(T, result)
                 else:
                     # Nothing was written — success here would repeat the exact
                     # lie this ticket exists to kill. No rerun: the warning and
@@ -242,10 +260,12 @@ def view_schedule_editor(T):
                         curr_d += timedelta(days=1)
 
                     if new_slots:
-                        slots_collection.insert_many(new_slots)
+                        # PRO-277: a second click, or days that already have
+                        # slots, must not leave two copies of one start time.
+                        inserted = insert_slots_sync(slots_collection, new_slots)
                         set_flash(
                             "sch_bulk_flash",
-                            f"{T['sch_msg_generated']} ({len(new_slots)})",
+                            f"{T['sch_msg_generated']} ({inserted})",
                         )
                         st.rerun()
                     else:

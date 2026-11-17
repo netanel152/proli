@@ -27,6 +27,8 @@ from app.core.database import (
     db,
 )
 
+SLOT_KEY = [("pro_id", ASCENDING), ("start_time", ASCENDING)]
+
 # Every index in the system: (collection label, collection, keys, kwargs).
 # Rationale that isn't obvious from the keys lives in a comment on the row.
 INDEX_SPECS = [
@@ -70,7 +72,14 @@ INDEX_SPECS = [
     ),
     # --- Slots ---
     ("Slots", slots_collection, [("pro_id", ASCENDING)], {}),
-    ("Slots", slots_collection, [("pro_id", ASCENDING), ("start_time", ASCENDING)], {}),
+    # PRO-277: unique. Without it two generators (or one double click) left two
+    # free documents for the same pro and start time, the atomic claim in
+    # book_slot_for_lead took one copy per approval, and the pro was booked
+    # twice. Every generator inserts through app/core/slot_writes.py, which
+    # treats a duplicate as "already there". A database built before this had
+    # the same key non-unique; prepare_unique_slot_index() dedupes it and drops
+    # the old index first, since Mongo refuses a second index on the same key.
+    ("Slots", slots_collection, SLOT_KEY, {"unique": True}),
     # --- Audit Log ---
     # PRO-142: compound, and the `_id` half is not optional. The viewer
     # pages with skip/limit and sorts `[("timestamp", -1), ("_id", -1)]` —
@@ -152,6 +161,80 @@ async def find_unlisted_indexes() -> list[tuple[str, str, tuple]]:
     return unlisted
 
 
+async def prepare_unique_slot_index(slots) -> None:
+    """Make room for the unique ``(pro_id, start_time)`` slot index (PRO-277).
+
+    A no-op once the index is unique. Otherwise it removes duplicate slots, then
+    drops the old non-unique index so the table loop can build the unique one.
+    Within each group of documents sharing a pro and a start time it keeps one:
+    the copy a lead's ``booked_slot_id`` points to, else a taken one, else the
+    oldest. It deletes only copies that are free and that no lead points to. A
+    group still holding two such copies is a real double booking, which no
+    automatic step may resolve: it is logged at ERROR and the old index stays,
+    so the unique build fails loudly too (PRO-250) until a human picks one.
+    """
+    leads = slots.database["leads"]
+    info = await slots.index_information()
+    current = next(
+        (
+            (name, spec)
+            for name, spec in info.items()
+            if _key_spec(spec.get("key", [])) == _key_spec(SLOT_KEY)
+        ),
+        None,
+    )
+    if current is None or current[1].get("unique"):
+        return
+
+    groups = await slots.aggregate(
+        [
+            {
+                "$group": {
+                    "_id": {"pro_id": "$pro_id", "start_time": "$start_time"},
+                    "ids": {"$push": "$_id"},
+                    "n": {"$sum": 1},
+                }
+            },
+            {"$match": {"n": {"$gt": 1}}},
+        ]
+    ).to_list(length=None)
+
+    removed = 0
+    unresolved = 0
+    for group in groups:
+        docs = await slots.find({"_id": {"$in": group["ids"]}}).to_list(length=None)
+        held = {
+            lead["booked_slot_id"]
+            for lead in await leads.find(
+                {"booked_slot_id": {"$in": group["ids"]}}, {"booked_slot_id": 1}
+            ).to_list(length=None)
+        }
+        docs.sort(key=lambda d: (d["_id"] not in held, not d.get("is_taken"), d["_id"]))
+        extra = docs[1:]
+        removable = [
+            d["_id"] for d in extra if not d.get("is_taken") and d["_id"] not in held
+        ]
+        if removable:
+            result = await slots.delete_many({"_id": {"$in": removable}})
+            removed += result.deleted_count
+        if len(extra) > len(removable):
+            unresolved += 1
+
+    if unresolved:
+        logger.error(
+            f"[Indexes] slots: {unresolved} pro/start-time pair(s) hold more than "
+            "one taken or booked slot — a double booking to resolve by hand. The "
+            "unique slot index cannot be built until then."
+        )
+        return
+
+    await slots.drop_index(current[0])
+    logger.warning(
+        f"[Indexes] slots: removed {removed} duplicate free slot(s) and dropped the "
+        f"non-unique index {current[0]!r}; the unique one is built next."
+    )
+
+
 async def create_all_indexes(silent: bool = False) -> list[dict]:
     """Create every index in INDEX_SPECS and return the ones that failed.
 
@@ -172,6 +255,19 @@ async def create_all_indexes(silent: bool = False) -> list[dict]:
             print(msg)
 
     log("Starting index creation...")
+
+    # The slots collection is read off the table, so a test that swaps
+    # INDEX_SPECS for its own never reaches the real database here.
+    slot_specs = [
+        spec
+        for spec in INDEX_SPECS
+        if _key_spec(spec[2]) == _key_spec(SLOT_KEY) and spec[3].get("unique")
+    ]
+    try:
+        for _label, slots, _keys, _kwargs in slot_specs:
+            await prepare_unique_slot_index(slots)
+    except Exception as e:
+        logger.error(f"[Indexes] could not prepare the unique slot index: {e}")
 
     failures = []
     current_label = None

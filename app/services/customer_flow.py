@@ -12,6 +12,7 @@ from app.core.phone import mask_chat_id, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.services.notification_service import page_operator
 from app.services.scheduling_service import record_no_show
+from app.services.matching_service import overlapping_taken_slot
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
 from bson import ObjectId
@@ -968,6 +969,19 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         {"_id": slot_id, "is_taken": False},
         {"$set": {"is_taken": True}},
     )
+    old_slot_id = lead.get("booked_slot_id")
+    # PRO-277: a slot inside a range the pro already has taken (a 2-hour slot
+    # and a template's hour) is not free, whatever its own flag says. The
+    # lead's own old slot does not count: it is released just below.
+    if chosen_slot and await overlapping_taken_slot(
+        chosen_slot,
+        ignore_ids=[old_slot_id] if old_slot_id else [],
+        collection=slots_collection,
+    ):
+        await slots_collection.update_one(
+            {"_id": slot_id, "is_taken": True}, {"$set": {"is_taken": False}}
+        )
+        chosen_slot = None
     if not chosen_slot:
         await whatsapp.send_message(
             chat_id, Messages.Customer.RESCHEDULE_INVALID_CHOICE
@@ -975,7 +989,6 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         return  # state preserved — let customer retry
 
     # Free previously booked slot if we have a reference to it
-    old_slot_id = lead.get("booked_slot_id")
     if old_slot_id:
         await slots_collection.update_one(
             {"_id": old_slot_id, "is_taken": True},

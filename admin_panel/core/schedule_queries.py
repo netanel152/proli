@@ -22,6 +22,10 @@ from datetime import datetime, time as dt_time
 import pandas as pd
 import pytz
 from bson.objectid import ObjectId
+from pymongo.errors import DuplicateKeyError
+
+from app.core.constants import LeadStatus
+from app.core.slot_writes import insert_slots_sync
 
 #: The editor frame's schema. The view builds its DataFrame with exactly these
 #: columns so they exist even when the day has no slots yet (PRO-158).
@@ -72,48 +76,101 @@ def _coerce_time(value):
     return None
 
 
+#: Lead statuses whose ``booked_slot_id`` no longer holds the slot.
+_RELEASED_STATUSES = (
+    LeadStatus.COMPLETED,
+    LeadStatus.CANCELLED,
+    LeadStatus.CLOSED,
+    LeadStatus.REJECTED,
+)
+
+
+def _as_utc(value):
+    """Mongo hands datetimes back naive (UTC); compare them aware."""
+    if isinstance(value, datetime) and value.tzinfo is None:
+        return value.replace(tzinfo=pytz.utc)
+    return value
+
+
+def _held_slot_ids(leads_collection, slot_ids) -> set[str]:
+    """Slots a live lead's ``booked_slot_id`` points to (PRO-278)."""
+    if leads_collection is None or not slot_ids:
+        return set()
+    return {
+        str(lead["booked_slot_id"])
+        for lead in leads_collection.find(
+            {
+                "booked_slot_id": {"$in": [ObjectId(i) for i in slot_ids]},
+                "status": {"$nin": list(_RELEASED_STATUSES)},
+            },
+            {"booked_slot_id": 1},
+        )
+    }
+
+
 def save_daily_schedule(
     slots_collection,
     edited_df: pd.DataFrame,
-    original_ids: set[str],
+    original_slots,
     pro_id,
     selected_date,
     tz,
+    leads_collection=None,
 ) -> dict:
     """Apply the admin's Daily-tab edits to ``slots_collection``.
 
-    ``original_ids`` are the (stringified) slot ids that were loaded into the
-    editor; anything the admin removed is deleted, rows whose ``_id`` is still
-    one of them are updated in place, and id-less rows are inserted. Times
-    arrive as local ``datetime.time`` values and are stored UTC, exactly as
-    the view always did.
+    ``original_slots`` are the slot documents that were loaded into the editor.
+    Anything the admin removed is deleted, rows whose ``_id`` is one of them
+    are updated in place, and id-less rows are inserted. Times arrive as local
+    ``datetime.time`` values and are stored UTC, exactly as the view always did.
 
-    Returns ``{"deleted": n, "updated": n, "inserted": n, "skipped": n}`` so
-    the view can tell the operator what actually happened — ``skipped`` counts
-    rows dropped for a missing/unparseable time, and the view warns instead of
-    celebrating when nothing was written at all.
+    PRO-278: the worker books slots while the editor is open, so a save writes
+    only what the admin changed, never the whole row. Each update and delete is
+    conditional on the ``is_taken`` the editor was built from. A slot that a
+    live lead's ``booked_slot_id`` points to (when ``leads_collection`` is
+    given, as the view does) is never set free or deleted from here.
+
+    Returns counts so the view can say what happened:
+
+    * ``deleted``, ``updated``, ``inserted``: rows written.
+    * ``skipped``: rows dropped for a missing or unparseable time.
+    * ``held``: rows left alone because a live lead holds the slot.
+    * ``stale``: rows that changed in the database after the editor loaded them.
+    * ``duplicates``: rows whose start time this pro already has a slot at
+      (the unique index, PRO-277).
 
     A frame lacking the ``_id`` column altogether is treated the same as an
-    editor showing no rows: every ``original_ids`` entry is deleted. The view
-    can no longer produce that shape (it builds with ``EDITOR_COLUMNS``), but
-    any other caller should know the degrade is "empty editor", not "no-op".
+    editor showing no rows: every original slot is a candidate for deletion.
+    The view can no longer produce that shape (it builds with
+    ``EDITOR_COLUMNS``), but any other caller should know the degrade is
+    "empty editor", not "no-op".
     """
+    originals = {str(doc["_id"]): doc for doc in original_slots}
+    held = _held_slot_ids(leads_collection, list(originals))
+
     # Missing columns (a frame built without the explicit schema) must degrade
-    # to "column of nothing", never to KeyError — that crash is this ticket.
+    # to "column of nothing", never to KeyError — that crash is PRO-158.
     id_series = (
         edited_df["_id"] if "_id" in edited_df.columns else pd.Series(dtype=object)
     )
 
-    ids_to_delete = original_ids - set(id_series.dropna().astype(str))
-    deleted = 0
-    if ids_to_delete:
-        result = slots_collection.delete_many(
-            {"_id": {"$in": [ObjectId(oid) for oid in ids_to_delete]}}
-        )
-        deleted = result.deleted_count
+    counts = dict.fromkeys(
+        ("deleted", "updated", "inserted", "skipped", "held", "stale", "duplicates"),
+        0,
+    )
 
-    updated = 0
-    skipped = 0
+    for oid in sorted(set(originals) - set(id_series.dropna().astype(str))):
+        if oid in held:
+            counts["held"] += 1
+            continue
+        result = slots_collection.delete_one(
+            {"_id": ObjectId(oid), "is_taken": originals[oid].get("is_taken")}
+        )
+        if result.deleted_count:
+            counts["deleted"] += 1
+        else:
+            counts["stale"] += 1
+
     new_slots = []
     for _, row in edited_df.iterrows():
         raw_start, raw_end = row.get("start_time"), row.get("end_time")
@@ -122,7 +179,7 @@ def save_daily_schedule(
         # Half-filled or unparseable rows are skipped — and counted, so the
         # view can say so instead of reporting success over a no-op.
         if s_time is None or e_time is None:
-            skipped += 1
+            counts["skipped"] += 1
             continue
 
         try:
@@ -133,7 +190,7 @@ def save_daily_schedule(
                 pytz.utc
             )
         except Exception:
-            skipped += 1
+            counts["skipped"] += 1
             continue
 
         # A new row's unticked checkbox can come back None/NaN, and Mongo
@@ -152,25 +209,41 @@ def save_daily_schedule(
         row_id = row.get("_id")
         if _is_missing(row_id):
             new_slots.append(slot_data)
-        elif isinstance(row_id, str) and row_id in original_ids:
+            continue
+        if not (isinstance(row_id, str) and row_id in originals):
+            # A non-empty id that is not one of the loaded slots cannot come
+            # from this editor — leave it alone rather than guess.
+            continue
+
+        original = originals[row_id]
+        changes = {
+            field: value
+            for field, value in slot_data.items()
+            if field != "pro_id" and _as_utc(original.get(field)) != value
+        }
+        if not changes:
+            continue
+        if row_id in held and changes.get("is_taken") is False:
+            counts["held"] += 1
+            continue
+        try:
             result = slots_collection.update_one(
-                {"_id": ObjectId(row_id)}, {"$set": slot_data}
+                {"_id": ObjectId(row_id), "is_taken": original.get("is_taken")},
+                {"$set": changes},
             )
-            # matched_count, not call count: a slot another session deleted
-            # between load and save must not be reported as updated.
-            updated += result.matched_count
-        # A non-empty id that is not in original_ids cannot come from this
-        # editor (rows are loaded from this day's query) — leave it alone
-        # rather than guess, matching the old behaviour.
+        except DuplicateKeyError:
+            counts["duplicates"] += 1
+            continue
+        # matched_count, not call count: a slot that was booked, or deleted by
+        # another session, between load and save is not reported as updated.
+        if result.matched_count:
+            counts["updated"] += 1
+        else:
+            counts["stale"] += 1
 
-    inserted = 0
     if new_slots:
-        result = slots_collection.insert_many(new_slots)
-        inserted = len(result.inserted_ids)
+        inserted = insert_slots_sync(slots_collection, new_slots)
+        counts["inserted"] = inserted
+        counts["duplicates"] += len(new_slots) - inserted
 
-    return {
-        "deleted": deleted,
-        "updated": updated,
-        "inserted": inserted,
-        "skipped": skipped,
-    }
+    return counts

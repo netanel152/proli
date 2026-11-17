@@ -13,6 +13,7 @@ from app.core.database import (  # noqa: F401 — leads_collection is a monkeypa
     leads_collection,  # unused here; tests/conftest.py rebinds it, so it must exist
 )
 from app.core.logger import logger
+from app.core.slot_writes import insert_slots
 import pytz
 
 IL_TZ = pytz.timezone("Asia/Jerusalem")
@@ -123,13 +124,14 @@ async def generate_slots_from_template(pro_id: str, days_ahead: int = 14) -> int
             )
             slot_start = slot_end
 
-    if new_slots:
-        await slots_collection.insert_many(new_slots)
-        logger.info(
-            f"Generated {len(new_slots)} slots for pro {pro_id} ({days_ahead} days)"
-        )
+    # PRO-277: the day check above runs under the scheduler lock but not against
+    # a panel insert into the same day, so a slot can already be there. The
+    # unique index refuses the copy; only what actually landed is counted.
+    inserted = await insert_slots(slots_collection, new_slots)
+    if inserted:
+        logger.info(f"Generated {inserted} slots for pro {pro_id} ({days_ahead} days)")
 
-    return len(new_slots)
+    return inserted
 
 
 async def regenerate_all_templates() -> int:
