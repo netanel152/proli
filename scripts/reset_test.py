@@ -11,12 +11,18 @@ Examples:
 import asyncio
 import argparse
 import os
+import sys
 import redis
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
+
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from app.core.config import settings
+from app.core.constants import DEVELOPMENT_ENV, STAGING_ENV
 
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/proli_db")
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
@@ -96,6 +102,22 @@ async def full_reset(db, r):
     print("  Redis: all state/context/metadata/webhook keys cleared")
 
 
+def assert_reset_allowed() -> None:
+    """Refuse to run anywhere but development or staging.
+
+    Every mode deletes leads, messages and Redis state; ``--all`` wipes them
+    wholesale. An allow-list (the same shape as ``seed_db.assert_seed_allowed``)
+    so it fails closed: an environment value added later is refused until
+    someone adds it here.
+    """
+    if settings.ENVIRONMENT not in (DEVELOPMENT_ENV, STAGING_ENV):
+        raise SystemExit(
+            f"❌ Refusing to reset: ENVIRONMENT={settings.ENVIRONMENT!r}.\n"
+            "   reset_test.py deletes leads, messages and Redis state, so it only "
+            "ever runs against development or staging."
+        )
+
+
 async def main():
     parser = argparse.ArgumentParser(description="Reset Proli test environment")
     parser.add_argument("--all", action="store_true", help="Full wipe of all test data")
@@ -106,6 +128,7 @@ async def main():
         "--pro", type=str, default=DEFAULT_PRO, help="Pro phone to reset"
     )
     args = parser.parse_args()
+    assert_reset_allowed()
 
     client = AsyncIOMotorClient(MONGO_URI)
     db = client["proli_db"]
