@@ -229,6 +229,9 @@ process_incoming_message(chat_id, text, media_url, message_id)
                │      pro, even without is_deal) → _finalize_deal()
                │
                └─ _finalize_deal():
+                      claim check (PRO-271): only a CONTACTED lead, or a NEW
+                        one whose pro was deactivated; anything that changed
+                        during the turn is left alone (atomic re-check on write)
                       check for emergency (Lead.is_emergency == True)
                       Emergency Express Lane: if emergency + city found, bypass strict address gate
                       create/update lead (status=NEW)

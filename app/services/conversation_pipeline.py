@@ -538,7 +538,15 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         # this fast path returns long before the dispatcher's expedited branch.
         # Without the same widening here, releasing the gate only swapped one
         # unanswered question for another.
-        emergency_expedite = bool(active_lead.get("is_emergency") and not is_deal)
+        # PRO-271: only a CONTACTED lead is finalized here. A NEW lead's offer
+        # is already out with this pro; finalizing again re-offered it and
+        # restarted the approval clock on every turn the model closed (and on
+        # every turn of a NEW emergency lead). _finalize_deal re-checks this
+        # against the lead as it is now, after the AI call.
+        can_finalize = active_lead.get("status") == LeadStatus.CONTACTED
+        emergency_expedite = bool(
+            can_finalize and active_lead.get("is_emergency") and not is_deal
+        )
         cleaned_reply = _strip_deal_marker(pro_response_obj.reply_to_user)
         if emergency_expedite:
             logger.info(
@@ -550,7 +558,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             await whatsapp.send_message(chat_id, cleaned_reply)
             await lead_manager.log_message(chat_id, "model", cleaned_reply)
 
-        if is_deal or emergency_expedite:
+        if can_finalize and (is_deal or emergency_expedite):
             try:
                 await _finalize_deal(
                     chat_id,
