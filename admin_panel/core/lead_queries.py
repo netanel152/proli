@@ -35,10 +35,10 @@ against. Recorded here so the absence reads as a decision, not an oversight.
 
 from datetime import datetime, timezone
 
-import pytz
 from bson.objectid import ObjectId
 
 from app.core.constants import Actor, LeadStatus
+from app.core.datetime_utils import IL_TZ as _IL_TZ
 from app.core.lead_history import status_history_entry
 from app.core.logger import logger
 from app.core.phone import strip_suffix
@@ -79,9 +79,6 @@ EDITOR_COLUMNS = [
     # a save can tell that somebody else changed the owner since it rendered.
     "_pro_id",
 ]
-
-#: The panel renders every timestamp in Israel local time.
-_IL_TZ = pytz.timezone("Asia/Jerusalem")
 
 #: Editor column -> lead document field. ``details_summary`` writes both
 #: ``details`` and ``issue_type``, so it is handled separately below.

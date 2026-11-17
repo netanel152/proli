@@ -42,7 +42,7 @@ from app.services import pipeline_watch
 from app.core.logger import logger, page_critical, redact_secrets
 from app.core.redis_client import with_scheduler_lock
 
-IL_TZ = pytz.timezone("Asia/Jerusalem")
+from app.core.datetime_utils import IL_TZ
 
 
 async def send_daily_reminders():

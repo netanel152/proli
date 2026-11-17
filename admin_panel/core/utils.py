@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 from bson import ObjectId
 import pytz
 
+from app.core.datetime_utils import IL_TZ
+
 from app.core.constants import is_prod_like_env
 from app.core.pro_trades import trades_line
 from app.core.slot_writes import insert_slots_sync
@@ -150,7 +152,6 @@ def generate_system_prompt(name, profession, areas, prices, trades=None):
 
 def create_initial_schedule(pro_id):
     """יוצר יומן לשבוע הקרוב (ימי חול בלבד, 08:00-18:00)"""
-    IL_TZ = pytz.timezone("Asia/Jerusalem")
     slots = []
     # Start from tomorrow morning in Israel time, then convert to UTC
     now_il = datetime.now(IL_TZ)

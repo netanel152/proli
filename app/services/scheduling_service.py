@@ -16,7 +16,7 @@ from app.core.logger import logger
 from app.core.slot_writes import insert_slots
 import pytz
 
-IL_TZ = pytz.timezone("Asia/Jerusalem")
+from app.core.datetime_utils import IL_TZ
 
 
 # --- Recurring Schedule Templates ---

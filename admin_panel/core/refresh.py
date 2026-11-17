@@ -16,9 +16,7 @@ pieces of that with a wrong answer worth guarding against.
 
 from datetime import datetime
 
-import pytz
-
-_IL_TZ = pytz.timezone("Asia/Jerusalem")
+from app.core.datetime_utils import IL_TZ as _IL_TZ
 
 # The intervals the sidebar slider offers, in seconds.
 #

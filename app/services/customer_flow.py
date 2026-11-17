@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 import pytz
 import re
 
-_IL_TZ = pytz.timezone("Asia/Jerusalem")
+from app.core.datetime_utils import IL_TZ as _IL_TZ
 
 
 def completion_check_due_filter(now_utc: datetime | None = None) -> dict:
