@@ -2,16 +2,22 @@
 Meta-approved template behind them.
 
 The inventory itself is PRO-88 (docs/WHATSAPP_TEMPLATE_CATALOG.md); this module
-is its machine-readable half. Every entry stays ``DRAFT`` until the template
+is its machine-readable half. An entry stays ``DRAFT`` until the template
 clears Meta review (``scripts/submit_whatsapp_templates.py`` submits it and
 reports its status and the category Meta holds it in). Flipping an entry to
 ``APPROVED``, with the exact name Meta approved, is the code half of arming it
 for the call sites that pass ``template_key`` to the facade's ``send_message``:
 the worker's, and the admin panel's through ``sync.send_text_sync``. The
 environment half is ``WHATSAPP_ARMED_TEMPLATES`` (PRO-232, below). It does
-nothing for a send that names no template. Flip only an entry Meta approved as UTILITY: one it holds as
-MARKETING costs several times as much and may not be delivered, so arming it is
-a decision to make on purpose (``--status`` exits 2 on one).
+nothing for a send that names no template.
+
+``category`` records what Meta holds, not what was asked for. Meta approved all
+28 submitted ``_v2`` templates on the production account by 2026-11-18, three of
+them as MARKETING (``reassigning``, ``pro_lead_outside_trade``,
+``stale_lead_reminder``). Those are ``APPROVED`` here so the registry agrees with
+Meta, and are left out of ``WHATSAPP_ARMED_TEMPLATES``: a MARKETING template
+costs several times a UTILITY one and may not be delivered, so arming one is a
+decision to make on purpose (``--status`` exits 3 while Meta holds any).
 
 A spec stores no body text: the copy has exactly one home
 (``app/core/messages.py``, ARCHITECTURE_STANDARD §10). ``body`` is a reference to
@@ -142,8 +148,9 @@ class TemplateSpec:
     body: str = ""
     # The names `body` uses, in the order they appear: `{{1}}`..`{{n}}` to Meta.
     params: tuple[str, ...] = ()
-    # Every template is UTILITY: MARKETING is throttled and costs more, and Meta
-    # can reject a miscategorised one with INCORRECT_CATEGORY.
+    # Submitted as UTILITY: MARKETING is throttled and costs more, and Meta can
+    # reject a miscategorised one with INCORRECT_CATEGORY. Once Meta has ruled,
+    # this is the category Meta holds, so `--status` reports no drift.
     category: str = "UTILITY"
     # False keeps an entry out of scripts/submit_whatsapp_templates.py.
     submit: bool = True
@@ -186,6 +193,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "lead_offer",
             "proli_lead_offer_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.APPROVAL_REQUEST",
             body=Messages.Templates.LEAD_OFFER,
             params=(
@@ -201,6 +209,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "lead_offer_reassigned",
             "proli_lead_offer_reassigned_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.NEW_LEAD_HEADER + Messages.Pro.NEW_LEAD_DETAILS",
             body=Messages.Templates.LEAD_OFFER_REASSIGNED,
             params=(
@@ -223,6 +232,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "approval_nudge",
             "proli_approval_nudge_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.APPROVAL_NUDGE",
             body=Messages.Templates.APPROVAL_NUDGE,
             params=("issue_type", "minutes"),
@@ -231,6 +241,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "daily_agenda",
             "proli_daily_agenda_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.DAILY_AGENDA_HEADER",
             body=Messages.Templates.DAILY_AGENDA,
             params=("pro_name", "date", "job_count"),
@@ -239,6 +250,8 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "stale_lead_reminder",
             "proli_stale_lead_reminder_v2",
+            status=TemplateStatus.APPROVED,
+            category="MARKETING",  # Meta's call, 2026-11-18: never armed
             source="Messages.Pro.STALE_LEAD_REMINDER",
             body=Messages.Templates.STALE_LEAD_REMINDER,
             params=("pro_name", "customer_name"),
@@ -247,6 +260,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "finish_reminder",
             "proli_finish_reminder_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.REMINDER",
             body=Messages.Templates.FINISH_REMINDER,
             buttons=(
@@ -257,6 +271,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "pro_lost_lead",
             "proli_pro_lost_lead_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.SOS.PRO_LOST_LEAD",
             body=Messages.Templates.PRO_LOST_LEAD,
             params=("issue_type",),
@@ -264,6 +279,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "bot_paused",
             "proli_bot_paused_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.PAUSE_NOTIFICATION",
             body=Messages.Templates.BOT_PAUSED,
             params=("issue_type",),
@@ -271,6 +287,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "sos_alert",
             "proli_sos_alert_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.SOS.PRO_ALERT",
             body=Messages.Templates.SOS_ALERT,
             params=("phone", "last_message"),
@@ -278,6 +295,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "sos_alert_pending",
             "proli_sos_alert_pending_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.SOS.PRO_ALERT_PENDING",
             body=Messages.Templates.SOS_ALERT_PENDING,
             buttons=_APPROVE_OR_REJECT,
@@ -285,6 +303,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "customer_cancelled",
             "proli_customer_cancelled_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.CUSTOMER_CANCELLED",
             body=Messages.Templates.CUSTOMER_CANCELLED,
             params=("customer_name", "full_address"),
@@ -292,18 +311,22 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "onboarding_approved",
             "proli_onboarding_approved_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Onboarding.APPROVED_NOTIFICATION",
             body=Messages.Templates.ONBOARDING_APPROVED,
         ),  # P13
         TemplateSpec(
             "onboarding_rejected",
             "proli_onboarding_rejected_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Onboarding.REJECTED_NOTIFICATION",
             body=Messages.Templates.ONBOARDING_REJECTED,
         ),  # P13
         TemplateSpec(
             "pro_lead_outside_trade",
             "proli_pro_lead_outside_trade_v2",
+            status=TemplateStatus.APPROVED,
+            category="MARKETING",  # Meta's call, 2026-11-18: never armed
             source="Messages.Pro.LEAD_OUTSIDE_TRADE",
             body=Messages.Templates.PRO_LEAD_OUTSIDE_TRADE,
             params=("issue_type",),
@@ -312,6 +335,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "pro_found",
             "proli_pro_found_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Customer.PRO_FOUND",
             body=Messages.Templates.PRO_FOUND,
             params=(
@@ -326,6 +350,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "no_pro_available",
             "proli_no_pro_available_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.SOS.NO_PRO_AVAILABLE",
             body=Messages.Templates.NO_PRO_AVAILABLE,
             params=("issue_type",),
@@ -334,6 +359,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "completion_check",
             "proli_completion_check_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Customer.COMPLETION_CHECK",
             body=Messages.Templates.COMPLETION_CHECK,
             params=("pro_name",),
@@ -346,6 +372,8 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "reassigning",
             "proli_reassigning_v2",
+            status=TemplateStatus.APPROVED,
+            category="MARKETING",  # Meta's call, 2026-11-18: never armed
             source="Messages.SOS.CUSTOMER_REASSIGNING",
             body=Messages.Templates.REASSIGNING,
             params=("issue_type",),
@@ -353,6 +381,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "max_reassignments",
             "proli_max_reassignments_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.SOS.MAX_REASSIGNMENTS_REACHED",
             body=Messages.Templates.MAX_REASSIGNMENTS,
             params=("issue_type",),
@@ -360,6 +389,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "pending_review",
             "proli_pending_review_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Customer.PENDING_REVIEW",
             body=Messages.Templates.PENDING_REVIEW,
             params=("issue_type",),
@@ -370,6 +400,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "customer_rescheduled",
             "proli_customer_rescheduled_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS",
             body=Messages.Templates.CUSTOMER_RESCHEDULED,
             params=("customer_name", "full_address", "old_time", "new_time"),
@@ -377,6 +408,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "customer_existing_job_query",
             "proli_customer_existing_job_query_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.CUSTOMER_EXISTING_JOB_QUERY",
             body=Messages.Templates.CUSTOMER_EXISTING_JOB_QUERY,
             params=("customer_name", "issue_type", "phone"),
@@ -384,12 +416,14 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "customer_reported_no_show",
             "proli_customer_reported_no_show_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.CUSTOMER_REPORTED_NO_SHOW",
             body=Messages.Templates.CUSTOMER_REPORTED_NO_SHOW,
         ),
         TemplateSpec(
             "customer_reported_completion",
             "proli_customer_reported_completion_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Pro.CUSTOMER_REPORTED_COMPLETION",
             body=Messages.Templates.CUSTOMER_REPORTED_COMPLETION,
             params=("customer_name",),
@@ -398,6 +432,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "pro_cancelled_booking",
             "proli_pro_cancelled_booking_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Customer.PRO_CANCELLED_BOOKING",
             body=Messages.Templates.PRO_CANCELLED_BOOKING,
             buttons=(_HUMAN,),
@@ -417,6 +452,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "reassign_offer",
             "proli_reassign_offer_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Customer.REASSIGN_OFFER",
             body=Messages.Templates.REASSIGN_OFFER,
             buttons=(
@@ -427,6 +463,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "awaiting_approval",
             "proli_awaiting_approval_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Customer.AWAITING_APPROVAL_TRANSPARENT",
             body=Messages.Templates.AWAITING_APPROVAL,
             params=("pro_name",),
@@ -434,6 +471,7 @@ TEMPLATES: dict[str, TemplateSpec] = {
         TemplateSpec(
             "bot_paused_by_pro",
             "proli_bot_paused_by_pro_v2",
+            status=TemplateStatus.APPROVED,
             source="Messages.Customer.BOT_PAUSED_BY_PRO",
             body=Messages.Templates.BOT_PAUSED_BY_PRO,
         ),

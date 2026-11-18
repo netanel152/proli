@@ -116,18 +116,23 @@ async def _send(facade):
 
 
 # ---------------------------------------------------------------------------
-# With every template DRAFT, nothing changes
+# With nothing armed, nothing changes
 # ---------------------------------------------------------------------------
 
 
-def test_every_registry_entry_is_still_draft():
-    """PRO-232: Meta's own sample template, the delivery probe, is the one entry
-    that is approved, and nothing arms it unless an environment names it."""
+def test_approval_alone_arms_nothing():
+    """PRO-150: every submitted template is APPROVED in the registry, plus Meta's
+    own sample, the delivery probe. None of them is armed until an environment
+    names it in WHATSAPP_ARMED_TEMPLATES, which the suite leaves empty, so the
+    "draft" sends below behave exactly as an unapproved one would."""
     assert {
         key
         for key, s in template_registry.TEMPLATES.items()
         if s.status is not TemplateStatus.DRAFT
-    } == {template_registry.DELIVERY_PROBE_KEY}
+    } == {key for key, s in template_registry.TEMPLATES.items() if s.submit} | {
+        template_registry.DELIVERY_PROBE_KEY
+    }
+    assert template_registry.armed_keys() == frozenset()
 
 
 @pytest.mark.asyncio
@@ -597,12 +602,12 @@ async def test_dry_run_records_the_text_and_transmits_nothing(graph):
 
 
 @pytest.mark.asyncio
-async def test_dry_run_records_the_buttons_its_draft_template_would_carry(
+async def test_dry_run_records_the_buttons_its_unarmed_template_would_carry(
     graph,
 ):
     provider = DryRunProvider()
     spec = template_registry.TEMPLATES["completion_check"]
-    assert spec.status is TemplateStatus.DRAFT
+    assert template_registry.resolve("completion_check") is None  # not armed here
 
     await WhatsAppFacade(provider).send_message(
         CHAT_ID, "מה שנשלח", template_key="completion_check", params={"pro_name": "דנה"}

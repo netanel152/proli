@@ -157,15 +157,19 @@ def test_a_bad_token_is_an_error_in_production_and_a_warning_elsewhere(
     getattr(log, other).assert_not_called()
 
 
-def test_the_real_registry_arms_the_probe_when_named_and_never_a_draft(monkeypatch):
+def test_the_real_registry_arms_what_is_named_and_never_a_draft(monkeypatch):
+    """`rate_service` is the one Proli template still DRAFT (never submitted),
+    so naming it arms nothing; an approved key arms only once it is named."""
+    assert TEMPLATES["rate_service"].status is TemplateStatus.DRAFT
     monkeypatch.setattr(settings, "WHATSAPP_ARMED_TEMPLATES", "lead_offer")
     assert template_registry.resolve(DELIVERY_PROBE_KEY) is None
-    assert template_registry.resolve("lead_offer") is None
+    assert template_registry.resolve("lead_offer") is TEMPLATES["lead_offer"]
 
     monkeypatch.setattr(
-        settings, "WHATSAPP_ARMED_TEMPLATES", f"{DELIVERY_PROBE_KEY},lead_offer"
+        settings, "WHATSAPP_ARMED_TEMPLATES", f"{DELIVERY_PROBE_KEY},rate_service"
     )
     assert (
         template_registry.resolve(DELIVERY_PROBE_KEY) is TEMPLATES[DELIVERY_PROBE_KEY]
     )
+    assert template_registry.resolve("rate_service") is None
     assert template_registry.resolve("lead_offer") is None

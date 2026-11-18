@@ -125,15 +125,30 @@ def test_every_worded_template_is_submitted_under_its_v2_name(spec):
     assert spec.meta_name == f"proli_{spec.key}_v2"
 
 
-def test_every_template_is_a_draft_utility_template_in_hebrew():
+# PRO-150, 2026-11-18: what Meta held the `_v2` submission as. Never armed.
+META_MARKETING = {"reassigning", "pro_lead_outside_trade", "stale_lead_reminder"}
+
+
+def test_every_proli_template_is_hebrew_and_approved_only_if_submitted():
     """PRO-232: the delivery probe is Meta's own English sample, not a Proli
-    template, so it is the one entry that is neither DRAFT nor Hebrew."""
+    template, so it is the one entry that is not Hebrew. PRO-150: Meta approved
+    all 28 submitted templates; what was never submitted stays DRAFT."""
     for spec in TEMPLATES.values():
         if spec.key == DELIVERY_PROBE_KEY:
             continue
-        assert spec.status is TemplateStatus.DRAFT
-        assert spec.category == "UTILITY"
         assert spec.language == "he"
+        expected = TemplateStatus.APPROVED if spec.submit else TemplateStatus.DRAFT
+        assert spec.status is expected, spec.key
+
+
+def test_the_category_is_the_one_meta_holds():
+    """UTILITY, except the three Meta approved as MARKETING. A change here is a
+    change on Meta's side, so it is spelled out rather than counted."""
+    for spec in TEMPLATES.values():
+        if spec.key == DELIVERY_PROBE_KEY:
+            continue
+        expected = "MARKETING" if spec.key in META_MARKETING else "UTILITY"
+        assert spec.category == expected, spec.key
 
 
 def test_the_entries_left_out_of_submission():

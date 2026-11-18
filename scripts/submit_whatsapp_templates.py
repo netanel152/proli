@@ -172,8 +172,11 @@ def not_utility(specs: list[TemplateSpec], meta_templates: list[dict]) -> list[s
         meta = by_name.get((spec.meta_name, spec.language))
         if meta is None or meta_category(meta) == UTILITY:
             continue
+        # APPROVED is only the code half of arming (PRO-232), so the warning is
+        # about the environment half: naming it sends it at that category's rate.
         armed = (
-            "it is APPROVED in the registry, so it is being sent in that category"
+            "it is APPROVED in the registry: keep it out of "
+            "WHATSAPP_ARMED_TEMPLATES, or it is sent in that category"
             if spec.status is TemplateStatus.APPROVED
             else "do not flip the registry"
         )
