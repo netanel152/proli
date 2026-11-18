@@ -9,7 +9,8 @@ import httpx
 import pytest
 
 from app.core.messages import Messages
-from app.providers.whatsapp.template_registry import TEMPLATES, meta_body
+from app.providers.whatsapp.template_registry import TEMPLATES as REGISTRY
+from app.providers.whatsapp.template_registry import meta_body
 
 _PATH = (
     pathlib.Path(__file__).resolve().parent.parent
@@ -19,6 +20,22 @@ _PATH = (
 _spec = importlib.util.spec_from_file_location("submit_whatsapp_templates", _PATH)
 submit = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(submit)
+
+# The script's logic is tested against the registry as it stood before Meta's
+# review: every submitted entry DRAFT and UTILITY. This module instance is this
+# file's own, so the substitution reaches nothing else. The registry as it is
+# now is checked against Meta's reported state at the end of the file.
+TEMPLATES = {
+    key: (
+        dataclasses.replace(
+            spec, status=submit.TemplateStatus.DRAFT, category=submit.UTILITY
+        )
+        if spec.submit
+        else spec
+    )
+    for key, spec in REGISTRY.items()
+}
+submit.TEMPLATES = TEMPLATES
 
 TOKEN = "super-secret-token-value"
 LIVE_WABA = "111"
@@ -503,7 +520,7 @@ def test_an_armed_template_meta_moved_to_marketing_is_named_as_being_sent():
     (line,) = submit.not_utility([spec], [_meta(spec, category="MARKETING")])
 
     assert "APPROVED in the registry" in line
-    assert "being sent in that category" in line
+    assert "keep it out of WHATSAPP_ARMED_TEMPLATES" in line
 
 
 @pytest.mark.parametrize("category", [None, "", "AUTHENTICATION", "marketing"])
@@ -578,3 +595,48 @@ def test_a_next_link_on_the_same_host_is_followed():
 
     assert len(submit.fetch_templates(client, LIVE_WABA)) == 2
     assert seen[1].endswith("after=x")
+
+
+# PRO-150, 2026-11-18: Meta approved all 28 `_v2` templates on the production
+# account, 25 as UTILITY and these three as MARKETING.
+META_MARKETING_2026_11_18 = {
+    "reassigning",
+    "pro_lead_outside_trade",
+    "stale_lead_reminder",
+}
+
+
+def test_the_registry_records_what_meta_approved(monkeypatch):
+    """Every submitted entry APPROVED, in the category Meta holds it in."""
+    monkeypatch.setattr(submit, "TEMPLATES", REGISTRY)
+    specs = submit.to_submit()
+
+    assert len(specs) == 28
+    assert all(spec.status is submit.TemplateStatus.APPROVED for spec in specs)
+    assert {
+        spec.key for spec in specs if spec.category != submit.UTILITY
+    } == META_MARKETING_2026_11_18
+    assert {spec.category for spec in specs} == {submit.UTILITY, "MARKETING"}
+
+
+def test_status_against_metas_reported_state_shows_no_drift_and_exits_3(
+    monkeypatch, capsys
+):
+    """What `--status` prints against the production account as reported: the
+    registry agrees with Meta, and the three MARKETING templates still stop it
+    with exit 3, because arming one is a decision, not a default."""
+    monkeypatch.setattr(submit, "TEMPLATES", REGISTRY)
+    graph = FakeGraph(templates=[_meta(spec) for spec in submit.to_submit()])
+
+    code = submit.main(["--status", "--waba-id", LIVE_WABA], client=graph.client())
+
+    printed = capsys.readouterr()
+    assert code == submit.EXIT_NOT_UTILITY
+    assert "0 drift line(s)." in printed.out
+    assert "flip the registry" not in printed.out
+    named = {
+        spec.key
+        for spec in REGISTRY.values()
+        if spec.submit and f"{spec.meta_name}: MARKETING on Meta" in printed.err
+    }
+    assert named == META_MARKETING_2026_11_18
