@@ -177,3 +177,110 @@ async def test_nudger_ignores_fresh_leads(mock_db, monkeypatch, mock_whatsapp):
     await remind_stale_booked_leads()
 
     mock_whatsapp.send_message.assert_not_called()
+
+
+async def _seed_stale_booked_lead(mock_db, monkeypatch):
+    monkeypatch.setattr("app.services.monitor_service.leads_collection", mock_db.leads)
+    monkeypatch.setattr("app.services.monitor_service.users_collection", mock_db.users)
+    await mock_db.leads.delete_many({})
+    await mock_db.users.delete_many({})
+
+    stale_time = datetime.now(timezone.utc) - timedelta(
+        hours=WorkerConstants.STALE_BOOKED_LEAD_HOURS + 1
+    )
+    await mock_db.users.insert_one(
+        {"_id": "pro_123", "phone_number": "972500000000", "business_name": "Pro"}
+    )
+    result = await mock_db.leads.insert_one(
+        {
+            "chat_id": "customer@c.us",
+            "status": LeadStatus.BOOKED,
+            "appointment_datetime": stale_time,
+            "pro_id": "pro_123",
+            "customer_name": "John Doe",
+        }
+    )
+    return result.inserted_id
+
+
+@pytest.fixture
+def nudger_logs():
+    from loguru import logger
+
+    records = []
+    handler_id = logger.add(lambda m: records.append(m.record), level="DEBUG")
+    yield records
+    logger.remove(handler_id)
+
+
+@pytest.mark.asyncio
+async def test_delivered_reminder_is_counted(
+    mock_db, monkeypatch, mock_whatsapp, nudger_logs
+):
+    """A send the facade reports as delivered counts against MAX_PRO_REMINDERS
+    and logs success."""
+    mock_whatsapp.send_message.return_value = "wamid.OK"
+    lead_id = await _seed_stale_booked_lead(mock_db, monkeypatch)
+
+    await remind_stale_booked_leads()
+
+    lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert lead["reminders_sent"] == 1
+    assert "last_reminder_at" in lead
+    assert "last_reminder_blocked_at" not in lead
+    assert any("Sent reminder" in r["message"] for r in nudger_logs)
+
+
+@pytest.mark.asyncio
+async def test_blocked_reminder_is_not_counted(
+    mock_db, monkeypatch, mock_whatsapp, nudger_logs
+):
+    """None is the facade's "blocked, not sent" (PRO-159): a closed window
+    with `stale_lead_reminder` unarmed, the breaker or the kill switch. It must
+    not burn a reminder or log as sent, but it starts the cooldown so the next
+    tick does not retry (and re-page) the same closed window."""
+    mock_whatsapp.send_message.return_value = None
+    lead_id = await _seed_stale_booked_lead(mock_db, monkeypatch)
+
+    await remind_stale_booked_leads()
+
+    mock_whatsapp.send_message.assert_called_once()
+    lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert "reminders_sent" not in lead
+    assert "last_reminder_at" not in lead
+    assert "last_reminder_blocked_at" in lead
+    assert not any("Sent reminder" in r["message"] for r in nudger_logs)
+    assert any(
+        r["level"].name == "WARNING" and "not counted" in r["message"]
+        for r in nudger_logs
+    )
+
+    # Inside the cooldown the next tick leaves the lead alone.
+    mock_whatsapp.send_message.reset_mock()
+    await remind_stale_booked_leads()
+    mock_whatsapp.send_message.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_blocked_cooldown_expires(mock_db, monkeypatch, mock_whatsapp):
+    """Once STALE_LEAD_REMINDER_COOLDOWN_HOURS has passed since a blocked send,
+    the lead is tried again, and a delivered retry is counted."""
+    lead_id = await _seed_stale_booked_lead(mock_db, monkeypatch)
+    await mock_db.leads.update_one(
+        {"_id": lead_id},
+        {
+            "$set": {
+                "last_reminder_blocked_at": datetime.now(timezone.utc)
+                - timedelta(
+                    hours=WorkerConstants.STALE_LEAD_REMINDER_COOLDOWN_HOURS + 1
+                )
+            }
+        },
+    )
+    mock_whatsapp.send_message.return_value = "wamid.OK"
+
+    await remind_stale_booked_leads()
+
+    mock_whatsapp.send_message.assert_called_once()
+    lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert lead["reminders_sent"] == 1
