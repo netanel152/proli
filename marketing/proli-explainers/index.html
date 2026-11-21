@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="he" dir="rtl"><head><meta charset="utf-8">
+<title>Proli explainers</title>
+<style>
+@font-face { font-family: "Heebo"; src: url(fonts/Heebo.ttf); font-weight: 100 900; }
+@font-face { font-family: "DM Mono"; src: url(fonts/DMMono-Medium.ttf); font-weight: 500; }
+html,body { margin:0; background:#000; overflow:hidden; }
+canvas { display:block; width:1080px; height:1920px; }
+</style></head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script src="engine.js"></script>
+<script src="film.js"></script>
+<script>
+const sample = 'אבגדהוזחטיכלמנסעפצקרשתךםןףץ?.,:"·0123456789 /@';
+Promise.all(['900 40px "Heebo"', '800 40px "Heebo"', '700 40px "Heebo"', '500 40px "Heebo"', '500 20px "DM Mono"']
+  .map((f) => document.fonts.load(f, sample))).then(() => { render(0); window.READY = true; });
+</script>
+</body></html>
