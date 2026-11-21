@@ -665,8 +665,15 @@ async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
         )
     except Exception as e:
         logger.error(f"Customer not told lead {lead['_id']} was approved: {e}")
-    # Clear AWAITING_PRO_APPROVAL state so customer can continue normally
-    await StateManager.clear_state(lead["chat_id"])
+    # Clear AWAITING_PRO_APPROVAL state so customer can continue normally —
+    # except an open "really cancel?" prompt: the customer's answer to it must
+    # still reach `guard_cancel_confirmation`, which now finds the lead BOOKED
+    # and says so instead of cancelling it. Its own TTL ends it otherwise.
+    if (
+        await StateManager.get_state(lead["chat_id"])
+        != UserStates.AWAITING_CANCEL_CONFIRMATION
+    ):
+        await StateManager.clear_state(lead["chat_id"])
 
     logger.info(f"Pro {pro['_id']} approved lead {lead['_id']}")
     return response_text

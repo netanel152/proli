@@ -106,6 +106,38 @@ class Messages:
         )
         CANCEL_ABORTED = "👍 העבודה נשארת כמתוכנן."
         CANCEL_NO_ACTIVE = "לא מצאתי עבודה פעילה לביטול — ייתכן שהיא כבר עודכנה."
+        # A cancel keyword on a request still awaiting the pro's approval (a NEW
+        # lead) asks the same way PRO-118 asks for a BOOKED job, and is handled
+        # by the same AWAITING_CANCEL_CONFIRMATION guard: 1, כן or a cancel
+        # keyword confirms; anything else keeps the request with the pro.
+        CANCEL_REQUEST_CONFIRM_PROMPT = (
+            "רק לוודא, לבטל את הבקשה שנמצאת אצל איש המקצוע לאישור?\n"
+            "1 - כן, לבטל\n"
+            "2 - לא, להשאיר אותה"
+        )
+        REQUEST_WITHDRAWN = (
+            "הבקשה בוטלה, ועדכנו את איש המקצוע.\n"
+            "אם צריך עוד משהו, אפשר לכתוב לנו כאן."
+        )
+        CANCEL_REQUEST_KEPT = (
+            "הבקשה נשארת אצל איש המקצוע לאישור.\n" "נעדכן אותך כאן ברגע שתתקבל תשובה."
+        )
+        # The pro approved while the prompt was open: the request is a booked
+        # job now, and cancelling that is the BOOKED path, which asks again.
+        CANCEL_REQUEST_ALREADY_BOOKED = (
+            "איש המקצוע כבר אישר את הבקשה, והעבודה נקבעה.\n"
+            "אם עדיין צריך לבטל אותה, אפשר לכתוב ביטול."
+        )
+        CANCEL_REQUEST_MOVED = (
+            "הבקשה כבר הועברה לאיש מקצוע אחר, והיא ממתינה לאישור שלו.\n"
+            "אם עדיין צריך לבטל אותה, אפשר לכתוב ביטול."
+        )
+        # Answer to התחלה while a request is with a pro. The reset still clears
+        # the conversation, but it does not withdraw the offer, so say so.
+        RESET_REQUEST_STILL_OPEN = (
+            "הבקשה שלך עדיין אצל איש המקצוע לאישור.\n"
+            "אם צריך לבטל אותה, אפשר לכתוב ביטול."
+        )
         RESCHEDULE_OFFER = (
             "אין בעיה, נתאם מועד חדש. הנה הזמנים הפנויים של איש המקצוע:\n"
             "{slots}\n\n"
@@ -605,6 +637,13 @@ class Messages:
         CUSTOMER_CANCELLED = (
             "⚠️ *עדכון חשוב:* הלקוח/ה {customer_name} ביטל/ה את העבודה "
             "שנקבעה לכתובת {address}."
+        )
+        # The customer withdrew a request this pro was offered and had not yet
+        # approved. Nothing here the offer did not already show; sent with the
+        # `customer_cancelled` template for a pro whose window is closed.
+        CUSTOMER_WITHDREW_OFFER = (
+            "הלקוח ביטל את הפנייה בנושא {issue_type} לפני שאישרת אותה.\n"
+            "אין צורך לאשר או לדחות אותה."
         )
         CUSTOMER_RESCHEDULED_SUCCESS = (
             "📅 *עדכון יומן:* הלקוח/ה {customer_name} בכתובת {address} "

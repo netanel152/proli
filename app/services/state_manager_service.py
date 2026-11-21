@@ -42,6 +42,18 @@ class StateManager:
             logger.error(f"Error setting state for {mask_chat_id(chat_id)}: {e}")
 
     @classmethod
+    async def get_ttl(cls, chat_id: str):
+        """Seconds left on state:{chat_id}, or None when it has no TTL, is
+        missing, or Redis fails."""
+        try:
+            redis = await get_redis_client()
+            ttl = await redis.ttl(f"state:{chat_id}")
+            return ttl if isinstance(ttl, int) and ttl > 0 else None
+        except Exception as e:
+            logger.error(f"Error reading state TTL for {mask_chat_id(chat_id)}: {e}")
+            return None
+
+    @classmethod
     async def clear_state(cls, chat_id: str):
         """
         Deletes state:{chat_id}, state_meta:{chat_id} and consent_hold:{chat_id},

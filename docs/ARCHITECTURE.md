@@ -106,7 +106,8 @@ process_incoming_message(chat_id, text, media_url, message_id)
         │            list PENDING_ADMIN_REVIEW leads → select lead
         │            → self-assign OR list candidate pros → assign
         │
-        ├─ Reset keyword? → clear state + context, silently (no confirmation message)
+        ├─ Reset keyword? → clear state + context, silently (no confirmation message),
+        │  unless a request is still with a pro: RESET_REQUEST_STILL_OPEN says so and how to cancel
         │
         ├─ Help keyword ("תפריט"/"עזרה", non-pro)? → send HELP_INFO, leave state intact
         │
@@ -147,6 +148,8 @@ process_incoming_message(chat_id, text, media_url, message_id)
         ├─ State == AWAITING_PRO_APPROVAL?
         │      └─ registered pro + PRO_ONLY_KEYWORDS? → fall through (soft-hold escape:
         │         a pro-as-customer parks here up to 1h and must still run their business)
+        │      └─ cancel keyword + an offered NEW lead? → ask to confirm the
+        │         withdrawal (AWAITING_CANCEL_CONFIRMATION, 300 s), return
         │      └─ otherwise send STILL_WAITING, return
         │
         ├─ State == PRO_MODE, or a prompt pro_flow itself is holding open
@@ -315,7 +318,7 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |
 | `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro (5m TTL, PRO-119); accept dispatches to the pro and parks the customer in `AWAITING_PRO_APPROVAL` if the address is complete, otherwise saves the pro as a preference and continues via `AWAITING_ADDRESS`, which dispatches to that pro the moment the address is complete (PRO-227) |
 | `AWAITING_NEW_OR_EXISTING` | A customer with a confirmed BOOKED job messages about something else; asked whether it's a new request or about the existing job |
-| `AWAITING_CANCEL_CONFIRMATION` | A cancel keyword on a confirmed BOOKED job; waiting for an explicit '1'/'2' before acting (5m TTL, PRO-118) |
+| `AWAITING_CANCEL_CONFIRMATION` | A cancel keyword on a confirmed BOOKED job, or on a request still awaiting the pro's approval (a NEW lead: from the soft hold, or from IDLE after it lapsed); waiting for an explicit '1'/'2' before acting (5m TTL, PRO-118). For a NEW lead, '2' or expiry gives back what was left of `AWAITING_PRO_APPROVAL` |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
 | `ADMIN_SELECTING_LEAD` / `ADMIN_SELECTING_ACTION` / `ADMIN_SELECTING_PRO` | Admin routing wizard steps (`ניהול` keyword, 15m TTL) |
 
@@ -340,7 +343,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | `completed` | Work done, awaiting customer rating |
 | `rejected` | Pro declined — a way-station, not terminal: `reassign_lead` immediately either reopens the lead as `new` under the next pro or escalates to `pending_admin_review` (PRO-117) |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h |
-| `cancelled` | Customer cancelled — a cancel keyword on a BOOKED job first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit |
+| `cancelled` | Customer cancelled — a cancel keyword on a BOOKED job, or on a NEW lead still awaiting its pro's approval, first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit; both write `cancel_reason: customer_requested` |
 | `pending_admin_review` | No pro found after all radius/fallback attempts, or max reassignments exhausted (a human takes over, PRO-63) |
 
 Every transition is recorded as a `{status, at, by}` entry in the lead's `status_history` array, written by the single `set_lead_status()` writer in `lead_manager_service.py`.

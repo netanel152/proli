@@ -21,6 +21,7 @@ from app.providers.whatsapp import get_whatsapp, record_account_state
 from app.providers.whatsapp import quality, template_registry
 from app.providers.whatsapp.facade import _PAUSE_KEY
 from app.services import matching_service
+from app.services.customer_flow import resume_lapsed_cancel_prompt
 from app.services.notification_service import (
     send_oncall_alert,
     issue_param,
@@ -1205,7 +1206,12 @@ async def check_pro_approval_sla():
     for lead in leads:
         try:
             chat_id = lead["chat_id"]
-            customer_state = await StateManager.get_state(chat_id)
+            # A cancel prompt the customer left unanswered parks them in IDLE
+            # once it lapses; this gives AWAITING_PRO_APPROVAL back first, so
+            # an offer the customer chose to keep is still chased.
+            customer_state = await resume_lapsed_cancel_prompt(
+                chat_id, await StateManager.get_state(chat_id), StateManager
+            )
 
             # PRO-212: a pro the admin deactivated can't answer this offer, so don't
             # wait for them. Moving it messages the customer, hence the PRO-73 gate.

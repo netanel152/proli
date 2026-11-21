@@ -145,6 +145,20 @@ reserved slot is released** (becomes bookable again); **the assigned pro is noti
 cancellation. Verify the freed slot in the admin panel.
 - [ ] Pass  · [ ] File: ______
 
+**4a. Before the pro approves.** **Steps (C):** finalize a deal so the lead is `new` and offered
+to P (C is told the request went to P), and **do not approve on P**. Send
+**`אני רוצה לבטל את ההזמנה`**, then reply **`1`**. Repeat with a second deal and reply **`2`**,
+and once more after the hour-long approval wait has lapsed (`בטל` still asks).
+**Expected:** the first message asks (`CANCEL_REQUEST_CONFIRM_PROMPT`, `1`/`2`), and nothing
+changes until `1`. After `1`: lead → `cancelled` (`cancel_reason: customer_requested`), C is told
+it is cancelled, and P gets a notice that the customer withdrew it, with no phone number. A later
+**`אשר`** (or a tap on the offer's button) on P books nothing and sends no customer details. After
+`2`: the lead stays `new` with P, and the PRO-56 nudge still reaches P (scenario 3). If P approves
+while the prompt is open, C's `1` cancels nothing and C is told the job is booked, with `ביטול`
+offered for the BOOKED path above. **`התחלה`** while the offer is open clears the conversation
+but tells C the request is still with the pro and how to cancel it.
+- [ ] Pass  · [ ] File: ______
+
 ### 5. Reschedule flow
 **Steps (C):** with a BOOKED lead, send **`מועד אחר`** → pick a new offered slot.
 **Expected:** the **old slot is freed**, the **new slot is booked**, and the lead reflects the

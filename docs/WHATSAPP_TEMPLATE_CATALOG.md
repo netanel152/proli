@@ -123,7 +123,7 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | P10 | `bot_paused` | `issue_type` | `BOT_PAUSED` | `dispatch_guards.guard_sos_human_handoff` |
 | P11 | `sos_alert` | `phone`, `last_message` | `SOS_ALERT` | `notification_service.send_sos_alert`, lead BOOKED |
 | P11 | `sos_alert_pending` | none | `SOS_ALERT_PENDING` | `notification_service.send_sos_alert`, lead NEW (a CONTACTED or absent lead sends the pro nothing) |
-| P12 | `customer_cancelled` | `customer_name`, `full_address` | `CUSTOMER_CANCELLED` | `workflow_service` cancel path |
+| P12 | `customer_cancelled` | `customer_name`, `full_address` | `CUSTOMER_CANCELLED`; also `CUSTOMER_WITHDREW_OFFER` | `workflow_service` cancel path; `customer_flow.withdraw_offered_request`, a request the customer withdrew before the pro approved it (the params are the name and street address the offer already showed, never the phone; the send is guarded) |
 | P13 | `onboarding_approved` | none | `ONBOARDING_APPROVED` | `admin_panel/views/professionals.py::_notify_pro_approved` |
 | P13 | `onboarding_rejected` | none | `ONBOARDING_REJECTED` | `admin_panel/views/professionals.py::_notify_pro_rejected` |
 | P14 | `pro_lead_outside_trade` | `issue_type` | `PRO_LEAD_OUTSIDE_TRADE` | `conversation_pipeline.py` wrong-trade check, for both `LEAD_OUTSIDE_TRADE` and `LEAD_OUTSIDE_TRADE_OFFER` |

@@ -7,7 +7,13 @@ from app.core.database import (
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.text_matching import contains_keyword, is_emergency_text
-from app.core.constants import LeadStatus, Defaults, Actor, WorkerConstants
+from app.core.constants import (
+    LeadStatus,
+    Defaults,
+    Actor,
+    UserStates,
+    WorkerConstants,
+)
 from app.core.phone import mask_chat_id, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.providers.whatsapp import template_registry
@@ -403,6 +409,206 @@ async def _rating_pending(chat_id: str) -> bool:
             {"chat_id": chat_id, **rating_prompt_open_filter()}, {"_id": 1}
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Cancelling a request that is still waiting for the pro's approval.
+#
+# A NEW lead is offered to a pro, and the customer parks in AWAITING_PRO_APPROVAL
+# for up to PRO_APPROVAL_TTL_SECONDS. A cancel keyword there used to get
+# STILL_WAITING, and after the state lapsed it reached the AI, so nothing could
+# withdraw the offer and a later אשר sent the pro the customer's phone. The ask
+# reuses PRO-118's AWAITING_CANCEL_CONFIRMATION (the guard chain arms it), and
+# these helpers carry the NEW-lead half of the answer. The metadata keys below
+# sit beside PRO-118's `cancel_confirm_lead_id`; `cancel_confirm_kind` is what
+# tells the two prompts apart.
+# ---------------------------------------------------------------------------
+
+CANCEL_KIND_NEW = "new"
+_CANCEL_NEW_META_KEYS = (
+    "cancel_confirm_lead_id",
+    "cancel_confirm_kind",
+    "cancel_confirm_pro_id",
+    "cancel_confirm_resume_state",
+    "cancel_confirm_resume_until",
+)
+
+
+def offered_lead_filter(chat_id: str) -> dict:
+    """A request with a pro and awaiting their approval: NEW, with a pro on it."""
+    return {"chat_id": chat_id, "status": LeadStatus.NEW, "pro_id": {"$ne": None}}
+
+
+async def find_offered_lead(chat_id: str):
+    """The newest request of this chat that a pro has been offered."""
+    return await leads_collection.find_one(
+        offered_lead_filter(chat_id), sort=[("created_at", -1)]
+    )
+
+
+def _still_offered(lead, pro_id) -> bool:
+    return bool(
+        lead
+        and lead.get("status") == LeadStatus.NEW
+        and pro_id
+        and str(lead.get("pro_id")) == str(pro_id)
+    )
+
+
+def approval_wait_left(meta: dict, now: datetime | None = None) -> int | None:
+    """Seconds of AWAITING_PRO_APPROVAL the cancel prompt interrupted, if any."""
+    until = meta.get("cancel_confirm_resume_until")
+    if meta.get(
+        "cancel_confirm_resume_state"
+    ) != UserStates.AWAITING_PRO_APPROVAL.value or not isinstance(until, (int, float)):
+        return None
+    left = int(until - (now or datetime.now(timezone.utc)).timestamp())
+    return left if left > 0 else None
+
+
+async def _cancel_prompt_lead(meta: dict):
+    try:
+        lead_oid = ObjectId(meta.get("cancel_confirm_lead_id"))
+    except Exception:
+        return None
+    return await leads_collection.find_one({"_id": lead_oid})
+
+
+async def resume_lapsed_cancel_prompt(chat_id: str, state, state_manager):
+    """Put AWAITING_PRO_APPROVAL back once an unanswered NEW-lead cancel prompt lapsed.
+
+    The prompt overwrites the approval state for CANCEL_CONFIRM_TTL_SECONDS, and
+    Redis can only drop a key when it expires, so a customer who never answered
+    would come back as IDLE: the soft hold no longer answers them and the PRO-56
+    approval SLA skips them. Called wherever that state is read for a decision
+    (the dispatcher, before the guard chain; the SLA, per lead). Restores only
+    what was left of the approval window, and only while the lead is still NEW
+    with the pro it was offered to. Returns the state to act on.
+    """
+    if state not in (None, UserStates.IDLE):
+        return state
+    try:
+        meta = await state_manager.get_metadata(chat_id)
+        if not isinstance(meta, dict) or meta.get("cancel_confirm_kind") != (
+            CANCEL_KIND_NEW
+        ):
+            return state
+        left = approval_wait_left(meta)
+        pro_id = meta.get("cancel_confirm_pro_id")
+        lead = await _cancel_prompt_lead(meta) if left else None
+        for key in _CANCEL_NEW_META_KEYS:
+            meta.pop(key, None)
+        await state_manager.set_metadata(chat_id, meta)
+        if left and _still_offered(lead, pro_id):
+            await state_manager.set_state(
+                chat_id, UserStates.AWAITING_PRO_APPROVAL, ttl=left
+            )
+            logger.info(
+                f"Cancel prompt lapsed for {mask_chat_id(chat_id)}: back to "
+                f"AWAITING_PRO_APPROVAL for {left}s"
+            )
+            return UserStates.AWAITING_PRO_APPROVAL
+    except Exception as e:
+        logger.error(
+            f"Could not resume {mask_chat_id(chat_id)} after a lapsed cancel prompt: {e}"
+        )
+    return state
+
+
+async def keep_offered_request(chat_id: str, meta: dict, whatsapp, state_manager):
+    """The customer did not confirm: the offer stays, and so does the wait."""
+    lead = await _cancel_prompt_lead(meta)
+    left = approval_wait_left(meta)
+    if left and _still_offered(lead, meta.get("cancel_confirm_pro_id")):
+        await state_manager.set_state(
+            chat_id, UserStates.AWAITING_PRO_APPROVAL, ttl=left
+        )
+    if lead and lead.get("status") == LeadStatus.BOOKED:
+        # The pro approved while the prompt was open.
+        await whatsapp.send_message(chat_id, Messages.Customer.CANCEL_ABORTED)
+        return
+    await whatsapp.send_message(chat_id, Messages.Customer.CANCEL_REQUEST_KEPT)
+
+
+async def withdraw_offered_request(chat_id: str, meta: dict, whatsapp, state_manager):
+    """The customer confirmed: NEW → CANCELLED, unless the pro got there first.
+
+    The write pins the status and the pro the prompt was armed for, so a pro who
+    approved in between keeps the job (PRO-123's rule, from the other side), and
+    a reassignment is not cancelled under a pro the customer was never asked
+    about. Only a won write tells the pro, and never with a contact detail.
+    """
+    try:
+        lead_oid = ObjectId(meta.get("cancel_confirm_lead_id"))
+        pro_oid = ObjectId(meta.get("cancel_confirm_pro_id"))
+    except Exception:
+        await whatsapp.send_message(chat_id, Messages.Customer.CANCEL_NO_ACTIVE)
+        return
+    cancelled = await set_lead_status(
+        lead_oid,
+        LeadStatus.CANCELLED,
+        Actor.CUSTOMER,
+        extra_set={
+            "cancelled_at": datetime.now(timezone.utc),
+            "cancel_reason": "customer_requested",
+        },
+        expected_status=LeadStatus.NEW,
+        expected_pro_id=pro_oid,
+    )
+    if cancelled is None:
+        lead = await leads_collection.find_one({"_id": lead_oid})
+        status = (lead or {}).get("status")
+        if status == LeadStatus.BOOKED:
+            reply = Messages.Customer.CANCEL_REQUEST_ALREADY_BOOKED
+        elif status == LeadStatus.NEW and lead.get("pro_id"):
+            # Offered to someone else meanwhile: still waiting, just not on the
+            # pro this answer was about.
+            await state_manager.set_state(
+                chat_id,
+                UserStates.AWAITING_PRO_APPROVAL,
+                ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
+            )
+            reply = Messages.Customer.CANCEL_REQUEST_MOVED
+        else:
+            reply = Messages.Customer.CANCEL_NO_ACTIVE
+        logger.info(
+            f"Customer {mask_chat_id(chat_id)} confirmed cancelling lead {lead_oid}, "
+            f"which had moved on (status={status}): nothing cancelled"
+        )
+        await whatsapp.send_message(chat_id, reply)
+        return
+
+    await ContextManager.clear_context(chat_id)
+    await whatsapp.send_message(chat_id, Messages.Customer.REQUEST_WITHDRAWN)
+    logger.info(
+        f"Customer {mask_chat_id(chat_id)} withdrew lead {lead_oid} before pro "
+        f"{pro_oid} approved it"
+    )
+    pro = await users_collection.find_one({"_id": pro_oid})
+    if not (pro and pro.get("phone_number")):
+        return
+    # CANCELLED is written: a failed notice must not crash the task, or ARQ's
+    # retry would answer the customer CANCEL_NO_ACTIVE.
+    try:
+        await whatsapp.send_message(
+            to_chat_id(pro["phone_number"]),
+            Messages.Pro.CUSTOMER_WITHDREW_OFFER.format(
+                issue_type=cancelled.get("issue_type")
+                or Messages.Fallbacks.ISSUE_UNKNOWN
+            ),
+            # The pro's window is often closed: the offer itself was a template.
+            # This one's params are the name and the street address the offer
+            # already showed, never the phone (PRO-59).
+            template_key="customer_cancelled",
+            params={
+                "customer_name": cancelled.get("customer_name")
+                or Messages.Fallbacks.CUSTOMER_NAME,
+                "full_address": cancelled.get("full_address")
+                or Messages.Fallbacks.UNKNOWN,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Pro not told lead {lead_oid} was withdrawn: {e}")
 
 
 # PRO-238: the statuses after which a reassign-offer reply has nothing to act on.

@@ -80,7 +80,7 @@ If the customer is themselves a registered pro, they are **not** returned to `PR
 | `PRO_MODE` | Sender is an active pro | `pro_flow.handle_pro_text_command()` called |
 | `CUSTOMER_MODE` | Pro types `לקוח`, or confirms the intent prompt | Pro treated as customer, context cleared; sticky while their own lead is open |
 | `AWAITING_INTENT_CONFIRMATION` | AI detects pro needs service | Prompt pro to switch modes; `1`/`כן` accepts, `2`/`לא` declines, anything else re-prompts once |
-| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI — unless the sender is a pro using an unambiguous business keyword, or an emergency keyword arrives (PRO-121: `EMERGENCY_WHILE_WAITING`, state kept, once per lead) |
+| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI — unless the sender is a pro using an unambiguous business keyword, an emergency keyword arrives (PRO-121: `EMERGENCY_WHILE_WAITING`, state kept, once per lead), or a cancel keyword arrives: the customer is asked to confirm withdrawing the request (`CANCEL_REQUEST_CONFIRM_PROMPT`, `AWAITING_CANCEL_CONFIRMATION`); `1` moves the NEW lead to `cancelled` (pinned on status and pro, so a pro who approved first keeps it) and tells the pro, anything else or no answer within `CANCEL_CONFIRM_TTL_SECONDS` keeps the offer and gives this state back for what was left of it. After this state lapses, a cancel keyword with no BOOKED job asks the same way |
 | `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged, 15m rolling TTL resets. An emergency keyword here flags the lead and pages the operator once, without un-pausing or replying (PRO-121) |
 | `AWAITING_ADDRESS` | Address missing parts | AI re-extracts parts from next message; once complete the blocked step runs on the same turn — the loyalty dispatch (`loyalty_pro_id` in the FSM metadata) or the deal the address gate rejected, with the time the gate saved (PRO-227). An emergency keyword with a known city releases the gate early instead (PRO-121) |
 
@@ -172,7 +172,7 @@ Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "
   - A pro's reject fails to find a replacement and the lead is escalated to `PENDING_ADMIN_REVIEW` (PRO-117); a *successful* reject → rematch deliberately keeps context — the conversation continues with the new pro
   - Max reassignments reached (lead escalated to `PENDING_ADMIN_REVIEW`)
   - Lead escalated to `PENDING_ADMIN_REVIEW` (healer path)
-  - Customer resets with "התחלה" / "reset"
+  - Customer resets with "התחלה" / "reset" (silent, unless a request is still with a pro awaiting approval: the reset does not withdraw it, so the customer is told it is still open and that `ביטול` cancels it)
 
 ---
 

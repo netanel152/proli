@@ -344,7 +344,8 @@ async def test_global_reset_clears_state_and_context_silently(deps, keyword):
     assert result is HANDLED
     deps.state_manager.clear_state.assert_awaited_once_with(ctx.chat_id)
     deps.context_manager.clear_context.assert_awaited_once_with(ctx.chat_id)
-    # Deliberately silent (2026-08-27 operator decision) — no confirmation.
+    # Deliberately silent (2026-08-27 operator decision) — no confirmation,
+    # when no request is with a pro (the case below covers one that is).
     deps.whatsapp.send_message.assert_not_awaited()
 
 
@@ -962,6 +963,140 @@ async def test_booked_cancel_reschedule_cancel_arms_confirmation_with_ttl(
         ctx.chat_id,
         UserStates.AWAITING_CANCEL_CONFIRMATION,
         ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
+    )
+
+
+# --------------------------------------------------------------------------
+# Cancelling a request still awaiting the pro's approval (a NEW lead)
+# --------------------------------------------------------------------------
+
+_OFFERED = {"_id": ObjectId(), "status": LeadStatus.NEW, "pro_id": ObjectId()}
+
+
+def _offered_lookup(monkeypatch, lead):
+    lookup = AsyncMock(return_value=lead)
+    monkeypatch.setattr(dispatch_guards.customer_flow, "find_offered_lead", lookup)
+    return lookup
+
+
+@pytest.mark.asyncio
+async def test_soft_hold_lets_a_cancel_keyword_ask_about_the_offer(deps, monkeypatch):
+    _offered_lookup(monkeypatch, _OFFERED)
+    deps.state_manager.get_ttl = AsyncMock(return_value=1200)
+    ctx = make_ctx(
+        user_text="אני רוצה לבטל את ההזמנה",
+        normalized_text="אני רוצה לבטל את ההזמנה",
+        current_state=UserStates.AWAITING_PRO_APPROVAL,
+    )
+
+    result = await guard_pro_approval_soft_hold(ctx, deps)
+
+    assert result is HANDLED
+    deps.state_manager.set_state.assert_awaited_once_with(
+        ctx.chat_id,
+        UserStates.AWAITING_CANCEL_CONFIRMATION,
+        ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
+    )
+    meta = deps.state_manager.set_metadata.await_args.args[1]
+    assert meta["cancel_confirm_kind"] == dispatch_guards.customer_flow.CANCEL_KIND_NEW
+    assert meta["cancel_confirm_pro_id"] == str(_OFFERED["pro_id"])
+    assert meta["cancel_confirm_resume_state"] == UserStates.AWAITING_PRO_APPROVAL
+    assert meta["cancel_confirm_resume_until"] > 0
+    deps.whatsapp.send_message.assert_awaited_once_with(
+        ctx.chat_id, Messages.Customer.CANCEL_REQUEST_CONFIRM_PROMPT
+    )
+
+
+@pytest.mark.asyncio
+async def test_soft_hold_cancel_with_no_offer_left_falls_through(deps, monkeypatch):
+    _offered_lookup(monkeypatch, None)
+    ctx = make_ctx(
+        user_text="בטל",
+        normalized_text="בטל",
+        current_state=UserStates.AWAITING_PRO_APPROVAL,
+    )
+
+    assert await guard_pro_approval_soft_hold(ctx, deps) is None
+    deps.whatsapp.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state, asks",
+    [
+        (UserStates.IDLE, True),
+        (UserStates.CUSTOMER_MODE, True),
+        # The address gate's own bail-out reads the word there.
+        (UserStates.AWAITING_ADDRESS, False),
+    ],
+)
+async def test_interceptor_asks_about_an_offer_with_no_booked_job(
+    deps, monkeypatch, state, asks
+):
+    fake_leads = AsyncMock()
+    fake_leads.find_one = AsyncMock(return_value=None)  # no BOOKED lead
+    monkeypatch.setattr(workflow_service, "leads_collection", fake_leads)
+    _offered_lookup(monkeypatch, _OFFERED)
+    ctx = make_ctx(user_text="בטל", normalized_text="בטל", current_state=state)
+
+    result = await guard_booked_cancel_reschedule(ctx, deps)
+
+    if asks:
+        assert result is HANDLED
+        deps.whatsapp.send_message.assert_awaited_once_with(
+            ctx.chat_id, Messages.Customer.CANCEL_REQUEST_CONFIRM_PROMPT
+        )
+        meta = deps.state_manager.set_metadata.await_args.args[1]
+        assert "cancel_confirm_resume_until" not in meta
+    else:
+        assert result is None
+        deps.whatsapp.send_message.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text, handler",
+    [("1", "withdraw_offered_request"), ("2", "keep_offered_request")],
+)
+async def test_cancel_confirmation_routes_an_offer_prompt(
+    deps, monkeypatch, text, handler
+):
+    meta = {
+        "cancel_confirm_lead_id": str(_OFFERED["_id"]),
+        "cancel_confirm_kind": dispatch_guards.customer_flow.CANCEL_KIND_NEW,
+        "cancel_confirm_pro_id": str(_OFFERED["pro_id"]),
+        "cancel_confirm_resume_state": UserStates.AWAITING_PRO_APPROVAL.value,
+    }
+    deps.state_manager.get_metadata = AsyncMock(return_value=meta)
+    called = AsyncMock()
+    monkeypatch.setattr(dispatch_guards.customer_flow, handler, called)
+    ctx = make_ctx(
+        normalized_text=text, current_state=UserStates.AWAITING_CANCEL_CONFIRMATION
+    )
+
+    assert await guard_cancel_confirmation(ctx, deps) is HANDLED
+
+    called.assert_awaited_once_with(
+        ctx.chat_id, meta, deps.whatsapp, deps.state_manager
+    )
+    # AWAITING_PRO_APPROVAL comes back through the helper, with its own TTL.
+    deps.state_manager.set_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_global_reset_with_an_open_offer_says_how_to_cancel(deps, monkeypatch):
+    _offered_lookup(monkeypatch, _OFFERED)
+    ctx = make_ctx(
+        normalized_text=Messages.Keywords.RESET_COMMANDS[1],
+        current_state=UserStates.AWAITING_PRO_APPROVAL,
+    )
+
+    assert await guard_global_reset(ctx, deps) is HANDLED
+
+    deps.state_manager.clear_state.assert_awaited_once_with(ctx.chat_id)
+    deps.context_manager.clear_context.assert_awaited_once_with(ctx.chat_id)
+    deps.whatsapp.send_message.assert_awaited_once_with(
+        ctx.chat_id, Messages.Customer.RESET_REQUEST_STILL_OPEN
     )
 
 

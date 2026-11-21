@@ -44,6 +44,7 @@ from app.core.messages import Messages
 from app.core.phone import to_chat_id, to_local_phone, strip_suffix, mask_chat_id
 from app.core.redis_client import get_redis_client
 from app.core.text_matching import contains_keyword, is_life_threatening_text
+from app.services import customer_flow
 from app.providers.whatsapp.template_registry import QuickReply
 
 
@@ -166,18 +167,29 @@ async def guard_admin_wizard(ctx: DispatchContext, deps: GuardDeps):
 
 
 async def guard_global_reset(ctx: DispatchContext, deps: GuardDeps):
-    """Global reset. Skipped for pros — they use `תפריט` for their menu."""
+    """Global reset. Skipped for pros — they use `תפריט` for their menu.
+
+    It clears the state and the context and never traps. It does not withdraw a
+    request already offered to a pro, so with one open it says so, and how to
+    cancel it: a silent reset left the offer live and the next message attached
+    to it, until the pro's אשר booked a customer who thought they had left.
+    """
+
     if (
         ctx.normalized_text not in Messages.Keywords.RESET_COMMANDS
         or ctx.current_state == UserStates.PRO_MODE
     ):
         return None
 
-    # Deliberately silent (operator decision, 2026-08-27): no confirmation
-    # message — the customer's next message simply starts a fresh
-    # conversation. The old RESET_SUCCESS confirmation was removed with it.
+    # Otherwise deliberately silent (operator decision, 2026-08-27): no
+    # confirmation message, and the customer's next message simply starts a
+    # fresh conversation. The old RESET_SUCCESS confirmation was removed with it.
     await deps.state_manager.clear_state(ctx.chat_id)
     await deps.context_manager.clear_context(ctx.chat_id)
+    if await customer_flow.find_offered_lead(ctx.chat_id):
+        await deps.whatsapp.send_message(
+            ctx.chat_id, Messages.Customer.RESET_REQUEST_STILL_OPEN
+        )
     return HANDLED
 
 
@@ -754,6 +766,11 @@ async def guard_pro_approval_soft_hold(ctx: DispatchContext, deps: GuardDeps):
     (PRO_APPROVAL_TTL_SECONDS), so an unconditional hold would lock them out of
     their own business for that whole window. Pro-only keywords escape; anything
     a customer prompt could plausibly mean does not.
+
+    A cancel keyword is the one customer reply it does not hold: the request is
+    still the customer's to withdraw until the pro approves it, so it gets the
+    PRO-118 confirmation prompt for the offered lead (`_ask_cancel_confirmation`,
+    answered by `guard_cancel_confirmation`).
     """
     from app.services import workflow_service as wf
 
@@ -773,6 +790,15 @@ async def guard_pro_approval_soft_hold(ctx: DispatchContext, deps: GuardDeps):
             if reply:
                 await deps.whatsapp.send_message(ctx.chat_id, reply)
             return HANDLED
+
+    if contains_keyword(ctx.normalized_text, Messages.Keywords.CANCEL_KEYWORDS):
+        offered = await customer_flow.find_offered_lead(ctx.chat_id)
+        if offered:
+            await _ask_cancel_confirmation(ctx, deps, offered, offered=True)
+            return HANDLED
+        # The state outlived the offer (approved, moved, closed): "still with
+        # the pro" would be false, so let the rest of the chain answer it.
+        return None
 
     pro_escaping = ctx.normalized_text in wf.PRO_ONLY_KEYWORDS and (
         await wf._is_registered_pro(ctx.chat_id)
@@ -863,6 +889,13 @@ async def guard_cancel_confirmation(ctx: DispatchContext, deps: GuardDeps):
     else keeps the job (safe default for a destructive action) and restores
     whatever flow state the interceptor overwrote (e.g. AWAITING_ADDRESS on
     a second, in-flight lead) instead of dumping the customer to IDLE.
+
+    The same prompt also asks about a request still awaiting the pro's approval
+    (`cancel_confirm_kind: "new"`, armed by the soft hold or, after that state
+    lapsed, by the interceptor below): a confirm withdraws the NEW lead through
+    `customer_flow.withdraw_offered_request`, and anything else keeps it and puts
+    AWAITING_PRO_APPROVAL back for what was left of it, so the PRO-56 SLA still
+    sees a customer who is waiting.
     """
     from app.services import workflow_service as wf
 
@@ -878,6 +911,18 @@ async def guard_cancel_confirmation(ctx: DispatchContext, deps: GuardDeps):
         or ctx.normalized_text == "כן"
         or (contains_keyword(ctx.normalized_text, Messages.Keywords.CANCEL_KEYWORDS))
     )
+    if meta.get("cancel_confirm_kind") == customer_flow.CANCEL_KIND_NEW:
+        if confirmed and cancel_lead_id:
+            await customer_flow.withdraw_offered_request(
+                ctx.chat_id, meta, deps.whatsapp, deps.state_manager
+            )
+            return HANDLED
+        if resume_state and resume_state != UserStates.AWAITING_PRO_APPROVAL:
+            await deps.state_manager.set_state(ctx.chat_id, resume_state)
+        await customer_flow.keep_offered_request(
+            ctx.chat_id, meta, deps.whatsapp, deps.state_manager
+        )
+        return HANDLED
     if confirmed and cancel_lead_id:
         try:
             cancel_oid = ObjectId(cancel_lead_id)
@@ -1093,7 +1138,12 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
 
     Placed before PRO_BUSINESS_KEYWORDS so Hebrew phrases are not misrouted.
     Guards against PRO_MODE so pros who happen to use these phrases are
-    unaffected. Falls through to normal routing when there is no BOOKED lead.
+    unaffected. Falls through to normal routing when there is no BOOKED lead,
+    except for a cancel keyword from a customer with no flow open (IDLE or
+    CUSTOMER_MODE) and a request still with a pro (NEW): AWAITING_PRO_APPROVAL
+    lasts an hour and the offer outlives it, so that request gets the same
+    confirmation prompt the soft hold gives. Holding states other than those two
+    keep their own reading of the word (the address gate's bail-out, say).
     """
     from app.services import workflow_service as wf
 
@@ -1111,43 +1161,24 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
         {"chat_id": ctx.chat_id, "status": LeadStatus.BOOKED},
         sort=[("created_at", -1)],
     )
+    is_cancel = contains_keyword(ctx.normalized_text, Messages.Keywords.CANCEL_KEYWORDS)
     if not booked_lead:
-        # booked_lead is None — fall through to normal routing
+        if is_cancel and ctx.current_state in (
+            None,
+            UserStates.IDLE,
+            UserStates.CUSTOMER_MODE,
+        ):
+            offered = await customer_flow.find_offered_lead(ctx.chat_id)
+            if offered:
+                await _ask_cancel_confirmation(ctx, deps, offered, offered=True)
+                return HANDLED
+        # No BOOKED lead — fall through to normal routing
         return None
 
     pro_id = booked_lead.get("pro_id")
 
-    if contains_keyword(ctx.normalized_text, Messages.Keywords.CANCEL_KEYWORDS):
-        # PRO-118: cancelling a confirmed BOOKED job is destructive —
-        # ask for an explicit confirmation instead of acting on the
-        # first keyword hit. Expiry of the TTL = the job silently
-        # stays. The customer's current flow state (e.g.
-        # AWAITING_ADDRESS on a second in-flight lead) is stashed so
-        # an aborted cancel restores it rather than dropping to IDLE.
-        meta = await deps.state_manager.get_metadata(ctx.chat_id) or {}
-        meta["cancel_confirm_lead_id"] = str(booked_lead["_id"])
-        # getattr(.value) — get_state returns a plain Redis string on
-        # every real path but the *enum member* UserStates.IDLE as its
-        # default; str() on the member yields "UserStates.IDLE", which
-        # would be persisted verbatim and match no state downstream.
-        meta["cancel_confirm_resume_state"] = (
-            getattr(ctx.current_state, "value", ctx.current_state)
-            if ctx.current_state
-            else None
-        )
-        await deps.state_manager.set_state(
-            ctx.chat_id,
-            UserStates.AWAITING_CANCEL_CONFIRMATION,
-            ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
-        )
-        await deps.state_manager.set_metadata(ctx.chat_id, meta)
-        await deps.whatsapp.send_message(
-            ctx.chat_id, Messages.Customer.CANCEL_CONFIRM_PROMPT
-        )
-        logger.info(
-            f"Customer {mask_chat_id(ctx.chat_id)} asked to cancel BOOKED lead "
-            f"{booked_lead['_id']} — awaiting confirmation"
-        )
+    if is_cancel:
+        await _ask_cancel_confirmation(ctx, deps, booked_lead)
         return HANDLED
 
     # Reschedule keyword
@@ -1183,6 +1214,72 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
         f"Customer {mask_chat_id(ctx.chat_id)} offered reschedule for lead {booked_lead['_id']}"
     )
     return HANDLED
+
+
+async def _ask_cancel_confirmation(
+    ctx: DispatchContext, deps: GuardDeps, lead: dict, offered: bool = False
+) -> None:
+    """Arm the PRO-118 "really cancel?" prompt for ``lead``.
+
+    Cancelling is destructive, so the keyword only asks; ``guard_cancel_confirmation``
+    acts on an explicit '1'. Expiry of the TTL leaves the lead as it was. The
+    customer's current flow state (e.g. AWAITING_ADDRESS on a second in-flight
+    lead) is stashed so an aborted cancel restores it rather than dropping to IDLE.
+
+    ``offered``: a NEW lead still awaiting its pro's approval rather than a BOOKED
+    job. Its metadata also carries the pro it was offered to (the cancel write
+    pins it) and, when the prompt interrupts AWAITING_PRO_APPROVAL, when that
+    wait would have ended, so a "2" or a lapsed prompt can give it back.
+    """
+
+    meta = await deps.state_manager.get_metadata(ctx.chat_id) or {}
+    meta["cancel_confirm_lead_id"] = str(lead["_id"])
+    # getattr(.value) — get_state returns a plain Redis string on every real
+    # path but the *enum member* UserStates.IDLE as its default; str() on the
+    # member yields "UserStates.IDLE", which would be persisted verbatim and
+    # match no state downstream.
+    resume_state = (
+        getattr(ctx.current_state, "value", ctx.current_state)
+        if ctx.current_state
+        else None
+    )
+    meta["cancel_confirm_resume_state"] = resume_state
+    if offered:
+        meta["cancel_confirm_kind"] = customer_flow.CANCEL_KIND_NEW
+        meta["cancel_confirm_pro_id"] = str(lead.get("pro_id"))
+        if resume_state == UserStates.AWAITING_PRO_APPROVAL.value:
+            left = await deps.state_manager.get_ttl(ctx.chat_id)
+            if not isinstance(left, int) or left <= 0:
+                left = WorkerConstants.PRO_APPROVAL_TTL_SECONDS
+            meta["cancel_confirm_resume_until"] = (
+                datetime.now(timezone.utc).timestamp() + left
+            )
+    else:
+        for key in (
+            "cancel_confirm_kind",
+            "cancel_confirm_pro_id",
+            "cancel_confirm_resume_until",
+        ):
+            meta.pop(key, None)
+    await deps.state_manager.set_state(
+        ctx.chat_id,
+        UserStates.AWAITING_CANCEL_CONFIRMATION,
+        ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
+    )
+    await deps.state_manager.set_metadata(ctx.chat_id, meta)
+    await deps.whatsapp.send_message(
+        ctx.chat_id,
+        (
+            Messages.Customer.CANCEL_REQUEST_CONFIRM_PROMPT
+            if offered
+            else Messages.Customer.CANCEL_CONFIRM_PROMPT
+        ),
+    )
+    logger.info(
+        f"Customer {mask_chat_id(ctx.chat_id)} asked to cancel "
+        f"{'offered' if offered else 'BOOKED'} lead {lead['_id']} — awaiting "
+        "confirmation"
+    )
 
 
 # ---------------------------------------------------------------------------
