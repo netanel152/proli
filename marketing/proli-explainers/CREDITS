@@ -1,0 +1,19 @@
+Proli explainers — proli-customers.mp4, proli-pros.mp4
+
+Picture: drawn in code (Canvas 2D), rendered with headless Chrome. No stock footage, no generated images.
+
+Fonts
+- Heebo — Oded Ezer & the Heebo Project Authors, SIL Open Font License 1.1 (fonts/OFL-Heebo.txt)
+  https://github.com/google/fonts/tree/main/ofl/heebo
+- DM Mono — The DM Mono Project Authors, SIL Open Font License 1.1 (fonts/OFL-DMMono.txt)
+  https://github.com/google/fonts/tree/main/ofl/dmmono
+
+Music and sound
+- Samples (CC0): Versilian Community Sample Library (Versilian Studios, github.com/sgossner/VCSL) — marimba,
+  glockenspiel, vibraphone, bowed vibraphone, claps, shaker, woodblock
+- Samples (CC0): FreePats project (freepats.zenvoid.org) — electric bass
+- Kick, whooshes, clicks, drips and the room bed: synthesised (numpy/scipy), no samples
+
+Content
+- Every claim on screen comes from the public Proli site (site/index.html in this repository).
+- "וואטסאפ" is named as text only; no WhatsApp logo or interface appears.
