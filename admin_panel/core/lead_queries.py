@@ -78,6 +78,10 @@ EDITOR_COLUMNS = [
     # and `edited_df` overwrites the `professional` cell, so this is the only way
     # a save can tell that somebody else changed the owner since it rendered.
     "_pro_id",
+    # Hidden: a BOOKED lead whose approval reserved no calendar slot
+    # (``slot_unreserved``, set by ``pro_flow._approve_lead``). The Kanban card
+    # shows it, because the pro is coordinating the time by phone.
+    "_slot_unreserved",
 ]
 
 #: Editor column -> lead document field. ``details_summary`` writes both
@@ -191,7 +195,17 @@ def build_lead_row(lead, *, pro_map_id_to_name, unknown_pro_label, status_labels
         "status_label": (status_labels or {}).get(status, status),
         "status": status,
         "_chat_id": lead["chat_id"],
+        "_slot_unreserved": slot_unreserved(lead),
     }
+
+
+def slot_unreserved(lead) -> bool:
+    """True for a BOOKED lead whose approval reserved no slot.
+
+    Only while BOOKED: the flag describes the booking, and a lead that left
+    BOOKED through the editor keeps the field without it meaning anything.
+    """
+    return bool(lead.get("slot_unreserved")) and lead.get("status") == "booked"
 
 
 def build_edit_form_payload(

@@ -127,7 +127,7 @@ A call site passes its free-form text plus `template_key` and named `params` to 
 | P13 | `onboarding_approved` | none | `ONBOARDING_APPROVED` | `admin_panel/views/professionals.py::_notify_pro_approved` |
 | P13 | `onboarding_rejected` | none | `ONBOARDING_REJECTED` | `admin_panel/views/professionals.py::_notify_pro_rejected` |
 | P14 | `pro_lead_outside_trade` | `issue_type` | `PRO_LEAD_OUTSIDE_TRADE` | `conversation_pipeline.py` wrong-trade check, for both `LEAD_OUTSIDE_TRADE` and `LEAD_OUTSIDE_TRADE_OFFER` |
-| — | `pro_found` | `pro_name`, `issue_type`, `full_address`, `appointment_time`, `price_estimate`, `pro_phone` | `PRO_FOUND` | `pro_flow._approve_lead`. The update `REASSIGNING` and `PENDING_REVIEW` promise, and the only way a closed-window customer gets the pro's phone |
+| — | `pro_found` | `pro_name`, `issue_type`, `full_address`, `appointment_time`, `price_estimate`, `pro_phone` | `PRO_FOUND` | `pro_flow._approve_lead`. The update `REASSIGNING` and `PENDING_REVIEW` promise, and the only way a closed-window customer gets the pro's phone. `appointment_time` is the hour the approval reserved (the claimed slot's, when it differs from the one asked for), or `Fallbacks.TIME_TO_COORDINATE` when no slot was reserved, so neither the template nor the free-form text states an hour nobody holds |
 | C1 | `no_pro_available` | `issue_type` | `NO_PRO_AVAILABLE` | `monitor_service.auto_reject_unassigned_leads` |
 | C2 | `completion_check` | `pro_name` | `COMPLETION_CHECK` | `customer_flow.send_customer_completion_check`, and the operator button, `admin_panel/core/utils.py::send_completion_check_sync` |
 | C3 | `reassigning` | `issue_type` | `REASSIGNING` | `monitor_service.reassign_lead` |

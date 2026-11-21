@@ -1027,6 +1027,11 @@ def load_css(lang_code, T):
             gap: 4px;
         }}
 
+        .kanban-card-detail--warning {{
+            color: var(--warning);
+            font-weight: 600;
+        }}
+
         /* ===== STATUS PILLS & KANBAN HEADERS ===== */
         {status_pill_css}
         {status_dark_css}
@@ -1314,6 +1319,16 @@ def render_kanban_card(lead, T):
     safe_details = html.escape(details)
     safe_client = html.escape(str(client))
     safe_pro = html.escape(str(pro))
+    # A BOOKED lead approved with no calendar slot (`_slot_unreserved`, from
+    # `lead_queries.build_lead_row`): the time is not held, so say so.
+    unreserved_html = ""
+    # str(): a DataFrame record hands back numpy.bool_, and NaN must not count.
+    if str(lead.get("_slot_unreserved")) == "True":
+        unreserved_html = f"""
+        <div class="kanban-card-detail kanban-card-detail--warning">
+            <span class="material-symbols-rounded" style="font-size:0.85rem">event_busy</span>
+            {html.escape(T.get("slot_unreserved", "No calendar slot reserved"))}
+        </div>"""
 
     return f"""<div class="kanban-card">
     <div class="kanban-card-title">
@@ -1332,7 +1347,7 @@ def render_kanban_card(lead, T):
         <div class="kanban-card-detail">
             <span class="material-symbols-rounded" style="font-size:0.85rem">schedule</span>
             <span dir="ltr" style="unicode-bidi:isolate">{date_str}</span>
-        </div>
+        </div>{unreserved_html}
     </div>
 </div>"""
 

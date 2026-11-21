@@ -2997,3 +2997,83 @@ async def test_more_continues_active_jobs_list_to_its_last_page(
         )
         in result
     )
+
+
+# --- Approval with no slot reserved ---
+
+
+@pytest.mark.asyncio
+async def test_approve_without_a_slot_flags_the_lead_and_names_no_hour(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    """No slot claimed: the pro is told, the lead is flagged, and neither the
+    free-form PRO_FOUND nor the pro_found template's time param states the
+    requested hour (it is the Fallbacks value that fits "מועד: ...")."""
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "מחר ב-10:00",
+            "appointment_datetime": datetime.now(timezone.utc) + timedelta(days=1),
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=None)
+    )
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert Messages.Pro.APPROVE_SUCCESS in result
+    assert Messages.Pro.APPROVE_NO_SLOT in result
+    assert Messages.Pro.CALENDAR_UPDATE_SUCCESS not in result
+    stored = await db.leads.find_one({"_id": lead_id})
+    assert stored["slot_unreserved"] is True
+    call = mock_wa.send_message.call_args
+    assert "מחר ב-10:00" not in call.args[1]
+    assert Messages.Fallbacks.TIME_TO_COORDINATE in call.args[1]
+    assert call.kwargs["template_key"] == "pro_found"
+    assert (
+        call.kwargs["params"]["appointment_time"]
+        == Messages.Fallbacks.TIME_TO_COORDINATE
+    )
+
+
+@pytest.mark.asyncio
+async def test_approve_onto_a_slot_clears_an_old_unreserved_flag(
+    pro_setup, mock_wa, mock_lm, monkeypatch
+):
+    pro_doc, db = pro_setup
+    lead_id = ObjectId()
+    await db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "pro_id": pro_doc["_id"],
+            "status": LeadStatus.NEW,
+            "chat_id": "972501111111@c.us",
+            "issue_type": "נזילה",
+            "full_address": "תל אביב, הרצל 10",
+            "appointment_time": "10:00",
+            "slot_unreserved": True,
+            "created_at": datetime.now(timezone.utc),
+        }
+    )
+    slot_id = ObjectId()
+    monkeypatch.setattr(
+        app.services.pro_flow, "book_slot_for_lead", AsyncMock(return_value=slot_id)
+    )
+
+    result = await handle_pro_text_command("972500000000@c.us", "אשר", mock_wa, mock_lm)
+
+    assert Messages.Pro.CALENDAR_UPDATE_SUCCESS in result
+    stored = await db.leads.find_one({"_id": lead_id})
+    assert stored["booked_slot_id"] == slot_id
+    assert "slot_unreserved" not in stored
+    params = mock_wa.send_message.call_args.kwargs["params"]
+    assert params["appointment_time"] == "10:00"

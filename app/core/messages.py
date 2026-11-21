@@ -497,6 +497,21 @@ class Messages:
         )
         APPROVE_SUCCESS = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
         CALENDAR_UPDATE_SUCCESS = "\nהיומן עודכן בהצלחה."
+        # The approval stands with no hour reserved: no free slot lay near the
+        # requested time. Said in place of CALENDAR_UPDATE_SUCCESS, never left
+        # out silently, and the customer is not given an hour either (§7).
+        APPROVE_NO_SLOT = (
+            "\nאין ביומן שעה פנויה סמוכה למועד שהלקוח ביקש, ולא שוריינה שעה.\n"
+            "יש לתאם את מועד ההגעה ישירות מול הלקוח."
+        )
+        # The requested hour was taken and the nearest free slot was reserved
+        # instead. The lead and the customer's message carry this hour (§6:
+        # the time ends its own line).
+        CALENDAR_UPDATE_MOVED = (
+            "\nהמועד המבוקש תפוס ביומן, ולכן שוריין המועד הפנוי הקרוב:\n"
+            "{appointment_time}\n"
+            "הלקוח קיבל את המועד הזה."
+        )
         # PRO-59: everything APPROVAL_REQUEST withholds, sent the moment the
         # approval is *claimed* — after the atomic status write, never before,
         # so a pro who loses the PRO-123 race gets ALREADY_RESPONDED and no
@@ -1458,6 +1473,10 @@ class Messages:
         # Template variables cannot be empty, so an optional line in a free-form
         # message becomes a variable with a value that says "nothing here".
         PRICE_NOT_QUOTED = "לא ניתנה הערכה"
+        # PRO_FOUND's time when approval reserved no slot: the customer is not
+        # told an hour nobody holds. Fits the approved template's "מועד: {...}"
+        # line, which is why it is a value and not a dropped line.
+        TIME_TO_COORDINATE = "יתואם בטלפון עם איש המקצוע"
         URGENCY_REGULAR = "רגילה"
 
     class Templates:

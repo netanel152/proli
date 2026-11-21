@@ -381,6 +381,9 @@ async def reassign_lead(
                 "completion_check_sent_count": "",
                 "offer_withheld_details": "",
                 "admin_offer_undelivered_at": "",
+                # Says the *booking* holds no slot; the next approval decides
+                # it afresh for the new pro.
+                "slot_unreserved": "",
             },
             # PRO-281: status, owner and count as read — see _as_read.
             extra_filter=as_read,

@@ -1222,7 +1222,9 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
                 "booked_slot_id": slot_id,
                 "rescheduled_at": datetime.now(timezone.utc),
                 "rescheduled_count": lead.get("rescheduled_count", 0) + 1,
-            }
+            },
+            # The lead holds a slot now, whatever its approval reserved.
+            "$unset": {"slot_unreserved": ""},
         },
     )
 

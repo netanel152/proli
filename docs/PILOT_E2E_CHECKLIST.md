@@ -290,24 +290,19 @@ changed it, then save.
 time** as close together as you can. (b) In the panel, run the bulk slot generator for a range that
 already has slots, and let the Sunday regeneration (or a second click) run over it again.
 **Expected:**
-- (a) One booking succeeds; the other customer is offered another time. The pro's schedule shows
-  one slot taken, never two bookings at the same time, and a slot that overlaps an already-taken one
-  is not offered.
+- (a) **P** can approve both. The first approval reserves the slot: P's reply says the calendar was
+  updated, and that customer's "pro found" message states the hour. The second approval goes through
+  too, because P coordinates the time by phone, but it holds no slot: P's reply says plainly that no
+  free slot lies near the requested time and to arrange the time with the customer; that customer's
+  "pro found" message names **no** hour (its time line reads `Fallbacks.TIME_TO_COORDINATE`, "יתואם
+  בטלפון עם איש המקצוע"); and the lead carries `slot_unreserved: true`, which the admin panel's
+  Kanban card shows on the booked lead. If instead another free slot lay within ±2h of the
+  requested time, that slot is reserved and the lead's `appointment_time`/`appointment_datetime`
+  move to it: P's reply names the reserved hour and says the customer was given it, and the
+  customer's message states that hour, not the one asked for. The pro's schedule shows one slot
+  taken per reservation, never two bookings on one slot, and a slot that overlaps an already-taken
+  one is not reserved.
 - (b) No duplicate slot rows appear; a repeat run adds nothing for times that already exist.
-
-> ⚠️ **Under review — what the code does today in (a), which is not what Expected says.** No
-> one is "offered another time". When the pro approves the second lead, the lead is marked
-> `booked` first and a slot is looked for afterwards (`pro_flow._approve_lead` →
-> `matching_service.book_slot_for_lead`). If another free slot exists within ±2h of the
-> requested time, it is taken silently: the lead's `booked_slot_id` points at a different
-> hour, while its `appointment_time` and the customer's "pro found" message still state the
-> time originally agreed. If no free slot is left in that window, the lead stays `booked`
-> with **no slot at all**; the only visible difference is that the pro's approval reply lacks
-> the "היומן עודכן בהצלחה" line. In both cases the second customer is told the pro is coming
-> at the requested time and nobody — customer, pro or operator — is told about the clash. The
-> slot half of Expected does hold (one slot row taken, never two). Record what you observe
-> against this note; do not tick Pass on the "offered another time" wording until the review
-> decides which behaviour is intended.
 
 - [ ] Pass  · [ ] File: ______
 

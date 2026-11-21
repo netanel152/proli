@@ -420,7 +420,7 @@ python scripts/generate_admin_hash.py
 
 ### Slot booking atomicity
 
-`book_slot_for_lead` uses MongoDB `find_one_and_update` to atomically find a free slot and mark it taken — preventing double-booking even under concurrent requests. It returns the reserved slot's `_id` (`Optional[ObjectId]`, `None` if no slot was available), which the approve path persists as the lead's `booked_slot_id` so release/reschedule always free the exact reserved slot rather than a sibling slot from another active job.
+`book_slot_for_lead` uses MongoDB `find_one_and_update` to atomically find a free slot and mark it taken — preventing double-booking even under concurrent requests. It returns the reserved slot's `_id` (`Optional[ObjectId]`, `None` if no slot was available), which the approve path persists as the lead's `booked_slot_id` so release/reschedule always free the exact reserved slot rather than a sibling slot from another active job. The approval is written BOOKED before the slot is looked for and stands whatever the search finds (`pro_flow._record_slot_outcome`): a slot at another hour than requested moves the lead's `appointment_time`/`appointment_datetime` to it and both pro and customer are told that hour; no slot at all sets `slot_unreserved: true` on the lead (shown on the admin panel's Kanban card), the pro's reply says no hour is held and to arrange it with the customer, and the customer's `PRO_FOUND` names no hour (`Fallbacks.TIME_TO_COORDINATE`). A later reschedule onto a slot, or a reassignment, clears the flag.
 
 Two more guards stop the same pro being booked twice for one time (PRO-277):
 
