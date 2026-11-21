@@ -12,7 +12,7 @@ each one turns into a hard failure the moment it is fixed, forcing the expectati
 to be updated rather than quietly drifting.
 """
 
-from datetime import timezone
+from datetime import timedelta, timezone
 
 import pytest
 
@@ -556,17 +556,129 @@ async def test_sos_pauses_the_bot_and_deflects_after_the_idle_window(world):
     world.recorder.assert_nothing_sent("the bot is paused for a human")
     await world.assert_state(UserStates.PAUSED_FOR_HUMAN)
 
-    # Nobody picked it up within the window → SLA deflection.
-    await world.age(
-        lead["_id"], WorkerConstants.PAUSE_TTL_SECONDS / 60 + 5, "paused_at"
-    )
+    # Nobody picked it up within the window → SLA deflection. Time passes in
+    # both stores: Mongo's paused_at ages, and Redis expires the state key it
+    # wrote with the same TTL before paused_at, exactly as production does.
+    await _lapse_pause(world, lead["_id"])
+    world.recorder.clear()
     await check_sla_deflection()
 
-    assert (await world.lead_by_id(lead["_id"]))["sla_deflected"] is True
+    stored = await world.lead_by_id(lead["_id"])
+    assert stored["sla_deflected"] is True
+    assert stored["is_paused"] is False
     world.recorder.assert_text_to(
         world.customer, Messages.Customer.SLA_DEFLECTION_MESSAGE
     )
     await world.assert_state(UserStates.IDLE)
+
+    # A second run finds nothing left to deflect and sends nothing more.
+    world.recorder.clear()
+    await check_sla_deflection()
+    world.recorder.assert_nothing_sent("the handoff was already deflected")
+
+
+async def _lapse_pause(world, *lead_ids, chat_id=None):
+    """The pause window passes: every given lead's paused_at ages past
+    PAUSE_TTL_SECONDS and the chat's state key expires with it."""
+    for lead_id in lead_ids:
+        await world.age(
+            lead_id, WorkerConstants.PAUSE_TTL_SECONDS / 60 + 5, "paused_at"
+        )
+    await world.expire_state(chat_id)
+
+
+@pytest.mark.asyncio
+async def test_sos_on_a_contacted_lead_deflects_after_the_idle_window(world):
+    """SOS pauses a CONTACTED lead (intake still running) too, so the job must
+    deflect it as well, not only NEW/BOOKED ones."""
+    from app.services.monitor_service import check_sla_deflection
+
+    await world.standard_cast()
+    lead = await world.booked_job(
+        world.pros[R.PRO_PRIMARY], status=LeadStatus.CONTACTED, pro_id=None
+    )
+
+    await world.send("נציג")
+    assert (await world.lead_by_id(lead["_id"]))["is_paused"] is True
+
+    await _lapse_pause(world, lead["_id"])
+    world.recorder.clear()
+    await check_sla_deflection()
+
+    stored = await world.lead_by_id(lead["_id"])
+    assert stored["sla_deflected"] is True
+    assert stored["is_paused"] is False
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.SLA_DEFLECTION_MESSAGE
+    )
+
+
+@pytest.mark.asyncio
+async def test_sla_deflection_leaves_a_customer_who_moved_on_alone(world):
+    """The pause lapsed and the customer is now in another flow: the flag is
+    cleared, but no deflection is sent and their state is not touched."""
+    from app.services.monitor_service import check_sla_deflection
+
+    await world.standard_cast()
+    lead = await world.booked_job(world.pros[R.PRO_PRIMARY])
+    await world.send("נציג")
+
+    await _lapse_pause(world, lead["_id"])
+    await world.set_state(UserStates.AWAITING_ADDRESS, ttl=3600)
+    world.recorder.clear()
+    await check_sla_deflection()
+
+    stored = await world.lead_by_id(lead["_id"])
+    assert stored["is_paused"] is False
+    assert not stored.get("sla_deflected")
+    world.recorder.assert_nothing_sent("the customer is in another flow")
+    await world.assert_state(UserStates.AWAITING_ADDRESS)
+
+
+@pytest.mark.asyncio
+async def test_sla_deflection_does_not_end_a_younger_handoff_on_the_same_chat(world):
+    """The pro paused lead A 20 minutes ago; the customer then asked for a human
+    on lead B 5 minutes ago, refreshing the chat's one state key. A has lapsed,
+    but the chat's handoff is B's and still live: nothing is sent and the pause
+    stands. Once B lapses too, the chat gets one deflection for both."""
+    from app.services.monitor_service import check_sla_deflection
+
+    await world.standard_cast()
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    lead_a = await world.booked_job(world.pros[R.PRO_PRIMARY])
+    await world.send(Messages.Keywords.BOT_PAUSE_COMMANDS[0], chat_id=pro_chat)
+    assert (await world.lead_by_id(lead_a["_id"]))["is_paused"] is True
+    await world.age(lead_a["_id"], 20, "paused_at")
+
+    lead_b = await world.booked_job(
+        world.pros[R.PRO_PRIMARY],
+        status=LeadStatus.CONTACTED,
+        pro_id=None,
+        created_at=world.anchor + timedelta(minutes=1),
+    )
+    await world.send("נציג")
+    assert (await world.lead_by_id(lead_b["_id"]))["is_paused"] is True
+    await world.age(lead_b["_id"], 5, "paused_at")
+
+    world.recorder.clear()
+    await check_sla_deflection()
+
+    world.recorder.assert_nothing_sent("lead B's handoff is still inside the window")
+    await world.assert_state(UserStates.PAUSED_FOR_HUMAN)
+    assert (await world.lead_by_id(lead_b["_id"]))["is_paused"] is True
+    assert not (await world.lead_by_id(lead_a["_id"])).get("sla_deflected")
+
+    # B lapses as well: one message for the chat, both leads released.
+    await _lapse_pause(world, lead_b["_id"])
+    await check_sla_deflection()
+
+    assert world.recorder.bodies_to(world.customer) == [
+        Messages.Customer.SLA_DEFLECTION_MESSAGE
+    ]
+    for lead in (lead_a, lead_b):
+        stored = await world.lead_by_id(lead["_id"])
+        assert stored["is_paused"] is False
+        assert stored["sla_deflected"] is True
 
 
 # ===========================================================================

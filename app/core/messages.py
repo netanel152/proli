@@ -245,11 +245,16 @@ class Messages:
         # books nothing at all. The old copy offered "אקבע לך שיחה טלפונית"
         # with a כן/לא menu whose replies fell straight through to the AI. This
         # says only what the code does: the handoff timed out and the bot is
-        # back, so the customer can simply keep writing here.
+        # back, so the customer can simply keep writing here. It names nobody:
+        # the pause may be a customer SOS (the operator was paged) or a pro's
+        # השהה (the pro paused it), and whoever it was already knows. No time
+        # is promised, since nothing schedules the human's reply. Written to
+        # the 2026-11-17 rules (no emoji, bold or em dash; voice "אנחנו").
         SLA_DEFLECTION_MESSAGE = (
-            "🕐 איש המקצוע עדיין לא התפנה לענות, ואני חוזר לטפל בפנייה שלך.\n"
-            "אפשר פשוט לכתוב לי כאן ואמשיך מכאן — או לכתוב *נציג* כדי לחזור "
-            "ולהמתין למענה אנושי."
+            "המענה האנושי עדיין לא הגיע, סליחה על ההמתנה.\n"
+            "מי שצריך לחזור אליך כבר יודע על הפנייה, ויחזור אליך.\n"
+            "בינתיים אפשר להמשיך לכתוב כאן, ואנחנו ממשיכים לטפל בפנייה. "
+            "כדי להמתין שוב למענה אנושי, אפשר לכתוב נציג."
         )
         LOYALTY_OFFER = (
             "🏠 איזה כיף שחזרת אלינו!\n"

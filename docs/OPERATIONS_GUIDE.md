@@ -139,7 +139,7 @@ db.settings.update_one(
 
 Toggle fields: `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `whatsapp_monitor_active`, `lead_janitor_active`, `sla_monitor_active`. Their defaults live once, in `app/core/scheduler_config.py` (`SCHEDULER_CONFIG_DEFAULTS`): the worker and the admin panel's Settings page both insert that document and read every toggle through `scheduler_toggle`, so a missing key shows in the panel as exactly what the worker does with it (PRO-249 — the panel used to show a missing `sos_healer_active` as on while the worker kept it off).
 
-**PRO-73 pilot posture:** `sos_healer_active`, `lead_janitor_active`, and `sla_monitor_active` gate *cold, customer-facing* re-engagement jobs and **default OFF** — they stay dark until an operator turns them on after the WhatsApp number is warmed up. Even when on, these three only run inside business hours (08:00–21:00 Israel time; see `within_business_hours()` in `app/core/datetime_utils.py`). Enable one via the same `settings_collection.update_one` pattern above, e.g. `{"$set": {"lead_janitor_active": True}}`.
+**PRO-73 pilot posture:** `sos_healer_active` and `lead_janitor_active` gate *cold, customer-facing* re-engagement jobs and **default OFF** — they stay dark until an operator turns them on after the WhatsApp number is warmed up. `sla_monitor_active` **defaults ON**: the SLA deflection answers a customer who asked for a human minutes earlier, so it is not a cold message. A default applies only to a missing key, so a `scheduler_config` document the worker already inserted with `sla_monitor_active: False` stays off until it is set to `True`. All three only run inside business hours (08:00–21:00 Israel time; see `within_business_hours()` in `app/core/datetime_utils.py`). Enable one via the same `settings_collection.update_one` pattern above, e.g. `{"$set": {"lead_janitor_active": True}}`.
 
 ---
 
@@ -160,9 +160,11 @@ The **Stale Lead Nudger** (every 4 h, plus once shortly after worker boot — PR
 2. Helps prevent `MAX_PRO_LOAD` (3) issues by ensuring completed jobs are cleared from the system.
 3. Limits reminders to `MAX_PRO_REMINDERS` (3) per lead, and skips a lead reminded within the last `STALE_LEAD_REMINDER_COOLDOWN_HOURS` (4) so the boot run can't burn all 3 reminders across a few quick deploys.
 
-The **SLA Monitor** (every 5 min; PRO-73: business hours + `sla_monitor_active` toggle, default OFF) checks chats in the `PAUSED_FOR_HUMAN` state:
-1. If 15 minutes of silence pass, the bot sends `Messages.Customer.SLA_DEFLECTION_MESSAGE` and `check_sla_deflection` clears the pause state — no callback is booked.
-2. This proactive "wake up" hands the customer back to normal bot routing instead of leaving them stuck waiting on the Pro; the copy no longer promises a telephone call, since the code never books one.
+The **SLA Monitor** (every 5 min; PRO-73: business hours + `sla_monitor_active` toggle, default ON) ends human handoffs nobody picked up. It reads the lead, not Redis: a CONTACTED, NEW or BOOKED lead with `is_paused` and a `paused_at` older than `PAUSE_TTL_SECONDS` (15 min). The `state:` key expires on the same TTL, so by then it is normally gone, and that counts as a lapsed pause.
+1. Per chat, if the state is `PAUSED_FOR_HUMAN` or absent/IDLE, every lapsed lead is marked `sla_deflected` (`sla_deflected_at`, `is_paused: False`), the pause state is cleared if still there, and the customer gets one `Messages.Customer.SLA_DEFLECTION_MESSAGE`: a human already knows and will get back to them, they can keep writing, and `נציג` asks again. No time is promised and no callback is booked.
+2. If the customer is now in another state (another flow), only `is_paused` is cleared; no message, no state change.
+3. While any lead of the chat still has a `paused_at` inside the window (a second SOS, a pro's `השהה`), the chat is left alone entirely; the handoff ends when its youngest pause does.
+4. Each lead is claimed conditionally on the `paused_at` the run read, and only the run that claims the chat's youngest lapsed lead sends, so two replicas never both deflect.
 
 The **Pro-Approval SLA** monitor (every 5 min) chases a silent pro on a `NEW` lead awaiting approval, timed from `pro_notified_at`, instead of waiting for the 60-min SOS Healer:
 1. At T+10 min (`APPROVAL_NUDGE_MINUTES`), nudges the pro once.

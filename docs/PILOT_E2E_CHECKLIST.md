@@ -167,7 +167,10 @@ never what the customer wrote.
 The assigned pro gets an alert only if the lead is **BOOKED** (with the customer's phone and words,
 plus the pause notice) or **NEW** (no phone and no words, offering `אשר`/`דחה`). On a CONTACTED lead,
 or if the admin deactivated the pro, the pro gets nothing. Further C messages within the window are held for a human, not
-auto-answered. After ~15 min the pause auto-expires.
+auto-answered. After ~15 min the pause auto-expires, and on the SLA Monitor's next in-hours pass
+(every 5 min, `sla_monitor_active` on by default) C gets the deflection: a human already knows and
+will get back to them, they can keep writing, and `נציג` asks again. The lead shows `sla_deflected: true`.
+Outside business hours the pause still expires, but the deflection waits for the next in-hours pass.
 - **PRO-133 — no indicator while paused.** Messages sent inside the 15-min window get **no blue checks and no "typing…"**: a human owns the chat and the bot answers nothing, so an indicator would promise a reply that never comes. The messages are still held and still reach the human. (Contrast with a `PENDING_ADMIN_REVIEW` chat, where the throttled ack means the indicator *is* shown — that chat is genuinely being worked on.)
 - [ ] Pass  · [ ] File: ______
 

@@ -8,11 +8,15 @@ each used to carry its own defaults. The panel inserted a partial document
 operator saw "active" on a job that did not run, and a Save from that screen
 switched it on.
 
-The defaults below are the worker's, unchanged. The three jobs that message a
-customer because a chat went silent (``sos_healer_active``,
-``lead_janitor_active``, ``sla_monitor_active``) default **off** until an
+The two jobs that message a customer because a chat went silent
+(``sos_healer_active``, ``lead_janitor_active``) default **off** until an
 operator enables them once the WhatsApp number is warmed up (PRO-73); every
-other toggle defaults on. Both processes read a toggle through
+other toggle defaults on, ``sla_monitor_active`` included: the SLA deflection
+answers a customer who asked for a human minutes earlier, so their window is
+open. A default applies only where the document lacks the key, so a
+``scheduler_config`` already stored with ``sla_monitor_active: False`` stays
+off until an operator sets it. All three customer-facing jobs still run only
+inside business hours. Both processes read a toggle through
 :func:`scheduler_toggle` and insert the document through
 :data:`SCHEDULER_CONFIG_DEFAULTS`, so a missing key means the same thing on
 both sides.
@@ -36,7 +40,9 @@ SCHEDULER_CONFIG_DEFAULTS = MappingProxyType(
         # PRO-73: cold customer-facing jobs stay dark until switched on.
         "sos_healer_active": False,
         "lead_janitor_active": False,
-        "sla_monitor_active": False,
+        # On by default: it answers a customer who asked for a human minutes
+        # earlier (their window is open), so it is not a cold re-engagement.
+        "sla_monitor_active": True,
     }
 )
 

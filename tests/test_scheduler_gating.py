@@ -65,6 +65,13 @@ async def test_cold_job_allowed_only_in_hours_and_toggled_on(monkeypatch):
 
     # no config doc at all → blocked
     monkeypatch.setattr(sched, "settings_collection", _mock_settings(None))
+    assert await sched._customer_cold_job_allowed("sos_healer_active") is False
+
+    # the SLA deflection defaults on (in hours), and an explicit off still wins
+    assert await sched._customer_cold_job_allowed("sla_monitor_active") is True
+    monkeypatch.setattr(
+        sched, "settings_collection", _mock_settings({"sla_monitor_active": False})
+    )
     assert await sched._customer_cold_job_allowed("sla_monitor_active") is False
 
 

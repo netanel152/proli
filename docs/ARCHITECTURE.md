@@ -54,7 +54,7 @@ Customer (WhatsApp)
 | Stale monitor | Every 30 min | Remind pros (4–6 h), check customers (6–24 h), flag >24 h for admin |
 | Stale Lead Nudger | Every 4 h | Remind pros of booked leads > 24h old to close them |
 | SOS Healer | Every 10 min | Reassign leads stuck > 60 min; escalate to `PENDING_ADMIN_REVIEW` if no replacement. PRO-73: gated to business hours (08:00–21:00 IL) + `sos_healer_active` toggle (default OFF) |
-| SLA Monitor | Every 5 min | Wake up silent `PAUSED_FOR_HUMAN` chats after 15m; offer phone call. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default OFF) |
+| SLA Monitor | Every 5 min | Deflect a human handoff nobody picked up within 15m (a paused CONTACTED/NEW/BOOKED lead, read from `paused_at`); no phone call is booked. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default ON) |
 | Pro-Approval SLA | Every 5 min | Nudge a silent pro at T+10m, then offer the customer a reassignment at T+25m (half thresholds for emergency leads); the customer-facing reassignment offer is gated to business hours (PRO-73) — the pro nudge is not |
 | SOS Reporter | Every 4 h | Page operator (`page_operator`, not WhatsApp) once per newly-stuck lead; muted for `SOS_REPORT_REPAGE_HOURS` (24h) after paging |
 | Lead Janitor | Every 6 h | Auto-reject `CONTACTED` leads with no assigned pro after 24 h. PRO-73: gated to business hours (08:00–21:00 IL) + `lead_janitor_active` toggle (default OFF) |
@@ -357,7 +357,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `customer_name` (AI-extracted from the conversation), `display_name` (optional, admin-set label from the admin panel's Edit-Lead form; falls back to `customer_name`, then the phone), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `address_city` (the city the street/number/floor/apartment were given with, PRO-228), `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count` |
 | `messages` | Chat history log per `chat_id`. When the Redis context is empty, `LeadManager.get_chat_history` rebuilds it from here, starting after the latest end of any terminal lead of that chat (its last terminal `status_history` entry), so a cancelled lead's messages never reach a new lead (PRO-228) |
 | `slots` | Appointment slots per pro with atomic locking (`is_taken`); unique on `(pro_id, start_time)`, and a claim skips a slot overlapping a taken one (PRO-277) |
-| `settings` | Scheduler config toggles (`sos_healer_active`, `lead_janitor_active`, `sla_monitor_active`, etc. — the three cold customer-facing toggles default OFF, PRO-73) |
+| `settings` | Scheduler config toggles (`sos_healer_active`, `lead_janitor_active`, `sla_monitor_active`, etc. — the SOS healer and lead janitor toggles default OFF, PRO-73; `sla_monitor_active` defaults ON) |
 | `reviews` | Customer ratings and text reviews |
 | `consent` | Privacy consent acknowledgements |
 | `audit_log` | Admin action history |

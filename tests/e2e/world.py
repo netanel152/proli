@@ -432,6 +432,14 @@ class World:
             {"_id": lead_id}, {"$set": {field: shifted for field in fields}}
         )
 
+    async def expire_state(self, chat_id: str | None = None) -> None:
+        """Drop the chat's ``state:`` key, as Redis does once its TTL runs out.
+
+        ``age`` moves Mongo's clock only; a test that ages a lead past a state's
+        TTL calls this too, so both stores agree on how much time has passed.
+        """
+        await self.redis.delete(f"state:{chat_id or self.customer}")
+
     def set_business_hours(self, inside: bool) -> None:
         """Force the PRO-73 quiet-hours gate on or off.
 
@@ -515,7 +523,7 @@ class World:
             stale_monitor_active=True,
             sos_healer_active=False,
             lead_janitor_active=False,
-            sla_monitor_active=False,
+            sla_monitor_active=True,
             sos_reporter_active=True,
             whatsapp_monitor_active=True,
         )
