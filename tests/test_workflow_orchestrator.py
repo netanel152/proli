@@ -6,6 +6,7 @@ Covers: reset, pro auto-detect, address collection, onboarding, deal finalizatio
 import re
 
 import pytest
+import pytest_asyncio
 from unittest.mock import ANY, AsyncMock, MagicMock
 from bson import ObjectId
 from app.core.constants import UserStates, LeadStatus, WorkerConstants, Actor
@@ -21,6 +22,21 @@ from app.services.workflow_service import (
 from app.services.ai_engine_service import AIResponse, ExtractedData
 import app.services.dispatch_guards as dispatch_guards
 import app.services.workflow_service
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _no_leads_from_earlier_tests(mock_db):
+    """`mock_db` is module-scoped, and most tests here share one customer chat.
+
+    A lead left by an earlier test on the same xdist worker changed the next
+    test's routing: a leftover CONTACTED lead for the shared chat turns the
+    no-pro dispatcher reply into a PENDING_ADMIN_REVIEW escalation, which is
+    how `test_no_pro_found_dispatcher_response_only` failed intermittently
+    under `-n auto` (reproduced by seeding one). Each test seeds the leads it
+    needs.
+    """
+    await mock_db.leads.delete_many({})
+    yield
 
 
 @pytest.fixture
