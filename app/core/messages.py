@@ -150,7 +150,25 @@ class Messages:
             "לא מצאתי תורים פנויים כרגע אצל איש המקצוע.\n"
             "אפשר להשיב *ביטול* כדי לבטל את העבודה, או *נציג* כדי לתאם מול הצוות."
         )
-        RESCHEDULE_INVALID_CHOICE = "אנא לבחור מספר תור מהרשימה."
+        # The picker's own exit is ביטול (handle_reschedule_selection): it keeps
+        # the current time and closes the list, so every re-prompt names it.
+        RESCHEDULE_INVALID_CHOICE = (
+            "אנא לבחור מספר תור מהרשימה, " "או לכתוב ביטול כדי להשאיר את המועד הנוכחי."
+        )
+        # A listed slot was taken by someone else before the customer's pick
+        # reached us; the list below is rebuilt from what is free now.
+        RESCHEDULE_SLOT_TAKEN = (
+            "התור הזה נתפס בינתיים. אלה הזמנים הפנויים עכשיו:\n"
+            "{slots}\n\n"
+            "אפשר לענות במספר התור הרצוי, או לכתוב ביטול כדי להשאיר את המועד הנוכחי."
+        )
+        # Same moment, nothing left to offer: the picker closes, the booking stays.
+        # After it, ביטול reaches the BOOKED cancel prompt and נציג the human handoff.
+        RESCHEDULE_SLOT_TAKEN_NO_SLOTS = (
+            "התור הזה נתפס בינתיים, ולא נשארו כרגע זמנים פנויים אחרים אצל איש המקצוע.\n"
+            "המועד הנוכחי נשאר כפי שהיה.\n"
+            "אם צריך לבטל את העבודה אפשר לכתוב ביטול, ולתיאום מול הצוות אפשר לכתוב נציג."
+        )
         RESCHEDULE_CANCELLED = "המועד נשאר כפי שהיה."
         HELP_INFO = (
             "🛠️ אני העוזר החכם של פרולי.\n"

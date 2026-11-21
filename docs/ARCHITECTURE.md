@@ -315,7 +315,7 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `PRO_SELECTING_JOB_TO_RESUME` | Pro has multiple paused chats and is picking which one *המשך* resumes (PRO-212) |
 | `PRO_AWAITING_FINAL_PRICE` | Post-completion prompt asking the pro what they charged (skippable, never gates COMPLETED) |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
-| `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |
+| `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot (10m TTL, `RESCHEDULE_PICK_TTL_SECONDS`, re-armed each time the list is sent); a listed slot taken meanwhile gets a rebuilt list, or with none left the state clears and the booking stays |
 | `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro (5m TTL, PRO-119); accept dispatches to the pro and parks the customer in `AWAITING_PRO_APPROVAL` if the address is complete, otherwise saves the pro as a preference and continues via `AWAITING_ADDRESS`, which dispatches to that pro the moment the address is complete (PRO-227) |
 | `AWAITING_NEW_OR_EXISTING` | A customer with a confirmed BOOKED job messages about something else; asked whether it's a new request or about the existing job |
 | `AWAITING_CANCEL_CONFIRMATION` | A cancel keyword on a confirmed BOOKED job, or on a request still awaiting the pro's approval (a NEW lead: from the soft hold, or from IDLE after it lapsed); waiting for an explicit '1'/'2' before acting (5m TTL, PRO-118). For a NEW lead, '2' or expiry gives back what was left of `AWAITING_PRO_APPROVAL` |

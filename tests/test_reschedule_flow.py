@@ -4,7 +4,8 @@ Tests for handle_reschedule_selection in customer_flow.py.
 A BOOKED customer who picks a slot from the reschedule menu (state
 AWAITING_RESCHEDULE_TIME) atomically claims the new slot, frees the old one,
 updates the lead, and notifies the pro. Edge cases: cancel keyword, invalid
-choice, slot already taken (race), and missing booked lead.
+choice, slot already taken (race: a fresh list, or the picker closes when nothing
+is left), a repeated reschedule phrase, and missing booked lead.
 
 customer_flow imports slots_collection at module level but conftest only patches
 its users/leads/reviews, so each test monkeypatches slots_collection too.
@@ -18,7 +19,7 @@ from bson import ObjectId
 
 import app.services.customer_flow as customer_flow
 from app.services.customer_flow import handle_reschedule_selection
-from app.core.constants import LeadStatus
+from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
 
 
@@ -28,6 +29,8 @@ def reschedule_env(monkeypatch, mock_db):
 
     mock_state = MagicMock()
     mock_state.clear_state = AsyncMock()
+    mock_state.set_state = AsyncMock()
+    mock_state.set_metadata = AsyncMock()
     mock_state.get_metadata = AsyncMock(return_value={})
     monkeypatch.setattr(customer_flow, "StateManager", mock_state)
 
@@ -187,27 +190,164 @@ async def test_invalid_choice_preserves_state(reschedule_env):
 
 
 @pytest.mark.asyncio
-async def test_slot_already_taken_race_preserves_state(reschedule_env):
+async def test_invalid_choice_names_the_exit(reschedule_env):
+    """The re-prompt says how to leave: ביטול, which this handler reads as
+    "keep the current time"."""
+    assert "ביטול" in Messages.Customer.RESCHEDULE_INVALID_CHOICE
+    assert "ביטול" in Messages.Keywords.CANCEL_KEYWORDS
+
+
+@pytest.mark.asyncio
+async def test_slot_taken_meanwhile_sends_a_fresh_list(reschedule_env):
+    """A valid number whose slot someone else took gets a rebuilt list, not
+    the invalid-choice line, and the picker re-arms with the new mapping."""
     db, mock_state, mock_wa = reschedule_env
     await db.leads.delete_many({})
     await db.slots.delete_many({})
 
+    pro_id = ObjectId()
     taken_slot_id = ObjectId()
-    await db.slots.insert_one(
-        {
-            "_id": taken_slot_id,
-            "is_taken": True,  # already claimed by someone else
-            "start_time": datetime(2026, 2, 1, 12, 0, tzinfo=timezone.utc),
-        }
+    free_slot_id = ObjectId()
+    await db.slots.insert_many(
+        [
+            {
+                "_id": taken_slot_id,
+                "pro_id": pro_id,
+                "is_taken": True,  # claimed by someone else after the list went out
+                "start_time": datetime(2099, 2, 1, 12, 0),
+            },
+            {
+                "_id": free_slot_id,
+                "pro_id": pro_id,
+                "is_taken": False,
+                "start_time": datetime(2099, 2, 1, 14, 0),
+            },
+        ]
     )
-    await _seed_booked_lead(db)
+    lead_id = await _seed_booked_lead(db, pro_id=pro_id)
     mock_state.get_metadata.return_value = {
         "reschedule_slots_context": {"1": str(taken_slot_id)}
     }
 
     await handle_reschedule_selection("customer@c.us", "1", mock_wa)
 
-    assert Messages.Customer.RESCHEDULE_INVALID_CHOICE in _sent_text(mock_wa)
+    sent = _sent_text(mock_wa)
+    assert Messages.Customer.RESCHEDULE_INVALID_CHOICE not in sent
+    assert sent.startswith(Messages.Customer.RESCHEDULE_SLOT_TAKEN.split("{")[0])
+    assert "1. 01/02/2099 16:00" in sent  # naive UTC 14:00 is 16:00 in Israel
+    mock_state.clear_state.assert_not_called()
+    mock_state.set_state.assert_awaited_once_with(
+        "customer@c.us",
+        UserStates.AWAITING_RESCHEDULE_TIME,
+        ttl=WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS,
+    )
+    mock_state.set_metadata.assert_awaited_once_with(
+        "customer@c.us", {"reschedule_slots_context": {"1": str(free_slot_id)}}
+    )
+    lead = await db.leads.find_one({"_id": lead_id})
+    assert lead.get("rescheduled_count") is None
+
+
+@pytest.mark.asyncio
+async def test_slot_taken_meanwhile_with_nothing_left_closes_the_picker(
+    reschedule_env,
+):
+    db, mock_state, mock_wa = reschedule_env
+    await db.leads.delete_many({})
+    await db.slots.delete_many({})
+
+    pro_id = ObjectId()
+    taken_slot_id = ObjectId()
+    await db.slots.insert_one(
+        {
+            "_id": taken_slot_id,
+            "pro_id": pro_id,
+            "is_taken": True,  # already claimed by someone else
+            "start_time": datetime(2099, 2, 1, 12, 0),
+        }
+    )
+    await _seed_booked_lead(db, pro_id=pro_id)
+    mock_state.get_metadata.return_value = {
+        "reschedule_slots_context": {"1": str(taken_slot_id)}
+    }
+
+    await handle_reschedule_selection("customer@c.us", "1", mock_wa)
+
+    assert _sent_text(mock_wa) == Messages.Customer.RESCHEDULE_SLOT_TAKEN_NO_SLOTS
+    mock_state.clear_state.assert_awaited_once_with("customer@c.us")
+    mock_state.set_state.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_slot_that_fails_the_overlap_check_is_not_offered_again(
+    reschedule_env,
+):
+    """PRO-277's overlap check gives a clashing slot back as free, so the query
+    alone would list the very slot that just failed."""
+    db, mock_state, mock_wa = reschedule_env
+    await db.leads.delete_many({})
+    await db.slots.delete_many({})
+
+    pro_id = ObjectId()
+    clashing_id = ObjectId()
+    await db.slots.insert_many(
+        [
+            {
+                "_id": ObjectId(),
+                "pro_id": pro_id,
+                "is_taken": True,
+                "start_time": datetime(2099, 2, 1, 12, 0),
+                "end_time": datetime(2099, 2, 1, 14, 0),
+            },
+            {
+                "_id": clashing_id,
+                "pro_id": pro_id,
+                "is_taken": False,
+                "start_time": datetime(2099, 2, 1, 13, 0),
+                "end_time": datetime(2099, 2, 1, 14, 0),
+            },
+        ]
+    )
+    await _seed_booked_lead(db, pro_id=pro_id)
+    mock_state.get_metadata.return_value = {
+        "reschedule_slots_context": {"1": str(clashing_id)}
+    }
+
+    await handle_reschedule_selection("customer@c.us", "1", mock_wa)
+
+    assert _sent_text(mock_wa) == Messages.Customer.RESCHEDULE_SLOT_TAKEN_NO_SLOTS
+    assert (await db.slots.find_one({"_id": clashing_id}))["is_taken"] is False
+
+
+@pytest.mark.asyncio
+async def test_repeated_reschedule_phrase_resends_the_list(reschedule_env):
+    db, mock_state, mock_wa = reschedule_env
+    await db.leads.delete_many({})
+    await db.slots.delete_many({})
+
+    pro_id = ObjectId()
+    free_slot_id = ObjectId()
+    await db.slots.insert_one(
+        {
+            "_id": free_slot_id,
+            "pro_id": pro_id,
+            "is_taken": False,
+            "start_time": datetime(2099, 2, 1, 14, 0),
+        }
+    )
+    await _seed_booked_lead(db, pro_id=pro_id)
+    mock_state.get_metadata.return_value = {
+        "reschedule_slots_context": {"1": str(ObjectId())}
+    }
+
+    await handle_reschedule_selection("customer@c.us", "אני צריך מועד אחר", mock_wa)
+
+    sent = _sent_text(mock_wa)
+    assert Messages.Customer.RESCHEDULE_INVALID_CHOICE not in sent
+    assert sent.startswith(Messages.Customer.RESCHEDULE_OFFER.split("{")[0])
+    mock_state.set_metadata.assert_awaited_once_with(
+        "customer@c.us", {"reschedule_slots_context": {"1": str(free_slot_id)}}
+    )
     mock_state.clear_state.assert_not_called()
 
 

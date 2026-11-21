@@ -18,7 +18,7 @@ from app.core.phone import mask_chat_id, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.providers.whatsapp import template_registry
 from app.services.notification_service import page_operator
-from app.services.scheduling_service import record_no_show
+from app.services.scheduling_service import get_available_slots, record_no_show
 from app.services.matching_service import overlapping_taken_slot
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
@@ -226,8 +226,8 @@ async def _handle_no_show_report(
     unset, so it would arm every stray "3" from that chat for the life of the
     booking. That is exactly the trap PRO-122 closed for the rating prompt with
     ``RATING_PROMPT_MAX_AGE_HOURS``, and it bites harder here: a "3" typed
-    during free-text intake, into an ``AWAITING_RESCHEDULE_TIME`` menu whose 4h
-    state TTL has lapsed, or after the loyalty guard's double-miss release, all
+    during free-text intake, into an ``AWAITING_RESCHEDULE_TIME`` menu whose
+    10-minute state TTL has lapsed, or after the loyalty guard's double-miss release, all
     reach this handler.
 
     The written forms are unprompted, so they need the appointment to have
@@ -1145,12 +1145,99 @@ async def handle_customer_review_comment(chat_id: str, text: str):
     return Messages.Customer.REVIEW_SAVED
 
 
+# How many of the pro's next free slots the reschedule list offers.
+RESCHEDULE_LIST_LIMIT = 8
+
+
+async def offer_reschedule_slots(
+    chat_id: str,
+    pro_id,
+    whatsapp,
+    state_manager,
+    message: str,
+    exclude_ids=(),
+) -> bool:
+    """Send the numbered list of ``pro_id``'s free slots and arm the picker.
+
+    The one place the reschedule list is built: the BOOKED interceptor's first
+    offer (``RESCHEDULE_OFFER``), a repeated reschedule phrase, and the rebuilt
+    list after a listed slot was taken meanwhile (``RESCHEDULE_SLOT_TAKEN``).
+    ``message`` takes the rendered list as ``{slots}``. The state is armed with
+    ``RESCHEDULE_PICK_TTL_SECONDS`` and the number → slot mapping is stored as
+    ``reschedule_slots_context``, replacing any earlier one. ``exclude_ids`` drops
+    slots the caller knows cannot be claimed (one that failed the overlap check
+    stays ``is_taken: False``, so the query alone would list it again).
+
+    Returns False, sending nothing and leaving the state alone, when there is
+    no free slot to offer.
+    """
+    excluded = {str(i) for i in exclude_ids}
+    available_slots = [
+        slot
+        for slot in await get_available_slots(str(pro_id), limit=RESCHEDULE_LIST_LIMIT)
+        if str(slot["_id"]) not in excluded
+    ]
+    if not available_slots:
+        return False
+
+    lines = []
+    slots_context = {}
+    for i, slot in enumerate(available_slots, 1):
+        label = stored_utc_to_il(slot["start_time"]).strftime("%d/%m/%Y %H:%M")
+        lines.append(f"{i}. {label}")
+        slots_context[str(i)] = str(slot["_id"])
+
+    await state_manager.set_state(
+        chat_id,
+        UserStates.AWAITING_RESCHEDULE_TIME,
+        ttl=WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS,
+    )
+    await state_manager.set_metadata(
+        chat_id, {"reschedule_slots_context": slots_context}
+    )
+    await whatsapp.send_message(chat_id, message.format(slots="\n".join(lines)))
+    return True
+
+
+async def _booked_lead_for(chat_id: str):
+    return await leads_collection.find_one(
+        {"chat_id": chat_id, "status": LeadStatus.BOOKED},
+        sort=[("created_at", -1)],
+    )
+
+
 async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) -> None:
+    """The customer's answer to the reschedule slot list (AWAITING_RESCHEDULE_TIME).
+
+    ``ביטול`` (any cancel keyword) keeps the current time and closes the list. A
+    repeated reschedule phrase sends the list again, rebuilt. A number not on the
+    list re-prompts, naming the exit. A listed slot taken meanwhile gets a fresh
+    list (``RESCHEDULE_SLOT_TAKEN``) rather than the invalid-choice line, or,
+    with nothing free left, ``RESCHEDULE_SLOT_TAKEN_NO_SLOTS`` and the list closes.
+    The booking is never touched until a new slot is actually claimed.
+    """
     normalized = user_text.strip().lower()
 
     if contains_keyword(normalized, Messages.Keywords.CANCEL_KEYWORDS):
         await StateManager.clear_state(chat_id)
         await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_CANCELLED)
+        return
+
+    if contains_keyword(normalized, Messages.Keywords.RESCHEDULE_KEYWORDS):
+        lead = await _booked_lead_for(chat_id)
+        if not (lead and lead.get("pro_id")):
+            await StateManager.clear_state(chat_id)
+            await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS)
+            return
+        if not await offer_reschedule_slots(
+            chat_id,
+            lead["pro_id"],
+            whatsapp,
+            StateManager,
+            Messages.Customer.RESCHEDULE_OFFER,
+        ):
+            await StateManager.clear_state(chat_id)
+            await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS)
         return
 
     meta = await StateManager.get_metadata(chat_id)
@@ -1165,10 +1252,7 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
 
     slot_id = ObjectId(slots_context[pick])
 
-    lead = await leads_collection.find_one(
-        {"chat_id": chat_id, "status": LeadStatus.BOOKED},
-        sort=[("created_at", -1)],
-    )
+    lead = await _booked_lead_for(chat_id)
     if not lead:
         await StateManager.clear_state(chat_id)
         await whatsapp.send_message(chat_id, Messages.Errors.GENERIC_ERROR)
@@ -1193,10 +1277,26 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         )
         chosen_slot = None
     if not chosen_slot:
-        await whatsapp.send_message(
-            chat_id, Messages.Customer.RESCHEDULE_INVALID_CHOICE
+        # Taken by someone else since the list went out. The number was valid,
+        # so answering "pick a number from the list" again would point at the
+        # same dead slot: rebuild the list from what is free now instead.
+        logger.info(
+            f"Reschedule pick {pick} for {mask_chat_id(chat_id)} lost slot {slot_id}; "
+            "sending a fresh list"
         )
-        return  # state preserved — let customer retry
+        if not lead.get("pro_id") or not await offer_reschedule_slots(
+            chat_id,
+            lead["pro_id"],
+            whatsapp,
+            StateManager,
+            Messages.Customer.RESCHEDULE_SLOT_TAKEN,
+            exclude_ids=[slot_id],
+        ):
+            await StateManager.clear_state(chat_id)
+            await whatsapp.send_message(
+                chat_id, Messages.Customer.RESCHEDULE_SLOT_TAKEN_NO_SLOTS
+            )
+        return
 
     # Free previously booked slot if we have a reference to it
     if old_slot_id:

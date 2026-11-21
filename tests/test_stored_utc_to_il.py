@@ -51,14 +51,18 @@ def test_an_aware_value_is_converted_not_relabelled(israel_process_tz):
 
 
 def test_the_reschedule_call_sites_use_it():
-    """Both reschedule renderings and the panel's lead date go through the helper."""
+    """Both reschedule renderings and the panel's lead date go through the helper.
+
+    The slot list is built in one place, ``customer_flow.offer_reschedule_slots``,
+    for the guard's first offer and the handler's rebuilt list alike.
+    """
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for rel, needle in (
         (
             "app/services/customer_flow.py",
             'stored_utc_to_il(chosen_slot["start_time"])',
         ),
-        ("app/services/dispatch_guards.py", 'stored_utc_to_il(slot["start_time"])'),
+        ("app/services/customer_flow.py", 'stored_utc_to_il(slot["start_time"])'),
         ("admin_panel/core/lead_queries.py", 'stored_utc_to_il(lead["created_at"])'),
     ):
         with open(os.path.join(root, rel), encoding="utf8") as fh:

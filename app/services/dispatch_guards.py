@@ -37,7 +37,6 @@ from bson.errors import InvalidId
 
 from app.core.background_tasks import spawn_background_task
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
-from app.core.datetime_utils import stored_utc_to_il
 from app.core.legal_links import consent_request_text
 from app.core.logger import logger
 from app.core.messages import Messages
@@ -951,7 +950,14 @@ async def guard_cancel_confirmation(ctx: DispatchContext, deps: GuardDeps):
 
 
 async def guard_reschedule_selection(ctx: DispatchContext, deps: GuardDeps):
-    """Reschedule selection — customer has been shown the slot menu and is picking."""
+    """Reschedule selection — customer has been shown the slot menu and is picking.
+
+    Holds every message in the state: ``customer_flow.handle_reschedule_selection``
+    reads ``ביטול`` (keep the current time), a repeated reschedule phrase (the
+    list again), a listed number (claim it, or a fresh list if it was taken
+    meanwhile) and anything else (re-prompt naming ``ביטול``). The state lives
+    ``RESCHEDULE_PICK_TTL_SECONDS``, so it never holds the chat for long.
+    """
     from app.services import workflow_service as wf
 
     if ctx.current_state == UserStates.AWAITING_RESCHEDULE_TIME:
@@ -1188,28 +1194,18 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
         )
         return HANDLED
 
-    available_slots = await wf.get_available_slots(str(pro_id), limit=8)
-    if not available_slots:
+    offered = await customer_flow.offer_reschedule_slots(
+        ctx.chat_id,
+        pro_id,
+        deps.whatsapp,
+        deps.state_manager,
+        Messages.Customer.RESCHEDULE_OFFER,
+    )
+    if not offered:
         await deps.whatsapp.send_message(
             ctx.chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS
         )
         return HANDLED
-
-    lines = []
-    slots_context = {}
-    for i, slot in enumerate(available_slots, 1):
-        label = stored_utc_to_il(slot["start_time"]).strftime("%d/%m/%Y %H:%M")
-        lines.append(f"{i}. {label}")
-        slots_context[str(i)] = str(slot["_id"])
-
-    await deps.state_manager.set_state(ctx.chat_id, UserStates.AWAITING_RESCHEDULE_TIME)
-    await deps.state_manager.set_metadata(
-        ctx.chat_id, {"reschedule_slots_context": slots_context}
-    )
-    await deps.whatsapp.send_message(
-        ctx.chat_id,
-        Messages.Customer.RESCHEDULE_OFFER.format(slots="\n".join(lines)),
-    )
     logger.info(
         f"Customer {mask_chat_id(ctx.chat_id)} offered reschedule for lead {booked_lead['_id']}"
     )

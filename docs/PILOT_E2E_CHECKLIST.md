@@ -163,6 +163,14 @@ but tells C the request is still with the pro and how to cancel it.
 **Steps (C):** with a BOOKED lead, send **`מועד אחר`** → pick a new offered slot.
 **Expected:** the **old slot is freed**, the **new slot is booked**, and the lead reflects the
 new time. No double-booking.
+**Taken meanwhile (C + admin panel):** send **`מועד אחר`** again, then mark the slot listed as
+`1` taken in the panel before answering, and send **`1`**.
+**Expected:** a new message saying that slot was just taken, with a fresh numbered list and
+`ביטול` to keep the current time (not "אנא לבחור מספר תור מהרשימה" alone); a number from the
+new list then moves the booking as above. With every slot taken instead, the reply says none
+are left, the current time stays, and the next digit is not read as a pick. A number not on
+the list (`9`) gets the re-prompt naming `ביטול`. Leaving the list unanswered for 10 minutes
+closes it (`RESCHEDULE_PICK_TTL_SECONDS`) and keeps the booking.
 - [ ] Pass  · [ ] File: ______
 
 ### 6. Status query in three lifecycle stages

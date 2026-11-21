@@ -32,7 +32,7 @@ Input classes
 | `awaiting_address` | → awaiting_pro_approval, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "כדי שאיש המקצוע יגיע למקום המדויק נשאר רק להשלים לכתובת:" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
 | `awaiting_pro_approval` | → awaiting_pro_approval, "⏳ מתנצל על ההמתנה — אני מאתר עבורך איש מקצוע זמין יותר כעת." | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | TTL ≤ 3600s | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
 | `paused_for_human` | silent | silent | N/A[same-reprompt] | silent | N/A[same-reprompt] | TTL ≤ 900s | "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
-| `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "אנא לבחור מספר תור מהרשימה." | N/A[same-reprompt] | "אנא לבחור מספר תור מהרשימה." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
+| `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "אנא לבחור מספר תור מהרשימה, או לכתוב ביטול כדי להשאיר את המועד הנוכחי." | N/A[same-reprompt] | "אנא לבחור מספר תור מהרשימה, או לכתוב ביטול כדי להשאיר את המועד הנוכחי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
 | `awaiting_loyalty_confirmation` | → awaiting_pro_approval, "עם הפרטים, ואעדכן אותך ברגע שיאשר" | → idle, "אחפש עבורך את איש המקצוע הפנוי" | N/A[same-reprompt] | "לא בטוח שהבנתי" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
 | `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "🙂 לא בטוח שהבנתי. זו פנייה חדשה?" | N/A[same-reprompt] | "🙂 לא בטוח שהבנתי. זו פנייה חדשה?" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
 | `awaiting_cancel_confirmation` | → idle, "ביטלתי את העבודה" | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | TTL ≤ 300s | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
@@ -232,7 +232,12 @@ async def arrange_awaiting_reschedule_time(world):
     slot = await world.db.slots.find_one(
         {"pro_id": world.pros[R.PRO_PRIMARY]["_id"], "is_taken": False}
     )
-    await world.set_state(UserStates.AWAITING_RESCHEDULE_TIME)
+    # Production arms the picker with RESCHEDULE_PICK_TTL_SECONDS
+    # (customer_flow.offer_reschedule_slots), not the 4h default.
+    await world.set_state(
+        UserStates.AWAITING_RESCHEDULE_TIME,
+        ttl=WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS,
+    )
     await world.set_metadata({"reschedule_slots_context": {"1": str(slot["_id"])}})
     return world.customer
 
@@ -637,7 +642,7 @@ MATRIX: dict[str, dict] = {
             send="👍",
             expect=(Messages.Customer.RESCHEDULE_INVALID_CHOICE,),
         ),
-        "silence": Cell(max_ttl=14400),
+        "silence": Cell(max_ttl=WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS),
         "interrupt": Cell(
             send="בטל", expect_state=UserStates.IDLE, expect=("המועד נשאר כפי שהיה",)
         ),
@@ -1081,7 +1086,8 @@ _COLLAPSED: dict[str, list[tuple[str, str]]] = {
     # A `silence` cell asserts `0 < ttl <= max` on a state the *arranger* just
     # set — so it is a property of StateManager.set_state honouring a TTL, not of
     # the state or the input class. Keep one cell per distinct TTL value
-    # (14400 default, 3600, 900, 600, 300) and drop the repeats.
+    # (14400 default, 3600, 900, 600, 300; the reschedule picker's 600 is the
+    # final-price prompt's value too) and drop the repeats.
     "ttl-class": [
         (UserStates.AWAITING_CONSENT, "silence"),
         (UserStates.CUSTOMER_MODE, "silence"),

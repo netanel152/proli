@@ -15,6 +15,7 @@ to be updated rather than quietly drifting.
 from datetime import timedelta, timezone
 
 import pytest
+from bson import ObjectId
 
 import app.services.dispatch_guards as dispatch_guards
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
@@ -1092,6 +1093,162 @@ async def test_reschedule_swaps_the_reservation(world):
         static_prefix(Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS),
     )
     await world.assert_state(UserStates.IDLE)
+
+
+async def _open_reschedule_picker(world):
+    """A BOOKED job, then the customer's reschedule phrase: the numbered list."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    lead = await world.booked_job(pro)
+    world.recorder.clear()
+    await world.send("אני צריך מועד אחר")
+    await world.assert_state(UserStates.AWAITING_RESCHEDULE_TIME)
+    world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.RESCHEDULE_OFFER)
+    )
+    mapping = (await world.metadata())["reschedule_slots_context"]
+    return pro, lead, mapping
+
+
+@pytest.mark.asyncio
+async def test_reschedule_picker_has_a_short_ttl(world):
+    """The list names slots other customers can take; a pick hours later must not
+    count. The picker lives RESCHEDULE_PICK_TTL_SECONDS, not the 4h default."""
+    await _open_reschedule_picker(world)
+    ttl = await world.state_ttl()
+    assert 0 < ttl <= WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_reschedule_slot_taken_meanwhile_offers_a_fresh_list(world):
+    """A listed slot taken by someone else before the customer picks it gets a
+    rebuilt list, not "pick a number from the list" pointing at the same dead
+    slot; a pick from the new list then moves the booking."""
+    pro, lead, mapping = await _open_reschedule_picker(world)
+    old_slot_id = lead["booked_slot_id"]
+    lost_slot_id = ObjectId(mapping["1"])
+    # Another customer takes slot 1 between the list going out and the pick.
+    await world.db.slots.update_one({"_id": lost_slot_id}, {"$set": {"is_taken": True}})
+    world.recorder.clear()
+
+    await world.send("1")
+
+    fresh = world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.RESCHEDULE_SLOT_TAKEN)
+    )
+    assert Messages.Customer.RESCHEDULE_INVALID_CHOICE not in fresh.body
+    assert "1." in fresh.body and "ביטול" in fresh.body
+    await world.assert_state(UserStates.AWAITING_RESCHEDULE_TIME)
+    assert 0 < await world.state_ttl() <= WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS
+    new_mapping = (await world.metadata())["reschedule_slots_context"]
+    assert new_mapping and str(lost_slot_id) not in new_mapping.values()
+    free_ids = {
+        str(s["_id"])
+        async for s in world.db.slots.find({"pro_id": pro["_id"], "is_taken": False})
+    }
+    assert set(new_mapping.values()) == free_ids
+    # Nothing moved yet.
+    unchanged = await world.lead_by_id(lead["_id"])
+    assert unchanged["booked_slot_id"] == old_slot_id
+    assert unchanged.get("rescheduled_count") is None
+
+    world.recorder.clear()
+    await world.send("1")
+
+    updated = await world.lead_by_id(lead["_id"])
+    assert updated["booked_slot_id"] == ObjectId(new_mapping["1"])
+    assert updated["rescheduled_count"] == 1
+    assert updated["status"] == LeadStatus.BOOKED
+    assert (await world.slot(old_slot_id))["is_taken"] is False
+    assert (await world.slot(lost_slot_id))["is_taken"] is True
+    new_slot = await world.slot(updated["booked_slot_id"])
+    assert new_slot["is_taken"] is True
+    new_time = (
+        new_slot["start_time"]
+        .replace(tzinfo=timezone.utc)
+        .astimezone(IL_TZ)
+        .strftime("%d/%m/%Y %H:%M")
+    )
+    assert updated["appointment_datetime"] == new_slot["start_time"]
+    assert updated["appointment_time"] == new_time
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.RESCHEDULE_SUCCESS.format(new_time=new_time)
+    )
+    await world.assert_state(UserStates.IDLE)
+
+
+@pytest.mark.asyncio
+async def test_reschedule_every_slot_taken_meanwhile_closes_the_picker(world):
+    """Every listed slot gone and nothing else free: say so, close the picker,
+    and leave the booking exactly as it was."""
+    pro, lead, mapping = await _open_reschedule_picker(world)
+    old_slot_id = lead["booked_slot_id"]
+    await world.db.slots.update_many(
+        {"pro_id": pro["_id"], "is_taken": False}, {"$set": {"is_taken": True}}
+    )
+    world.recorder.clear()
+
+    await world.send("2")
+
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.RESCHEDULE_SLOT_TAKEN_NO_SLOTS
+    )
+    await world.assert_state(UserStates.IDLE)
+    kept = await world.lead_by_id(lead["_id"])
+    assert kept["status"] == LeadStatus.BOOKED
+    assert kept["booked_slot_id"] == old_slot_id
+    assert kept["appointment_time"] == lead["appointment_time"]
+    assert kept.get("rescheduled_count") is None
+    assert (await world.slot(old_slot_id))["is_taken"] is True
+
+
+@pytest.mark.asyncio
+async def test_reschedule_number_not_on_the_list_names_the_exit(world):
+    _, lead, mapping = await _open_reschedule_picker(world)
+    assert "9" not in mapping
+    world.recorder.clear()
+
+    await world.send("9")
+
+    reply = world.recorder.assert_text_to(
+        world.customer, Messages.Customer.RESCHEDULE_INVALID_CHOICE
+    )
+    assert "ביטול" in reply.body
+    await world.assert_state(UserStates.AWAITING_RESCHEDULE_TIME)
+    assert (await world.metadata())["reschedule_slots_context"] == mapping
+
+    # The exit it names keeps the current time.
+    world.recorder.clear()
+    await world.send("ביטול")
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.RESCHEDULE_CANCELLED
+    )
+    await world.assert_state(UserStates.IDLE)
+    kept = await world.lead_by_id(lead["_id"])
+    assert kept["booked_slot_id"] == lead["booked_slot_id"]
+
+
+@pytest.mark.asyncio
+async def test_repeating_the_reschedule_phrase_resends_the_list(world):
+    """Inside the picker, the phrase that opened it sends the list again rather
+    than "pick a number from the list"."""
+    pro, _, _ = await _open_reschedule_picker(world)
+    # One listed slot went meanwhile: the list sent again is the current one.
+    gone = await world.db.slots.find_one({"pro_id": pro["_id"], "is_taken": False})
+    await world.db.slots.update_one({"_id": gone["_id"]}, {"$set": {"is_taken": True}})
+    world.recorder.clear()
+
+    await world.send("אפשר מועד אחר?")
+
+    again = world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.RESCHEDULE_OFFER)
+    )
+    assert Messages.Customer.RESCHEDULE_INVALID_CHOICE not in again.body
+    await world.assert_state(UserStates.AWAITING_RESCHEDULE_TIME)
+    assert (
+        str(gone["_id"])
+        not in (await world.metadata())["reschedule_slots_context"].values()
+    )
 
 
 # ===========================================================================
