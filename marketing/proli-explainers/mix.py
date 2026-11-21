@@ -1,5 +1,5 @@
-"""Proli explainers: score, foley and ambience for one film → out/mix_<film>.wav
-usage: mix.py customer|pro       (reads events_<film>.json, exported by core/render/events.mjs with ?film=<film>)
+"""Proli explainers: score, foley and ambience for one film and cut → out/mix_<film>_<cut>.wav
+usage: mix.py customer|pro full|short   (reads events_<film>_<cut>.json, exported by core/render/events.mjs)
 120 BPM: beat 0.5 s, bar 2 s. D major, one chord per bar: D – Bm – G – A."""
 
 import json
@@ -32,7 +32,9 @@ from core.audio.sfx import (  # noqa: E402
 )
 
 FILM = sys.argv[1] if len(sys.argv) > 1 else "customer"
-data = json.load(open(f"{HERE}/events_{FILM}.json"))
+CUT = sys.argv[2] if len(sys.argv) > 2 else "full"
+TAG = f"{FILM}_{CUT}"
+data = json.load(open(f"{HERE}/events_{TAG}.json"))
 DUR, EV = float(data["dur"]), data["ev"]
 S.seed(7)
 rng = np.random.default_rng(11)
@@ -40,23 +42,14 @@ N = int((DUR + 2) * SR)
 mus = np.zeros((N, 2), np.float32)
 fx = np.zeros((N, 2), np.float32)
 
-# ───────── the plan: where the groove plays, where it rests ─────────
-if FILM == "customer":
-    GROOVE = [(4.0, 24.0), (24.5, 37.0)]  # drums + bass
-    HALF_REST = 24.0  # half a beat of nothing before the lock opens (24.5)
-    STRIP = (37.0, 39.5)  # the icon wall: ticks only
-    FINAL = 39.5  # last chord, rings to the end
-    BREATH = None
-    RUN = None
-    INTRO_PAD = (0.0, 4.0)
-else:
-    GROOVE = [(4.5, 19.75), (20.0, 30.5), (35.0, 39.5)]
-    HALF_REST = 19.75  # before the "אשר" tick lands on 20.0
-    STRIP = (39.5, 40.5)
-    FINAL = 40.5
-    BREATH = (30.5, 35.0)  # the coffee card: shaker + pad
-    RUN = (22.5, 30.5)  # the command run: 16th shakers
-    INTRO_PAD = (0.0, 4.5)
+# ───────── the plan comes from the picture (film.js): where the groove plays, rests and ends ─────────
+PLAN = next(e for e in EV if e["type"] == "plan")
+GROOVE = [tuple(x) for x in PLAN["groove"]]  # drums + bass; the gaps are the half-beat rest and the breath
+STRIP = tuple(PLAN["strip"])  # the icon wall: ticks only
+FINAL = float(PLAN["final"])  # last chord, rings to the end
+BREATH = tuple(PLAN["breath"]) if PLAN.get("breath") else None  # the coffee card: shaker + pad
+RUN = tuple(PLAN["run"]) if PLAN.get("run") else None  # the command run: 16th shakers
+INTRO_PAD = tuple(PLAN["pad"])
 CHORDS = [
     ("D", ["D4", "F#4", "A4"], "D2", ["D5", "F#5", "A5", "B5"]),
     ("Bm", ["B3", "D4", "F#4"], "B1", ["B4", "D5", "F#5", "A5"]),
@@ -445,8 +438,8 @@ seg = mix[: int(DUR * SR)].copy()
 f = int(0.6 * SR)
 seg[-f:] *= np.linspace(1, 0, f)[:, None]
 os.makedirs(f"{HERE}/out", exist_ok=True)
-sf.write(f"{HERE}/out/mix_{FILM}.wav", seg.astype(np.float32), SR, subtype="FLOAT")
+sf.write(f"{HERE}/out/mix_{TAG}.wav", seg.astype(np.float32), SR, subtype="FLOAT")
 used = sorted({s["inst"] for s in score})
-json.dump(used, open(f"{HERE}/out/instruments_{FILM}.json", "w"))
+json.dump(used, open(f"{HERE}/out/instruments_{TAG}.json", "w"))
 print("instruments:", used)
-print("wrote", f"out/mix_{FILM}.wav", round(len(seg) / SR, 3), "s")
+print("wrote", f"out/mix_{TAG}.wav", round(len(seg) / SR, 3), "s")

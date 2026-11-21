@@ -12,8 +12,13 @@ canvas { display:block; width:1080px; height:1920px; }
 <script src="engine.js"></script>
 <script src="film.js"></script>
 <script>
-const sample = 'אבגדהוזחטיכלמנסעפצקרשתךםןףץ?.,:"·0123456789 /@';
-Promise.all(['900 40px "Heebo"', '800 40px "Heebo"', '700 40px "Heebo"', '500 40px "Heebo"', '500 20px "DM Mono"']
-  .map((f) => document.fonts.load(f, sample))).then(() => { render(0); window.READY = true; });
+const sample = 'אבגדהוזחטיכלמנסעפצקרשתךםןףץ?.,:"·0123456789 /@-XQR';
+// ?qr=<file in this folder>: the real QR for the end card; without it a placeholder is drawn
+const qr = new URLSearchParams(location.search).get('qr');
+const loadQr = !qr ? Promise.resolve() : new Promise((ok, bad) => {
+  const im = new Image(); im.onload = () => { window.QR_IMG = im; ok(); }; im.onerror = () => bad(new Error('QR image not found: ' + qr)); im.src = qr;
+});
+Promise.all([loadQr, ...['900 40px "Heebo"', '800 40px "Heebo"', '700 40px "Heebo"', '500 40px "Heebo"', '500 20px "DM Mono"']
+  .map((f) => document.fonts.load(f, sample))]).then(() => { render(0); window.READY = true; });
 </script>
 </body></html>

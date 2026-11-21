@@ -138,3 +138,47 @@ Sound as transition: A0's drip lands on A1's first beat (L-cut); B2's bell start
 No voice, so the cards are the text layer: a big Heebo 900 title (≤ 3 words), one second line in Heebo
 700 (≤ 7 words), optional mono chip. Every card holds ≥ its reading time (Hebrew ≈ letters ÷ 15 + 1.5 s;
 `readcheck.mjs`). `subtitles_he.srt` lists the card texts, from the edit list.
+
+---
+
+## Revision 2 (2026-11-22) — what changed, and what now holds
+
+The sections above describe the first cut. These points replace them where they differ; the shot times
+now come from `film.js` itself (each shot has a `dur`, the sequence per cut is `SEQ`), and the score,
+the subtitles and the reading check all read those same numbers.
+
+**Four outputs** — each film in a full cut and a 15–20 s cut (problem → how → CTA):
+
+| file | length | sequence |
+|---|---|---|
+| `proli-customers.mp4` | 39.5 s | hook · write · consent · find · approve · status · fixed · end |
+| `proli-customers-short.mp4` | 19.5 s | hook · write · find · end |
+| `proli-pros.mp4` | 42 s | open · summary · lead · filter · take · commands · break · dusk · end |
+| `proli-pros-short.mp4` | 19.5 s | open · lead · take · end |
+
+**Customers**
+- Problem and logo share one three-second card: the tap drips, "נזילה?", and the name "פרולי" as a yellow
+  chip. The separate brand chapter card is gone; "בוואטסאפ" moved into step 1's second line.
+- Plural address throughout ("קרוב אליכם", "המספר שלכם"); "הוא מאשר" is now "בעל המקצוע מאשר".
+- One step counter: the HUD's `01 / 05` and tick bar. The copy over the title is removed.
+- End card: QR on the left; on the right "שלחו הודעה בוואטסאפ", the number, and `proli.me`.
+
+**Professionals**
+- Opens on the benefit, not the greeting: "עבודות מגיעות אליכם בוואטסאפ" + "פיילוט ללא עלות", over a phone
+  that fills with jobs. The words are on screen within the first second; the card holds 4.5 s because
+  a 25-letter line needs about 3.2 s to be read.
+- The command run is three commands in three seconds (עבודות · חפש · תפריט). "אשר" has its own scene and
+  "הפסקה" / "זמין" the break card, so nothing is named twice.
+- Approve scene: by default the pro **taps the "אשר" reply button** under the offer (this is what
+  `notification_service.offer_buttons("lead_offer", …)` sends; the typed word keeps working). `APPROVE=typed`
+  renders the typed-word version instead. To be confirmed against the E2E.
+- The step counter over the title stays here, because this film's HUD shows the clock, not the step.
+- End card: QR + WhatsApp number replace the e-mail address.
+
+**Placeholders** — until cutover the end cards draw `05X-XXX-XXXX` and a QR-shaped placeholder (finder
+squares and the letters "QR", no code). `WA_NUMBER=… WA_QR=<image in this folder> sh build.sh` replaces both.
+A build without them prints a note; those files are not for publishing.
+
+**Reading check** — each line of a card is one piece (title, second line, chip), as in the style's own
+demo. Hebrew is timed at the check's Latin rate (letters ÷ 15 + 1.5 s), stricter than needed. `build.sh`
+runs the check before rendering each cut and exits non-zero if any text is too short.
