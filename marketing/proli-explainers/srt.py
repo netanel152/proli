@@ -1,35 +1,15 @@
-"""Card texts → subtitles_he_<film>.srt (the film has no voice; the cards are the text layer).
-usage: srt.py customer|pro out.srt   — reads the shot list from shots_<film>.json (written by events.mjs via SHOTS)."""
+"""Card texts → an .srt (the films have no voice; the cards are the text layer).
+usage: srt.py events_<film>_<cut>.json out.srt   — the cues come from the picture itself (film.js writes them
+into the events file as type "cue"), so the subtitles cannot drift from the cards."""
 
+import json
 import os
 import sys
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-film, out = sys.argv[1], sys.argv[2]
-CARDS = {
-    "customer": [
-        (0.9, 4.0, "נזילה? מי יתקן את זה?"),
-        (4.5, 8.5, "פרולי — בעל מקצוע, דרך וואטסאפ"),
-        (8.9, 13.0, "כותבים: טקסט, תמונה, קול או וידאו"),
-        (13.4, 17.5, "מאשרים: פעם אחת, בפנייה הראשונה"),
-        (17.9, 23.5, "מאתרים: בעל מקצוע פנוי, קרוב אליך"),
-        (23.8, 28.0, "הוא מאשר: המספר שלך נחשף רק אחרי שאישר"),
-        (28.4, 32.5, 'תמיד בתמונה: כתבו "סטטוס" או "נציג"'),
-        (32.9, 37.0, "תוקן. ופרולי מוודאת שהכול בסדר"),
-        (40.2, 45.0, "פרולי — בלי אפליקציה · ללא עלות ללקוחות · proli.me"),
-    ],
-    "pro": [
-        (1.3, 4.5, "בוקר טוב. יום חדש מתחיל"),
-        (4.9, 9.0, "סיכום בוקר: העבודות של היום, כל בוקר"),
-        (9.4, 13.5, "יש עבודה: תיאור התקלה והכתובת"),
-        (13.9, 18.0, "רק מה שמתאים: לפי תחום, אזור ועומס"),
-        (18.4, 22.5, "אשר. מילה אחת, והעבודה שלך"),
-        (23.0, 30.5, "פקודות טקסט: אשר · דחה · חפש · הפסקה · זמין · תפריט · עבודות"),
-        (30.9, 35.0, "צריך הפסקה? מתי שתרצו, בהודעה אחת"),
-        (35.4, 39.5, "סוף יום: כל העבודות, לפי מועד"),
-        (41.2, 47.0, "פרולי — לבעלי מקצוע · פיילוט ללא עלות · info@proli.me"),
-    ],
-}[film]
+events, out = sys.argv[1], sys.argv[2]
+cues = [
+    e for e in json.load(open(events, encoding="utf-8"))["ev"] if e["type"] == "cue"
+]
 
 
 def ts(x):
@@ -38,6 +18,6 @@ def ts(x):
 
 
 with open(out, "w", encoding="utf-8") as f:
-    for i, (a, b, text) in enumerate(CARDS, 1):
-        f.write(f"{i}\n{ts(a)} --> {ts(b)}\n{text}\n\n")
-print("wrote", os.path.basename(out))
+    for i, c in enumerate(cues, 1):
+        f.write(f"{i}\n{ts(c['t'])} --> {ts(c['t1'])}\n{c['text']}\n\n")
+print("wrote", os.path.basename(out), len(cues), "cues")
