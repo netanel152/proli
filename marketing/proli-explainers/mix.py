@@ -44,10 +44,14 @@ fx = np.zeros((N, 2), np.float32)
 
 # ───────── the plan comes from the picture (film.js): where the groove plays, rests and ends ─────────
 PLAN = next(e for e in EV if e["type"] == "plan")
-GROOVE = [tuple(x) for x in PLAN["groove"]]  # drums + bass; the gaps are the half-beat rest and the breath
+GROOVE = [
+    tuple(x) for x in PLAN["groove"]
+]  # drums + bass; the gaps are the half-beat rest and the breath
 STRIP = tuple(PLAN["strip"])  # the icon wall: ticks only
 FINAL = float(PLAN["final"])  # last chord, rings to the end
-BREATH = tuple(PLAN["breath"]) if PLAN.get("breath") else None  # the coffee card: shaker + pad
+BREATH = (
+    tuple(PLAN["breath"]) if PLAN.get("breath") else None
+)  # the coffee card: shaker + pad
 RUN = tuple(PLAN["run"]) if PLAN.get("run") else None  # the command run: 16th shakers
 INTRO_PAD = tuple(PLAN["pad"])
 CHORDS = [
