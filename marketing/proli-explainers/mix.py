@@ -34,7 +34,7 @@ from core.audio.sfx import (  # noqa: E402
 FILM = sys.argv[1] if len(sys.argv) > 1 else "customer"
 CUT = sys.argv[2] if len(sys.argv) > 2 else "full"
 TAG = f"{FILM}_{CUT}"
-data = json.load(open(f"{HERE}/events_{TAG}.json"))
+data = json.load(open(f"{HERE}/events_{TAG}.json", encoding="utf-8"))
 DUR, EV = float(data["dur"]), data["ev"]
 S.seed(7)
 rng = np.random.default_rng(11)
