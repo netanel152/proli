@@ -37,6 +37,7 @@ from bson.errors import InvalidId
 
 from app.core.background_tasks import spawn_background_task
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
+from app.core.datetime_utils import stored_utc_to_il
 from app.core.legal_links import consent_request_text
 from app.core.logger import logger
 from app.core.messages import Messages
@@ -1166,7 +1167,7 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
     lines = []
     slots_context = {}
     for i, slot in enumerate(available_slots, 1):
-        label = slot["start_time"].astimezone(wf._IL_TZ).strftime("%d/%m/%Y %H:%M")
+        label = stored_utc_to_il(slot["start_time"]).strftime("%d/%m/%Y %H:%M")
         lines.append(f"{i}. {label}")
         slots_context[str(i)] = str(slot["_id"])
 

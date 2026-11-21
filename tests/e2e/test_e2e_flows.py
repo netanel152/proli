@@ -12,6 +12,8 @@ each one turns into a hard failure the moment it is fixed, forcing the expectati
 to be updated rather than quietly drifting.
 """
 
+from datetime import timezone
+
 import pytest
 
 import app.services.dispatch_guards as dispatch_guards
@@ -959,7 +961,14 @@ async def test_reschedule_swaps_the_reservation(world):
     new_slot = await world.slot(updated["booked_slot_id"])
     assert new_slot["is_taken"] is True
     # PRO-45: both stored times move with the booking, not only the slot id.
-    new_time = new_slot["start_time"].astimezone(IL_TZ).strftime("%d/%m/%Y %H:%M")
+    # Stored as naive UTC: compute the Israel wall clock independently of the
+    # process TZ, so the assertion cannot share the bug it guards against.
+    new_time = (
+        new_slot["start_time"]
+        .replace(tzinfo=timezone.utc)
+        .astimezone(IL_TZ)
+        .strftime("%d/%m/%Y %H:%M")
+    )
     assert updated["appointment_datetime"] == new_slot["start_time"]
     assert updated["appointment_time"] == new_time
     assert updated["appointment_time"] != lead["appointment_time"]

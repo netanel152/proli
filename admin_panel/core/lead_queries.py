@@ -38,7 +38,7 @@ from datetime import datetime, timezone
 from bson.objectid import ObjectId
 
 from app.core.constants import Actor, LeadStatus
-from app.core.datetime_utils import IL_TZ as _IL_TZ
+from app.core.datetime_utils import stored_utc_to_il
 from app.core.lead_history import status_history_entry
 from app.core.logger import logger
 from app.core.phone import strip_suffix
@@ -182,7 +182,7 @@ def build_lead_row(lead, *, pro_map_id_to_name, unknown_pro_label, status_labels
 
     return {
         "id": str(lead["_id"]),
-        "date": lead["created_at"].astimezone(_IL_TZ),
+        "date": stored_utc_to_il(lead["created_at"]),
         "client": client_label(lead),
         "_display_name": (lead.get("display_name") or ""),
         "_pro_id": str(lead.get("pro_id") or ""),

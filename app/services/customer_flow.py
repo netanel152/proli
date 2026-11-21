@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 import pytz
 import re
 
-from app.core.datetime_utils import IL_TZ as _IL_TZ
+from app.core.datetime_utils import IL_TZ as _IL_TZ, stored_utc_to_il
 
 
 def completion_check_due_filter(now_utc: datetime | None = None) -> dict:
@@ -1000,7 +1000,7 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         )
 
     old_time = lead.get("appointment_time", "לא ידוע")
-    new_time = chosen_slot["start_time"].astimezone(_IL_TZ).strftime("%d/%m/%Y %H:%M")
+    new_time = stored_utc_to_il(chosen_slot["start_time"]).strftime("%d/%m/%Y %H:%M")
 
     await leads_collection.update_one(
         {"_id": lead["_id"]},

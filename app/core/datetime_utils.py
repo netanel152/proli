@@ -62,3 +62,18 @@ def parse_iso_to_utc(value: Optional[str]) -> Optional[datetime]:
         # for a scheduling hint — acceptable, and never a crash.
         dt = IL_TZ.localize(dt)
     return dt.astimezone(timezone.utc)
+
+
+def stored_utc_to_il(dt: datetime) -> datetime:
+    """A datetime read back from Mongo, as Israel time.
+
+    The driver is not ``tz_aware``, so it returns *naive* datetimes that were
+    stored as UTC. Calling ``.astimezone()`` on a naive value treats it as the
+    process's local time, and every Railway service runs with ``TZ`` set to
+    Israel time — so a bare ``.astimezone(IL_TZ)`` on a slot's ``start_time``
+    rendered it two or three hours early in staging and production while the
+    test suite, which runs in UTC, saw the right hour.
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(IL_TZ)
