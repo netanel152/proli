@@ -575,6 +575,25 @@ async def test_opening_media_is_not_fetched_or_uploaded_until_accept(world, clou
 
 
 @pytest.mark.asyncio
+async def test_opening_media_reaches_the_lead_as_the_rehosted_url(world, cloudinary):
+    """The lead a held photo ends up on stores the Cloudinary copy made on accept,
+    never Meta's inbound marker, which nobody downstream could open."""
+    await world.add_pro(R.PRO_PRIMARY, name="נתנאל אינסטלציה")
+    await workflow_service.process_incoming_message(
+        world.customer, "יש לי נזילה בתל אביב", "meta-media://M1"
+    )
+    assert await world.lead() is None
+
+    world.ai.script(reply("מאתר איש מקצוע.", city="תל אביב", issue="נזילה"))
+    await world.send("כן")
+
+    lead = await world.lead()
+    assert lead is not None
+    assert lead["media_urls"] == ["https://res.cloudinary.com/proli/hosted/image"]
+    assert await _mongo_mentions(world, "meta-media://") == []
+
+
+@pytest.mark.asyncio
 async def test_declined_media_is_never_fetched_or_uploaded(world, cloudinary):
     fetch, uploads = cloudinary
     await workflow_service.process_incoming_message(

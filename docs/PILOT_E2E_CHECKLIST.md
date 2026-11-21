@@ -14,12 +14,15 @@ the first real test.
 > Every failure → open a Linear ticket **before** the pilot, fix, then **re-run the
 > whole checklist** until it is 100% green. Record the run in the sign-off table.
 
-> ⚠️ **PRO-86 update:** the legacy WhatsApp vendor is gone (PRO-85). Real sends now require
-> `WHATSAPP_PROVIDER=cloud`, which selects the PRO-89 `CloudAPIProvider` —
-> code-complete against the Meta Graph API, but with no live account behind it yet:
-> PRO-87 (Business Portfolio, template approval, a sandbox number) has not landed, so
-> this checklist is **not currently runnable end-to-end** (no configuration produces
-> `whatsapp.status: "up"` yet). Re-enable once PRO-87 onboarding completes.
+> **Status (2026-11-21):** real sends go through `WHATSAPP_PROVIDER=cloud` (the PRO-89
+> `CloudAPIProvider`; the legacy vendor is gone, PRO-85/PRO-86). PRO-87 onboarding is done.
+> **Staging** sends live from Meta's Test Number, so the checklist is runnable there today as
+> the rehearsal (`SANDBOX_E2E_RUNSHEET.md` Part 3). **Production** is still muted (above), so
+> the run that counts as the launch gate waits for the PRO-102 cutover. Meta approved the 28
+> `_v2` templates on 2026-11-18 (25 UTILITY, 3 MARKETING — the three are never armed), but
+> nothing is armed until `WHATSAPP_ARMED_TEMPLATES` names a key: until then a send to a
+> closed 24h window is dropped, so keep every test phone's window open (it wrote to the bot
+> within the day) unless the step is about a closed window.
 
 ---
 
@@ -30,6 +33,33 @@ the first real test.
 | **C — Customer phone** | A real phone whose number is **not** a registered pro. |
 | **P — Pro phone** | A real phone registered + approved as a pro, whose `service_areas` cover **C's test city** (e.g. Tel Aviv). |
 | **Admin** | Admin panel open (logged in) + the admin WhatsApp on `ADMIN_PHONE`. |
+
+### Running with two phones
+
+The whole checklist can be run with two handsets. The third role, a second pro, needs a
+database record but no phone.
+
+| Phone | Plays | Notes |
+|---|---|---|
+| **Phone 1 — customer** | **C** | A number that is **not** a registered pro. |
+| **Phone 2 — pro** | **P**, and **Admin** if `ADMIN_PHONE` is this same number | The registered, approved pro. When it is also the admin, `ניהול` opens the admin wizard from it; until the wizard is finished its replies belong to the wizard, and after that every keyword is read as the pro's again. |
+
+- **A second approved pro in the database, no handset:** scenario 3 (the reassignment half —
+  somebody has to be offered the lead after P stays silent) and scenario 15 (the wizard
+  assigns to "a different pro"; in (b) the lead is "offered to the next pro"). Give it a
+  number nobody is holding. Its messages go **unobserved**: confirm what it was sent from the
+  lead in the admin panel and the worker log, not from a screen, and say so in the notes.
+- **Scenario 10 (self-signup) needs an unregistered number**, and Phone 1 is the only one.
+  Run it **last**, from Phone 1, after a reset (`התחלה`) — once approved, that number is a pro
+  and can no longer play C.
+- **Operator pages** (SOS, escalations, emergencies with no pro) arrive as Sentry email, not
+  on either phone. Have the inbox open.
+- **Anything that needs a third handset is `N/A (sandbox)`**, not Fail. That is every step
+  that needs two *customers* or a second fresh number at the same time: scenario 12 step 1's
+  second number (`לא לביטול`) and its steps 2–4 where the two waiting offers come from two
+  customers, scenario 13 (a) once Phone 1 already has consent on record, and scenario 16 (a)
+  with two customers. Where the scenario itself names a route that needs no third phone
+  ("or one customer and the panel" in 16 (a)), use that route instead of marking it N/A.
 
 Keywords used below (from `app/core/messages.py`, exact): emergency `הצפה`/`דחוף` · SOS
 `נציג`/`אנושי`/`מנהל` · status `סטטוס`/`?` · cancel `בטל` · reschedule `מועד אחר` ·
@@ -68,7 +98,7 @@ ticket merges. Re-verify this table before each run.
 | **PRO-60** (`is_verified` not auto-true) | ✅ holds — defaults false in admin, absent in onboarding | Scenario 10 valid |
 | **PRO-55** (quoted price to pro) | ✅ built — `quoted_price` persisted, shown in `APPROVAL_REQUEST` **and** `PRO_FOUND` | Scenario 1's price check is valid |
 | **PRO-56** (10-min nudge / 25-min offer) | ✅ built — `check_pro_approval_sla` job runs every 5 min | Scenario 3 is a valid regression |
-| **PRO-48** (ADMIN_PHONE reaches the operator) | ⚠️ config check | Verify `ADMIN_PHONE` is **set** in the environment and is the operator's number. Do **not** check it against the default value: production is legitimately set to a number equal to the default, because the default is the operator's own. The boot warning covers the case this row used to test — an environment where nothing set it at all |
+| **PRO-48** (ADMIN_PHONE is the operator's number) | ⚠️ config check | Verify `ADMIN_PHONE` is **set** in the environment and is the operator's number. Do **not** check it against the default value: production is legitimately set to a number equal to the default, because the default is the operator's own. The boot warning covers the case this row used to test — an environment where nothing set it at all. No business alert is sent to it over WhatsApp since PRO-88 (SOS, escalations and stuck-lead reports page through Sentry email), so check it from the handset: `ניהול` sent **from** that phone opens the admin wizard (scenario 8), and from any other number it does not. The only WhatsApp the bot still sends to it (or to `ONCALL_PHONE` when set) is the infrastructure courtesy notice that the account recovered after an outage, which this checklist does not trigger |
 | **PRO-133** (read receipt + typing indicator) | ⚠️ depends on PR #231 | Until it merges, the indicator checks in scenarios 1 and 7 fail by design — on Cloud API nothing was ever transmitted, because `CloudAPIProvider` never overrode the base no-op. This is the only handset evidence PRO-133 can get: the unit suite and the offline harness prove the call is *made*, not that WhatsApp renders it |
 | **Policy links in the consent gate and pro signup** | ⚠️ config check | The consent message carries a privacy link only once `PUBLIC_BASE_ORIGIN` is set, and a terms link (consent + signup welcome) only once `TERMS_ENABLED=true` **and** `app/static/terms.html` is the owner-approved text. `/terms` answers 404 until then. Both variables on **api and worker**. Open every link the message sends |
 
@@ -130,7 +160,10 @@ at that moment (no AI hallucination, no stale state).
 
 ### 7. SOS / human handoff
 **Steps (C):** mid-flow, send **`נציג`** (or `אנושי` / `מנהל`).
-**Expected:** the bot **pauses for 15 min** (`PAUSED_FOR_HUMAN`); the admin is paged via Sentry.
+**Expected:** the bot **pauses for 15 min** (`PAUSED_FOR_HUMAN`); the admin is paged via **Sentry
+email**, and gets **no WhatsApp** on `ADMIN_PHONE` in any configuration (PRO-88). The page names the
+last four digits of the customer's number, the issue, the lead and whether the pro was notified —
+never what the customer wrote.
 The assigned pro gets an alert only if the lead is **BOOKED** (with the customer's phone and words,
 plus the pause notice) or **NEW** (no phone and no words, offering `אשר`/`דחה`). On a CONTACTED lead,
 or if the admin deactivated the pro, the pro gets nothing. Further C messages within the window are held for a human, not
@@ -141,12 +174,16 @@ auto-answered. After ~15 min the pause auto-expires.
 ### 8. Unmatchable city → admin review
 **Steps (C):** run intake for a city with **no covering pro** (e.g. **אילת**).
 **Expected (current code):** no pro found within the max radius → lead → `PENDING_ADMIN_REVIEW`;
-the **customer** receives the "pending review" message; the admin is paged via
-**`page_critical` → Sentry email** (not a WhatsApp to `ADMIN_PHONE`). The lead appears in the
-admin panel's pending-review view and via the `ניהול` wizard.
-- Verify the **Sentry email** arrives (reuses the PRO-18 / PRO-75 paging path).
-- ⚠️ **Note:** this `page_critical` fires on *every* unmatchable lead — expect one email each. If that's too noisy for a routine no-pro case, downgrade the log level (separate ticket).
-- `ADMIN_PHONE`/`ONCALL_PHONE` reaching the operator (PRO-48) is verified via the **SOS/handoff** path (scenario 7), which *does* WhatsApp the admin. The check is that the message arrives — not that the value differs from the default, which it legitimately does not.
+the **customer** receives the "pending review" message. **The admin is not paged** for a routine
+unmatchable lead (PRO-77): it is a coverage gap, logged at WARNING, and no Sentry email and no
+WhatsApp to `ADMIN_PHONE` is sent. The lead appears in the admin panel's pending-review view and
+via the `ניהול` wizard, which is how the operator finds it.
+- Verify **no Sentry email** arrives for the ordinary case.
+- **Emergency variant (PRO-121):** repeat with an emergency message for the same city (e.g.
+  `הצפה באילת`). This one **does** page: one Sentry email, "EMERGENCY lead … has no available
+  pro … needs manual routing now". Still no WhatsApp to the admin.
+- `ADMIN_PHONE` is checked by sending `ניהול` from that phone here: the wizard opens and lists
+  this lead. Nothing in scenarios 7 or 8 sends a WhatsApp *to* the admin (see the PRO-48 row).
 - [ ] Pass  · [ ] File: ______
 
 ### 9. Voice-note intake
@@ -240,6 +277,21 @@ already has slots, and let the Sunday regeneration (or a second click) run over 
   one slot taken, never two bookings at the same time, and a slot that overlaps an already-taken one
   is not offered.
 - (b) No duplicate slot rows appear; a repeat run adds nothing for times that already exist.
+
+> ⚠️ **Under review — what the code does today in (a), which is not what Expected says.** No
+> one is "offered another time". When the pro approves the second lead, the lead is marked
+> `booked` first and a slot is looked for afterwards (`pro_flow._approve_lead` →
+> `matching_service.book_slot_for_lead`). If another free slot exists within ±2h of the
+> requested time, it is taken silently: the lead's `booked_slot_id` points at a different
+> hour, while its `appointment_time` and the customer's "pro found" message still state the
+> time originally agreed. If no free slot is left in that window, the lead stays `booked`
+> with **no slot at all**; the only visible difference is that the pro's approval reply lacks
+> the "היומן עודכן בהצלחה" line. In both cases the second customer is told the pro is coming
+> at the requested time and nobody — customer, pro or operator — is told about the clash. The
+> slot half of Expected does hold (one slot row taken, never two). Record what you observe
+> against this note; do not tick Pass on the "offered another time" wording until the review
+> decides which behaviour is intended.
+
 - [ ] Pass  · [ ] File: ______
 
 ---

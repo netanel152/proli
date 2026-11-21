@@ -159,6 +159,37 @@ async def test_a_tap_on_an_offer_no_longer_this_pros_books_nothing(world, moved_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("moved_to", ["another_pro", "booked", "cancelled"])
+async def test_a_reject_tap_on_an_offer_no_longer_this_pros_rejects_nothing(
+    world, moved_to
+):
+    pro, pro_chat, older, newer = await _pro_with_two_offers(world)
+    if moved_to == "another_pro":
+        change = {"pro_id": world.pros[R.PRO_SECONDARY]["_id"]}
+    elif moved_to == "booked":
+        change = {"status": LeadStatus.BOOKED}
+    else:
+        change = {"status": LeadStatus.CANCELLED}
+    await world.db.leads.update_one({"_id": newer["_id"]}, {"$set": change})
+    before = await world.lead_by_id(newer["_id"])
+
+    await world.tap(_id(REJECT_WORD, newer), chat_id=pro_chat)
+
+    # Not rejected, not rematched, not escalated: the lead is exactly as it was.
+    assert await world.lead_by_id(newer["_id"]) == before
+    assert not before.get("rejected_by")
+    # Never the other waiting offer instead.
+    untouched = await world.lead_by_id(older["_id"])
+    assert untouched["status"] == LeadStatus.NEW
+    assert untouched["pro_id"] == pro["_id"]
+    assert not untouched.get("rejected_by")
+    world.recorder.assert_text_to(pro_chat, Messages.Pro.SELECTION_OFFER_LIST_CHANGED)
+    world.recorder.assert_silent(CUSTOMER_A, "nothing happened to their request")
+    world.recorder.assert_silent(CUSTOMER_B, "nothing happened to their request")
+    assert await world.state(pro_chat) != UserStates.PRO_SELECTING_JOB_TO_REJECT
+
+
+@pytest.mark.asyncio
 async def test_a_tap_on_the_only_offer_once_reassigned_answers_no_pending(world):
     await world.standard_cast()
     pro = world.pros[R.PRO_PRIMARY]

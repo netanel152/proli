@@ -16,6 +16,7 @@ import pytest
 
 import app.services.dispatch_guards as dispatch_guards
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
+from app.core.datetime_utils import IL_TZ
 from app.core.messages import Messages
 from app.core.phone import to_local_phone
 from tests.copy_util import longest_static_chunk, static_prefix
@@ -248,6 +249,77 @@ async def test_inbound_wamid_is_marked_read_with_typing_once_per_turn(
     assert indicators[0].chat_id == world.customer
     assert indicators[0].payload["messageId"] == "wamid.E2E-IN-1"
     world.recorder.assert_text_to(world.customer, "איך קוראים לך")
+
+
+def _spy_on_typing_tasks(monkeypatch) -> list:
+    """The indicator tasks a turn spawns, for a test to await (PRO-187)."""
+    real_spawn = dispatch_guards.spawn_background_task
+    spawned = []
+
+    def spy(coro, *, name):
+        task = real_spawn(coro, name=name)
+        spawned.append(task)
+        return task
+
+    monkeypatch.setattr(dispatch_guards, "spawn_background_task", spy)
+    return spawned
+
+
+def _typing_indicators(world) -> list:
+    return [s for s in world.recorder.all if s.endpoint == "sendChatStateTyping"]
+
+
+@pytest.mark.asyncio
+async def test_the_first_pre_consent_message_is_marked_read_with_typing(
+    world, monkeypatch
+):
+    """PRO-133: the indicator fires above the consent gate, so a customer's very
+    first message — answered with the consent request, not the AI — gets it too."""
+    await world.add_pro(R.PRO_PRIMARY, name="נתנאל אינסטלציה")
+    spawned = _spy_on_typing_tasks(monkeypatch)
+
+    await world.send("היי, יש לי נזילה", message_id="wamid.E2E-FIRST")
+    for task in spawned:
+        await task
+
+    await world.assert_state(UserStates.AWAITING_CONSENT)
+    world.recorder.assert_text_to(world.customer, Messages.Consent.REQUEST)
+    indicators = _typing_indicators(world)
+    assert len(indicators) == 1, world.recorder.transcript()
+    assert indicators[0].chat_id == world.customer
+    assert indicators[0].payload["messageId"] == "wamid.E2E-FIRST"
+
+
+@pytest.mark.asyncio
+async def test_no_typing_indicator_while_the_chat_is_paused_for_a_human(
+    world, monkeypatch
+):
+    """PRO-133: a paused chat is answered with nothing, so it shows no blue checks
+    and no "typing…" either. The same chat, released, gets the indicator again —
+    which is what proves the silence above was the pause and not the wiring."""
+    await world.standard_cast()
+    await world.booked_job(world.pros[R.PRO_PRIMARY], is_paused=True)
+    await world.set_state(
+        UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS
+    )
+    spawned = _spy_on_typing_tasks(monkeypatch)
+
+    await world.send("הלו? מישהו שם?", message_id="wamid.E2E-PAUSED")
+    for task in spawned:
+        await task
+
+    await world.assert_state(UserStates.PAUSED_FOR_HUMAN)
+    assert _typing_indicators(world) == [], world.recorder.transcript()
+    world.recorder.assert_nothing_sent("the bot is paused for a human")
+
+    await world.set_state(UserStates.IDLE)
+    await world.send("תודה", message_id="wamid.E2E-RELEASED")
+    for task in spawned:
+        await task
+
+    indicators = _typing_indicators(world)
+    assert len(indicators) == 1, world.recorder.transcript()
+    assert indicators[0].payload["messageId"] == "wamid.E2E-RELEASED"
 
 
 @pytest.mark.asyncio
@@ -613,6 +685,18 @@ async def test_emergency_leads_halve_the_sla_thresholds(world):
     world.recorder.assert_text_to(
         world.pro_chat(R.PRO_PRIMARY), static_prefix(Messages.Pro.APPROVAL_NUDGE)
     )
+    world.recorder.assert_silent(world.customer, "the halved offer is not due yet")
+
+    # Past the halved offer threshold, still well short of the standard one.
+    halved_offer = WorkerConstants.APPROVAL_REASSIGN_OFFER_MINUTES // 2
+    assert halved_offer + 1 < WorkerConstants.APPROVAL_REASSIGN_OFFER_MINUTES
+    await world.age(lead["_id"], halved_offer + 1, "pro_notified_at")
+    world.recorder.clear()
+
+    await check_pro_approval_sla()
+
+    world.recorder.assert_text_to(world.customer, Messages.Customer.REASSIGN_OFFER)
+    assert (await world.lead_by_id(lead["_id"]))["reassign_offered"] is True
 
 
 @pytest.mark.asyncio
@@ -872,9 +956,15 @@ async def test_reschedule_swaps_the_reservation(world):
     assert updated["rescheduled_count"] == 1
     assert updated["status"] == LeadStatus.BOOKED
     assert (await world.slot(old_slot_id))["is_taken"] is False
-    assert (await world.slot(updated["booked_slot_id"]))["is_taken"] is True
+    new_slot = await world.slot(updated["booked_slot_id"])
+    assert new_slot["is_taken"] is True
+    # PRO-45: both stored times move with the booking, not only the slot id.
+    new_time = new_slot["start_time"].astimezone(IL_TZ).strftime("%d/%m/%Y %H:%M")
+    assert updated["appointment_datetime"] == new_slot["start_time"]
+    assert updated["appointment_time"] == new_time
+    assert updated["appointment_time"] != lead["appointment_time"]
     world.recorder.assert_text_to(
-        world.customer, static_prefix(Messages.Customer.RESCHEDULE_SUCCESS)
+        world.customer, Messages.Customer.RESCHEDULE_SUCCESS.format(new_time=new_time)
     )
     world.recorder.assert_text_to(
         world.pro_chat(R.PRO_PRIMARY),
@@ -990,6 +1080,8 @@ async def test_pro_self_service_onboarding(world):
     assert created["service_areas"] == ["תל אביב", "רמת גן"]
     assert created["is_active"] is False
     assert created["pending_approval"] is True
+    # PRO-60: signing up by chat verifies nothing — only the operator does.
+    assert not created.get("is_verified")
     # Awaiting approval means invisible to routing.
     assert created["location"]["coordinates"] == [34.7818, 32.0853]
     await world.assert_state(UserStates.IDLE, chat_id=applicant)
@@ -1335,6 +1427,50 @@ async def test_deal_marker_never_leaks_to_the_customer(world):
     world.recorder.assert_text_to(world.customer, "קבענו למחר")
     # is_deal closed it; the marker played no part.
     assert (await world.lead())["status"] == LeadStatus.NEW
+
+
+@pytest.mark.asyncio
+async def test_a_deal_with_no_quoted_price_shows_no_price_line_to_either_side(world):
+    """PRO-55: the price line is optional on both sides. A deal the model closed
+    without quoting a price puts no estimate, and no stray "₪", in the pro's
+    approval request or in the customer's pro-found message."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    world.ai.script(
+        reply("מאתר איש מקצוע.", city="תל אביב", issue="נזילה"),
+        deal(
+            "מעולה, קבענו למחר ב-10:00!",
+            city="תל אביב",
+            issue="נזילה",
+            street="דיזנגוף",
+            street_number="50",
+            floor="3",
+            apartment="12",
+            appointment_time="מחר ב-10:00",
+        ),
+    )
+
+    await world.send("יש לי נזילה בתל אביב, דיזנגוף 50 קומה 3 דירה 12, מחר ב-10")
+
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.NEW
+    assert not lead.get("quoted_price")
+    approval = world.recorder.assert_text_to(
+        pro_chat, static_prefix(Messages.Pro.APPROVAL_REQUEST), "מחר ב-10:00"
+    )
+    assert static_prefix(Messages.Pro.APPROVAL_PRICE_LINE) not in approval.body
+    assert "₪" not in approval.body
+
+    world.recorder.clear()
+    await world.send("אשר", chat_id=pro_chat)
+
+    assert (await world.lead())["status"] == LeadStatus.BOOKED
+    found = world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.PRO_FOUND), pro["business_name"]
+    )
+    assert static_prefix(Messages.Customer.QUOTED_PRICE_LINE) not in found.body
+    assert "₪" not in found.body
 
 
 @pytest.mark.asyncio
