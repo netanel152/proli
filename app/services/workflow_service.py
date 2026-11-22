@@ -64,6 +64,7 @@ from app.services.customer_flow import (  # noqa: F401
     handle_customer_review_comment,
     handle_reschedule_selection as _handle_reschedule_selection,
     handle_status_query as _handle_status_query,
+    resume_lapsed_cancel_prompt,
 )
 from app.services.scheduling_service import get_available_slots  # noqa: F401
 
@@ -809,8 +810,12 @@ async def _process_incoming_message_inner(
         # harmless while the flag only tagged a lead at creation and is not now
         # that it short-circuits a holding state.
         is_emergency_detected=is_emergency_text(normalized_text),
-        # Get state early — needed to skip global checks for pros
-        current_state=await StateManager.get_state(chat_id),
+        # Get state early — needed to skip global checks for pros. An unanswered
+        # cancel prompt on a request still with a pro gives AWAITING_PRO_APPROVAL
+        # back here once it lapses, so the soft hold answers the next message.
+        current_state=await resume_lapsed_cancel_prompt(
+            chat_id, await StateManager.get_state(chat_id), StateManager
+        ),
         message_id=message_id,
         reply_ref=reply_ref,
     )

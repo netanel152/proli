@@ -11,7 +11,7 @@ In Review without the artifacts this sheet produces — the filled-in tables bel
 device screenshots, and worker log excerpts, attached to the Linear issue.
 A ticked box with no artifact behind it does not count.
 
-> Keywords, expected copy and the 11 product scenarios are **not** duplicated
+> Keywords, expected copy and the 16 product scenarios are **not** duplicated
 > here — run them from `docs/PILOT_E2E_CHECKLIST.md` and record results there.
 > This sheet owns: device mapping, staging config, the Cloud-API-only checks,
 > and evidence collection.
@@ -70,13 +70,14 @@ template path PRO-64 can exercise later.
 
 ## Part 3 — Product scenarios
 
-Run **all 12 scenarios of `docs/PILOT_E2E_CHECKLIST.md`** on the devices above
+Run **all 16 scenarios of `docs/PILOT_E2E_CHECKLIST.md`** on the devices above
 (C=D1, P=D2, second pro=D3, Admin=D4, fresh signup=D5), staging config instead of
 production. Record Pass/File **in that checklist's own table** and attach the
 signed-off copy to PRO-101. Sandbox deltas to expect:
 
 - The sender shows as Meta's **"Test Number"**, not "Proli" — display name comes with the production number.
-- Scenario 8 (unmatchable city) pages via Sentry email — verify it arrives, same as production would.
+- Scenario 8 (unmatchable city) does **not** page for a routine lead (PRO-77, logged at WARNING); only its emergency variant sends a Sentry email — verify both, same as production would.
+- Scenario 7 (SOS) pages via Sentry email; D4 receives no WhatsApp for it (PRO-88).
 - Any scenario that needs a 6th phone is out of scope on sandbox; note it as `N/A (sandbox)` rather than Fail.
 
 ## Part 4 — Closed-window drill + template retry (Cloud-API-only behavior)
@@ -101,7 +102,7 @@ signed-off copy to PRO-101. Sandbox deltas to expect:
 
 ## Sign-off
 
-| Run # | Date | Tester | Part 1 | Part 2 | Part 3 (x/11) | Part 4 | Notes / tickets |
+| Run # | Date | Tester | Part 1 | Part 2 | Part 3 (x/16) | Part 4 | Notes / tickets |
 |---|---|---|---|---|---|---|---|
 |  |  |  |  |  |  |  |  |
 

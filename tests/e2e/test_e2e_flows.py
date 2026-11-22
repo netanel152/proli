@@ -12,10 +12,14 @@ each one turns into a hard failure the moment it is fixed, forcing the expectati
 to be updated rather than quietly drifting.
 """
 
+from datetime import timedelta, timezone
+
 import pytest
+from bson import ObjectId
 
 import app.services.dispatch_guards as dispatch_guards
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
+from app.core.datetime_utils import IL_TZ
 from app.core.messages import Messages
 from app.core.phone import to_local_phone
 from tests.copy_util import longest_static_chunk, static_prefix
@@ -250,6 +254,77 @@ async def test_inbound_wamid_is_marked_read_with_typing_once_per_turn(
     world.recorder.assert_text_to(world.customer, "איך קוראים לך")
 
 
+def _spy_on_typing_tasks(monkeypatch) -> list:
+    """The indicator tasks a turn spawns, for a test to await (PRO-187)."""
+    real_spawn = dispatch_guards.spawn_background_task
+    spawned = []
+
+    def spy(coro, *, name):
+        task = real_spawn(coro, name=name)
+        spawned.append(task)
+        return task
+
+    monkeypatch.setattr(dispatch_guards, "spawn_background_task", spy)
+    return spawned
+
+
+def _typing_indicators(world) -> list:
+    return [s for s in world.recorder.all if s.endpoint == "sendChatStateTyping"]
+
+
+@pytest.mark.asyncio
+async def test_the_first_pre_consent_message_is_marked_read_with_typing(
+    world, monkeypatch
+):
+    """PRO-133: the indicator fires above the consent gate, so a customer's very
+    first message — answered with the consent request, not the AI — gets it too."""
+    await world.add_pro(R.PRO_PRIMARY, name="נתנאל אינסטלציה")
+    spawned = _spy_on_typing_tasks(monkeypatch)
+
+    await world.send("היי, יש לי נזילה", message_id="wamid.E2E-FIRST")
+    for task in spawned:
+        await task
+
+    await world.assert_state(UserStates.AWAITING_CONSENT)
+    world.recorder.assert_text_to(world.customer, Messages.Consent.REQUEST)
+    indicators = _typing_indicators(world)
+    assert len(indicators) == 1, world.recorder.transcript()
+    assert indicators[0].chat_id == world.customer
+    assert indicators[0].payload["messageId"] == "wamid.E2E-FIRST"
+
+
+@pytest.mark.asyncio
+async def test_no_typing_indicator_while_the_chat_is_paused_for_a_human(
+    world, monkeypatch
+):
+    """PRO-133: a paused chat is answered with nothing, so it shows no blue checks
+    and no "typing…" either. The same chat, released, gets the indicator again —
+    which is what proves the silence above was the pause and not the wiring."""
+    await world.standard_cast()
+    await world.booked_job(world.pros[R.PRO_PRIMARY], is_paused=True)
+    await world.set_state(
+        UserStates.PAUSED_FOR_HUMAN, ttl=WorkerConstants.PAUSE_TTL_SECONDS
+    )
+    spawned = _spy_on_typing_tasks(monkeypatch)
+
+    await world.send("הלו? מישהו שם?", message_id="wamid.E2E-PAUSED")
+    for task in spawned:
+        await task
+
+    await world.assert_state(UserStates.PAUSED_FOR_HUMAN)
+    assert _typing_indicators(world) == [], world.recorder.transcript()
+    world.recorder.assert_nothing_sent("the bot is paused for a human")
+
+    await world.set_state(UserStates.IDLE)
+    await world.send("תודה", message_id="wamid.E2E-RELEASED")
+    for task in spawned:
+        await task
+
+    indicators = _typing_indicators(world)
+    assert len(indicators) == 1, world.recorder.transcript()
+    assert indicators[0].payload["messageId"] == "wamid.E2E-RELEASED"
+
+
 @pytest.mark.asyncio
 async def test_pro_rejection_records_rejected_then_reassigns(world):
     """PRO-117: a reject is no longer a terminal write. _handle_reject still
@@ -482,17 +557,129 @@ async def test_sos_pauses_the_bot_and_deflects_after_the_idle_window(world):
     world.recorder.assert_nothing_sent("the bot is paused for a human")
     await world.assert_state(UserStates.PAUSED_FOR_HUMAN)
 
-    # Nobody picked it up within the window → SLA deflection.
-    await world.age(
-        lead["_id"], WorkerConstants.PAUSE_TTL_SECONDS / 60 + 5, "paused_at"
-    )
+    # Nobody picked it up within the window → SLA deflection. Time passes in
+    # both stores: Mongo's paused_at ages, and Redis expires the state key it
+    # wrote with the same TTL before paused_at, exactly as production does.
+    await _lapse_pause(world, lead["_id"])
+    world.recorder.clear()
     await check_sla_deflection()
 
-    assert (await world.lead_by_id(lead["_id"]))["sla_deflected"] is True
+    stored = await world.lead_by_id(lead["_id"])
+    assert stored["sla_deflected"] is True
+    assert stored["is_paused"] is False
     world.recorder.assert_text_to(
         world.customer, Messages.Customer.SLA_DEFLECTION_MESSAGE
     )
     await world.assert_state(UserStates.IDLE)
+
+    # A second run finds nothing left to deflect and sends nothing more.
+    world.recorder.clear()
+    await check_sla_deflection()
+    world.recorder.assert_nothing_sent("the handoff was already deflected")
+
+
+async def _lapse_pause(world, *lead_ids, chat_id=None):
+    """The pause window passes: every given lead's paused_at ages past
+    PAUSE_TTL_SECONDS and the chat's state key expires with it."""
+    for lead_id in lead_ids:
+        await world.age(
+            lead_id, WorkerConstants.PAUSE_TTL_SECONDS / 60 + 5, "paused_at"
+        )
+    await world.expire_state(chat_id)
+
+
+@pytest.mark.asyncio
+async def test_sos_on_a_contacted_lead_deflects_after_the_idle_window(world):
+    """SOS pauses a CONTACTED lead (intake still running) too, so the job must
+    deflect it as well, not only NEW/BOOKED ones."""
+    from app.services.monitor_service import check_sla_deflection
+
+    await world.standard_cast()
+    lead = await world.booked_job(
+        world.pros[R.PRO_PRIMARY], status=LeadStatus.CONTACTED, pro_id=None
+    )
+
+    await world.send("נציג")
+    assert (await world.lead_by_id(lead["_id"]))["is_paused"] is True
+
+    await _lapse_pause(world, lead["_id"])
+    world.recorder.clear()
+    await check_sla_deflection()
+
+    stored = await world.lead_by_id(lead["_id"])
+    assert stored["sla_deflected"] is True
+    assert stored["is_paused"] is False
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.SLA_DEFLECTION_MESSAGE
+    )
+
+
+@pytest.mark.asyncio
+async def test_sla_deflection_leaves_a_customer_who_moved_on_alone(world):
+    """The pause lapsed and the customer is now in another flow: the flag is
+    cleared, but no deflection is sent and their state is not touched."""
+    from app.services.monitor_service import check_sla_deflection
+
+    await world.standard_cast()
+    lead = await world.booked_job(world.pros[R.PRO_PRIMARY])
+    await world.send("נציג")
+
+    await _lapse_pause(world, lead["_id"])
+    await world.set_state(UserStates.AWAITING_ADDRESS, ttl=3600)
+    world.recorder.clear()
+    await check_sla_deflection()
+
+    stored = await world.lead_by_id(lead["_id"])
+    assert stored["is_paused"] is False
+    assert not stored.get("sla_deflected")
+    world.recorder.assert_nothing_sent("the customer is in another flow")
+    await world.assert_state(UserStates.AWAITING_ADDRESS)
+
+
+@pytest.mark.asyncio
+async def test_sla_deflection_does_not_end_a_younger_handoff_on_the_same_chat(world):
+    """The pro paused lead A 20 minutes ago; the customer then asked for a human
+    on lead B 5 minutes ago, refreshing the chat's one state key. A has lapsed,
+    but the chat's handoff is B's and still live: nothing is sent and the pause
+    stands. Once B lapses too, the chat gets one deflection for both."""
+    from app.services.monitor_service import check_sla_deflection
+
+    await world.standard_cast()
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    lead_a = await world.booked_job(world.pros[R.PRO_PRIMARY])
+    await world.send(Messages.Keywords.BOT_PAUSE_COMMANDS[0], chat_id=pro_chat)
+    assert (await world.lead_by_id(lead_a["_id"]))["is_paused"] is True
+    await world.age(lead_a["_id"], 20, "paused_at")
+
+    lead_b = await world.booked_job(
+        world.pros[R.PRO_PRIMARY],
+        status=LeadStatus.CONTACTED,
+        pro_id=None,
+        created_at=world.anchor + timedelta(minutes=1),
+    )
+    await world.send("נציג")
+    assert (await world.lead_by_id(lead_b["_id"]))["is_paused"] is True
+    await world.age(lead_b["_id"], 5, "paused_at")
+
+    world.recorder.clear()
+    await check_sla_deflection()
+
+    world.recorder.assert_nothing_sent("lead B's handoff is still inside the window")
+    await world.assert_state(UserStates.PAUSED_FOR_HUMAN)
+    assert (await world.lead_by_id(lead_b["_id"]))["is_paused"] is True
+    assert not (await world.lead_by_id(lead_a["_id"])).get("sla_deflected")
+
+    # B lapses as well: one message for the chat, both leads released.
+    await _lapse_pause(world, lead_b["_id"])
+    await check_sla_deflection()
+
+    assert world.recorder.bodies_to(world.customer) == [
+        Messages.Customer.SLA_DEFLECTION_MESSAGE
+    ]
+    for lead in (lead_a, lead_b):
+        stored = await world.lead_by_id(lead["_id"])
+        assert stored["is_paused"] is False
+        assert stored["sla_deflected"] is True
 
 
 # ===========================================================================
@@ -613,6 +800,18 @@ async def test_emergency_leads_halve_the_sla_thresholds(world):
     world.recorder.assert_text_to(
         world.pro_chat(R.PRO_PRIMARY), static_prefix(Messages.Pro.APPROVAL_NUDGE)
     )
+    world.recorder.assert_silent(world.customer, "the halved offer is not due yet")
+
+    # Past the halved offer threshold, still well short of the standard one.
+    halved_offer = WorkerConstants.APPROVAL_REASSIGN_OFFER_MINUTES // 2
+    assert halved_offer + 1 < WorkerConstants.APPROVAL_REASSIGN_OFFER_MINUTES
+    await world.age(lead["_id"], halved_offer + 1, "pro_notified_at")
+    world.recorder.clear()
+
+    await check_pro_approval_sla()
+
+    world.recorder.assert_text_to(world.customer, Messages.Customer.REASSIGN_OFFER)
+    assert (await world.lead_by_id(lead["_id"]))["reassign_offered"] is True
 
 
 @pytest.mark.asyncio
@@ -872,15 +1071,184 @@ async def test_reschedule_swaps_the_reservation(world):
     assert updated["rescheduled_count"] == 1
     assert updated["status"] == LeadStatus.BOOKED
     assert (await world.slot(old_slot_id))["is_taken"] is False
-    assert (await world.slot(updated["booked_slot_id"]))["is_taken"] is True
+    new_slot = await world.slot(updated["booked_slot_id"])
+    assert new_slot["is_taken"] is True
+    # PRO-45: both stored times move with the booking, not only the slot id.
+    # Stored as naive UTC: compute the Israel wall clock independently of the
+    # process TZ, so the assertion cannot share the bug it guards against.
+    new_time = (
+        new_slot["start_time"]
+        .replace(tzinfo=timezone.utc)
+        .astimezone(IL_TZ)
+        .strftime("%d/%m/%Y %H:%M")
+    )
+    assert updated["appointment_datetime"] == new_slot["start_time"]
+    assert updated["appointment_time"] == new_time
+    assert updated["appointment_time"] != lead["appointment_time"]
     world.recorder.assert_text_to(
-        world.customer, static_prefix(Messages.Customer.RESCHEDULE_SUCCESS)
+        world.customer, Messages.Customer.RESCHEDULE_SUCCESS.format(new_time=new_time)
     )
     world.recorder.assert_text_to(
         world.pro_chat(R.PRO_PRIMARY),
         static_prefix(Messages.Pro.CUSTOMER_RESCHEDULED_SUCCESS),
     )
     await world.assert_state(UserStates.IDLE)
+
+
+async def _open_reschedule_picker(world):
+    """A BOOKED job, then the customer's reschedule phrase: the numbered list."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    lead = await world.booked_job(pro)
+    world.recorder.clear()
+    await world.send("אני צריך מועד אחר")
+    await world.assert_state(UserStates.AWAITING_RESCHEDULE_TIME)
+    world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.RESCHEDULE_OFFER)
+    )
+    mapping = (await world.metadata())["reschedule_slots_context"]
+    return pro, lead, mapping
+
+
+@pytest.mark.asyncio
+async def test_reschedule_picker_has_a_short_ttl(world):
+    """The list names slots other customers can take; a pick hours later must not
+    count. The picker lives RESCHEDULE_PICK_TTL_SECONDS, not the 4h default."""
+    await _open_reschedule_picker(world)
+    ttl = await world.state_ttl()
+    assert 0 < ttl <= WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_reschedule_slot_taken_meanwhile_offers_a_fresh_list(world):
+    """A listed slot taken by someone else before the customer picks it gets a
+    rebuilt list, not "pick a number from the list" pointing at the same dead
+    slot; a pick from the new list then moves the booking."""
+    pro, lead, mapping = await _open_reschedule_picker(world)
+    old_slot_id = lead["booked_slot_id"]
+    lost_slot_id = ObjectId(mapping["1"])
+    # Another customer takes slot 1 between the list going out and the pick.
+    await world.db.slots.update_one({"_id": lost_slot_id}, {"$set": {"is_taken": True}})
+    world.recorder.clear()
+
+    await world.send("1")
+
+    fresh = world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.RESCHEDULE_SLOT_TAKEN)
+    )
+    assert Messages.Customer.RESCHEDULE_INVALID_CHOICE not in fresh.body
+    assert "1." in fresh.body and "ביטול" in fresh.body
+    await world.assert_state(UserStates.AWAITING_RESCHEDULE_TIME)
+    assert 0 < await world.state_ttl() <= WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS
+    new_mapping = (await world.metadata())["reschedule_slots_context"]
+    assert new_mapping and str(lost_slot_id) not in new_mapping.values()
+    free_ids = {
+        str(s["_id"])
+        async for s in world.db.slots.find({"pro_id": pro["_id"], "is_taken": False})
+    }
+    assert set(new_mapping.values()) == free_ids
+    # Nothing moved yet.
+    unchanged = await world.lead_by_id(lead["_id"])
+    assert unchanged["booked_slot_id"] == old_slot_id
+    assert unchanged.get("rescheduled_count") is None
+
+    world.recorder.clear()
+    await world.send("1")
+
+    updated = await world.lead_by_id(lead["_id"])
+    assert updated["booked_slot_id"] == ObjectId(new_mapping["1"])
+    assert updated["rescheduled_count"] == 1
+    assert updated["status"] == LeadStatus.BOOKED
+    assert (await world.slot(old_slot_id))["is_taken"] is False
+    assert (await world.slot(lost_slot_id))["is_taken"] is True
+    new_slot = await world.slot(updated["booked_slot_id"])
+    assert new_slot["is_taken"] is True
+    new_time = (
+        new_slot["start_time"]
+        .replace(tzinfo=timezone.utc)
+        .astimezone(IL_TZ)
+        .strftime("%d/%m/%Y %H:%M")
+    )
+    assert updated["appointment_datetime"] == new_slot["start_time"]
+    assert updated["appointment_time"] == new_time
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.RESCHEDULE_SUCCESS.format(new_time=new_time)
+    )
+    await world.assert_state(UserStates.IDLE)
+
+
+@pytest.mark.asyncio
+async def test_reschedule_every_slot_taken_meanwhile_closes_the_picker(world):
+    """Every listed slot gone and nothing else free: say so, close the picker,
+    and leave the booking exactly as it was."""
+    pro, lead, mapping = await _open_reschedule_picker(world)
+    old_slot_id = lead["booked_slot_id"]
+    await world.db.slots.update_many(
+        {"pro_id": pro["_id"], "is_taken": False}, {"$set": {"is_taken": True}}
+    )
+    world.recorder.clear()
+
+    await world.send("2")
+
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.RESCHEDULE_SLOT_TAKEN_NO_SLOTS
+    )
+    await world.assert_state(UserStates.IDLE)
+    kept = await world.lead_by_id(lead["_id"])
+    assert kept["status"] == LeadStatus.BOOKED
+    assert kept["booked_slot_id"] == old_slot_id
+    assert kept["appointment_time"] == lead["appointment_time"]
+    assert kept.get("rescheduled_count") is None
+    assert (await world.slot(old_slot_id))["is_taken"] is True
+
+
+@pytest.mark.asyncio
+async def test_reschedule_number_not_on_the_list_names_the_exit(world):
+    _, lead, mapping = await _open_reschedule_picker(world)
+    assert "9" not in mapping
+    world.recorder.clear()
+
+    await world.send("9")
+
+    reply = world.recorder.assert_text_to(
+        world.customer, Messages.Customer.RESCHEDULE_INVALID_CHOICE
+    )
+    assert "ביטול" in reply.body
+    await world.assert_state(UserStates.AWAITING_RESCHEDULE_TIME)
+    assert (await world.metadata())["reschedule_slots_context"] == mapping
+
+    # The exit it names keeps the current time.
+    world.recorder.clear()
+    await world.send("ביטול")
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.RESCHEDULE_CANCELLED
+    )
+    await world.assert_state(UserStates.IDLE)
+    kept = await world.lead_by_id(lead["_id"])
+    assert kept["booked_slot_id"] == lead["booked_slot_id"]
+
+
+@pytest.mark.asyncio
+async def test_repeating_the_reschedule_phrase_resends_the_list(world):
+    """Inside the picker, the phrase that opened it sends the list again rather
+    than "pick a number from the list"."""
+    pro, _, _ = await _open_reschedule_picker(world)
+    # One listed slot went meanwhile: the list sent again is the current one.
+    gone = await world.db.slots.find_one({"pro_id": pro["_id"], "is_taken": False})
+    await world.db.slots.update_one({"_id": gone["_id"]}, {"$set": {"is_taken": True}})
+    world.recorder.clear()
+
+    await world.send("אפשר מועד אחר?")
+
+    again = world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.RESCHEDULE_OFFER)
+    )
+    assert Messages.Customer.RESCHEDULE_INVALID_CHOICE not in again.body
+    await world.assert_state(UserStates.AWAITING_RESCHEDULE_TIME)
+    assert (
+        str(gone["_id"])
+        not in (await world.metadata())["reschedule_slots_context"].values()
+    )
 
 
 # ===========================================================================
@@ -990,6 +1358,8 @@ async def test_pro_self_service_onboarding(world):
     assert created["service_areas"] == ["תל אביב", "רמת גן"]
     assert created["is_active"] is False
     assert created["pending_approval"] is True
+    # PRO-60: signing up by chat verifies nothing — only the operator does.
+    assert not created.get("is_verified")
     # Awaiting approval means invisible to routing.
     assert created["location"]["coordinates"] == [34.7818, 32.0853]
     await world.assert_state(UserStates.IDLE, chat_id=applicant)
@@ -1335,6 +1705,50 @@ async def test_deal_marker_never_leaks_to_the_customer(world):
     world.recorder.assert_text_to(world.customer, "קבענו למחר")
     # is_deal closed it; the marker played no part.
     assert (await world.lead())["status"] == LeadStatus.NEW
+
+
+@pytest.mark.asyncio
+async def test_a_deal_with_no_quoted_price_shows_no_price_line_to_either_side(world):
+    """PRO-55: the price line is optional on both sides. A deal the model closed
+    without quoting a price puts no estimate, and no stray "₪", in the pro's
+    approval request or in the customer's pro-found message."""
+    await world.standard_cast()
+    pro = world.pros[R.PRO_PRIMARY]
+    pro_chat = world.pro_chat(R.PRO_PRIMARY)
+    world.ai.script(
+        reply("מאתר איש מקצוע.", city="תל אביב", issue="נזילה"),
+        deal(
+            "מעולה, קבענו למחר ב-10:00!",
+            city="תל אביב",
+            issue="נזילה",
+            street="דיזנגוף",
+            street_number="50",
+            floor="3",
+            apartment="12",
+            appointment_time="מחר ב-10:00",
+        ),
+    )
+
+    await world.send("יש לי נזילה בתל אביב, דיזנגוף 50 קומה 3 דירה 12, מחר ב-10")
+
+    lead = await world.lead()
+    assert lead["status"] == LeadStatus.NEW
+    assert not lead.get("quoted_price")
+    approval = world.recorder.assert_text_to(
+        pro_chat, static_prefix(Messages.Pro.APPROVAL_REQUEST), "מחר ב-10:00"
+    )
+    assert static_prefix(Messages.Pro.APPROVAL_PRICE_LINE) not in approval.body
+    assert "₪" not in approval.body
+
+    world.recorder.clear()
+    await world.send("אשר", chat_id=pro_chat)
+
+    assert (await world.lead())["status"] == LeadStatus.BOOKED
+    found = world.recorder.assert_text_to(
+        world.customer, static_prefix(Messages.Customer.PRO_FOUND), pro["business_name"]
+    )
+    assert static_prefix(Messages.Customer.QUOTED_PRICE_LINE) not in found.body
+    assert "₪" not in found.body
 
 
 @pytest.mark.asyncio

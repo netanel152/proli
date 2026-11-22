@@ -21,6 +21,7 @@ from app.providers.whatsapp import get_whatsapp, record_account_state
 from app.providers.whatsapp import quality, template_registry
 from app.providers.whatsapp.facade import _PAUSE_KEY
 from app.services import matching_service
+from app.services.customer_flow import resume_lapsed_cancel_prompt
 from app.services.notification_service import (
     send_oncall_alert,
     issue_param,
@@ -380,6 +381,9 @@ async def reassign_lead(
                 "completion_check_sent_count": "",
                 "offer_withheld_details": "",
                 "admin_offer_undelivered_at": "",
+                # Says the *booking* holds no slot; the next approval decides
+                # it afresh for the new pro.
+                "slot_unreserved": "",
             },
             # PRO-281: status, owner and count as read — see _as_read.
             extra_filter=as_read,
@@ -1205,7 +1209,12 @@ async def check_pro_approval_sla():
     for lead in leads:
         try:
             chat_id = lead["chat_id"]
-            customer_state = await StateManager.get_state(chat_id)
+            # A cancel prompt the customer left unanswered parks them in IDLE
+            # once it lapses; this gives AWAITING_PRO_APPROVAL back first, so
+            # an offer the customer chose to keep is still chased.
+            customer_state = await resume_lapsed_cancel_prompt(
+                chat_id, await StateManager.get_state(chat_id), StateManager
+            )
 
             # PRO-212: a pro the admin deactivated can't answer this offer, so don't
             # wait for them. Moving it messages the customer, hence the PRO-73 gate.
@@ -1342,72 +1351,130 @@ async def check_pro_approval_sla():
             logger.error(f"❌ [Approval SLA] Error on lead {lead.get('_id')}: {e}")
 
 
+_SLA_PAUSABLE_STATUSES = (LeadStatus.CONTACTED, LeadStatus.NEW, LeadStatus.BOOKED)
+
+
+async def _release_paused_lead(lead: dict, **extra) -> bool:
+    """Claim one lapsed pause: clear ``is_paused`` only if it still carries the
+    ``paused_at`` this run read. A refreshed pause (the customer wrote again, the
+    pro paused again) or another replica's claim leaves it untouched."""
+    claimed = await leads_collection.update_one(
+        {"_id": lead["_id"], "is_paused": True, "paused_at": lead["paused_at"]},
+        {"$set": {"is_paused": False, **extra}},
+    )
+    return claimed.modified_count == 1
+
+
 async def check_sla_deflection():
     """
-    SLA MONITOR:
-    Finds leads where bot is paused for human, checks if it's been silent for 15 mins.
+    SLA MONITOR: ends a human handoff nobody picked up within ``PAUSE_TTL_SECONDS``.
+
+    The lead's own ``is_paused`` + ``paused_at`` are the source of truth. The
+    Redis ``state:`` key carries the same TTL and is always written before
+    ``paused_at``, so by the time a lead qualifies the key has normally expired:
+    reading "state is not PAUSED_FOR_HUMAN" as "somebody resumed the chat" meant
+    the deflection never fired. Per chat:
+
+    * The chat's handoff ends when its *youngest* pause ends. While any lead of
+      the chat still has a ``paused_at`` inside the window (a second SOS, a pro
+      pause, a refreshed TTL), the job touches nothing on that chat: no message,
+      no flag cleared and no FSM write, so the live handoff keeps running. Its
+      lapsed leads are released together with it once it lapses too.
+    * State ``PAUSED_FOR_HUMAN``, or no state / IDLE (the pause simply lapsed):
+      deflect. Every lapsed lead is claimed and marked ``sla_deflected``, the
+      pause state (if still there) is cleared, and the customer gets one message.
+    * Any other state: the customer has moved on into another flow, so only the
+      flags are cleared; their state and their chat are left alone.
+
+    Idempotency: each lead is claimed conditionally on the ``paused_at`` this run
+    read (``_release_paused_lead``), and the message goes out only from the run
+    that claimed the chat's youngest lapsed lead, so two replicas never both send.
     """
     logger.info("🕵️ [SLA Monitor] Checking for silent human handoffs...")
 
-    # We use WorkerConstants.PAUSE_TTL_SECONDS as the inactivity threshold (currently 900s / 15m)
     threshold_time = datetime.now(timezone.utc) - timedelta(
         seconds=WorkerConstants.PAUSE_TTL_SECONDS
     )
-
-    # Find leads that are paused and haven't had activity for the threshold time
-    query = {
-        "is_paused": True,
-        "paused_at": {"$lt": threshold_time},
-        "status": {"$in": [LeadStatus.NEW, LeadStatus.BOOKED]},
-    }
+    statuses = {"$in": list(_SLA_PAUSABLE_STATUSES)}
 
     try:
-        cursor = leads_collection.find(query)
+        cursor = leads_collection.find(
+            {
+                "is_paused": True,
+                "paused_at": {"$lt": threshold_time},
+                "status": statuses,
+            }
+        )
         paused_leads = await cursor.to_list(length=WorkerConstants.DB_QUERY_LIMIT)
 
         if not paused_leads:
             logger.info("✅ [SLA Monitor] No silent handoffs found.")
             return
 
+        by_chat: dict[str, list[dict]] = {}
         for lead in paused_leads:
-            chat_id = lead["chat_id"]
+            if lead.get("chat_id"):
+                by_chat.setdefault(lead["chat_id"], []).append(lead)
 
-            # Double check with Redis state
-            state = await StateManager.get_state(chat_id)
-            if state != UserStates.PAUSED_FOR_HUMAN:
-                # State already cleared or changed, just cleanup the DB flag
-                await leads_collection.update_one(
-                    {"_id": lead["_id"]}, {"$set": {"is_paused": False}}
+        for chat_id, lapsed in by_chat.items():
+            try:
+                live = await leads_collection.find_one(
+                    {
+                        "chat_id": chat_id,
+                        "is_paused": True,
+                        "paused_at": {"$gte": threshold_time},
+                        "status": statuses,
+                    }
                 )
-                continue
+                if live:
+                    logger.info(
+                        f"⏳ [SLA Monitor] {mask_chat_id(chat_id)} still has a live "
+                        f"handoff on lead {live['_id']}; leaving the chat alone."
+                    )
+                    continue
 
-            # It's been 15 mins of silence. Trigger deflection.
-            logger.warning(
-                f"⏰ [SLA Monitor] SLA exceeded for {mask_chat_id(chat_id)} "
-                f"on lead {lead['_id']}. Deflecting to phone check."
-            )
+                # Youngest first: its claim is the one that decides the send.
+                lapsed.sort(key=lambda lead: lead["paused_at"], reverse=True)
+                state = await StateManager.get_state(chat_id)
 
-            # 1. Clear state
-            await StateManager.clear_state(chat_id)
+                if state not in (UserStates.PAUSED_FOR_HUMAN, UserStates.IDLE):
+                    for lead in lapsed:
+                        await _release_paused_lead(lead)
+                    logger.info(
+                        f"[SLA Monitor] {mask_chat_id(chat_id)} moved on to {state}; "
+                        f"cleared the lapsed pause without a deflection."
+                    )
+                    continue
 
-            # 2. Update lead doc
-            await leads_collection.update_one(
-                {"_id": lead["_id"]},
-                {"$set": {"is_paused": False, "sla_deflected": True}},
-            )
+                deflected = {
+                    "sla_deflected": True,
+                    "sla_deflected_at": datetime.now(timezone.utc),
+                }
+                if not await _release_paused_lead(lapsed[0], **deflected):
+                    continue  # re-paused since the read, or another replica has it
+                for lead in lapsed[1:]:
+                    await _release_paused_lead(lead, **deflected)
 
-            # 3. Send Deflection Message. PRO-232: untemplated on purpose, so a
-            # customer whose window has closed is not an operator page.
-            await whatsapp.send_message(
-                chat_id,
-                Messages.Customer.SLA_DEFLECTION_MESSAGE,
-                untemplated="SLA deflection",
-            )
+                logger.warning(
+                    f"⏰ [SLA Monitor] SLA exceeded for {mask_chat_id(chat_id)} "
+                    f"on lead {lapsed[0]['_id']}. Deflecting back to the bot."
+                )
+                if state == UserStates.PAUSED_FOR_HUMAN:
+                    await StateManager.clear_state(chat_id)
 
-            logger.info(
-                f"✅ [SLA Monitor] Deflected customer {mask_chat_id(chat_id)} "
-                f"on lead {lead['_id']} after inactivity."
-            )
+                # PRO-232: untemplated on purpose, so a customer whose window
+                # has closed is not an operator page.
+                await whatsapp.send_message(
+                    chat_id,
+                    Messages.Customer.SLA_DEFLECTION_MESSAGE,
+                    untemplated="SLA deflection",
+                )
+                logger.info(
+                    f"✅ [SLA Monitor] Deflected customer {mask_chat_id(chat_id)} "
+                    f"on lead {lapsed[0]['_id']} after inactivity."
+                )
+            except Exception as e:
+                logger.error(f"❌ [SLA Monitor] Error on {mask_chat_id(chat_id)}: {e}")
 
     except Exception as e:
         logger.error(f"❌ [SLA Monitor] Error: {e}")

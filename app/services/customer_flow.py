@@ -7,12 +7,18 @@ from app.core.database import (
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.text_matching import contains_keyword, is_emergency_text
-from app.core.constants import LeadStatus, Defaults, Actor, WorkerConstants
+from app.core.constants import (
+    LeadStatus,
+    Defaults,
+    Actor,
+    UserStates,
+    WorkerConstants,
+)
 from app.core.phone import mask_chat_id, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.providers.whatsapp import template_registry
 from app.services.notification_service import page_operator
-from app.services.scheduling_service import record_no_show
+from app.services.scheduling_service import get_available_slots, record_no_show
 from app.services.matching_service import overlapping_taken_slot
 from app.services.context_manager_service import ContextManager
 from app.services.state_manager_service import StateManager
@@ -21,7 +27,7 @@ from datetime import datetime, timedelta, timezone
 import pytz
 import re
 
-from app.core.datetime_utils import IL_TZ as _IL_TZ
+from app.core.datetime_utils import IL_TZ as _IL_TZ, stored_utc_to_il
 
 
 def completion_check_due_filter(now_utc: datetime | None = None) -> dict:
@@ -220,8 +226,8 @@ async def _handle_no_show_report(
     unset, so it would arm every stray "3" from that chat for the life of the
     booking. That is exactly the trap PRO-122 closed for the rating prompt with
     ``RATING_PROMPT_MAX_AGE_HOURS``, and it bites harder here: a "3" typed
-    during free-text intake, into an ``AWAITING_RESCHEDULE_TIME`` menu whose 4h
-    state TTL has lapsed, or after the loyalty guard's double-miss release, all
+    during free-text intake, into an ``AWAITING_RESCHEDULE_TIME`` menu whose
+    10-minute state TTL has lapsed, or after the loyalty guard's double-miss release, all
     reach this handler.
 
     The written forms are unprompted, so they need the appointment to have
@@ -403,6 +409,206 @@ async def _rating_pending(chat_id: str) -> bool:
             {"chat_id": chat_id, **rating_prompt_open_filter()}, {"_id": 1}
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Cancelling a request that is still waiting for the pro's approval.
+#
+# A NEW lead is offered to a pro, and the customer parks in AWAITING_PRO_APPROVAL
+# for up to PRO_APPROVAL_TTL_SECONDS. A cancel keyword there used to get
+# STILL_WAITING, and after the state lapsed it reached the AI, so nothing could
+# withdraw the offer and a later אשר sent the pro the customer's phone. The ask
+# reuses PRO-118's AWAITING_CANCEL_CONFIRMATION (the guard chain arms it), and
+# these helpers carry the NEW-lead half of the answer. The metadata keys below
+# sit beside PRO-118's `cancel_confirm_lead_id`; `cancel_confirm_kind` is what
+# tells the two prompts apart.
+# ---------------------------------------------------------------------------
+
+CANCEL_KIND_NEW = "new"
+_CANCEL_NEW_META_KEYS = (
+    "cancel_confirm_lead_id",
+    "cancel_confirm_kind",
+    "cancel_confirm_pro_id",
+    "cancel_confirm_resume_state",
+    "cancel_confirm_resume_until",
+)
+
+
+def offered_lead_filter(chat_id: str) -> dict:
+    """A request with a pro and awaiting their approval: NEW, with a pro on it."""
+    return {"chat_id": chat_id, "status": LeadStatus.NEW, "pro_id": {"$ne": None}}
+
+
+async def find_offered_lead(chat_id: str):
+    """The newest request of this chat that a pro has been offered."""
+    return await leads_collection.find_one(
+        offered_lead_filter(chat_id), sort=[("created_at", -1)]
+    )
+
+
+def _still_offered(lead, pro_id) -> bool:
+    return bool(
+        lead
+        and lead.get("status") == LeadStatus.NEW
+        and pro_id
+        and str(lead.get("pro_id")) == str(pro_id)
+    )
+
+
+def approval_wait_left(meta: dict, now: datetime | None = None) -> int | None:
+    """Seconds of AWAITING_PRO_APPROVAL the cancel prompt interrupted, if any."""
+    until = meta.get("cancel_confirm_resume_until")
+    if meta.get(
+        "cancel_confirm_resume_state"
+    ) != UserStates.AWAITING_PRO_APPROVAL.value or not isinstance(until, (int, float)):
+        return None
+    left = int(until - (now or datetime.now(timezone.utc)).timestamp())
+    return left if left > 0 else None
+
+
+async def _cancel_prompt_lead(meta: dict):
+    try:
+        lead_oid = ObjectId(meta.get("cancel_confirm_lead_id"))
+    except Exception:
+        return None
+    return await leads_collection.find_one({"_id": lead_oid})
+
+
+async def resume_lapsed_cancel_prompt(chat_id: str, state, state_manager):
+    """Put AWAITING_PRO_APPROVAL back once an unanswered NEW-lead cancel prompt lapsed.
+
+    The prompt overwrites the approval state for CANCEL_CONFIRM_TTL_SECONDS, and
+    Redis can only drop a key when it expires, so a customer who never answered
+    would come back as IDLE: the soft hold no longer answers them and the PRO-56
+    approval SLA skips them. Called wherever that state is read for a decision
+    (the dispatcher, before the guard chain; the SLA, per lead). Restores only
+    what was left of the approval window, and only while the lead is still NEW
+    with the pro it was offered to. Returns the state to act on.
+    """
+    if state not in (None, UserStates.IDLE):
+        return state
+    try:
+        meta = await state_manager.get_metadata(chat_id)
+        if not isinstance(meta, dict) or meta.get("cancel_confirm_kind") != (
+            CANCEL_KIND_NEW
+        ):
+            return state
+        left = approval_wait_left(meta)
+        pro_id = meta.get("cancel_confirm_pro_id")
+        lead = await _cancel_prompt_lead(meta) if left else None
+        for key in _CANCEL_NEW_META_KEYS:
+            meta.pop(key, None)
+        await state_manager.set_metadata(chat_id, meta)
+        if left and _still_offered(lead, pro_id):
+            await state_manager.set_state(
+                chat_id, UserStates.AWAITING_PRO_APPROVAL, ttl=left
+            )
+            logger.info(
+                f"Cancel prompt lapsed for {mask_chat_id(chat_id)}: back to "
+                f"AWAITING_PRO_APPROVAL for {left}s"
+            )
+            return UserStates.AWAITING_PRO_APPROVAL
+    except Exception as e:
+        logger.error(
+            f"Could not resume {mask_chat_id(chat_id)} after a lapsed cancel prompt: {e}"
+        )
+    return state
+
+
+async def keep_offered_request(chat_id: str, meta: dict, whatsapp, state_manager):
+    """The customer did not confirm: the offer stays, and so does the wait."""
+    lead = await _cancel_prompt_lead(meta)
+    left = approval_wait_left(meta)
+    if left and _still_offered(lead, meta.get("cancel_confirm_pro_id")):
+        await state_manager.set_state(
+            chat_id, UserStates.AWAITING_PRO_APPROVAL, ttl=left
+        )
+    if lead and lead.get("status") == LeadStatus.BOOKED:
+        # The pro approved while the prompt was open.
+        await whatsapp.send_message(chat_id, Messages.Customer.CANCEL_ABORTED)
+        return
+    await whatsapp.send_message(chat_id, Messages.Customer.CANCEL_REQUEST_KEPT)
+
+
+async def withdraw_offered_request(chat_id: str, meta: dict, whatsapp, state_manager):
+    """The customer confirmed: NEW → CANCELLED, unless the pro got there first.
+
+    The write pins the status and the pro the prompt was armed for, so a pro who
+    approved in between keeps the job (PRO-123's rule, from the other side), and
+    a reassignment is not cancelled under a pro the customer was never asked
+    about. Only a won write tells the pro, and never with a contact detail.
+    """
+    try:
+        lead_oid = ObjectId(meta.get("cancel_confirm_lead_id"))
+        pro_oid = ObjectId(meta.get("cancel_confirm_pro_id"))
+    except Exception:
+        await whatsapp.send_message(chat_id, Messages.Customer.CANCEL_NO_ACTIVE)
+        return
+    cancelled = await set_lead_status(
+        lead_oid,
+        LeadStatus.CANCELLED,
+        Actor.CUSTOMER,
+        extra_set={
+            "cancelled_at": datetime.now(timezone.utc),
+            "cancel_reason": "customer_requested",
+        },
+        expected_status=LeadStatus.NEW,
+        expected_pro_id=pro_oid,
+    )
+    if cancelled is None:
+        lead = await leads_collection.find_one({"_id": lead_oid})
+        status = (lead or {}).get("status")
+        if status == LeadStatus.BOOKED:
+            reply = Messages.Customer.CANCEL_REQUEST_ALREADY_BOOKED
+        elif status == LeadStatus.NEW and lead.get("pro_id"):
+            # Offered to someone else meanwhile: still waiting, just not on the
+            # pro this answer was about.
+            await state_manager.set_state(
+                chat_id,
+                UserStates.AWAITING_PRO_APPROVAL,
+                ttl=WorkerConstants.PRO_APPROVAL_TTL_SECONDS,
+            )
+            reply = Messages.Customer.CANCEL_REQUEST_MOVED
+        else:
+            reply = Messages.Customer.CANCEL_NO_ACTIVE
+        logger.info(
+            f"Customer {mask_chat_id(chat_id)} confirmed cancelling lead {lead_oid}, "
+            f"which had moved on (status={status}): nothing cancelled"
+        )
+        await whatsapp.send_message(chat_id, reply)
+        return
+
+    await ContextManager.clear_context(chat_id)
+    await whatsapp.send_message(chat_id, Messages.Customer.REQUEST_WITHDRAWN)
+    logger.info(
+        f"Customer {mask_chat_id(chat_id)} withdrew lead {lead_oid} before pro "
+        f"{pro_oid} approved it"
+    )
+    pro = await users_collection.find_one({"_id": pro_oid})
+    if not (pro and pro.get("phone_number")):
+        return
+    # CANCELLED is written: a failed notice must not crash the task, or ARQ's
+    # retry would answer the customer CANCEL_NO_ACTIVE.
+    try:
+        await whatsapp.send_message(
+            to_chat_id(pro["phone_number"]),
+            Messages.Pro.CUSTOMER_WITHDREW_OFFER.format(
+                issue_type=cancelled.get("issue_type")
+                or Messages.Fallbacks.ISSUE_UNKNOWN
+            ),
+            # The pro's window is often closed: the offer itself was a template.
+            # This one's params are the name and the street address the offer
+            # already showed, never the phone (PRO-59).
+            template_key="customer_cancelled",
+            params={
+                "customer_name": cancelled.get("customer_name")
+                or Messages.Fallbacks.CUSTOMER_NAME,
+                "full_address": cancelled.get("full_address")
+                or Messages.Fallbacks.UNKNOWN,
+            },
+        )
+    except Exception as e:
+        logger.error(f"Pro not told lead {lead_oid} was withdrawn: {e}")
 
 
 # PRO-238: the statuses after which a reassign-offer reply has nothing to act on.
@@ -939,12 +1145,99 @@ async def handle_customer_review_comment(chat_id: str, text: str):
     return Messages.Customer.REVIEW_SAVED
 
 
+# How many of the pro's next free slots the reschedule list offers.
+RESCHEDULE_LIST_LIMIT = 8
+
+
+async def offer_reschedule_slots(
+    chat_id: str,
+    pro_id,
+    whatsapp,
+    state_manager,
+    message: str,
+    exclude_ids=(),
+) -> bool:
+    """Send the numbered list of ``pro_id``'s free slots and arm the picker.
+
+    The one place the reschedule list is built: the BOOKED interceptor's first
+    offer (``RESCHEDULE_OFFER``), a repeated reschedule phrase, and the rebuilt
+    list after a listed slot was taken meanwhile (``RESCHEDULE_SLOT_TAKEN``).
+    ``message`` takes the rendered list as ``{slots}``. The state is armed with
+    ``RESCHEDULE_PICK_TTL_SECONDS`` and the number → slot mapping is stored as
+    ``reschedule_slots_context``, replacing any earlier one. ``exclude_ids`` drops
+    slots the caller knows cannot be claimed (one that failed the overlap check
+    stays ``is_taken: False``, so the query alone would list it again).
+
+    Returns False, sending nothing and leaving the state alone, when there is
+    no free slot to offer.
+    """
+    excluded = {str(i) for i in exclude_ids}
+    available_slots = [
+        slot
+        for slot in await get_available_slots(str(pro_id), limit=RESCHEDULE_LIST_LIMIT)
+        if str(slot["_id"]) not in excluded
+    ]
+    if not available_slots:
+        return False
+
+    lines = []
+    slots_context = {}
+    for i, slot in enumerate(available_slots, 1):
+        label = stored_utc_to_il(slot["start_time"]).strftime("%d/%m/%Y %H:%M")
+        lines.append(f"{i}. {label}")
+        slots_context[str(i)] = str(slot["_id"])
+
+    await state_manager.set_state(
+        chat_id,
+        UserStates.AWAITING_RESCHEDULE_TIME,
+        ttl=WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS,
+    )
+    await state_manager.set_metadata(
+        chat_id, {"reschedule_slots_context": slots_context}
+    )
+    await whatsapp.send_message(chat_id, message.format(slots="\n".join(lines)))
+    return True
+
+
+async def _booked_lead_for(chat_id: str):
+    return await leads_collection.find_one(
+        {"chat_id": chat_id, "status": LeadStatus.BOOKED},
+        sort=[("created_at", -1)],
+    )
+
+
 async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) -> None:
+    """The customer's answer to the reschedule slot list (AWAITING_RESCHEDULE_TIME).
+
+    ``ביטול`` (any cancel keyword) keeps the current time and closes the list. A
+    repeated reschedule phrase sends the list again, rebuilt. A number not on the
+    list re-prompts, naming the exit. A listed slot taken meanwhile gets a fresh
+    list (``RESCHEDULE_SLOT_TAKEN``) rather than the invalid-choice line, or,
+    with nothing free left, ``RESCHEDULE_SLOT_TAKEN_NO_SLOTS`` and the list closes.
+    The booking is never touched until a new slot is actually claimed.
+    """
     normalized = user_text.strip().lower()
 
     if contains_keyword(normalized, Messages.Keywords.CANCEL_KEYWORDS):
         await StateManager.clear_state(chat_id)
         await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_CANCELLED)
+        return
+
+    if contains_keyword(normalized, Messages.Keywords.RESCHEDULE_KEYWORDS):
+        lead = await _booked_lead_for(chat_id)
+        if not (lead and lead.get("pro_id")):
+            await StateManager.clear_state(chat_id)
+            await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS)
+            return
+        if not await offer_reschedule_slots(
+            chat_id,
+            lead["pro_id"],
+            whatsapp,
+            StateManager,
+            Messages.Customer.RESCHEDULE_OFFER,
+        ):
+            await StateManager.clear_state(chat_id)
+            await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS)
         return
 
     meta = await StateManager.get_metadata(chat_id)
@@ -959,10 +1252,7 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
 
     slot_id = ObjectId(slots_context[pick])
 
-    lead = await leads_collection.find_one(
-        {"chat_id": chat_id, "status": LeadStatus.BOOKED},
-        sort=[("created_at", -1)],
-    )
+    lead = await _booked_lead_for(chat_id)
     if not lead:
         await StateManager.clear_state(chat_id)
         await whatsapp.send_message(chat_id, Messages.Errors.GENERIC_ERROR)
@@ -987,10 +1277,26 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         )
         chosen_slot = None
     if not chosen_slot:
-        await whatsapp.send_message(
-            chat_id, Messages.Customer.RESCHEDULE_INVALID_CHOICE
+        # Taken by someone else since the list went out. The number was valid,
+        # so answering "pick a number from the list" again would point at the
+        # same dead slot: rebuild the list from what is free now instead.
+        logger.info(
+            f"Reschedule pick {pick} for {mask_chat_id(chat_id)} lost slot {slot_id}; "
+            "sending a fresh list"
         )
-        return  # state preserved — let customer retry
+        if not lead.get("pro_id") or not await offer_reschedule_slots(
+            chat_id,
+            lead["pro_id"],
+            whatsapp,
+            StateManager,
+            Messages.Customer.RESCHEDULE_SLOT_TAKEN,
+            exclude_ids=[slot_id],
+        ):
+            await StateManager.clear_state(chat_id)
+            await whatsapp.send_message(
+                chat_id, Messages.Customer.RESCHEDULE_SLOT_TAKEN_NO_SLOTS
+            )
+        return
 
     # Free previously booked slot if we have a reference to it
     if old_slot_id:
@@ -1000,7 +1306,7 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         )
 
     old_time = lead.get("appointment_time", "לא ידוע")
-    new_time = chosen_slot["start_time"].astimezone(_IL_TZ).strftime("%d/%m/%Y %H:%M")
+    new_time = stored_utc_to_il(chosen_slot["start_time"]).strftime("%d/%m/%Y %H:%M")
 
     await leads_collection.update_one(
         {"_id": lead["_id"]},
@@ -1016,7 +1322,9 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
                 "booked_slot_id": slot_id,
                 "rescheduled_at": datetime.now(timezone.utc),
                 "rescheduled_count": lead.get("rescheduled_count", 0) + 1,
-            }
+            },
+            # The lead holds a slot now, whatever its approval reserved.
+            "$unset": {"slot_unreserved": ""},
         },
     )
 

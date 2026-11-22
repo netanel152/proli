@@ -54,7 +54,7 @@ Customer (WhatsApp)
 | Stale monitor | Every 30 min | Remind pros (4–6 h), check customers (6–24 h), flag >24 h for admin |
 | Stale Lead Nudger | Every 4 h | Remind pros of booked leads > 24h old to close them |
 | SOS Healer | Every 10 min | Reassign leads stuck > 60 min; escalate to `PENDING_ADMIN_REVIEW` if no replacement. PRO-73: gated to business hours (08:00–21:00 IL) + `sos_healer_active` toggle (default OFF) |
-| SLA Monitor | Every 5 min | Wake up silent `PAUSED_FOR_HUMAN` chats after 15m; offer phone call. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default OFF) |
+| SLA Monitor | Every 5 min | Deflect a human handoff nobody picked up within 15m (a paused CONTACTED/NEW/BOOKED lead, read from `paused_at`); no phone call is booked. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default ON) |
 | Pro-Approval SLA | Every 5 min | Nudge a silent pro at T+10m, then offer the customer a reassignment at T+25m (half thresholds for emergency leads); the customer-facing reassignment offer is gated to business hours (PRO-73) — the pro nudge is not |
 | SOS Reporter | Every 4 h | Page operator (`page_operator`, not WhatsApp) once per newly-stuck lead; muted for `SOS_REPORT_REPAGE_HOURS` (24h) after paging |
 | Lead Janitor | Every 6 h | Auto-reject `CONTACTED` leads with no assigned pro after 24 h. PRO-73: gated to business hours (08:00–21:00 IL) + `lead_janitor_active` toggle (default OFF) |
@@ -106,7 +106,8 @@ process_incoming_message(chat_id, text, media_url, message_id)
         │            list PENDING_ADMIN_REVIEW leads → select lead
         │            → self-assign OR list candidate pros → assign
         │
-        ├─ Reset keyword? → clear state + context, silently (no confirmation message)
+        ├─ Reset keyword? → clear state + context, silently (no confirmation message),
+        │  unless a request is still with a pro: RESET_REQUEST_STILL_OPEN says so and how to cancel
         │
         ├─ Help keyword ("תפריט"/"עזרה", non-pro)? → send HELP_INFO, leave state intact
         │
@@ -147,6 +148,8 @@ process_incoming_message(chat_id, text, media_url, message_id)
         ├─ State == AWAITING_PRO_APPROVAL?
         │      └─ registered pro + PRO_ONLY_KEYWORDS? → fall through (soft-hold escape:
         │         a pro-as-customer parks here up to 1h and must still run their business)
+        │      └─ cancel keyword + an offered NEW lead? → ask to confirm the
+        │         withdrawal (AWAITING_CANCEL_CONFIRMATION, 300 s), return
         │      └─ otherwise send STILL_WAITING, return
         │
         ├─ State == PRO_MODE, or a prompt pro_flow itself is holding open
@@ -312,10 +315,10 @@ Redis-backed FSM per `chat_id`. Default TTL: 4 hours. `PAUSED_FOR_HUMAN` uses a 
 | `PRO_SELECTING_JOB_TO_RESUME` | Pro has multiple paused chats and is picking which one *המשך* resumes (PRO-212) |
 | `PRO_AWAITING_FINAL_PRICE` | Post-completion prompt asking the pro what they charged (skippable, never gates COMPLETED) |
 | `PAUSED_FOR_HUMAN` | Bot paused for direct pro-customer chat (15m rolling expiry) |
-| `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot |
+| `AWAITING_RESCHEDULE_TIME` | Waiting for customer to select a new appointment slot (10m TTL, `RESCHEDULE_PICK_TTL_SECONDS`, re-armed each time the list is sent); a listed slot taken meanwhile gets a rebuilt list, or with none left the state clears and the booking stays |
 | `AWAITING_LOYALTY_CONFIRMATION` | Waiting for customer to confirm return to previous pro (5m TTL, PRO-119); accept dispatches to the pro and parks the customer in `AWAITING_PRO_APPROVAL` if the address is complete, otherwise saves the pro as a preference and continues via `AWAITING_ADDRESS`, which dispatches to that pro the moment the address is complete (PRO-227) |
 | `AWAITING_NEW_OR_EXISTING` | A customer with a confirmed BOOKED job messages about something else; asked whether it's a new request or about the existing job |
-| `AWAITING_CANCEL_CONFIRMATION` | A cancel keyword on a confirmed BOOKED job; waiting for an explicit '1'/'2' before acting (5m TTL, PRO-118) |
+| `AWAITING_CANCEL_CONFIRMATION` | A cancel keyword on a confirmed BOOKED job, or on a request still awaiting the pro's approval (a NEW lead: from the soft hold, or from IDLE after it lapsed); waiting for an explicit '1'/'2' before acting (5m TTL, PRO-118). For a NEW lead, '2' or expiry gives back what was left of `AWAITING_PRO_APPROVAL` |
 | `ONBOARDING_*` | Pro self-signup steps (NAME → TYPE → AREAS → PRICES → CONFIRM) |
 | `ADMIN_SELECTING_LEAD` / `ADMIN_SELECTING_ACTION` / `ADMIN_SELECTING_PRO` | Admin routing wizard steps (`ניהול` keyword, 15m TTL) |
 
@@ -340,7 +343,7 @@ CONTACTED → NEW → BOOKED → COMPLETED → (rating) → CLOSED
 | `completed` | Work done, awaiting customer rating |
 | `rejected` | Pro declined — a way-station, not terminal: `reassign_lead` immediately either reopens the lead as `new` under the next pro or escalates to `pending_admin_review` (PRO-117) |
 | `closed` | Admin closes a lead, or the Janitor closes a never-assigned lead after 24 h |
-| `cancelled` | Customer cancelled — a cancel keyword on a BOOKED job first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit |
+| `cancelled` | Customer cancelled — a cancel keyword on a BOOKED job, or on a NEW lead still awaiting its pro's approval, first asks for explicit confirmation (`AWAITING_CANCEL_CONFIRMATION`, PRO-118) rather than cancelling on the first keyword hit; both write `cancel_reason: customer_requested` |
 | `pending_admin_review` | No pro found after all radius/fallback attempts, or max reassignments exhausted (a human takes over, PRO-63) |
 
 Every transition is recorded as a `{status, at, by}` entry in the lead's `status_history` array, written by the single `set_lead_status()` writer in `lead_manager_service.py`.
@@ -357,7 +360,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `customer_name` (AI-extracted from the conversation), `display_name` (optional, admin-set label from the admin panel's Edit-Lead form; falls back to `customer_name`, then the phone), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `address_city` (the city the street/number/floor/apartment were given with, PRO-228), `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count` |
 | `messages` | Chat history log per `chat_id`. When the Redis context is empty, `LeadManager.get_chat_history` rebuilds it from here, starting after the latest end of any terminal lead of that chat (its last terminal `status_history` entry), so a cancelled lead's messages never reach a new lead (PRO-228) |
 | `slots` | Appointment slots per pro with atomic locking (`is_taken`); unique on `(pro_id, start_time)`, and a claim skips a slot overlapping a taken one (PRO-277) |
-| `settings` | Scheduler config toggles (`sos_healer_active`, `lead_janitor_active`, `sla_monitor_active`, etc. — the three cold customer-facing toggles default OFF, PRO-73) |
+| `settings` | Scheduler config toggles (`sos_healer_active`, `lead_janitor_active`, `sla_monitor_active`, etc. — the SOS healer and lead janitor toggles default OFF, PRO-73; `sla_monitor_active` defaults ON) |
 | `reviews` | Customer ratings and text reviews |
 | `consent` | Privacy consent acknowledgements |
 | `audit_log` | Admin action history |

@@ -106,6 +106,38 @@ class Messages:
         )
         CANCEL_ABORTED = "👍 העבודה נשארת כמתוכנן."
         CANCEL_NO_ACTIVE = "לא מצאתי עבודה פעילה לביטול — ייתכן שהיא כבר עודכנה."
+        # A cancel keyword on a request still awaiting the pro's approval (a NEW
+        # lead) asks the same way PRO-118 asks for a BOOKED job, and is handled
+        # by the same AWAITING_CANCEL_CONFIRMATION guard: 1, כן or a cancel
+        # keyword confirms; anything else keeps the request with the pro.
+        CANCEL_REQUEST_CONFIRM_PROMPT = (
+            "רק לוודא, לבטל את הבקשה שנמצאת אצל איש המקצוע לאישור?\n"
+            "1 - כן, לבטל\n"
+            "2 - לא, להשאיר אותה"
+        )
+        REQUEST_WITHDRAWN = (
+            "הבקשה בוטלה, ועדכנו את איש המקצוע.\n"
+            "אם צריך עוד משהו, אפשר לכתוב לנו כאן."
+        )
+        CANCEL_REQUEST_KEPT = (
+            "הבקשה נשארת אצל איש המקצוע לאישור.\n" "נעדכן אותך כאן ברגע שתתקבל תשובה."
+        )
+        # The pro approved while the prompt was open: the request is a booked
+        # job now, and cancelling that is the BOOKED path, which asks again.
+        CANCEL_REQUEST_ALREADY_BOOKED = (
+            "איש המקצוע כבר אישר את הבקשה, והעבודה נקבעה.\n"
+            "אם עדיין צריך לבטל אותה, אפשר לכתוב ביטול."
+        )
+        CANCEL_REQUEST_MOVED = (
+            "הבקשה כבר הועברה לאיש מקצוע אחר, והיא ממתינה לאישור שלו.\n"
+            "אם עדיין צריך לבטל אותה, אפשר לכתוב ביטול."
+        )
+        # Answer to התחלה while a request is with a pro. The reset still clears
+        # the conversation, but it does not withdraw the offer, so say so.
+        RESET_REQUEST_STILL_OPEN = (
+            "הבקשה שלך עדיין אצל איש המקצוע לאישור.\n"
+            "אם צריך לבטל אותה, אפשר לכתוב ביטול."
+        )
         RESCHEDULE_OFFER = (
             "אין בעיה, נתאם מועד חדש. הנה הזמנים הפנויים של איש המקצוע:\n"
             "{slots}\n\n"
@@ -118,7 +150,25 @@ class Messages:
             "לא מצאתי תורים פנויים כרגע אצל איש המקצוע.\n"
             "אפשר להשיב *ביטול* כדי לבטל את העבודה, או *נציג* כדי לתאם מול הצוות."
         )
-        RESCHEDULE_INVALID_CHOICE = "אנא לבחור מספר תור מהרשימה."
+        # The picker's own exit is ביטול (handle_reschedule_selection): it keeps
+        # the current time and closes the list, so every re-prompt names it.
+        RESCHEDULE_INVALID_CHOICE = (
+            "אנא לבחור מספר תור מהרשימה, " "או לכתוב ביטול כדי להשאיר את המועד הנוכחי."
+        )
+        # A listed slot was taken by someone else before the customer's pick
+        # reached us; the list below is rebuilt from what is free now.
+        RESCHEDULE_SLOT_TAKEN = (
+            "התור הזה נתפס בינתיים. אלה הזמנים הפנויים עכשיו:\n"
+            "{slots}\n\n"
+            "אפשר לענות במספר התור הרצוי, או לכתוב ביטול כדי להשאיר את המועד הנוכחי."
+        )
+        # Same moment, nothing left to offer: the picker closes, the booking stays.
+        # After it, ביטול reaches the BOOKED cancel prompt and נציג the human handoff.
+        RESCHEDULE_SLOT_TAKEN_NO_SLOTS = (
+            "התור הזה נתפס בינתיים, ולא נשארו כרגע זמנים פנויים אחרים אצל איש המקצוע.\n"
+            "המועד הנוכחי נשאר כפי שהיה.\n"
+            "אם צריך לבטל את העבודה אפשר לכתוב ביטול, ולתיאום מול הצוות אפשר לכתוב נציג."
+        )
         RESCHEDULE_CANCELLED = "המועד נשאר כפי שהיה."
         HELP_INFO = (
             "🛠️ אני העוזר החכם של פרולי.\n"
@@ -245,11 +295,16 @@ class Messages:
         # books nothing at all. The old copy offered "אקבע לך שיחה טלפונית"
         # with a כן/לא menu whose replies fell straight through to the AI. This
         # says only what the code does: the handoff timed out and the bot is
-        # back, so the customer can simply keep writing here.
+        # back, so the customer can simply keep writing here. It names nobody:
+        # the pause may be a customer SOS (the operator was paged) or a pro's
+        # השהה (the pro paused it), and whoever it was already knows. No time
+        # is promised, since nothing schedules the human's reply. Written to
+        # the 2026-11-17 rules (no emoji, bold or em dash; voice "אנחנו").
         SLA_DEFLECTION_MESSAGE = (
-            "🕐 איש המקצוע עדיין לא התפנה לענות, ואני חוזר לטפל בפנייה שלך.\n"
-            "אפשר פשוט לכתוב לי כאן ואמשיך מכאן — או לכתוב *נציג* כדי לחזור "
-            "ולהמתין למענה אנושי."
+            "המענה האנושי עדיין לא הגיע, סליחה על ההמתנה.\n"
+            "מי שצריך לחזור אליך כבר יודע על הפנייה, ויחזור אליך.\n"
+            "בינתיים אפשר להמשיך לכתוב כאן, ואנחנו ממשיכים לטפל בפנייה. "
+            "כדי להמתין שוב למענה אנושי, אפשר לכתוב נציג."
         )
         LOYALTY_OFFER = (
             "🏠 איזה כיף שחזרת אלינו!\n"
@@ -460,6 +515,21 @@ class Messages:
         )
         APPROVE_SUCCESS = "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך."
         CALENDAR_UPDATE_SUCCESS = "\nהיומן עודכן בהצלחה."
+        # The approval stands with no hour reserved: no free slot lay near the
+        # requested time. Said in place of CALENDAR_UPDATE_SUCCESS, never left
+        # out silently, and the customer is not given an hour either (§7).
+        APPROVE_NO_SLOT = (
+            "\nאין ביומן שעה פנויה סמוכה למועד שהלקוח ביקש, ולא שוריינה שעה.\n"
+            "יש לתאם את מועד ההגעה ישירות מול הלקוח."
+        )
+        # The requested hour was taken and the nearest free slot was reserved
+        # instead. The lead and the customer's message carry this hour (§6:
+        # the time ends its own line).
+        CALENDAR_UPDATE_MOVED = (
+            "\nהמועד המבוקש תפוס ביומן, ולכן שוריין המועד הפנוי הקרוב:\n"
+            "{appointment_time}\n"
+            "הלקוח קיבל את המועד הזה."
+        )
         # PRO-59: everything APPROVAL_REQUEST withholds, sent the moment the
         # approval is *claimed* — after the atomic status write, never before,
         # so a pro who loses the PRO-123 race gets ALREADY_RESPONDED and no
@@ -600,6 +670,13 @@ class Messages:
         CUSTOMER_CANCELLED = (
             "⚠️ *עדכון חשוב:* הלקוח/ה {customer_name} ביטל/ה את העבודה "
             "שנקבעה לכתובת {address}."
+        )
+        # The customer withdrew a request this pro was offered and had not yet
+        # approved. Nothing here the offer did not already show; sent with the
+        # `customer_cancelled` template for a pro whose window is closed.
+        CUSTOMER_WITHDREW_OFFER = (
+            "הלקוח ביטל את הפנייה בנושא {issue_type} לפני שאישרת אותה.\n"
+            "אין צורך לאשר או לדחות אותה."
         )
         CUSTOMER_RESCHEDULED_SUCCESS = (
             "📅 *עדכון יומן:* הלקוח/ה {customer_name} בכתובת {address} "
@@ -1414,6 +1491,10 @@ class Messages:
         # Template variables cannot be empty, so an optional line in a free-form
         # message becomes a variable with a value that says "nothing here".
         PRICE_NOT_QUOTED = "לא ניתנה הערכה"
+        # PRO_FOUND's time when approval reserved no slot: the customer is not
+        # told an hour nobody holds. Fits the approved template's "מועד: {...}"
+        # line, which is why it is a value and not a dropped line.
+        TIME_TO_COORDINATE = "יתואם בטלפון עם איש המקצוע"
         URGENCY_REGULAR = "רגילה"
 
     class Templates:

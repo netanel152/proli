@@ -923,6 +923,7 @@ def view_leads_dashboard(T):
                     "_chat_id": None,
                     "_display_name": None,
                     "_pro_id": None,
+                    "_slot_unreserved": None,
                     "status": None,
                     "date": st.column_config.DatetimeColumn(
                         T["col_date"],

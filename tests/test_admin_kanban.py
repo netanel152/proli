@@ -12,6 +12,7 @@ import admin_panel.views.home as home
 from admin_panel.ui.components import (
     STATUS_COLORS,
     STATUS_COLORS_DARK,
+    render_kanban_card,
     render_kanban_column,
     render_status_pill,
 )
@@ -106,3 +107,15 @@ def test_pending_review_count_query_matches_stored_status():
     col.insert_one({"status": "new"})
 
     assert col.count_documents({"status": LeadStatus.PENDING_ADMIN_REVIEW}) == 1
+
+
+def test_kanban_card_shows_slot_unreserved_in_the_operators_language():
+    he, en = _find_translation_dicts()
+    lead = {"client": "דנה", "details_summary": "נזילה", "professional": "נתנאל"}
+    for T in (he, en):
+        assert T["slot_unreserved"]
+        flagged = render_kanban_card({**lead, "_slot_unreserved": True}, T)
+        assert T["slot_unreserved"] in flagged
+        for value in (False, float("nan"), None):
+            card = render_kanban_card({**lead, "_slot_unreserved": value}, T)
+            assert T["slot_unreserved"] not in card

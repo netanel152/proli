@@ -80,7 +80,7 @@ If the customer is themselves a registered pro, they are **not** returned to `PR
 | `PRO_MODE` | Sender is an active pro | `pro_flow.handle_pro_text_command()` called |
 | `CUSTOMER_MODE` | Pro types `לקוח`, or confirms the intent prompt | Pro treated as customer, context cleared; sticky while their own lead is open |
 | `AWAITING_INTENT_CONFIRMATION` | AI detects pro needs service | Prompt pro to switch modes; `1`/`כן` accepts, `2`/`לא` declines, anything else re-prompts once |
-| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI — unless the sender is a pro using an unambiguous business keyword, or an emergency keyword arrives (PRO-121: `EMERGENCY_WHILE_WAITING`, state kept, once per lead) |
+| `AWAITING_PRO_APPROVAL` | Deal sent to pro | Bot replies with STILL_WAITING, no AI — unless the sender is a pro using an unambiguous business keyword, an emergency keyword arrives (PRO-121: `EMERGENCY_WHILE_WAITING`, state kept, once per lead), or a cancel keyword arrives: the customer is asked to confirm withdrawing the request (`CANCEL_REQUEST_CONFIRM_PROMPT`, `AWAITING_CANCEL_CONFIRMATION`); `1` moves the NEW lead to `cancelled` (pinned on status and pro, so a pro who approved first keeps it) and tells the pro, anything else or no answer within `CANCEL_CONFIRM_TTL_SECONDS` keeps the offer and gives this state back for what was left of it. After this state lapses, a cancel keyword with no BOOKED job asks the same way |
 | `PAUSED_FOR_HUMAN` | Pro/customer pauses bot | Messages logged, 15m rolling TTL resets. An emergency keyword here flags the lead and pages the operator once, without un-pausing or replying (PRO-121) |
 | `AWAITING_ADDRESS` | Address missing parts | AI re-extracts parts from next message; once complete the blocked step runs on the same turn — the loyalty dispatch (`loyalty_pro_id` in the FSM metadata) or the deal the address gate rejected, with the time the gate saved (PRO-227). An emergency keyword with a known city releases the gate early instead (PRO-121) |
 
@@ -92,7 +92,7 @@ When the customer sends a trigger phrase (e.g., "אני צריך נציג"):
 2. `send_sos_alert()` always pages the admin. It alerts the assigned pro only on a BOOKED lead (with the customer's phone and words) or a NEW one (neither, offering `*אשר*`/`*דחה*`), and never a pro the admin deactivated. The page's `pro_notified` says whether a send to the pro succeeded. A BOOKED lead's pro also gets `PAUSE_NOTIFICATION`
 3. Customer receives `Messages.Customer.BOT_PAUSED_BY_CUSTOMER`
 4. All subsequent messages reset the 15-minute TTL.
-5. If 15 minutes of silence pass, the **SLA Monitor** triggers `SLA_DEFLECTION_MESSAGE` (PRO-73: business hours + `sla_monitor_active` toggle, default OFF).
+5. If 15 minutes of silence pass, the **SLA Monitor** triggers `SLA_DEFLECTION_MESSAGE` (PRO-73: business hours + `sla_monitor_active` toggle, default ON).
 
 ### Edge-Case Bailouts
 
@@ -147,7 +147,7 @@ All jobs run inside the Worker process via APScheduler.
 | Daily agendas | 08:00 IL (daily) | Sends each pro a list of their booked jobs for the day, keyed on `appointment_datetime`; leads without a resolved `appointment_datetime` (e.g. ASAP) are not included |
 | Stale monitor | Every 30 min | Tier 1 (4–6 h): reminder to pro (capped at `MAX_PRO_REMINDERS`). Tier 2 (6–24 h): completion check to customer (capped at `MAX_CUSTOMER_COMPLETION_CHECKS`, min `CUSTOMER_COMPLETION_CHECK_COOLDOWN_HOURS` apart — the lead stays BOOKED inside the window, so without the cap every tick re-sent). Tier 3 (>24 h): flag for admin |
 | SOS Healer | Every 10 min | Reassigns stuck leads or escalates to `PENDING_ADMIN_REVIEW`. PRO-73: gated to business hours (08:00–21:00 IL) + `sos_healer_active` toggle (default OFF) |
-| SLA Monitor | Every 5 min | Wakes up silent `PAUSED_FOR_HUMAN` chats after 15m; offers phone call. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default OFF) |
+| SLA Monitor | Every 5 min | Deflects a human handoff nobody picked up within 15m (a paused CONTACTED/NEW/BOOKED lead, read from `paused_at`); no phone call is booked. PRO-73: gated to business hours (08:00–21:00 IL) + `sla_monitor_active` toggle (default ON) |
 | Pro-Approval SLA | Every 5 min | Nudges a silent pro at T+10m, then offers the customer a reassignment at T+25m (half thresholds for emergency leads); the reassignment offer is gated to business hours (PRO-73), the pro nudge is not |
 | SOS Reporter | Every 4 h | Pages operator once per newly-stuck lead (muted for `SOS_REPORT_REPAGE_HOURS`/24h after paging); the standing already-paged backlog is logged, not re-paged |
 | Stale Lead Nudger | Every 4 h | Reminds pros to close booked leads older than 24 h |
@@ -159,7 +159,7 @@ All jobs run inside the Worker process via APScheduler.
 | Pipeline Watch | Every 10 min, production only (PRO-17) | Pages the operator on a pending-review backlog or a stuck-`contacted` climb and checks in to the Sentry Crons monitor `worker-pipeline-watch`; no toggle |
 | Backup Freshness Watchdog | Every 60 min, plus once after boot, production only (PRO-185) | Pages when the last successful backup is older than 48 h |
 
-Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "scheduler_config"}` with fields `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `whatsapp_monitor_active`, `lead_janitor_active`, `sla_monitor_active`. The last two, plus `sos_healer_active`, gate cold customer-facing re-engagement jobs and default OFF (pilot safety, PRO-73) until enabled post warm-up.
+Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "scheduler_config"}` with fields `sos_healer_active`, `sos_reporter_active`, `stale_monitor_active`, `whatsapp_monitor_active`, `lead_janitor_active`, `sla_monitor_active`. `lead_janitor_active` and `sos_healer_active` gate cold customer-facing re-engagement jobs and default OFF (pilot safety, PRO-73) until enabled post warm-up; `sla_monitor_active` defaults ON, since the deflection answers a customer who asked for a human minutes earlier. All three are business-hours only.
 
 ---
 
@@ -172,7 +172,7 @@ Job toggles are controlled via MongoDB `settings_collection` document `{"_id": "
   - A pro's reject fails to find a replacement and the lead is escalated to `PENDING_ADMIN_REVIEW` (PRO-117); a *successful* reject → rematch deliberately keeps context — the conversation continues with the new pro
   - Max reassignments reached (lead escalated to `PENDING_ADMIN_REVIEW`)
   - Lead escalated to `PENDING_ADMIN_REVIEW` (healer path)
-  - Customer resets with "התחלה" / "reset"
+  - Customer resets with "התחלה" / "reset" (silent, unless a request is still with a pro awaiting approval: the reset does not withdraw it, so the customer is told it is still open and that `ביטול` cancels it)
 
 ---
 

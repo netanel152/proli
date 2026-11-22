@@ -1314,3 +1314,19 @@ def test_panel_and_bot_status_writers_set_the_same_fields(db):
     assert {"status", "status_history", "updated_at"} <= set(doc)
     assert doc["status_history"][-1]["status"] == "booked"
     assert _stamp(doc) > _OLD_STAMP
+
+
+def test_build_lead_row_carries_slot_unreserved_only_while_booked():
+    """A BOOKED lead approved with no slot shows on the Kanban card; the same
+    field on a lead that has left BOOKED means nothing and is not carried."""
+    flagged = dict(pro_map_id_to_name={}, unknown_pro_label=UNKNOWN_PRO_LABEL)
+    booked = build_lead_row(
+        _row_lead_doc(status="booked", slot_unreserved=True), **flagged
+    )
+    cancelled = build_lead_row(
+        _row_lead_doc(status="cancelled", slot_unreserved=True), **flagged
+    )
+    plain = build_lead_row(_row_lead_doc(status="booked"), **flagged)
+    assert booked["_slot_unreserved"] is True
+    assert cancelled["_slot_unreserved"] is False
+    assert plain["_slot_unreserved"] is False

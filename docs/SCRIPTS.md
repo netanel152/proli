@@ -157,7 +157,7 @@ One poll of production's `/health/leads`: applies the alert rules and pages thro
 
 ### `simulate_sla_deflection.py`
 
-Simulates a 15-minute silence for a specific `chat_id` by setting its Redis state to `PAUSED_FOR_HUMAN` and backdating its `paused_at` timestamp in MongoDB. This triggers the SLA Monitor on its next run — provided it's business hours (08:00–21:00 IL) and `sla_monitor_active` is enabled (defaults OFF, PRO-73).
+Simulates a 15-minute silence for a specific `chat_id` by setting its Redis state to `PAUSED_FOR_HUMAN` and backdating its `paused_at` timestamp in MongoDB. This triggers the SLA Monitor on its next run — provided it's business hours (08:00–21:00 IL) and `sla_monitor_active` is enabled (defaults ON; a stored `False` keeps it off).
 
 ```bash
 python scripts/simulate_sla_deflection.py 972501234567

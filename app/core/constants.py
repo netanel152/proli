@@ -206,11 +206,20 @@ class WorkerConstants:
     PAUSE_TTL_SECONDS = 900  # 15 minutes — auto-expiry for PAUSED_FOR_HUMAN state
     # PRO-118: window for the customer to answer the "really cancel?" prompt
     # (AWAITING_CANCEL_CONFIRMATION). Expiry = the job silently stays booked.
+    # Also the window for cancelling a request still awaiting the pro's
+    # approval (a NEW lead): expiry leaves the offer with the pro, and the
+    # customer's AWAITING_PRO_APPROVAL comes back on the next read of the state
+    # (`customer_flow.resume_lapsed_cancel_prompt`) for what was left of it.
     CANCEL_CONFIRM_TTL_SECONDS = 300
     # PRO-119: window for the customer to answer the loyalty offer ("want your
     # previous pro?"). Without it the state inherited the 4h default TTL and a
     # customer whose reply we failed to parse was trapped for hours.
     LOYALTY_CONFIRM_TTL_SECONDS = 300
+    # Window for a customer with a BOOKED job to pick a number from the reschedule
+    # slot list (AWAITING_RESCHEDULE_TIME). Its numbers name slots that other
+    # customers can take, so a digit sent hours later must not count; expiry keeps
+    # the current booking. Re-armed whenever the list is sent again.
+    RESCHEDULE_PICK_TTL_SECONDS = 600
     # How many of a returning customer's past COMPLETED jobs the loyalty gate
     # looks back through for a pro whose trade fits the new issue. A customer
     # with a long history should still be offered their electrician for a

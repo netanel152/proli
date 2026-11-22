@@ -43,9 +43,12 @@ _OLD_PANEL_DOC = {
 
 def test_cold_customer_jobs_default_off_everything_else_on():
     """PRO-73, written down once: the jobs that message a customer because a
-    chat went silent stay dark until an operator enables them."""
+    chat went silent stay dark until an operator enables them. The SLA
+    deflection is on by default: it answers a customer who asked for a human
+    minutes earlier."""
     off = {k for k in SCHEDULER_TOGGLES if not SCHEDULER_CONFIG_DEFAULTS[k]}
-    assert off == {"sos_healer_active", "lead_janitor_active", "sla_monitor_active"}
+    assert off == {"sos_healer_active", "lead_janitor_active"}
+    assert SCHEDULER_CONFIG_DEFAULTS["sla_monitor_active"] is True
     assert set(SCHEDULER_TOGGLES) == {
         "is_active",
         "stale_monitor_active",

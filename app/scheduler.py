@@ -301,9 +301,11 @@ async def monitor_unfinished_jobs():
 async def _customer_cold_job_allowed(toggle_key: str) -> bool:
     """PRO-73 gate for *cold customer-facing* scheduler jobs (SOS healer, lead
     janitor, SLA deflection): run only **inside business hours** AND when the
-    per-job toggle is enabled. Toggles **default OFF** — these re-engagement jobs
-    that message a customer because the chat went silent stay dark until an
-    operator turns them on after the WhatsApp number is warmed up (pilot safety)."""
+    per-job toggle is enabled. The SOS healer and lead janitor toggles **default
+    OFF** — re-engagement jobs that message a customer because the chat went
+    silent stay dark until an operator turns them on after the WhatsApp number is
+    warmed up (pilot safety). ``sla_monitor_active`` defaults on: it answers a
+    customer who asked for a human minutes earlier (``scheduler_config.py``)."""
     if not within_business_hours():
         return False
     config = await settings_collection.find_one({"_id": SCHEDULER_CONFIG_ID})

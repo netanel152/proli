@@ -1701,3 +1701,155 @@ async def test_handle_status_query_falls_back_to_recent_completed_lead(flow_db):
     assert result is not None
     # COMPLETED template mentions the work ended
     assert result == Messages.Customer.STATUS_COMPLETED
+
+
+# --- cancelling a request still awaiting the pro's approval ---
+
+
+def _offer_meta(lead_id, pro_id, **extra):
+    meta = {
+        "cancel_confirm_lead_id": str(lead_id),
+        "cancel_confirm_kind": app.services.customer_flow.CANCEL_KIND_NEW,
+        "cancel_confirm_pro_id": str(pro_id),
+    }
+    meta.update(extra)
+    return meta
+
+
+async def _seed_offer(db, chat_id, **overrides):
+    pro_id = ObjectId()
+    await db.users.insert_one(
+        {"_id": pro_id, "business_name": "יוסי", "phone_number": "972509990001"}
+    )
+    lead = {
+        "_id": ObjectId(),
+        "chat_id": chat_id,
+        "status": LeadStatus.NEW,
+        "pro_id": pro_id,
+        "issue_type": "נזילה",
+        "customer_name": "דנה",
+        "full_address": "דיזנגוף 50, תל אביב",
+    }
+    lead.update(overrides)
+    await db.leads.insert_one(lead)
+    return lead
+
+
+@pytest.mark.asyncio
+async def test_withdraw_cancels_and_names_the_customer_cancelled_template(
+    flow_db, mock_whatsapp
+):
+    from app.services.customer_flow import withdraw_offered_request
+
+    chat_id = "972501112001@c.us"
+    lead = await _seed_offer(flow_db, chat_id)
+    state_manager = AsyncMock()
+
+    await withdraw_offered_request(
+        chat_id, _offer_meta(lead["_id"], lead["pro_id"]), mock_whatsapp, state_manager
+    )
+
+    stored = await flow_db.leads.find_one({"_id": lead["_id"]})
+    assert stored["status"] == LeadStatus.CANCELLED
+    assert stored["cancel_reason"] == "customer_requested"
+    calls = mock_whatsapp.send_message.await_args_list
+    assert calls[0].args == (chat_id, Messages.Customer.REQUEST_WITHDRAWN)
+    pro_call = calls[1]
+    assert pro_call.args[0] == to_chat_id("972509990001")
+    assert pro_call.kwargs["template_key"] == "customer_cancelled"
+    assert set(pro_call.kwargs["params"]) == {"customer_name", "full_address"}
+    assert "0501112001" not in pro_call.args[1]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, other_pro, expected",
+    [
+        (LeadStatus.BOOKED, False, Messages.Customer.CANCEL_REQUEST_ALREADY_BOOKED),
+        (LeadStatus.NEW, True, Messages.Customer.CANCEL_REQUEST_MOVED),
+        (LeadStatus.CANCELLED, False, Messages.Customer.CANCEL_NO_ACTIVE),
+    ],
+)
+async def test_withdraw_that_lost_the_race_changes_nothing(
+    flow_db, mock_whatsapp, status, other_pro, expected
+):
+    from app.services.customer_flow import withdraw_offered_request
+
+    chat_id = f"97250111300{len(expected) % 10}@c.us"
+    lead = await _seed_offer(flow_db, chat_id, status=status)
+    asked_about = ObjectId() if other_pro else lead["pro_id"]
+    state_manager = AsyncMock()
+
+    await withdraw_offered_request(
+        chat_id, _offer_meta(lead["_id"], asked_about), mock_whatsapp, state_manager
+    )
+
+    stored = await flow_db.leads.find_one({"_id": lead["_id"]})
+    assert stored["status"] == status
+    assert "cancel_reason" not in stored
+    mock_whatsapp.send_message.assert_awaited_once_with(chat_id, expected)
+    if other_pro:
+        state_manager.set_state.assert_awaited_once()
+    else:
+        state_manager.set_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "left_s, status, restored",
+    [
+        (600, LeadStatus.NEW, True),
+        (-5, LeadStatus.NEW, False),  # the approval wait itself had ended
+        (600, LeadStatus.BOOKED, False),  # approved while the prompt was open
+    ],
+)
+async def test_resume_lapsed_cancel_prompt(flow_db, left_s, status, restored):
+    from app.core.constants import UserStates
+    from app.services.customer_flow import resume_lapsed_cancel_prompt
+
+    chat_id = f"9725011140{abs(left_s) % 100:02d}@c.us"
+    lead = await _seed_offer(flow_db, chat_id, status=status)
+    until = datetime.now(timezone.utc).timestamp() + left_s
+    meta = _offer_meta(
+        lead["_id"],
+        lead["pro_id"],
+        cancel_confirm_resume_state=UserStates.AWAITING_PRO_APPROVAL.value,
+        cancel_confirm_resume_until=until,
+        other="kept",
+    )
+    state_manager = AsyncMock()
+    state_manager.get_metadata = AsyncMock(return_value=meta)
+
+    state = await resume_lapsed_cancel_prompt(chat_id, UserStates.IDLE, state_manager)
+
+    state_manager.set_metadata.assert_awaited_once_with(chat_id, {"other": "kept"})
+    if restored:
+        assert state == UserStates.AWAITING_PRO_APPROVAL
+        state_manager.set_state.assert_awaited_once()
+        assert 0 < state_manager.set_state.await_args.kwargs["ttl"] <= left_s
+    else:
+        assert state == UserStates.IDLE
+        state_manager.set_state.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resume_lapsed_cancel_prompt_ignores_other_states_and_prompts():
+    from app.core.constants import UserStates
+    from app.services.customer_flow import resume_lapsed_cancel_prompt
+
+    state_manager = AsyncMock()
+    state_manager.get_metadata = AsyncMock(
+        return_value={"cancel_confirm_lead_id": str(ObjectId())}  # a BOOKED prompt
+    )
+    assert (
+        await resume_lapsed_cancel_prompt("c", UserStates.IDLE, state_manager)
+        == UserStates.IDLE
+    )
+    assert (
+        await resume_lapsed_cancel_prompt(
+            "c", UserStates.AWAITING_ADDRESS, state_manager
+        )
+        == UserStates.AWAITING_ADDRESS
+    )
+    state_manager.set_state.assert_not_awaited()
+    state_manager.set_metadata.assert_not_awaited()

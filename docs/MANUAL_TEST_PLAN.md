@@ -165,6 +165,7 @@ Reset keywords are `"reset"` and `"התחלה"`. The `"תפריט"` keyword send
 |------|-----------|-------------|----------------------|--------|
 | 1 | 972523651414 | "reset" | *(nothing — the reset is deliberately silent)* | State cleared to idle |
 | 2 | 972524828796 | "reset" | *(nothing — the reset is deliberately silent)* | State cleared (will re-detect as pro on next message) |
+| 3 | 972523651414 | "התחלה" while a request is with a pro, not yet approved | `RESET_REQUEST_STILL_OPEN`: the request is still with the pro, and `ביטול` cancels it | State cleared, lead still `new`; the one case the reset is not silent |
 
 ---
 

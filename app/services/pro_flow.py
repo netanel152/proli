@@ -2,10 +2,12 @@ import math
 import re
 import urllib.parse
 from bson import ObjectId
+from app.core import database
 from app.core.database import users_collection, leads_collection, reviews_collection
 from app.core.logger import logger
 from app.core.messages import Messages
 from app.core.constants import LeadStatus, Defaults, UserStates, WorkerConstants, Actor
+from app.core.datetime_utils import stored_utc_to_il
 from app.core.phone import mask_chat_id, strip_suffix, to_chat_id, to_local_phone
 from app.services.lead_manager_service import set_lead_status
 from app.core.redis_client import get_redis_client
@@ -524,6 +526,91 @@ async def _handle_approve(pro, lead_manager, whatsapp, chat_id, text, reply_ref=
     return await _approve_lead(lead, pro, lead_manager, whatsapp)
 
 
+def _same_instant(a: datetime, b: datetime) -> bool:
+    """Mongo hands datetimes back naive UTC; compare them as UTC instants."""
+    if a.tzinfo is None:
+        a = a.replace(tzinfo=timezone.utc)
+    if b.tzinfo is None:
+        b = b.replace(tzinfo=timezone.utc)
+    return a == b
+
+
+async def _record_slot_outcome(lead, pro, booked_slot_id):
+    """Write what the approval's slot claim actually reserved onto the lead.
+
+    Three outcomes, and the approval stands in all of them (the owner's call):
+
+    * ``reserved`` — a slot at the requested time (or an ASAP lead's soonest):
+      ``booked_slot_id`` is set and ``slot_unreserved`` cleared.
+    * ``moved`` — the requested hour was taken and ``book_slot_for_lead``
+      claimed another slot inside its window. The lead's ``appointment_time``
+      and ``appointment_datetime`` move to that slot's start, so the lead, the
+      pro and the customer all name the hour that is actually held.
+    * ``unreserved`` — no slot was claimed (none free in the window, or the
+      claim failed). ``slot_unreserved: True`` flags the lead for the operator
+      and nobody is told an hour; the pro coordinates it by phone.
+
+    The write is pinned to the pro whose BOOKED claim just won, so a lead
+    reassigned in between is not written. A slot claimed for a lead the write
+    no longer matches is given back rather than left taken by nobody.
+
+    Returns ``{"outcome": ..., "lead_fields": {...}}``, the fields being the
+    time fields the caller's copy of the lead must now carry.
+    """
+    # Read per call through the module: the suite swaps the collection on
+    # `app.core.database` after this module is imported.
+    slots_collection = database.slots_collection
+
+    held = {"_id": lead["_id"], "pro_id": pro["_id"]}
+    if booked_slot_id is None:
+        await leads_collection.update_one(
+            held,
+            {"$set": {"slot_unreserved": True}, "$unset": {"booked_slot_id": ""}},
+        )
+        logger.warning(
+            f"Pro {pro['_id']} approved lead {lead['_id']} with no free slot "
+            "near the requested time: approved, flagged slot_unreserved."
+        )
+        return {"outcome": "unreserved", "lead_fields": {}}
+
+    time_fields = {}
+    requested = lead.get("appointment_datetime")
+    if isinstance(requested, datetime):
+        slot = await slots_collection.find_one(
+            {"_id": booked_slot_id}, {"start_time": 1}
+        )
+        start = (slot or {}).get("start_time")
+        if isinstance(start, datetime) and not _same_instant(start, requested):
+            time_fields = {
+                "appointment_datetime": start,
+                # The format the customer's reschedule writes.
+                "appointment_time": stored_utc_to_il(start).strftime("%d/%m/%Y %H:%M"),
+            }
+
+    written = await leads_collection.update_one(
+        held,
+        {
+            "$set": {"booked_slot_id": booked_slot_id, **time_fields},
+            "$unset": {"slot_unreserved": ""},
+        },
+    )
+    if not written.matched_count:
+        await slots_collection.update_one(
+            {"_id": booked_slot_id, "is_taken": True}, {"$set": {"is_taken": False}}
+        )
+        logger.info(
+            f"Lead {lead['_id']} left pro {pro['_id']} before its slot was "
+            f"recorded; slot {booked_slot_id} given back."
+        )
+    if time_fields:
+        logger.info(
+            f"Lead {lead['_id']}: requested hour taken, booked slot "
+            f"{booked_slot_id} at {time_fields['appointment_datetime']} instead."
+        )
+        return {"outcome": "moved", "lead_fields": time_fields}
+    return {"outcome": "reserved", "lead_fields": {}}
+
+
 async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
     # PRO-123: guard the write on both the status we read *and* the ownership
     # we read. Status alone is not enough — `monitor_service.reassign_lead`
@@ -555,17 +642,26 @@ async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
         lead["created_at"],
         appointment_datetime=lead.get("appointment_datetime"),
     )
-    booking_success = booked_slot_id is not None
-
-    if booked_slot_id is not None:
-        await leads_collection.update_one(
-            {"_id": lead["_id"]},
-            {"$set": {"booked_slot_id": booked_slot_id}},
-        )
+    booking = await _record_slot_outcome(lead, pro, booked_slot_id)
+    # Whatever the slot outcome, the time both messages state is the one the
+    # lead now carries: the claimed slot's when it moved, nothing when no slot
+    # was reserved (the customer is told the pro will coordinate it).
+    lead = {**lead, **booking["lead_fields"]}
 
     response_text = Messages.Pro.APPROVE_SUCCESS
-    if booking_success:
+    if booking["outcome"] == "moved":
+        response_text += Messages.Pro.CALENDAR_UPDATE_MOVED.format(
+            appointment_time=lead["appointment_time"]
+        )
+    elif booking["outcome"] == "reserved":
         response_text += Messages.Pro.CALENDAR_UPDATE_SUCCESS
+    else:
+        response_text += Messages.Pro.APPROVE_NO_SLOT
+    customer_time = (
+        Messages.Fallbacks.TIME_TO_COORDINATE
+        if booking["outcome"] == "unreserved"
+        else lead.get("appointment_time", "")
+    )
 
     # PRO-59: the contact details the offer withheld. Composed only past the
     # atomic claim above — every early return between the find_one and here
@@ -641,7 +737,7 @@ async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
         profession_line=profession_line,
         issue_type=lead.get("issue_type", ""),
         full_address=lead.get("full_address", ""),
-        appointment_time=lead.get("appointment_time", ""),
+        appointment_time=customer_time,
         price_line=price_line,
         rating_line=rating_line,
     )
@@ -656,7 +752,7 @@ async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
                 "pro_name": pro_name,
                 "issue_type": lead.get("issue_type", ""),
                 "full_address": lead.get("full_address", ""),
-                "appointment_time": lead.get("appointment_time", ""),
+                "appointment_time": customer_time,
                 "price_estimate": notification_service.price_estimate_param(
                     quoted_price
                 ),
@@ -665,8 +761,15 @@ async def _approve_lead(lead, pro, lead_manager, whatsapp, picked=False):
         )
     except Exception as e:
         logger.error(f"Customer not told lead {lead['_id']} was approved: {e}")
-    # Clear AWAITING_PRO_APPROVAL state so customer can continue normally
-    await StateManager.clear_state(lead["chat_id"])
+    # Clear AWAITING_PRO_APPROVAL state so customer can continue normally —
+    # except an open "really cancel?" prompt: the customer's answer to it must
+    # still reach `guard_cancel_confirmation`, which now finds the lead BOOKED
+    # and says so instead of cancelling it. Its own TTL ends it otherwise.
+    if (
+        await StateManager.get_state(lead["chat_id"])
+        != UserStates.AWAITING_CANCEL_CONFIRMATION
+    ):
+        await StateManager.clear_state(lead["chat_id"])
 
     logger.info(f"Pro {pro['_id']} approved lead {lead['_id']}")
     return response_text
