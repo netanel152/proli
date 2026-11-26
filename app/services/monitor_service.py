@@ -1501,7 +1501,8 @@ async def remind_stale_booked_leads():
     )
 
     # Query for BOOKED leads older than 24 hours with reminders < max and no
-    # reminder inside the cooldown. $and so every predicate applies together.
+    # reminder (delivered or blocked) inside the cooldown. $and so every
+    # predicate applies together.
     query = {
         "status": LeadStatus.BOOKED,
         "$and": [
@@ -1521,6 +1522,14 @@ async def remind_stale_booked_leads():
                 "$or": [
                     {"last_reminder_at": {"$exists": False}},
                     {"last_reminder_at": {"$lt": reminder_cooldown}},
+                ]
+            },
+            # A blocked send starts the same cooldown (see below), so the 4h
+            # job doesn't retry, and re-page, a closed window on every tick.
+            {
+                "$or": [
+                    {"last_reminder_blocked_at": {"$exists": False}},
+                    {"last_reminder_blocked_at": {"$lt": reminder_cooldown}},
                 ]
             },
         ],
@@ -1560,12 +1569,36 @@ async def remind_stale_booked_leads():
             )
 
             try:
-                await whatsapp.send_message(
+                sent = await whatsapp.send_message(
                     pro_phone,
                     message,
                     template_key="stale_lead_reminder",
                     params={"pro_name": pro_name, "customer_name": customer_name},
                 )
+
+                # None is the facade's "blocked, not sent" (PRO-159): a closed
+                # 24h window with no armed template, the breaker, the kill
+                # switch, or a refused template. A lead stale for 24h+ has the
+                # pro's window closed almost always, and `stale_lead_reminder`
+                # is held as MARKETING so it is deliberately left unarmed. A
+                # blocked send must not burn one of MAX_PRO_REMINDERS or log
+                # as sent. It does start the cooldown, on its own field so
+                # `last_reminder_at` still means "last delivered": without it
+                # the job would retry, and the facade re-page, every tick.
+                if not sent:
+                    await leads_collection.update_one(
+                        {"_id": lead_id},
+                        {
+                            "$set": {
+                                "last_reminder_blocked_at": datetime.now(timezone.utc)
+                            }
+                        },
+                    )
+                    logger.warning(
+                        f"[Stale Lead Nudger] Reminder for lead {lead_id} did not "
+                        f"reach pro {pro_id}; not counted"
+                    )
+                    continue
 
                 # Update lead
                 await leads_collection.update_one(
