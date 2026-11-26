@@ -10,6 +10,9 @@ What this pins on top of the sibling harness:
 
 - the file never names a production secret, so a typo cannot point the job there,
 - both STAGING secrets are required (this run clears Redis state as well as Mongo),
+- the handsets come from the STAGING_TEST_* repository secrets (this repo is
+  public, so its inputs panel is world readable); the phone inputs are optional
+  overrides, and a run with neither set fails with a message naming both,
 - the four free-form inputs reach the script through `env:` and a quoted
   `--flag=value`, never through `${{ }}` inside the shell (a city is user text),
 - `--apply` only ever arrives through `$FLAGS`, so an unticked box cannot write,
@@ -33,6 +36,13 @@ from app.core.pro_trades import LISTABLE_TRADES
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "prepare_staging_e2e.yml"
 SCRIPT_PATH = REPO_ROOT / "scripts" / "prepare_staging_e2e.py"
+
+
+# An input override wins; otherwise the repository secret.
+PHONE_EXPR = {
+    "CUSTOMER_PHONE": "${{ inputs.customer_phone || secrets.STAGING_TEST_CUSTOMER_PHONE }}",
+    "PRO_PHONE": "${{ inputs.pro_phone || secrets.STAGING_TEST_PRO_PHONE }}",
+}
 
 
 def _load_workflow():
@@ -201,6 +211,8 @@ def test_the_file_never_names_a_production_secret():
         "STAGING_MONGO_URI",
         "STAGING_REDIS_URL",
         "GOOGLE_MAPS_API_KEY",
+        "STAGING_TEST_CUSTOMER_PHONE",
+        "STAGING_TEST_PRO_PHONE",
     }
 
 
@@ -217,8 +229,16 @@ def test_the_inputs_are_exactly_these_and_apply_defaults_to_off():
     assert list(inputs) == ["customer_phone", "pro_phone", "city", "trade", "apply"]
     assert inputs["apply"]["type"] == "boolean"
     assert inputs["apply"]["default"] is False
-    for name in ("customer_phone", "pro_phone", "city", "trade"):
+    for name in ("city", "trade"):
         assert inputs[name]["required"] is True
+    # The handsets are optional overrides: the secrets are the normal path.
+    for name in ("customer_phone", "pro_phone"):
+        assert inputs[name]["required"] is False
+        assert inputs[name].get("default", "") == ""
+        description = inputs[name]["description"]
+        assert "public" in description.lower()
+        assert "WARNING" in description
+        assert "secret" in description
 
 
 def test_the_trade_choices_are_exactly_the_trades_the_script_accepts():
@@ -231,7 +251,7 @@ def test_the_trade_choices_are_exactly_the_trades_the_script_accepts():
 def test_branch_and_secrets_reach_the_shell_through_env_not_expressions():
     doc = _load_workflow()
     assert _find_step(doc, "target")["env"]["REF_NAME"] == "${{ github.ref_name }}"
-    for step_id in ("mask", "target", "creds", "prepare"):
+    for step_id in ("mask", "phones", "target", "creds", "prepare"):
         assert "${{" not in _find_step(doc, step_id)["run"]
 
 
@@ -245,7 +265,8 @@ def test_every_free_form_input_goes_through_env_and_a_quoted_flag():
         ("city", "CITY"),
         ("trade", "TRADE"),
     ):
-        assert env[var] == f"${{{{ inputs.{name} }}}}"
+        expected = PHONE_EXPR.get(var, f"${{{{ inputs.{name} }}}}")
+        assert env[var] == expected
         # `--flag="$VAR"` (one token), so a value that starts with `--` is data.
         assert f'--{name.replace("_", "-")}="${var}"' in run
 
@@ -364,8 +385,8 @@ def test_the_handset_numbers_are_masked_by_the_first_step():
     first = steps[0]
 
     assert first["id"] == "mask"
-    assert first["env"]["CUSTOMER_PHONE"] == "${{ inputs.customer_phone }}"
-    assert first["env"]["PRO_PHONE"] == "${{ inputs.pro_phone }}"
+    assert first["env"]["CUSTOMER_PHONE"] == PHONE_EXPR["CUSTOMER_PHONE"]
+    assert first["env"]["PRO_PHONE"] == PHONE_EXPR["PRO_PHONE"]
     assert '"::add-mask::$CUSTOMER_PHONE"' in first["run"]
     assert '"::add-mask::$PRO_PHONE"' in first["run"]
 
@@ -413,3 +434,78 @@ def test_a_uri_with_no_database_is_refused_too(creds_script, tmp_path):
         redis_url="redis://r.example:6379/0",
     )
     assert proc.returncode != 0
+
+
+# --- The handsets come from secrets, with the inputs as optional overrides ---
+
+
+def test_the_masking_and_the_require_step_run_before_anything_else():
+    steps = _load_workflow()["jobs"]["prepare-staging-e2e"]["steps"]
+    assert [s.get("id") for s in steps[:2]] == ["mask", "phones"]
+
+
+def test_the_phones_are_resolved_the_same_way_in_every_step_that_reads_them():
+    doc = _load_workflow()
+    for step_id in ("mask", "phones", "prepare"):
+        env = _find_step(doc, step_id)["env"]
+        assert env["CUSTOMER_PHONE"] == PHONE_EXPR["CUSTOMER_PHONE"]
+        assert env["PRO_PHONE"] == PHONE_EXPR["PRO_PHONE"]
+
+
+@pytest.fixture(scope="module")
+def phones_script(tmp_path_factory):
+    return _step_script(tmp_path_factory, "phones", "phones")
+
+
+def _run_phones(phones_script, tmp_path, *, customer, pro):
+    env = {
+        k: v for k, v in os.environ.items() if k not in ("CUSTOMER_PHONE", "PRO_PHONE")
+    }
+    for key, value in (("CUSTOMER_PHONE", customer), ("PRO_PHONE", pro)):
+        if value is not None:
+            env[key] = value
+    return _bash(phones_script, cwd=tmp_path, env=env)
+
+
+def test_both_phones_set_passes(phones_script, tmp_path):
+    proc = _run_phones(phones_script, tmp_path, customer="0501234567", pro="0507654321")
+
+    assert proc.returncode == 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "::error::" not in proc.stdout
+
+
+@pytest.mark.parametrize(
+    "customer, pro, named, not_named",
+    [
+        pytest.param("", "0507654321", "CUSTOMER", "PRO_PHONE", id="no-customer"),
+        pytest.param("0501234567", "", "PRO", "CUSTOMER_PHONE", id="no-pro"),
+        pytest.param("   ", "0507654321", "CUSTOMER", "PRO_PHONE", id="blank-customer"),
+        pytest.param("0501234567", None, "PRO", "CUSTOMER_PHONE", id="unset-pro"),
+    ],
+)
+def test_a_missing_handset_refuses_and_names_the_secret_and_the_input(
+    phones_script, tmp_path, customer, pro, named, not_named
+):
+    proc = _run_phones(phones_script, tmp_path, customer=customer, pro=pro)
+
+    assert proc.returncode != 0, f"stdout={proc.stdout!r} stderr={proc.stderr!r}"
+    assert "::error::" in proc.stdout
+    assert f"STAGING_TEST_{named}_PHONE" in proc.stdout
+    assert f"{named.lower()}_phone" in proc.stdout
+    assert f"STAGING_TEST_{not_named}" not in proc.stdout
+
+
+def test_both_handsets_missing_reports_both(phones_script, tmp_path):
+    proc = _run_phones(phones_script, tmp_path, customer="", pro="")
+
+    assert proc.returncode != 0
+    assert "STAGING_TEST_CUSTOMER_PHONE" in proc.stdout
+    assert "STAGING_TEST_PRO_PHONE" in proc.stdout
+    assert proc.stdout.count("::error::") == 2
+
+
+def test_a_refusal_never_echoes_the_other_number(phones_script, tmp_path):
+    proc = _run_phones(phones_script, tmp_path, customer="", pro="0507654321")
+
+    assert proc.returncode != 0
+    assert "0507654321" not in proc.stdout + proc.stderr

@@ -5,6 +5,10 @@ name: 🧪 Prepare staging E2E data
 # and `scripts/prepare_staging_e2e.py` refuses any database that is not
 # `proli_staging_db`. Unticked `apply` is a read-only report. See
 # docs/CI_WORKFLOWS.md.
+#
+# The handsets come from the STAGING_TEST_CUSTOMER_PHONE / STAGING_TEST_PRO_PHONE
+# repository secrets. This repo is public and a run's inputs panel is world
+# readable, so the phone inputs are optional overrides, not the normal path.
 
 run-name: >-
   ${{ github.ref_name == 'dev' && format('🧪 Prepare staging E2E data — {0}', inputs.apply && 'writing' || 'dry run') || '🧪 Refused — staging only, run from dev' }}
@@ -13,13 +17,15 @@ on:
   workflow_dispatch:
     inputs:
       customer_phone:
-        description: "The customer's handset, any Israeli mobile format (0501234567, 972501234567)"
+        description: "OPTIONAL override. Leave EMPTY to use the STAGING_TEST_CUSTOMER_PHONE secret. WARNING: inputs are PUBLIC on this repo, so a number typed here is published in the run's inputs panel. Any Israeli mobile format"
         type: string
-        required: true
+        required: false
+        default: ""
       pro_phone:
-        description: "The pro's handset. Seeded as an approved pro; it must not already belong to another pro"
+        description: "OPTIONAL override. Leave EMPTY to use the STAGING_TEST_PRO_PHONE secret. WARNING: inputs are PUBLIC on this repo, so a number typed here is published in the run's inputs panel. Seeded as an approved pro; it must not already belong to another pro"
         type: string
-        required: true
+        required: false
+        default: ""
       city:
         description: "The city both seeded pros serve. It must be placeable on the map"
         type: string
@@ -56,15 +62,43 @@ jobs:
     steps:
       # GitHub prints a step's `env:` values in its log header, and the handsets
       # are real numbers. Masked first, so every later step's header and output
-      # shows them as asterisks. (The run's inputs panel cannot be hidden.)
+      # shows them as asterisks. A secret is masked by GitHub already; an input
+      # override is not, which is why this stays. (The run's inputs panel cannot
+      # be hidden: that is why the secrets are the normal path.)
       - name: Mask the handset numbers in this job's log
         id: mask
         env:
-          CUSTOMER_PHONE: ${{ inputs.customer_phone }}
-          PRO_PHONE: ${{ inputs.pro_phone }}
+          CUSTOMER_PHONE: ${{ inputs.customer_phone || secrets.STAGING_TEST_CUSTOMER_PHONE }}
+          PRO_PHONE: ${{ inputs.pro_phone || secrets.STAGING_TEST_PRO_PHONE }}
         run: |
           if [ -n "${CUSTOMER_PHONE:-}" ]; then echo "::add-mask::$CUSTOMER_PHONE"; fi
           if [ -n "${PRO_PHONE:-}" ]; then echo "::add-mask::$PRO_PHONE"; fi
+
+      # Neither the input nor the secret set means there is no handset to seed.
+      # Say which one, and where to put it, before anything is installed.
+      - name: Require both handset numbers
+        id: phones
+        env:
+          CUSTOMER_PHONE: ${{ inputs.customer_phone || secrets.STAGING_TEST_CUSTOMER_PHONE }}
+          PRO_PHONE: ${{ inputs.pro_phone || secrets.STAGING_TEST_PRO_PHONE }}
+        run: |
+          set +e
+          set -uo pipefail
+
+          # Whitespace-only counts as unset (a stray space in an input box).
+          missing=0
+          if [ -z "${CUSTOMER_PHONE:-}" ] || [ -z "${CUSTOMER_PHONE//[[:space:]]/}" ]; then
+            echo "::error::No customer handset. Set the STAGING_TEST_CUSTOMER_PHONE repository secret (Settings → Secrets and variables → Actions), or fill the customer_phone input. Inputs are public on this repo, so the secret is the safe path."
+            missing=1
+          fi
+          if [ -z "${PRO_PHONE:-}" ] || [ -z "${PRO_PHONE//[[:space:]]/}" ]; then
+            echo "::error::No pro handset. Set the STAGING_TEST_PRO_PHONE repository secret (Settings → Secrets and variables → Actions), or fill the pro_phone input. Inputs are public on this repo, so the secret is the safe path."
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo "Refusing to run: nothing was written."
+            exit 1
+          fi
 
       # Only `dev` resolves, and only to staging. There is no production arm:
       # `production` is refused by name so that nobody has to wonder.
@@ -147,8 +181,8 @@ jobs:
           # script itself refuses any database but proli_staging_db.
           ENVIRONMENT: development
           TARGET_ENV: ${{ steps.target.outputs.target }}
-          CUSTOMER_PHONE: ${{ inputs.customer_phone }}
-          PRO_PHONE: ${{ inputs.pro_phone }}
+          CUSTOMER_PHONE: ${{ inputs.customer_phone || secrets.STAGING_TEST_CUSTOMER_PHONE }}
+          PRO_PHONE: ${{ inputs.pro_phone || secrets.STAGING_TEST_PRO_PHONE }}
           CITY: ${{ inputs.city }}
           TRADE: ${{ inputs.trade }}
           APPLY: ${{ inputs.apply }}
