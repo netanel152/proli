@@ -45,6 +45,43 @@ def test_every_workflow_declares_permissions_and_only_promote_can_write(path):
         assert permissions == {"contents": "read"}
 
 
+# The one job outside promote whose token may write: the review job comments on
+# the PR it reviews. Anything else asking for a write at job level fails here.
+REVIEWS = "claude-review.yml"
+
+
+@workflow_param
+def test_only_the_review_job_widens_permissions_and_only_to_comment(path):
+    for name, job in _load(path)["jobs"].items():
+        granted = job.get("permissions")
+        if path.name == REVIEWS:
+            assert granted == {"contents": "read", "pull-requests": "write"}, name
+        else:
+            assert granted is None, f"{path.name}: {name} sets job permissions"
+
+
+def test_the_review_check_keeps_its_name():
+    # Branch protection requires this job by name; a rename stops requiring it.
+    assert "claude-review" in _load(WORKFLOW_DIR / REVIEWS)["jobs"]
+
+
+def test_the_review_fails_closed():
+    # No credential, no verdict or a blocker must all leave the check red.
+    doc = _load(WORKFLOW_DIR / REVIEWS)
+    steps = doc["jobs"]["claude-review"]["steps"]
+    gate = next(s for s in steps if s.get("name", "").startswith("Post the review"))
+    assert gate["if"].startswith("always()")
+    assert 'block) echo "::error::' in gate["run"]
+    assert '*) echo "::error::' in gate["run"]
+    assert "exit 1" in steps[0]["run"]
+    assert doc[True]["pull_request"]["types"] == [
+        "opened",
+        "synchronize",
+        "reopened",
+        "ready_for_review",
+    ]
+
+
 @workflow_param
 def test_every_job_has_a_timeout(path):
     for name, job in _load(path)["jobs"].items():

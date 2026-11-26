@@ -5,6 +5,7 @@ What each workflow does, what a red run means, and the incidents behind the odd-
 | Workflow | Trigger | Secrets and vars | A red run means |
 |---|---|---|---|
 | `tests.yml` | PRs, push to `dev`/`production` | none | A guard, actionlint, a linter or the suite failed, or the PR passes fewer tests than `dev` |
+| `🤖 claude-review.yml` | PRs to `dev`/`production` (not drafts) | `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (also as a Dependabot secret) | The review found a BLOCKER, returned no verdict, or no credential was visible (a fork PR never gets one) |
 | `🔎 verify-staging-deploy.yml` | push to `dev` | `STAGING_HEALTH_TOKEN`; `STAGING_HEALTH_URL` (var, optional) | Staging did not serve this commit within 12 minutes; the deploy trigger is probably dead (`docs/RAILWAY_SETUP.md`) |
 | `🚢 promote-to-production.yml` | manual | `PRODUCTION_HEALTH_URL` (var, optional) | Not a fast-forward, `dev` is not green (the annotation says which case), a short `skip_reason`, or production did not restart |
 | `🛑 stop_railway_services.yml` | manual, branch is the target | `RAILWAY_TOKEN_PRODUCTION`, `RAILWAY_TOKEN_STAGING` | A named service is **still running**; stop it from the Railway dashboard |
@@ -14,7 +15,7 @@ What each workflow does, what a red run means, and the incidents behind the odd-
 
 ## Conventions
 
-Every workflow declares `permissions` (`contents: read`; promote adds what it needs to push and to read check runs) and a job timeout, pins actions to a full SHA with a `# vX.Y.Z` comment, and passes secrets and step outputs to scripts through `env:`. Only promote's checkout keeps its credentials. Nothing uses `pull_request_target`: this repo is public, and `pull_request` never exposes secrets to a fork.
+Every workflow declares `permissions` (`contents: read`; promote adds what it needs to push and to read check runs, and the review job alone adds `pull-requests: write` at job level, to comment) and a job timeout, pins actions to a full SHA with a `# vX.Y.Z` comment, and passes secrets and step outputs to scripts through `env:`. Only promote's checkout keeps its credentials. Nothing uses `pull_request_target`: this repo is public, and `pull_request` never exposes secrets to a fork.
 
 Dependabot bumps the action pins in one weekly PR. Its `pip` entry (`.github/dependabot.yml`) sets `open-pull-requests-limit: 0`, so no routine version-bump PR opens for `requirements.txt`; only security updates do (they ignore that limit), and only while "Dependabot security updates" is on in the repository's Code security settings. It cannot see the two versions that live in scripts, so bump those by hand: actionlint in `tests.yml` (version and SHA-256 from the release's checksums file) and `@railway/cli` in the stop workflow.
 
@@ -37,6 +38,17 @@ Known limits:
 - Each label change costs a full run of the suite.
 
 The `Current status: N passed` line this replaced was edited in 36 of the last 40 commits on `dev` before the change, and was the main source of merge conflicts between open PRs. Earlier versions: an equality check, which failed whichever of two test-adding PRs merged second; then a floor in the file, kept current by `refresh-test-baseline.yml`.
+
+## Claude review
+
+`claude-review.yml` is the review pass every PR needs before it merges; its job, `claude-review`, is a required check next to `pytest`. It runs `anthropics/claude-code-action` with the checklist from `.claude/agents/code-reviewer.md`, which the action restores from the base branch along with the rest of `.claude/` and `CLAUDE.md`, so a PR cannot rewrite the rules it is reviewed by. Claude gets read-only tools (`Read`, `Grep`, `Glob`, `gh pr diff`, `gh pr view`) plus inline comments; nothing from the PR is executed.
+
+- **Green** means a review ran on this head commit and found no BLOCKER. WARNINGS and SUGGESTIONS are left as comments and do not block.
+- **Red** means one of: at least one BLOCKER; the review did not return a verdict (re-run the job); or no credential was visible. The last is always the case for a fork PR, because `pull_request` never hands secrets to a fork — push the branch into this repo instead.
+- One sticky comment per PR (marked `<!-- claude-review -->`) is edited in place on each push, so the latest verdict is the one shown.
+- A draft is skipped and cannot merge anyway; marking it ready starts the run the merge waits for.
+- Dependabot is allowed to trigger it (`allowed_bots`), but Dependabot runs only see Dependabot secrets, so the credential has to be added there too.
+- Prompt injection: the PR's text and code can try to talk the reviewer into passing. The prompt tells it to report such text as a finding, but the check is a review pass, not a substitute for the human who merges.
 
 ## Why they look like this
 
