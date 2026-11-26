@@ -35,6 +35,23 @@ python scripts/seed_coverage_matrix.py --purge                # remove only this
 
 `--scenario` is repeatable and off by default.
 
+### `prepare_staging_e2e.py`
+
+Staging-only. Readies staging for an end-to-end run on real handsets, for one customer handset and one pro handset (`--customer-phone`, `--pro-phone`, `--city`, `--trade`). It resets both chats: their leads, their messages, the leads held by the E2E pros, and in Redis the FSM state, held pre-consent messages, chat context and rate-limit / daily-AI-cap counters (the 24h service-window tracker is left alone, since it mirrors Meta). It then seeds the pro handset as an approved, active pro in that city and trade with 7 days of slots and a consent record, and one extra approved pro in the same city and trade, rated lower, so a rejected or timed-out offer has someone to be reassigned to. The extra pro's number is the reserved, structurally unreachable `972000000200`, so an offer to it cannot be delivered: it ends in the `pro_offer_send_failed` escalation, not in a message anyone reads. Pros are created through the application's own paths (the registration's `_create_pending_pro`, the steps the admin panel's Approve click runs, `record_consent`), minus the "you were approved" WhatsApp. Every document is tagged `seed_batch: "e2e_v1"`; a re-run removes the previous batch first, and a *different* approved pro already holding either phone is never touched (the run refuses).
+
+Refuses unless `ENVIRONMENT` is `development` or `staging`, every database it connects to is `proli_staging_db` (production is refused by name), and `REDIS_URL` is set to a reachable, non-loopback host. Dry run by default: nothing is written without `--apply`.
+
+Do not run it in a database that also holds the coverage matrix (`coverage_v1`): those pros are approved, active rivals in the same geo rings and may outrank the handset pro, so the offer would go to one of them. The dry run warns when other approved, active pros are present.
+
+```bash
+python scripts/prepare_staging_e2e.py --customer-phone 0501234567 --pro-phone 0507654321 --city "תל אביב" --trade plumber           # report only
+python scripts/prepare_staging_e2e.py --customer-phone 0501234567 --pro-phone 0507654321 --city "תל אביב" --trade plumber --apply   # write
+```
+
+Exit `0` when done (dry run: nothing is in the way), `2` when the city could not be placed on the map (nothing written), `3` when refused (not the staging database, a Redis that is not remote, bad input, or a foreign pro holds a phone; nothing written), `4` when the apply stopped part-way or read back differently from what it wrote (Redis state still set, a pro with no slots; safe to run again).
+
+Against staging, run the **`🧪 Prepare staging E2E data`** workflow rather than by hand: it runs from `dev` only, the connection settings come from repo secrets, the job exits with the script's own code, and the report is written to the run's job summary.
+
 ### `migrate_unknown_address.py`
 
 One-time migration. Finds all leads with `full_address = "Unknown Address"` (a legacy sentinel value) and clears the field so the geocoding service can resolve it properly on the next interaction.

@@ -10,6 +10,7 @@ What each workflow does, what a red run means, and the incidents behind the odd-
 | `🛑 stop_railway_services.yml` | manual, branch is the target | `RAILWAY_TOKEN_PRODUCTION`, `RAILWAY_TOKEN_STAGING` | A named service is **still running**; stop it from the Railway dashboard |
 | `🗺️ check_pro_service_areas.yml` | manual, branch is the target | `{PRODUCTION,STAGING}_MONGO_URI`, `{PRODUCTION,STAGING}_REDIS_URL`, `GOOGLE_MAPS_API_KEY` | A pro cannot be placed on the map, the geocoder was down, nothing was checked, or a secret is missing (PRO-189) |
 | `🧰 backfill_pro_trades.yml` | manual, branch is the target | `{PRODUCTION,STAGING}_MONGO_URI`, `{PRODUCTION,STAGING}_REDIS_URL` | The backfill did not complete, or a secret is missing; unticked `apply` is read-only, and exit `1` on a dry run means pros still need it (PRO-234) |
+| `🧪 prepare_staging_e2e.yml` | manual, `dev` only (staging; no production arm, `production` is refused by name) | `STAGING_MONGO_URI`, `STAGING_REDIS_URL`, `GOOGLE_MAPS_API_KEY` | The script refused (not `proli_staging_db`, an unusable input, an unreachable Redis, or another pro already holds the phone), the city could not be placed on the map, or the apply stopped part-way (safe to run again); a missing `STAGING_*` secret or a URI naming another database also fails it. Unticked `apply` is read-only |
 | `🩺 health-leads-monitor.yml` | every 10 minutes, manual | `PRODUCTION_HEALTH_TOKEN`, `PRODUCTION_SENTRY_DSN` | See "Lead pipeline monitor" in `docs/OPERATIONS_GUIDE.md` |
 
 ## Conventions
@@ -51,6 +52,8 @@ The `Current status: N passed` line this replaced was edited in 36 of the last 4
 **A stale environment looks like a quiet one (PRO-155).** Railway's deploy trigger for staging died and the dashboard kept showing SUCCESS, from variable-triggered restarts of a stale image. `verify-staging-deploy.yml` compares the pushed SHA with authenticated `/health`'s `commit`, the PRO-136-gated detail.
 
 **The branch is the target.** The stop workflow's confirm box refused four runs in a row on 2026-09-08: a phone keyboard's trailing space, then the wrong word. A branch in the dropdown cannot be misspelled, and a feature branch can touch nothing. The service-areas check copies the shape, with a checkbox for the same reason.
+
+**The E2E preparation has no production arm.** It resets chats and writes pros, so it reads only the `STAGING_*` secrets, runs from `dev` and from nowhere else, and checks the database name twice: in the workflow before the install, and in `scripts/prepare_staging_e2e.py`. The second check is the one that holds, because the workflow runs with `ENVIRONMENT=development` like its siblings and so cannot rely on the environment name. The handset numbers are masked in the job log first, since GitHub prints a step's `env:` values.
 
 **A green stop must mean stopped.** A blanket `|| echo "no active deployment"` once swallowed a rejected token, then printed "All services stopped" (measured on staging 2026-09-22 and 2026-10-06). "No deployments found" is now the only failure that counts as success.
 

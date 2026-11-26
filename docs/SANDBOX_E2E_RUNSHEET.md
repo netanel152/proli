@@ -32,6 +32,13 @@ checklist requires it (a registered pro's number must exist as a pro in staging)
 | D4 | **Admin** — `ADMIN_PHONE` on staging | ...____ | ☐ | ☐ admin record |
 | D5 | Spare — closed-window drill / pro self-signup (scenario 10) | ...____ | ☐ | ☐ unregistered |
 
+> **Preparing the staging data:** the `🧪 Prepare staging E2E data` workflow (run from `dev`;
+> `scripts/prepare_staging_e2e.py`, see `docs/SCRIPTS.md`) resets D1's and D2's chats and seeds
+> D2 as an approved pro with slots and consent, plus one extra approved pro with **no handset**
+> (a reserved, unreachable number). That extra pro is **not D3**: an offer reassigned to it
+> cannot be delivered. D3 as a real reassignment target still has to be seeded or approved
+> separately.
+
 ⚠️ Verify (PRO-88 open question): whether the 5-recipient limit also applies to
 **template** sends. Record the answer here: ______ — it decides how much of the
 template path PRO-64 can exercise later.
