@@ -50,7 +50,7 @@ python scripts/prepare_staging_e2e.py --customer-phone 0501234567 --pro-phone 05
 
 Exit `0` when done (dry run: nothing is in the way), `2` when the city could not be placed on the map (nothing written), `3` when refused (not the staging database, a Redis that is not remote, bad input, or a foreign pro holds a phone; nothing written), `4` when the apply stopped part-way or read back differently from what it wrote (Redis state still set, a pro with no slots; safe to run again).
 
-Against staging, run the **`🧪 Prepare staging E2E data`** workflow rather than by hand: it runs from `dev` only, the connection settings come from repo secrets, the job exits with the script's own code, and the report is written to the run's job summary.
+Against staging, run the **`🧪 Prepare staging E2E data`** workflow rather than by hand: it runs from `dev` only, the connection settings and the two handset numbers (`STAGING_TEST_CUSTOMER_PHONE`, `STAGING_TEST_PRO_PHONE`) come from repo secrets (the phone inputs are optional overrides, but inputs are public on this repo), the job exits with the script's own code, and the report is written to the run's job summary.
 
 ### `migrate_unknown_address.py`
 
