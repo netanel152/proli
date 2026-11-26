@@ -174,6 +174,7 @@ Expected result: the full unit suite passes, with integration tests skipped with
 | [Production Readiness](docs/PRODUCTION_READINESS.md) | Pre-launch checklist |
 | [Scaling Guide](docs/SCALING_GUIDE.md) | Horizontal scaling strategies |
 | [Parallel Tracks](docs/PARALLEL_TRACKS.md) | One worktree per issue, the Windows shell traps, teardown |
+| [Working with Claude](docs/WORKING_WITH_CLAUDE.md) | One topic per chat, no model switch mid-chat, which model for which job |
 
 ## Working with Claude Code
 

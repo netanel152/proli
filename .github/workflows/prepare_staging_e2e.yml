@@ -1,0 +1,213 @@
+name: 🧪 Prepare staging E2E data
+
+# Resets and seeds staging for an end-to-end run on real handsets. STAGING ONLY:
+# it runs from `dev` and from nowhere else, it reads only the STAGING_* secrets,
+# and `scripts/prepare_staging_e2e.py` refuses any database that is not
+# `proli_staging_db`. Unticked `apply` is a read-only report. See
+# docs/CI_WORKFLOWS.md.
+
+run-name: >-
+  ${{ github.ref_name == 'dev' && format('🧪 Prepare staging E2E data — {0}', inputs.apply && 'writing' || 'dry run') || '🧪 Refused — staging only, run from dev' }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      customer_phone:
+        description: "The customer's handset, any Israeli mobile format (0501234567, 972501234567)"
+        type: string
+        required: true
+      pro_phone:
+        description: "The pro's handset. Seeded as an approved pro; it must not already belong to another pro"
+        type: string
+        required: true
+      city:
+        description: "The city both seeded pros serve. It must be placeable on the map"
+        type: string
+        required: true
+        default: "תל אביב"
+      trade:
+        description: "The seeded pros' trade"
+        type: choice
+        required: true
+        default: plumber
+        options:
+          - plumber
+          - electrician
+          - handyman
+          - locksmith
+          - painter
+          - cleaner
+      apply:
+        description: "Write: reset both chats and seed the two pros. Leave unticked for a read-only report."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-staging-e2e
+  cancel-in-progress: false
+
+jobs:
+  prepare-staging-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      # GitHub prints a step's `env:` values in its log header, and the handsets
+      # are real numbers. Masked first, so every later step's header and output
+      # shows them as asterisks. (The run's inputs panel cannot be hidden.)
+      - name: Mask the handset numbers in this job's log
+        id: mask
+        env:
+          CUSTOMER_PHONE: ${{ inputs.customer_phone }}
+          PRO_PHONE: ${{ inputs.pro_phone }}
+        run: |
+          if [ -n "${CUSTOMER_PHONE:-}" ]; then echo "::add-mask::$CUSTOMER_PHONE"; fi
+          if [ -n "${PRO_PHONE:-}" ]; then echo "::add-mask::$PRO_PHONE"; fi
+
+      # Only `dev` resolves, and only to staging. There is no production arm:
+      # `production` is refused by name so that nobody has to wonder.
+      - name: Resolve the target from the branch
+        id: target
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "${REF_NAME:-}" in
+            dev)        TARGET=staging ;;
+            production)
+              echo "::error::This workflow is staging-only and never runs against production. Run it from 'dev'. Refusing to touch any database."
+              exit 1
+              ;;
+            *)
+              echo "::error::Run this workflow from 'dev' (staging). Branch '${REF_NAME:-}' maps to nothing. Refusing to touch any database."
+              exit 1
+              ;;
+          esac
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "Branch '$REF_NAME' → preparing $TARGET."
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Verify the connection settings resolved
+        id: creds
+        env:
+          MONGO_URI: ${{ secrets.STAGING_MONGO_URI }}
+          REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
+          TARGET: ${{ steps.target.outputs.target }}
+        run: |
+          set +e
+          set -uo pipefail
+
+          # `Settings` defaults both to localhost, so a missing secret would
+          # reset an empty local database and call it staging. This run also
+          # clears Redis state, so both are required, not just the database.
+          if [ -z "${MONGO_URI:-}" ] || [ -z "${REDIS_URL:-}" ]; then
+            echo "::error::STAGING_MONGO_URI and STAGING_REDIS_URL must both resolve for '$TARGET'. Add them as *repository* secrets (Settings → Secrets and variables → Actions) — a secret under Settings → Environments is invisible here, since this job declares no environment. Refusing to run: without them the script would silently reset an empty local database."
+            exit 1
+          fi
+
+          # The database name only: never the host, never the credentials.
+          DB_NAME="$(python -c 'import os, urllib.parse as up; p = up.urlsplit(os.environ["MONGO_URI"]).path or ""; print(p.lstrip("/").split("?")[0] or "(none named in the URI)")')"
+          echo "Connection settings resolved for $TARGET"
+          echo "  database:    $DB_NAME"
+
+          # The script refuses this too; failing here saves the install and says
+          # it before anything runs.
+          if [ "$DB_NAME" != "proli_staging_db" ]; then
+            echo "::error::STAGING_MONGO_URI names database '$DB_NAME', not 'proli_staging_db'. This workflow only ever prepares the staging database. Refusing to run."
+            exit 1
+          fi
+
+      - name: Prepare E2E data in ${{ steps.target.outputs.target }}
+        id: prepare
+        env:
+          MONGO_URI: ${{ secrets.STAGING_MONGO_URI }}
+          REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
+          GOOGLE_MAPS_API_KEY: ${{ secrets.GOOGLE_MAPS_API_KEY }}
+          # `Settings` refuses to construct without these four. Placeholders:
+          # this script touches neither Gemini nor Cloudinary.
+          GEMINI_API_KEY: unused-by-this-script
+          CLOUDINARY_CLOUD_NAME: unused-by-this-script
+          CLOUDINARY_API_KEY: unused-by-this-script
+          CLOUDINARY_API_SECRET: unused-by-this-script
+          # Deliberately `development`: `staging` would arm the boot checks meant
+          # for the deployed services. The branch picks the secrets, and the
+          # script itself refuses any database but proli_staging_db.
+          ENVIRONMENT: development
+          TARGET_ENV: ${{ steps.target.outputs.target }}
+          CUSTOMER_PHONE: ${{ inputs.customer_phone }}
+          PRO_PHONE: ${{ inputs.pro_phone }}
+          CITY: ${{ inputs.city }}
+          TRADE: ${{ inputs.trade }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          set +e
+          set -uo pipefail
+
+          if [ "${APPLY:-false}" = "true" ]; then
+            FLAGS="--apply"
+            MODE="--apply (writing)"
+          else
+            FLAGS=""
+            MODE="read-only (dry run — no writes)"
+          fi
+
+          echo "Preparing E2E data in $TARGET_ENV — $MODE"
+
+          # Every input reaches the script through `env:` and a quoted
+          # `--flag=value`, never by expression interpolation into this shell.
+          CMD=(python scripts/prepare_staging_e2e.py
+            --customer-phone="$CUSTOMER_PHONE"
+            --pro-phone="$PRO_PHONE"
+            --city="$CITY"
+            --trade="$TRADE")
+          if [ -n "$FLAGS" ]; then
+            CMD+=("$FLAGS")
+          fi
+
+          "${CMD[@]}" 2>&1 | tee report.txt
+          code=${PIPESTATUS[0]}
+
+          {
+            echo "## 🧪 Staging E2E data — $TARGET_ENV"
+            echo
+            echo "- Mode: $MODE"
+            echo "- Exit code: \`$code\`"
+            echo
+            echo '```'
+            cat report.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # The script's exit code stays the job's verdict, so a checklist can
+          # be ticked on a green run and only on a green run.
+          case "$code" in
+            0)
+              echo "✅ Staging is ready for the run (or, on a dry run, nothing stands in the way)."
+              ;;
+            2)
+              echo "::error::The city could not be placed on the map, so nothing was written. Use a city the geocoder knows."
+              ;;
+            3)
+              echo "::error::The script refused: not the staging database, an unusable input, an unreachable Redis, or another pro already holds the phone. Nothing was written. See the job summary."
+              ;;
+            4)
+              echo "::error::The apply stopped part-way, or read back differently from what it wrote (Redis state still set, a pro with no slots). Part of it may be written; it is safe to run again. See the job summary."
+              ;;
+            *)
+              echo "::error::The preparation did not complete (exit $code). Part of it may have been written. See the log above."
+              ;;
+          esac
+          exit "$code"
