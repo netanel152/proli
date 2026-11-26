@@ -101,10 +101,10 @@ jobs:
             warnings=$(printf '%s' "$RESULT" | jq -r '.warnings')
             summary=$(printf '%s' "$RESULT" | jq -r '.summary')
             if [ "$verdict" = "pass" ]; then head="✅ **Claude review passed**"; else head="⛔ **Claude review: ${blockers} blocker(s) — fix before merge**"; fi
-            body=$(printf '%s\n%s — %s warning(s), reviewed at `%s`\n\n%s\n' "$MARKER" "$head" "$warnings" "${HEAD_SHA:0:7}" "$summary")
+            body=$(printf "%s\n%s — %s warning(s), reviewed at \`%s\`\n\n%s\n" "$MARKER" "$head" "$warnings" "${HEAD_SHA:0:7}" "$summary")
           else
             verdict="error"
-            body=$(printf '%s\n⚠️ **Claude review did not complete** for `%s`, so this PR has no review yet. Re-run the job from the Checks tab.\n' "$MARKER" "${HEAD_SHA:0:7}")
+            body=$(printf "%s\n⚠️ **Claude review did not complete** for \`%s\`, so this PR has no review yet. Re-run the job from the Checks tab.\n" "$MARKER" "${HEAD_SHA:0:7}")
           fi
           printf '%s\n' "$body" >> "$GITHUB_STEP_SUMMARY"
 
