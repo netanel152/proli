@@ -41,22 +41,19 @@ class Messages:
         # Same wording as `Templates.RATE_SERVICE`.
         RATING_SCALE_LINE = "אפשר לענות במספר מ-1 (גרוע) עד 5 (מצוין), או לכתוב דלג."
 
-        # The option texts stay "כן, הסתיים": a customer who types the option
-        # back is matched by `Keywords.CUSTOMER_COMPLETION_INDICATOR`.
+        # "כן, הסתיימה" matches the template. A customer who types the option
+        # back still contains `Keywords.CUSTOMER_COMPLETION_INDICATOR`.
         COMPLETION_CHECK = (
             "היי, רצינו לוודא שהכל הסתדר עם {pro_name}.\n"
             "העבודה הסתיימה? אפשר לענות במספר:\n"
-            "1 - כן, הסתיים\n"
+            "1 - כן, הסתיימה\n"
             "2 - עדיין לא\n"
             "3 - איש המקצוע לא הגיע"
         )
         COMPLETION_ACK = (
             "איזה כיף לשמוע.\n" "איך היה השירות של {pro_name}?\n" + RATING_SCALE_LINE
         )
-        COMPLETION_NOT_YET_ACK = (
-            "אין בעיה, לא נציק בינתיים.\n"
-            "כשהעבודה תסתיים, אפשר לכתוב סיימתי ונמשיך משם."
-        )
+        COMPLETION_NOT_YET_ACK = "אין בעיה.\nכשהעבודה תסתיים, אפשר לכתוב כאן סיימתי."
         # PRO-45: answer to option 3. It is a receipt for the report and
         # nothing else. `reassign_lead` runs before this reaches the customer
         # and messages them itself on every branch — a replacement search, a
@@ -233,7 +230,7 @@ class Messages:
             "2 - להמתין עוד קצת"
         )
         REASSIGN_WAIT_ACK = (
-            "אין בעיה, ממשיכים לחכות לאישור. נעדכן אותך ברגע שתהיה תשובה."
+            "אין בעיה, ממשיכים לחכות לאישור. נעדכן אותך כאן ברגע שתהיה תשובה."
         )
         # PRO-238: a "1"/"2" answering REASSIGN_OFFER after the situation it
         # asked about has moved on. Each says what is true now; none changes
@@ -304,8 +301,8 @@ class Messages:
         # answering with the generic STILL_WAITING.
         EMERGENCY_WHILE_WAITING = (
             "סימנו את הפנייה שלך כדחופה.\n"
-            "איש המקצוע שקיבל אותה צריך לענות מהר, ואם לא תגיע תשובה "
-            "בדקות הקרובות, נחפש לך מישהו אחר.\n"
+            "איש המקצוע שקיבל אותה צריך לענות מהר. אם התשובה תתעכב, "
+            "נשאל אותך כאן אם לחפש איש מקצוע אחר.\n"
             "בינתיים, חשוב לשמור על בטיחות."
         )
         # §7: `monitor_service.check_sla_deflection` clears the pause state and
@@ -317,13 +314,14 @@ class Messages:
         # (the operator was paged) or a pro's השהה (the pro paused it), and
         # nothing schedules anyone's reply.
         SLA_DEFLECTION_MESSAGE = (
-            "סליחה על ההמתנה, המענה האנושי עדיין לא הגיע.\n"
-            "אנחנו שוב כאן בצ'אט: אפשר להמשיך לכתוב, ונמשיך לטפל בפנייה.\n"
-            "כדי לחכות שוב למענה אנושי, אפשר לכתוב נציג."
+            "סליחה על ההמתנה. המענה האוטומטי חזר לפעול בשיחה הזו, "
+            "אז אפשר להמשיך לכתוב לנו כאן.\n"
+            "כדי לבקש שוב מענה אנושי, אפשר לכתוב נציג."
         )
         LOYALTY_OFFER = (
             "איזה כיף שחזרת אלינו!\n"
-            "בפעם הקודמת טיפל בך {pro_name}. לבדוק קודם אם הוא פנוי גם הפעם?\n"
+            "בפעם הקודמת עבדת עם {pro_name}\n"
+            "לבדוק קודם אם איש המקצוע פנוי גם הפעם?\n"
             "1 - כן, לבדוק מולו\n"
             "2 - לא, לחפש מישהו אחר"
         )
@@ -337,7 +335,7 @@ class Messages:
         # saved, but no pro was contacted — so the copy promises nothing and
         # asks for what is still missing ({missing} is the gate's own reason).
         LOYALTY_ACCEPTED_NEED_DETAILS = (
-            "מעולה, רשמנו ש{pro_name} יטפל בעבודה הזו.\n" "{missing}"
+            "מעולה, נבדוק קודם מול {pro_name}.\n" "{missing}"
         )
         # PRO-119: the lead changed hands while the loyalty prompt was open —
         # neutral, promises nothing, since the race winner owns it now.
@@ -373,7 +371,7 @@ class Messages:
             "1 - כן, בעיה חדשה\n"
             "2 - זה לגבי העבודה הקיימת"
         )
-        NEW_REQUEST_ACK = "בסדר גמור. מה הבעיה החדשה? נמצא לך איש מקצוע."
+        NEW_REQUEST_ACK = "בסדר גמור. מה הבעיה החדשה?"
         # The pro gets CUSTOMER_EXISTING_JOB_QUERY, which asks them to call back;
         # nothing measures when they do, so no timeframe here.
         EXISTING_JOB_HANDOFF = (
@@ -411,11 +409,10 @@ class Messages:
         STATUS_PENDING_ADMIN_REVIEW = (
             "הסטטוס של הפנייה שלך:\n\n"
             "הצוות שלנו עובר על הפנייה וימצא לך איש מקצוע מתאים.\n"
-            "נעדכן אותך כאן ברגע שיש חדש."
+            "נעדכן אותך כאן ברגע שנמצא איש מקצוע מתאים."
         )
         STATUS_COMPLETED = (
-            "הסטטוס של הפנייה שלך:\n\n"
-            "העבודה הסתיימה. אם עוד לא דירגת את איש המקצוע, נשמח לשמוע איך היה."
+            "הסטטוס של הפנייה שלך:\n\n" "העבודה הסתיימה. תודה שבחרת בפרולי."
         )
         STATUS_CANCELLED = "הסטטוס של הפנייה שלך:\n\nהפנייה בוטלה."
         STATUS_REJECTED_OR_CLOSED = (
@@ -426,7 +423,7 @@ class Messages:
         # Optional lines composed into PRO_FOUND (built in pro_flow.py).
         PROFESSION_LINE = "מקצוע: {label}\n"
         QUOTED_PRICE_LINE = "\nהערכת המחיר שקיבלת: {quoted_price}₪\n"
-        PRO_RATING_LINE = "\nדירוג: {rating:.1f} ({review_count} ביקורות)"
+        PRO_RATING_LINE = "\nדירוג: {rating:.1f}\nמספר ביקורות: {review_count}"
         # workflow_service's AWAITING_NEW_OR_EXISTING re-prompt. §3: same menu
         # shape and same option wording as EXISTING_JOB_PROMPT, which is the
         # question this re-asks.
@@ -438,7 +435,8 @@ class Messages:
         # lead_manager_service's address gate: the sentence plus the field
         # vocabulary it lists (attribute name -> Hebrew label, in gate order).
         ADDRESS_MISSING_PARTS = (
-            "כדי שאיש המקצוע יגיע בדיוק למקום, חסר לנו עוד בכתובת: " "{missing_fields}"
+            "כדי שאיש המקצוע יגיע בדיוק למקום, חסרים לנו עוד פרטים בכתובת: "
+            "{missing_fields}"
         )
         ADDRESS_FIELD_LABELS = {
             "street": "רחוב",
@@ -460,17 +458,17 @@ class Messages:
         # `handle_pro_text_command` dispatches on (§7).
         CMD_APPROVE = "אשר - לקבל את העבודה שמחכה לך"
         CMD_REJECT = "דחה - לדחות את העבודה שמחכה לך"
-        CMD_DETAILS = "פרטים - פרטי העבודות הפעילות וקישורי ניווט"
-        CMD_ACTIVE_JOBS = "עבודות - רשימת העבודות הפעילות"
+        CMD_DETAILS = "פרטים - לראות את העבודות שאישרת, עם טלפון וניווט"
+        CMD_ACTIVE_JOBS = "עבודות - לראות את העבודות הפעילות"
         CMD_FINISH = "סיימתי - לסגור עבודה שסיימת"
         CMD_CANCEL = "ביטול - לבטל עבודה פעילה"
         CMD_SEARCH = "חפש - לחפש פניות שמחכות לאיש מקצוע"
         CMD_RESUME = "זמין - לחזור לקבל עבודות"
-        CMD_PAUSE = "הפסקה - לעצור לזמן מה את קבלת העבודות"
-        CMD_SUMMARY = "סיכום - סיכום הביצועים שלך"
-        CMD_REVIEWS = "ביקורות - הביקורות האחרונות שלך"
-        CMD_HISTORY = "היסטוריה - העבודות האחרונות שסיימת"
-        CMD_MENU = "תפריט - חזרה ללוח הבקרה"
+        CMD_PAUSE = "הפסקה - להפסיק זמנית לקבל עבודות"
+        CMD_SUMMARY = "סיכום - לראות את סיכום הביצועים שלך"
+        CMD_REVIEWS = "ביקורות - לקרוא את הביקורות האחרונות שלך"
+        CMD_HISTORY = "היסטוריה - לראות את העבודות האחרונות שסיימת"
+        CMD_MENU = "תפריט - לחזור ללוח הבקרה"
 
         HELP_MENU = "\n".join(
             (
@@ -486,7 +484,7 @@ class Messages:
                 CMD_FINISH,
                 CMD_CANCEL,
                 "",
-                "יוזמה וזמינות:",
+                "חיפוש וזמינות:",
                 CMD_SEARCH,
                 CMD_RESUME,
                 CMD_PAUSE,
@@ -552,7 +550,7 @@ class Messages:
         CALENDAR_UPDATE_MOVED = (
             "\nהמועד שהלקוח ביקש תפוס ביומן, אז שריינו את המועד הפנוי הקרוב:\n"
             "{appointment_time}\n"
-            "הלקוח קיבל את המועד הזה."
+            "שלחנו ללקוח את המועד הזה."
         )
         # PRO-59: everything APPROVAL_REQUEST withholds, sent the moment the
         # approval is *claimed* — after the atomic status write, never before,
@@ -628,7 +626,7 @@ class Messages:
         EARLY_LEAD_DETAILS = "תקלה: {issue_type}\nעיר: {city}"
         EARLY_LEAD_FOOTER = (
             "\n\nאנחנו משלימים עם הלקוח את שאר הפרטים: כתובת, יום ושעה.\n"
-            "כשהכל יהיה מוכן, תקבל הודעה עם כל הפרטים לאישור. "
+            "כשהכל יהיה מוכן, תקבל הודעה עם הפרטים לאישור. "
             "אין צורך לעשות כלום עכשיו."
         )
         # Sent when deal closes — ready for approval
@@ -807,7 +805,7 @@ class Messages:
         SELECT_JOB_TO_CANCEL = (
             "איזו עבודה לבטל?\n"
             "{jobs_list}\n"
-            "שלח את מספר העבודה, או כתוב ביטול כדי לצאת."
+            "שלח את מספר העבודה לביטול, או כתוב ביטול כדי לצאת בלי לבטל."
         )
         # PRO-212: אשר/דחה with more than one NEW lead. Rows are JOB_SELECT_ROW,
         # which carries nothing the offer itself did not (PRO-59).
@@ -978,7 +976,7 @@ class Messages:
         LEAD_NOT_FOUND = "הליד לא נמצא. כדי להתחיל מחדש, כתוב ניהול."
         NO_AVAILABLE_PROS = "לא מצאנו אנשי מקצוע פנויים לליד הזה."
         AVAILABLE_PROS_HEADER = "אנשי מקצוע פנויים:\n"
-        PRO_ROW = "{num}. {name} (דירוג: {rating})"
+        PRO_ROW = "{num}. {name}\nדירוג: {rating}"
         INVALID_OPTION = "האפשרות הזו לא קיימת. אפשר לענות 1 או 2."
         PRO_NOT_FOUND = "איש המקצוע לא נמצא. כדי להתחיל מחדש, כתוב ניהול."
         ASSIGN_SUCCESS = "הליד הועבר אל {pro_name}."
@@ -1004,7 +1002,7 @@ class Messages:
         )
         NO_PRO_AVAILABLE = (
             "לא מצאנו כרגע איש מקצוע פנוי לפנייה שלך.\n"
-            "אפשר לנסות שוב מאוחר יותר, או לכתוב נציג ומישהו מהצוות יחזור אליך."
+            "אפשר לנסות שוב מאוחר יותר, או לכתוב נציג כדי להעביר את השיחה לצוות שלנו."
         )
         # PRO-63: sent when a lead exhausts MAX_REASSIGNMENTS. This is the worst
         # moment a customer can have with Proli — they have been failed three
@@ -1103,14 +1101,14 @@ class Messages:
         # A tap sends ACCEPT_KEYWORDS[0] / DECLINE_KEYWORDS[0], the words typed
         # (dispatch_guards.CONSENT_BUTTONS), so the label may say more. Meta
         # caps a reply-button title at 20 characters.
-        ACCEPT_BUTTON = "כן להמשיך"
-        DECLINE_BUTTON = "לא לביטול"
+        ACCEPT_BUTTON = "כן, להמשיך"
+        DECLINE_BUTTON = "לא, תודה"
 
     class Onboarding:
         _WELCOME_INTRO = (
             "ברוכים הבאים להרשמה כאיש מקצוע בפרולי!\n\n"
             "נשאל כמה שאלות קצרות ונבנה את הפרופיל שלך.\n"
-            "בסוף הצוות שלנו יאשר את הפרופיל, ואז תתחיל לקבל עבודות.\n\n"
+            "בסוף הצוות שלנו יעבור על הפרופיל, ואחרי האישור תתחיל לקבל עבודות.\n\n"
         )
         _WELCOME_QUESTION = "מה שם העסק שלך?"
         WELCOME = _WELCOME_INTRO + _WELCOME_QUESTION
@@ -1152,11 +1150,13 @@ class Messages:
             "מקצוע: {type}\n"
             "אזורים: {areas}\n"
             "מחירים: {prices}\n\n"
-            "הכל נכון? לשליחה כתוב אשר, ולהתחלה מחדש כתוב ביטול."
+            "הכל נכון? לשליחה כתוב אשר, ולביטול ההרשמה כתוב ביטול."
         )
         SUCCESS = (
-            "תודה! שלחנו את הפרופיל שלך לאישור.\n"
-            "נעדכן אותך כשהוא יאושר, ואז תתחיל לקבל עבודות."
+            "תודה! שלחנו את הפרופיל שלך לצוות שלנו.\n"
+            "נעדכן אותך כאן כשנעבור עליו.\n"
+            "לשאלות אפשר לכתוב לנו למייל:\n"
+            "info@proli.me"
         )
         CANCELLED = "ההרשמה בוטלה. כדי להתחיל מחדש בכל זמן, כתוב הרשמה."
         ALREADY_REGISTERED = "כבר יש לך פרופיל אצלנו!"
@@ -1217,7 +1217,7 @@ class Messages:
         CITIES_PARSE_ERROR = (
             "לא זיהינו ערים. אפשר לשלוח רשימה של ערים, מופרדות בפסיקים:"
         )
-        CONFIRM_REPROMPT = "לשליחה כתוב אשר, ולהתחלה מחדש כתוב ביטול."
+        CONFIRM_REPROMPT = "לשליחה כתוב אשר, ולביטול ההרשמה כתוב ביטול."
 
     class System:
         # RESET_SUCCESS was removed 2026-08-27 (operator decision): a global
@@ -1508,9 +1508,9 @@ class Messages:
         ]
 
         # Completion check text tokens (used in handle_customer_completion_text).
-        # Must stay in step with the "*1* — כן, הסתיים" option in
+        # Must stay a substring of the "1 - כן, הסתיימה" option in
         # Customer.COMPLETION_CHECK: a customer who types the option back
-        # verbatim is confirming completion.
+        # verbatim is confirming completion (customer_flow matches with `in`).
         CUSTOMER_COMPLETION_INDICATOR = "כן, הסתיים"
 
         # Customer status pull — '?' must be exact match; words matched after .strip().lower()
@@ -1808,7 +1808,7 @@ class Messages:
             "לא הצלחנו לעבד את הקובץ ששלחת, אז התייחסנו רק למה שכתבת."
         )
         DAILY_AI_CAP_REACHED = (
-            "הגעת למכסת הפניות היומית. אפשר לנסות שוב מחר, "
+            "הגענו למכסת ההודעות היומית בשיחה הזו. אפשר להמשיך מחר, "
             "ואם זה דחוף, אפשר לכתוב נציג."
         )
 

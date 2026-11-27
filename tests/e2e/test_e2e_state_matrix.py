@@ -29,7 +29,7 @@ Input classes
 | `idle` | "כאן פרולי. אנחנו מוצאים לך את איש המקצוע שמתאים לתקלה, כמו אינסטלטור, חשמלאי או מנעולן." | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | silent | N/A[race] |
 | `awaiting_consent` | → idle, "אפשר להתחיל" | "שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | "שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "הבנו, לא נשמור את תוכן ההודעות שלך. אם משנים את הדעה, אפשר פשוט לשלוח לנו הודעה." | N/A[race] |
 | `customer_mode` | "מה הכתובת" | "מאיפה בדיוק" | "במה אפשר לעזור" | "ראיתי את התמונה" | "לעזור" | N/A[ttl-class] | → pro_mode | N/A[race] |
-| `awaiting_address` | → awaiting_pro_approval, "הכתובת עודכנה." | "מספר דירה" | "כדי שאיש המקצוע יגיע בדיוק למקום, חסר לנו עוד בכתובת:" | "לא הצלחנו לזהות את הכתובת." | "לא הצלחנו לזהות את הכתובת." | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
+| `awaiting_address` | → awaiting_pro_approval, "הכתובת עודכנה." | "מספר דירה" | "כדי שאיש המקצוע יגיע בדיוק למקום, חסרים לנו עוד פרטים בכתובת:" | "לא הצלחנו לזהות את הכתובת." | "לא הצלחנו לזהות את הכתובת." | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
 | `awaiting_pro_approval` | → awaiting_pro_approval, "סליחה על העיכוב. אנחנו מחפשים לך איש מקצוע אחר ונעדכן אותך כאן." | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | TTL ≤ 3600s | → paused_for_human, "קיבלנו, והעברנו את השיחה למענה אנושי.
 בינתיים המענה האוטומטי בשיחה הזו מושהה." | N/A[race] |
 | `paused_for_human` | silent | silent | N/A[same-reprompt] | silent | N/A[same-reprompt] | TTL ≤ 900s | "קיבלנו, והעברנו את השיחה למענה אנושי.
@@ -55,10 +55,20 @@ Input classes
 | `onboarding_type` | → onboarding_areas, "באילו ערים או אזורים אתה עובד?" | → onboarding_areas, "באילו ערים או אזורים אתה עובד?" | "לא הבנו. אפשר לשלוח מספר מ-1 עד 7, או את שם המקצוע, למשל אינסטלטור או חשמלאי." | N/A[pro-text-only] | "לא הבנו. אפשר לשלוח מספר מ-1 עד 7, או את שם המקצוע, למשל אינסטלטור או חשמלאי." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 | `onboarding_areas` | → onboarding_prices, "המחירים" | → onboarding_prices, "המחירים" | "לא זיהינו ערים. אפשר לשלוח רשימה של ערים, מופרדות בפסיקים:" | N/A[pro-text-only] | → onboarding_prices, "המחירים" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 | `onboarding_prices` | → onboarding_confirm, "זה הסיכום של הפרופיל שלך:" | → onboarding_confirm, "זה הסיכום של הפרופיל שלך:" | N/A[same-reprompt] | N/A[pro-text-only] | → onboarding_confirm, "זה הסיכום של הפרופיל שלך:" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
-| `onboarding_confirm` | → idle, "תודה! שלחנו את הפרופיל שלך לאישור." | "לשליחה כתוב אשר, ולהתחלה מחדש כתוב ביטול." | N/A[same-reprompt] | N/A[pro-text-only] | "לשליחה כתוב אשר, ולהתחלה מחדש כתוב ביטול." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `onboarding_confirm` | → idle, "תודה! שלחנו את הפרופיל שלך לצוות שלנו." | "לשליחה כתוב אשר, ולביטול ההרשמה כתוב ביטול." | N/A[same-reprompt] | N/A[pro-text-only] | "לשליחה כתוב אשר, ולביטול ההרשמה כתוב ביטול." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 | `admin_selecting_lead` | → admin_selecting_action, "למי להעביר" | "המספר הזה לא ברשימה. נסה שוב, או כתוב ביטול כדי לצאת." | N/A[same-reprompt] | N/A[admin-menu] | "המספר הזה לא ברשימה. נסה שוב, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | → idle, "בוטל" | N/A[race] |
 | `admin_selecting_action` | → admin_selecting_pro, "אנשי מקצוע פנויים" | "האפשרות הזו לא קיימת. אפשר לענות 1 או 2." | N/A[same-reprompt] | N/A[admin-menu] | "האפשרות הזו לא קיימת. אפשר לענות 1 או 2." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
 | `admin_selecting_pro` | → idle, "הליד הועבר" | "המספר הזה לא ברשימה. נסה שוב, או כתוב ביטול כדי לצאת." | N/A[same-reprompt] | N/A[admin-menu] | "המספר הזה לא ברשימה. נסה שוב, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+
+N/A legend
+~~~~~~~~~~
+* ``admin-menu`` — The admin wizard is a text-only numeric menu.
+* ``pro-text-only`` — Pro-side commands are a text menu; a pro never sends the bot media.
+* ``race`` — State-independent. The per-chat Redis lock is taken before any state is read (workflow_service.py:219), so every state behaves identically; proven once in test_a_second_message_mid_flight_is_deferred_not_dropped.
+* ``resting`` — IDLE is the resting state — there is nothing to expire.
+* ``same-exit`` — A reset keyword exits through one handler per wizard, not one per step. Kept on the wizard's first step; see _COLLAPSED.
+* ``same-reprompt`` — This row answers free/offtopic/wrong/emoji with one identical re-prompt. Kept two cells covering the input paths that actually differ (AI text, and media or emoji); see _COLLAPSED.
+* ``ttl-class`` — A `silence` cell asserts a TTL bound on a state the arranger set, so it proves StateManager.set_state honours a TTL — not anything about this state or input class. Kept once per distinct TTL value; see _COLLAPSED.
 
 N/A legend
 ~~~~~~~~~~
