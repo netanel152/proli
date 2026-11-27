@@ -26,8 +26,112 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 import pytz
 import re
+import secrets
 
 from app.core.datetime_utils import IL_TZ as _IL_TZ, stored_utc_to_il
+from app.providers.whatsapp.base import ListPicker, ListRow
+from app.providers.whatsapp.template_registry import QuickReply
+
+# ---------------------------------------------------------------------------
+# PRO-105: the customer's reply buttons and lists.
+#
+# Every one mirrors a reply its text already advertises, so a tap and the typed
+# reply reach the same branch: the "1 - …" lines' digits, or the keyword the
+# text asks to be written. Typing keeps working everywhere.
+#
+# A prompt that holds a state also stores a fresh `prompt_ref` in the FSM
+# metadata and sends it as the `reply_ref` every button or row id carries
+# (`"1#<prompt_ref>"`). Its guard reads a tap only if the ref is the one stored
+# now (`tap_is_stale`): a tap on an older copy of the question, whose digit may
+# mean another lead or slot by now, changes nothing. A typed reply has no ref
+# and is read as it always was.
+# ---------------------------------------------------------------------------
+
+#: Both "really cancel?" prompts (`CANCEL_CONFIRM_PROMPT`, the BOOKED job, and
+#: `CANCEL_REQUEST_CONFIRM_PROMPT`, the request still with the pro).
+CANCEL_CONFIRM_BUTTONS = (
+    QuickReply(Messages.Customer.CANCEL_YES_BUTTON, "1"),
+    QuickReply(Messages.Customer.CANCEL_NO_BUTTON, "2"),
+)
+#: `LOYALTY_OFFER` and `LOYALTY_REPROMPT`.
+LOYALTY_BUTTONS = (
+    QuickReply(Messages.Customer.LOYALTY_YES_BUTTON, "1"),
+    QuickReply(Messages.Customer.LOYALTY_NO_BUTTON, "2"),
+)
+#: `EXISTING_JOB_PROMPT` and `NEW_OR_EXISTING_REPROMPT`.
+NEW_OR_EXISTING_BUTTONS = (
+    QuickReply(Messages.Customer.NEW_REQUEST_BUTTON, "1"),
+    QuickReply(Messages.Customer.EXISTING_JOB_BUTTON, "2"),
+)
+#: `RESCHEDULE_NO_SLOTS` and `RESCHEDULE_SLOT_TAKEN_NO_SLOTS`: the two words
+#: they ask to be written. No state holds them and no ref rides on them: the
+#: typed words reach the BOOKED cancel prompt (which asks again) and the human
+#: handoff whenever they are sent, so a late tap does what late typing does.
+NO_SLOTS_BUTTONS = (
+    QuickReply(
+        Messages.Customer.CANCEL_JOB_BUTTON, Messages.Keywords.CANCEL_KEYWORDS[3]
+    ),
+    QuickReply(Messages.Customer.HUMAN_BUTTON, Messages.Keywords.SOS_COMMANDS[0]),
+)
+
+#: The states whose own guard reads a tap's `prompt_ref`. A tap carrying a ref
+#: in any other state answers a question that is no longer open.
+PROMPT_REF_STATES = frozenset(
+    {
+        UserStates.AWAITING_CANCEL_CONFIRMATION,
+        UserStates.AWAITING_RESCHEDULE_TIME,
+        UserStates.AWAITING_LOYALTY_CONFIRMATION,
+        UserStates.AWAITING_NEW_OR_EXISTING,
+    }
+)
+
+
+#: Every customer `prompt_ref` starts with this. As the leading 4 bytes of an
+#: ObjectId it is a 1970 timestamp, so no lead id (which a pro offer's ref
+#: always is, PRO-104) can ever have it: a tap's ref says by its shape alone
+#: whether it answers a customer prompt, with no lookup and whoever sent it.
+PROMPT_REF_PREFIX = "00000000"
+
+
+def new_prompt_ref() -> str:
+    """A fresh 24-hex reference for one prompt, the shape `split_reply_ref`
+    reads back off a tap: `PROMPT_REF_PREFIX` and 16 random hex digits."""
+    return PROMPT_REF_PREFIX + secrets.token_hex(8)
+
+
+def is_prompt_ref(reply_ref: str | None) -> bool:
+    """True for a ref minted by `new_prompt_ref`, False for a lead's id or none."""
+    return bool(reply_ref) and reply_ref.lower().startswith(PROMPT_REF_PREFIX)
+
+
+def tap_is_stale(reply_ref: str | None, meta: dict | None) -> bool:
+    """True for a tap that does not answer the prompt open now.
+
+    A typed reply (no ref) is never stale. A tap is, when its ref is not the
+    `prompt_ref` stored with the open prompt, a prompt armed before refs existed
+    included.
+    """
+    return bool(reply_ref) and reply_ref != (meta or {}).get("prompt_ref")
+
+
+def _slot_row(number: str, start_il: datetime) -> ListRow:
+    """The list row for slot ``number`` starting at ``start_il`` (Israel time)."""
+    weekday = start_il.weekday()
+    time = start_il.strftime("%H:%M")
+    return ListRow(
+        id=number,
+        title=Messages.Customer.RESCHEDULE_ROW_TITLE.format(
+            number=number,
+            day_letter=Messages.Customer.WEEKDAY_LETTERS[weekday],
+            date=f"{start_il.day}.{start_il.month}",
+            time=time,
+        ),
+        description=Messages.Customer.RESCHEDULE_ROW_DESCRIPTION.format(
+            weekday=Messages.Pro.WEEKDAY_NAMES[weekday],
+            date=start_il.strftime("%d/%m/%Y"),
+            time=time,
+        ),
+    )
 
 
 def completion_check_due_filter(now_utc: datetime | None = None) -> dict:
@@ -1181,21 +1285,39 @@ async def offer_reschedule_slots(
         return False
 
     lines = []
+    rows = []
     slots_context = {}
     for i, slot in enumerate(available_slots, 1):
-        label = stored_utc_to_il(slot["start_time"]).strftime("%d/%m/%Y %H:%M")
-        lines.append(f"{i}. {label}")
+        start_il = stored_utc_to_il(slot["start_time"])
+        lines.append(f"{i}. {start_il.strftime('%d/%m/%Y %H:%M')}")
+        rows.append(_slot_row(str(i), start_il))
         slots_context[str(i)] = str(slot["_id"])
 
+    # PRO-105: the same list as an interactive list, one row per numbered line.
+    # The ref is new for every list, so a row of an earlier one (whose number
+    # may name another slot now) is told apart from a row of this one.
+    # Metadata first: a state open over the previous list's mapping and ref
+    # would book the wrong slot for a typed digit and refuse every tap.
+    prompt_ref = new_prompt_ref()
+    await state_manager.set_metadata(
+        chat_id,
+        {"reschedule_slots_context": slots_context, "prompt_ref": prompt_ref},
+    )
     await state_manager.set_state(
         chat_id,
         UserStates.AWAITING_RESCHEDULE_TIME,
         ttl=WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS,
     )
-    await state_manager.set_metadata(
-        chat_id, {"reschedule_slots_context": slots_context}
+    await whatsapp.send_message(
+        chat_id,
+        message.format(slots="\n".join(lines)),
+        list_picker=ListPicker(
+            button=Messages.Customer.RESCHEDULE_LIST_BUTTON,
+            section_title=Messages.Customer.RESCHEDULE_LIST_SECTION,
+            rows=tuple(rows),
+        ),
+        reply_ref=prompt_ref,
     )
-    await whatsapp.send_message(chat_id, message.format(slots="\n".join(lines)))
     return True
 
 
@@ -1206,7 +1328,9 @@ async def _booked_lead_for(chat_id: str):
     )
 
 
-async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) -> None:
+async def handle_reschedule_selection(
+    chat_id: str, user_text: str, whatsapp, reply_ref: str | None = None
+) -> None:
     """The customer's answer to the reschedule slot list (AWAITING_RESCHEDULE_TIME).
 
     ``ביטול`` (any cancel keyword) keeps the current time and closes the list. A
@@ -1215,6 +1339,10 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
     list (``RESCHEDULE_SLOT_TAKEN``) rather than the invalid-choice line, or,
     with nothing free left, ``RESCHEDULE_SLOT_TAKEN_NO_SLOTS`` and the list closes.
     The booking is never touched until a new slot is actually claimed.
+
+    ``reply_ref`` (PRO-105) is the list a tapped row came from. A row of an
+    earlier list than the open one gets ``RESCHEDULE_STALE_CHOICE`` and books
+    nothing, since its number may name another slot now; the open list stays.
     """
     normalized = user_text.strip().lower()
 
@@ -1227,7 +1355,9 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         lead = await _booked_lead_for(chat_id)
         if not (lead and lead.get("pro_id")):
             await StateManager.clear_state(chat_id)
-            await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS)
+            await whatsapp.send_message(
+                chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS, buttons=NO_SLOTS_BUTTONS
+            )
             return
         if not await offer_reschedule_slots(
             chat_id,
@@ -1237,10 +1367,19 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
             Messages.Customer.RESCHEDULE_OFFER,
         ):
             await StateManager.clear_state(chat_id)
-            await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS)
+            await whatsapp.send_message(
+                chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS, buttons=NO_SLOTS_BUTTONS
+            )
         return
 
     meta = await StateManager.get_metadata(chat_id)
+    if tap_is_stale(reply_ref, meta):
+        logger.info(
+            f"Reschedule tap for {mask_chat_id(chat_id)} came from an earlier list; "
+            "nothing booked"
+        )
+        await whatsapp.send_message(chat_id, Messages.Customer.RESCHEDULE_STALE_CHOICE)
+        return  # the open list stays answerable
     slots_context = meta.get("reschedule_slots_context", {})
     pick = user_text.strip()
 
@@ -1294,7 +1433,9 @@ async def handle_reschedule_selection(chat_id: str, user_text: str, whatsapp) ->
         ):
             await StateManager.clear_state(chat_id)
             await whatsapp.send_message(
-                chat_id, Messages.Customer.RESCHEDULE_SLOT_TAKEN_NO_SLOTS
+                chat_id,
+                Messages.Customer.RESCHEDULE_SLOT_TAKEN_NO_SLOTS,
+                buttons=NO_SLOTS_BUTTONS,
             )
         return
 

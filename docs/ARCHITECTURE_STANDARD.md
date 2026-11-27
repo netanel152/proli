@@ -145,10 +145,12 @@ network, no Mongo and no Redis. New handlers follow the same shape.
 **5. Text menus first.** Every WhatsApp menu is numeric or keyword replies —
 `"Reply '1' to approve, '2' to reject"` — spelled out in the text, and typing
 always works. Buttons only mirror those replies: a template may carry quick-reply
-buttons (owner decision 2026-11-14, PRO-230), and since PRO-104/PRO-105 exactly
-three flows send free-form reply buttons through `send_message(..., buttons=)`:
+buttons (owner decision 2026-11-14, PRO-230), and since PRO-104/PRO-105 these
+flows send free-form reply buttons through `send_message(..., buttons=)`:
 the pro lead offers (a tap carries its lead, `אשר#<lead_id>`), the consent
-request and the completion check. Everything else stays text until after launch.
+request, the completion check and the customer's cancel, loyalty, new-or-existing
+and no-slots prompts; the reschedule slot list goes as an interactive list
+(`list_picker=`). Everything else stays text until after launch.
 `send_interactive` (numeric ids) exists on the provider ABC and the PRO-89
 `CloudAPIProvider` can send it, but no flow may call it. This is a
 CLAUDE.md-level rule and reviewers enforce it.
@@ -338,8 +340,9 @@ Rules:
 - No HTTP client at a vendor messaging endpoint anywhere in the repo.
 - `send_interactive` is defined on the ABC and MUST NOT be called from any
   flow. A template's quick-reply buttons are allowed (2026-11-14, PRO-230),
-  and so are the free-form reply buttons of the three PRO-104/PRO-105 flows
-  (`send_message(..., buttons=)`, ids mirroring the advertised keywords).
+  and so are the free-form reply buttons and the reschedule list of the
+  PRO-104/PRO-105 flows (`send_message(..., buttons=)` / `list_picker=`, ids
+  mirroring the advertised keywords).
 - Two CI guards enforce this mechanically (the "Guard" steps in
   `.github/workflows/tests.yml`): the build fails on any reference to the
   old vendor's domain **in code** — `*.md` is excluded, so prose may name the

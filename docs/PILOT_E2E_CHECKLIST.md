@@ -64,10 +64,11 @@ database record but no phone.
 Keywords used below (from `app/core/messages.py`, exact): emergency `הצפה`/`דחוף` · SOS
 `נציג`/`אנושי`/`מנהל` · status `סטטוס`/`?` · cancel `בטל` · reschedule `מועד אחר` ·
 register `הרשמה` · reset `התחלה` · rating `1`–`5` · admin wizard `ניהול`. Every prompt
-states its replies as text, and typing them always works. Three prompts also show **reply
+states its replies as text, and typing them always works. Some prompts also show **reply
 buttons** on an open window (PRO-104/PRO-105, see CLAUDE.md): the pro's lead offer and nudge
-(`אשר`/`דחה`, each tap naming its own lead), the customer's consent request (`כן`/`לא`) and the
-completion check (`1`/`2`/`3`). Typed `אשר` with more than one offer waiting opens a numbered
+(`אשר`/`דחה`, each tap naming its own lead), the customer's consent request (`כן`/`לא`), the
+completion check (`1`/`2`/`3`), the customer's cancel, loyalty and existing-job prompts (`1`/`2`)
+and the no-slots reschedule reply; the reschedule slot list is an interactive list. Typed `אשר` with more than one offer waiting opens a numbered
 list, and a bare `1` only opens a list whose own `1` then approves. Scenario 12 checks the
 buttons.
 
@@ -235,8 +236,8 @@ reflects real current lead states (no stale columns). Mutations show success fee
 Each step on a phone whose 24h window is open (it wrote to the bot within the day).
 **Steps:**
 1. **(C)** From a number with no consent on record, write anything. → The consent request shows
-   two buttons, `כן להמשיך` and `לא לביטול`. Tap `כן להמשיך` → the same reply typing `כן` gives
-   (the ack, and the opening message answered). On another fresh number, tap `לא לביטול` → the
+   two buttons, `כן, להמשיך` and `לא, תודה`. Tap `כן, להמשיך` → the same reply typing `כן` gives
+   (the ack, and the opening message answered). On another fresh number, tap `לא, תודה` → the
    decline message, and nothing about that chat in the panel.
 2. **(P)** Have two offers waiting for P at once (two customers, or a second lead routed to P).
    On the **older** offer's message tap `אשר` → **that** lead is booked and its customer's
@@ -248,6 +249,22 @@ Each step on a phone whose 24h window is open (it wrote to the bot within the da
 5. **(C)** On a booked job, trigger the completion check (admin panel). → Three buttons,
    `כן הסתיים`, `עדיין לא`, `לא הגיע`. Tap `כן הסתיים` → the job completes and the rating
    prompt arrives, as typing `1` would.
+6. **(C)** On a booked job, write the cancel keyword. → The cancel prompt shows `כן, לבטל` and
+   `לא, להשאיר אותה`. Tap `לא, להשאיר אותה` → the job stays booked, as typing `2` would. Ask to
+   cancel again, then tap `כן, לבטל` on the **earlier** prompt's message → "the button belongs
+   to a previous message" (`STALE_BUTTON_TAP`), nothing is cancelled and the new prompt stays open.
+7. **(C)** Reach the loyalty offer (a customer with a completed job, a new request). → Buttons
+   `כן, לבדוק מולו` / `לא, לחפש מישהו אחר`; each tap behaves as typing `1` / `2`. Write something
+   else instead, then tap a button on the old offer → `STALE_BUTTON_TAP`, state unchanged.
+8. **(C)** With a booked job, open a new request. → The existing-job prompt shows `כן, בעיה חדשה` /
+   `לגבי העבודה הקיימת`; each tap behaves as typing `1` / `2`.
+9. **(C)** On a booked job, write the reschedule phrase. → The slot list arrives as an interactive
+   list (opener `בחירת מועד`, rows like `א׳ 29.11 · 10:00`); tap a row → that slot is booked, as
+   typing its number would. Ask for the list again and tap a row of the **earlier** list →
+   "the choice came from a previous list" (`RESCHEDULE_STALE_CHOICE`), the booking is untouched.
+   With no free slots, the reply carries `ביטול העבודה` and `נציג` buttons.
+10. **(C)** Tap a button or list row from a prompt whose state has ended (answered or expired). →
+    "the button belongs to a message that is no longer valid" (`STALE_BUTTON_TAP_EXPIRED`), nothing changes.
 - [ ] Pass  · [ ] File: ______
 
 ### 13. Life-threatening report  ·  regresses PRO-222

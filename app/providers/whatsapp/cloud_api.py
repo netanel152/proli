@@ -38,6 +38,7 @@ from app.core.phone import mask_chat_id as _mask
 from app.core.phone import strip_suffix, to_chat_id
 from app.providers.whatsapp import template_registry
 from app.providers.whatsapp.base import (
+    ListPicker,
     NormalizedMessage,
     ServiceWindowClosedError,
     TemplateNotRegisteredError,
@@ -76,6 +77,13 @@ _MAX_BUTTONS = 3
 _MAX_LIST_ROWS = 10
 _BUTTON_TITLE_LIMIT = 20
 _LIST_ROW_TITLE_LIMIT = 24
+# PRO-105: the rest of Meta's list limits. The opener button shares the reply
+# button's 20, a section title the row title's 24; a row description is 72 and
+# a row id 200.
+_LIST_BUTTON_LIMIT = 20
+_LIST_SECTION_TITLE_LIMIT = 24
+_LIST_ROW_DESCRIPTION_LIMIT = 72
+_LIST_ROW_ID_LIMIT = 200
 # Cloud API hard caps. The legacy vendor's ceilings were far higher, so bodies that
 # have always worked (the daily agenda, מצא results) can newly overflow: text
 # is chunked across sends, an oversized interactive body degrades to text.
@@ -134,6 +142,51 @@ def _reply_buttons(text: str, buttons: Sequence[Any]) -> dict[str, Any] | None:
                 for b in buttons
             ]
         },
+    }
+
+
+def _list_message(text: str, picker: ListPicker) -> dict[str, Any] | None:
+    """The interactive list message for ``text`` and ``picker``, or ``None``
+    when Meta would refuse it (PRO-105).
+
+    Same rule as :func:`_reply_buttons`: nothing is truncated or dropped. More
+    than ten rows, an opener over 20 characters, a section title or a row title
+    over 24, a description over 72, an id over 200, two equal ids or a body over
+    1024 all mean ``None``, and the caller sends the plain text, whose numbered
+    lines still say what to type.
+    """
+    rows = list(picker.rows)
+    ids = [row.id for row in rows]
+    if (
+        not rows
+        or len(rows) > _MAX_LIST_ROWS
+        or not text
+        or len(text) > _INTERACTIVE_BODY_LIMIT
+        or not picker.button
+        or len(picker.button) > _LIST_BUTTON_LIMIT
+        or len(picker.section_title) > _LIST_SECTION_TITLE_LIMIT
+        or any(not r.id or len(r.id) > _LIST_ROW_ID_LIMIT for r in rows)
+        or any(not r.title or len(r.title) > _LIST_ROW_TITLE_LIMIT for r in rows)
+        or any(len(r.description) > _LIST_ROW_DESCRIPTION_LIMIT for r in rows)
+        or len(set(ids)) != len(ids)
+    ):
+        return None
+    section: dict[str, Any] = {
+        "rows": [
+            {
+                "id": r.id,
+                "title": r.title,
+                **({"description": r.description} if r.description else {}),
+            }
+            for r in rows
+        ]
+    }
+    if picker.section_title:
+        section = {"title": picker.section_title, **section}
+    return {
+        "type": "list",
+        "body": {"text": text},
+        "action": {"button": picker.button, "sections": [section]},
     }
 
 
@@ -471,6 +524,27 @@ class CloudAPIProvider(WhatsAppProvider):
         if fallback is not None:
             return await self.send_template(chat_id, fallback.key)
         return await self._post_open_window(chat_id, text, buttons)
+
+    async def send_list(
+        self,
+        chat_id: str,
+        text: str,
+        picker: ListPicker,
+    ) -> dict[str, Any] | None:
+        """``text`` with an interactive list on an open window (PRO-105).
+
+        A closed window behaves exactly as :meth:`send_text` does, and so does a
+        list Meta's limits would refuse: it goes as plain text.
+        """
+        fallback = await self._window_fallback(chat_id, "text")
+        if fallback is not None:
+            return await self.send_template(chat_id, fallback.key)
+        interactive = _list_message(text, picker)
+        if interactive is None:
+            return await self._post_text(chat_id, text)
+        return await self._post_message(
+            chat_id, {"type": "interactive", "interactive": interactive}, "interactive"
+        )
 
     async def _post_open_window(
         self, chat_id: str, text: str, buttons: Sequence[Any]

@@ -370,17 +370,18 @@ class World:
         *,
         chat_id: str | None = None,
         id_message: str = "wamid.e2e-tap",
+        kind: str = "button_reply",
     ) -> dict:
         """Full path for a tapped reply button (PRO-104/PRO-105): Meta's
         ``interactive``/``button_reply`` webhook carrying ``button_id`` → enqueue
-        → worker task."""
+        → worker task. ``kind="list_reply"`` taps a list row instead (PRO-105)."""
         payload = self.webhook_payload(None, chat_id=chat_id, id_message=id_message)
         message = payload["entry"][0]["changes"][0]["value"]["messages"][0]
         message.pop("text")
         message["type"] = "interactive"
         message["interactive"] = {
-            "type": "button_reply",
-            "button_reply": {"id": button_id, "title": "tapped"},
+            "type": kind,
+            kind: {"id": button_id, "title": "tapped"},
         }
         result = await self.post_webhook(payload)
         await self.drain()

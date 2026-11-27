@@ -8,6 +8,8 @@ and the kill switch, which is precisely the class of bug this ticket removes.
 from app.core.config import settings
 from app.core.logger import logger
 from app.providers.whatsapp.base import (
+    ListPicker,
+    ListRow,
     NormalizedMessage,
     ServiceWindowClosedError,
     TemplateNotRegisteredError,
@@ -79,6 +81,8 @@ def reset_whatsapp() -> None:
 __all__ = [
     "CloudAPIProvider",
     "DryRunProvider",
+    "ListPicker",
+    "ListRow",
     "NormalizedMessage",
     "ServiceWindowClosedError",
     "TemplateNotRegisteredError",

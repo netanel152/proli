@@ -12,7 +12,11 @@ from typing import Any, Sequence
 
 from app.core.logger import logger
 from app.providers.whatsapp import template_registry
-from app.providers.whatsapp.base import NormalizedMessage, WhatsAppProvider
+from app.providers.whatsapp.base import (
+    ListPicker,
+    NormalizedMessage,
+    WhatsAppProvider,
+)
 
 
 def _pairs(buttons: Sequence[Any]) -> list[tuple[str, str]]:
@@ -114,6 +118,28 @@ class DryRunProvider(WhatsAppProvider):
         """A ``text`` entry, as ``send_text`` records, plus the ``(label, id)``
         pairs of its reply buttons (PRO-105)."""
         return self._record("text", chat_id, text=text, buttons=_pairs(buttons))
+
+    async def send_list(
+        self,
+        chat_id: str,
+        text: str,
+        picker: ListPicker,
+    ) -> dict[str, Any] | None:
+        """A ``text`` entry, as ``send_text`` records, plus the list it would
+        open (PRO-105): ``list`` holds the opener ``button``, the
+        ``section_title`` and the ``(id, title, description)`` of each row, ids
+        already carrying their ``#<reply_ref>``. Recorded whatever Meta's limits
+        say, so a test can hold the rows to them."""
+        return self._record(
+            "text",
+            chat_id,
+            text=text,
+            list={
+                "button": picker.button,
+                "section_title": picker.section_title,
+                "rows": [(r.id, r.title, r.description) for r in picker.rows],
+            },
+        )
 
     async def send_interactive(
         self,

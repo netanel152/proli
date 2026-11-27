@@ -1003,7 +1003,10 @@ async def test_soft_hold_lets_a_cancel_keyword_ask_about_the_offer(deps, monkeyp
     assert meta["cancel_confirm_resume_state"] == UserStates.AWAITING_PRO_APPROVAL
     assert meta["cancel_confirm_resume_until"] > 0
     deps.whatsapp.send_message.assert_awaited_once_with(
-        ctx.chat_id, Messages.Customer.CANCEL_REQUEST_CONFIRM_PROMPT
+        ctx.chat_id,
+        Messages.Customer.CANCEL_REQUEST_CONFIRM_PROMPT,
+        buttons=dispatch_guards.customer_flow.CANCEL_CONFIRM_BUTTONS,
+        reply_ref=meta["prompt_ref"],
     )
 
 
@@ -1043,10 +1046,13 @@ async def test_interceptor_asks_about_an_offer_with_no_booked_job(
 
     if asks:
         assert result is HANDLED
-        deps.whatsapp.send_message.assert_awaited_once_with(
-            ctx.chat_id, Messages.Customer.CANCEL_REQUEST_CONFIRM_PROMPT
-        )
         meta = deps.state_manager.set_metadata.await_args.args[1]
+        deps.whatsapp.send_message.assert_awaited_once_with(
+            ctx.chat_id,
+            Messages.Customer.CANCEL_REQUEST_CONFIRM_PROMPT,
+            buttons=dispatch_guards.customer_flow.CANCEL_CONFIRM_BUTTONS,
+            reply_ref=meta["prompt_ref"],
+        )
         assert "cancel_confirm_resume_until" not in meta
     else:
         assert result is None

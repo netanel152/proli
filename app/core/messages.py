@@ -124,6 +124,22 @@ class Messages:
             "1 - כן, לבטל\n"
             "2 - לא, להשאיר אותה"
         )
+        # PRO-105: both "really cancel?" prompts above also go out with two
+        # reply buttons. Their ids are the 1 and 2 the text advertises, and each
+        # label is its line's own words (at most 20 characters).
+        CANCEL_YES_BUTTON = "כן, לבטל"
+        CANCEL_NO_BUTTON = "לא, להשאיר אותה"
+        # PRO-105: a customer's reply buttons and list rows name the prompt they
+        # answer. A tap on an older one changes nothing and says so: the first
+        # while a newer question of the same kind is open, the second when none is.
+        STALE_BUTTON_TAP = (
+            "הכפתור הזה שייך להודעה קודמת, אז לא שינינו כלום.\n"
+            "אפשר לענות על השאלה האחרונה ששלחנו."
+        )
+        STALE_BUTTON_TAP_EXPIRED = (
+            "הבחירה הזו שייכת להודעה שכבר לא בתוקף, אז לא שינינו כלום.\n"
+            "אפשר לכתוב לנו כאן מה צריך עכשיו."
+        )
         REQUEST_WITHDRAWN = (
             "הבקשה בוטלה, ועדכנו את איש המקצוע.\n"
             "אם צריך עוד משהו, אפשר לכתוב לנו כאן."
@@ -182,6 +198,30 @@ class Messages:
             "כדי לבטל את העבודה אפשר לכתוב ביטול, ולתיאום מול הצוות אפשר לכתוב נציג."
         )
         RESCHEDULE_CANCELLED = "בסדר, המועד נשאר כמו שהיה."
+        # PRO-105: RESCHEDULE_OFFER and RESCHEDULE_SLOT_TAKEN also open as an
+        # interactive list, one row per numbered line, each row's id its number
+        # so a tap is the typed digit. Meta's limits: opener at most 20
+        # characters, section title and row title at most 24, description 72.
+        RESCHEDULE_LIST_BUTTON = "בחירת מועד"
+        RESCHEDULE_LIST_SECTION = "זמנים פנויים"
+        # The row title is compact ("1. ה׳ 29.11 · 10:00", at most 19) so it
+        # never reaches 24, and opens with the number the text asks for; the
+        # description under it spells the slot out.
+        RESCHEDULE_ROW_TITLE = "{number}. {day_letter} {date} · {time}"
+        RESCHEDULE_ROW_DESCRIPTION = "יום {weekday}, {date} בשעה {time}"
+        # Monday first, as datetime.weekday() counts and Pro.WEEKDAY_NAMES lists.
+        WEEKDAY_LETTERS = ("ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳", "א׳")
+        # A tap on a row of an earlier list while a newer one is open: its
+        # number may name another slot now, so nothing is booked.
+        RESCHEDULE_STALE_CHOICE = (
+            "הבחירה הזו הגיעה מרשימה קודמת, אז לא שינינו את המועד.\n"
+            "אפשר לבחור מהרשימה האחרונה, "
+            "או לכתוב ביטול כדי להשאיר את המועד הנוכחי."
+        )
+        # PRO-105: RESCHEDULE_NO_SLOTS and RESCHEDULE_SLOT_TAKEN_NO_SLOTS offer
+        # two words, ביטול and נציג; these buttons send exactly those words.
+        CANCEL_JOB_BUTTON = "ביטול העבודה"
+        HUMAN_BUTTON = "תיאום עם נציג"
         HELP_INFO = (
             "כאן פרולי. אנחנו מוצאים לך את איש המקצוע שמתאים לתקלה, "
             "כמו אינסטלטור, חשמלאי או מנעולן.\n"
@@ -328,6 +368,10 @@ class Messages:
             "1 - כן, לבדוק מולו\n"
             "2 - לא, לחפש מישהו אחר"
         )
+        # PRO-105: LOYALTY_OFFER and LOYALTY_REPROMPT go out with two reply
+        # buttons, ids 1 and 2, each label its line's own words.
+        LOYALTY_YES_BUTTON = "כן, לבדוק מולו"
+        LOYALTY_NO_BUTTON = "לא, לחפש מישהו אחר"
         # PRO-119: the accept ack must match what actually happened. Sent only
         # when the lead was complete enough to dispatch and the pro really was
         # contacted this turn.
@@ -372,8 +416,13 @@ class Messages:
             "יש לך כבר עבודה מאושרת עם {pro_name}: {issue}, {appointment}\n"
             "זו פנייה חדשה? אפשר לענות במספר:\n"
             "1 - כן, בעיה חדשה\n"
-            "2 - זה לגבי העבודה הקיימת"
+            "2 - לגבי העבודה הקיימת"
         )
+        # PRO-105: EXISTING_JOB_PROMPT and NEW_OR_EXISTING_REPROMPT go out with
+        # two reply buttons, ids 1 and 2, each label its line's own words (the
+        # line lost its "זה" so the label fits Meta's 20 characters).
+        NEW_REQUEST_BUTTON = "כן, בעיה חדשה"
+        EXISTING_JOB_BUTTON = "לגבי העבודה הקיימת"
         NEW_REQUEST_ACK = "בסדר גמור. מה הבעיה החדשה?"
         # The pro gets CUSTOMER_EXISTING_JOB_QUERY, which asks them to call back;
         # nothing measures when they do, so no timeframe here.
@@ -433,7 +482,7 @@ class Messages:
         NEW_OR_EXISTING_REPROMPT = (
             "לא בטוחים שהבנו. זו פנייה חדשה? אפשר לענות במספר:\n"
             "1 - כן, בעיה חדשה\n"
-            "2 - זה לגבי העבודה הקיימת"
+            "2 - לגבי העבודה הקיימת"
         )
         # lead_manager_service's address gate: the sentence plus the field
         # vocabulary it lists (attribute name -> Hebrew label, in gate order).

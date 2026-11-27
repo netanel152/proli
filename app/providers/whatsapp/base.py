@@ -16,7 +16,10 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Sequence
 
-from app.providers.whatsapp.template_registry import buttons_with_reply_ref
+from app.providers.whatsapp.template_registry import (
+    REPLY_REF_SEPARATOR,
+    buttons_with_reply_ref,
+)
 
 
 class ServiceWindowClosedError(Exception):
@@ -87,8 +90,54 @@ class NormalizedMessage:
     sender_name: str | None = None
     message_id: str | None = None
     #: PRO-104: the lead a tapped button named (``"<keyword>#<lead_id>"``), as
-    #: a 24-hex ObjectId string. ``text`` then holds only the keyword.
+    #: a 24-hex ObjectId string. ``text`` then holds only the keyword. PRO-105:
+    #: on a customer menu (reply buttons or a list row) it names the prompt the
+    #: tap answers instead, the ``prompt_ref`` the flow stored when it asked.
     reply_ref: str | None = None
+
+
+@dataclass(frozen=True)
+class ListRow:
+    """One row of an interactive list (PRO-105).
+
+    ``id`` is the reply the flow already accepts typed (a menu digit), so a tap
+    and a typed digit reach the same handler; ``title`` is what the row shows
+    (Meta: at most 24 characters) and ``description`` the line under it (at most
+    72). The facade appends ``#<reply_ref>`` to the id, as for reply buttons.
+    """
+
+    id: str
+    title: str
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class ListPicker:
+    """The list a message opens: its opener ``button`` (at most 20 characters),
+    one section titled ``section_title`` (at most 24) and its ``rows`` (at most
+    10). The message's text still lists every option, so a transport that cannot
+    send the list, or a list Meta would refuse, falls back to that text."""
+
+    button: str
+    section_title: str
+    rows: tuple[ListRow, ...]
+
+    def with_reply_ref(self, reply_ref: str | None) -> "ListPicker":
+        """This picker with ``reply_ref`` appended to every row id."""
+        if not reply_ref:
+            return self
+        return ListPicker(
+            self.button,
+            self.section_title,
+            tuple(
+                ListRow(
+                    f"{row.id}{REPLY_REF_SEPARATOR}{reply_ref}",
+                    row.title,
+                    row.description,
+                )
+                for row in self.rows
+            ),
+        )
 
 
 class WhatsAppProvider(ABC):
@@ -183,6 +232,21 @@ class WhatsAppProvider(ABC):
         """
         return await self.send_text(chat_id, text)
 
+    async def send_list(
+        self,
+        chat_id: str,
+        text: str,
+        picker: ListPicker,
+    ) -> dict[str, Any] | None:
+        """Deliver ``text`` with an interactive list mirroring the numbered
+        options it already shows (PRO-105).
+
+        A tapped row sends back its ``id``, the digit the flow accepts typed. The
+        default sends the text alone, which is always correct: the text still
+        lists every option. Same window contract as :meth:`send_text`.
+        """
+        return await self.send_text(chat_id, text)
+
     @abstractmethod
     async def send_interactive(
         self,
@@ -194,9 +258,10 @@ class WhatsAppProvider(ABC):
 
         The legacy vendor could not do this at all, which is why the project convention
         was numeric text menus. The PRO-89 transport exists now, but no *flow*
-        calls this: the reply buttons the flows send (PRO-104/PRO-105) go through
-        :meth:`send_buttons` and :meth:`send_business_initiated`, whose ids are
-        the keywords the text advertises, not ``"1"``, ``"2"`` (see CLAUDE.md).
+        calls this: the reply buttons and lists the flows send (PRO-104/PRO-105)
+        go through :meth:`send_buttons`, :meth:`send_list` and
+        :meth:`send_business_initiated`, whose ids are the replies the text
+        advertises, built by the flow rather than numbered here (see CLAUDE.md).
 
         Same window contract as :meth:`send_text` — report, then raise.
         """
