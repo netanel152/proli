@@ -357,7 +357,7 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | Collection | Purpose |
 |-----------|---------|
 | `users` | Professionals and customers. Pros have `location` (2dsphere), `service_areas`, `price_list`, `social_proof`, `total_tokens_used` |
-| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `customer_name` (AI-extracted from the conversation), `display_name` (optional, admin-set label from the admin panel's Edit-Lead form; falls back to `customer_name`, then the phone), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `address_city` (the city the street/number/floor/apartment were given with, PRO-228), `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count` |
+| `leads` | Job requests. Fields: `chat_id`, `pro_id`, `status`, `status_history` (array of `{status, at, by}` transition records), `customer_name` (AI-extracted from the conversation), `display_name` (optional, admin-set label from the admin panel's Edit-Lead form; falls back to `customer_name`, then the phone), `issue_type`, `is_emergency`, `full_address`, `street`, `street_number`, `city`, `floor`, `apartment`, `address_city` (the city the street/number/floor/apartment were given with, PRO-228), `appointment_time`, `appointment_datetime` (BSON UTC date, parsed from the AI's ISO string; null for open-ended/ASAP times), `media_url`, `reassignment_count`, `quoted_price` (see below) |
 | `messages` | Chat history log per `chat_id`. When the Redis context is empty, `LeadManager.get_chat_history` rebuilds it from here, starting after the latest end of any terminal lead of that chat (its last terminal `status_history` entry), so a cancelled lead's messages never reach a new lead (PRO-228) |
 | `slots` | Appointment slots per pro with atomic locking (`is_taken`); unique on `(pro_id, start_time)`, and a claim skips a slot overlapping a taken one (PRO-277) |
 | `settings` | Scheduler config toggles (`sos_healer_active`, `lead_janitor_active`, `sla_monitor_active`, etc. — the SOS healer and lead janitor toggles default OFF, PRO-73; `sla_monitor_active` defaults ON) |
@@ -366,6 +366,16 @@ Every transition is recorded as a `{status, at, by}` entry in the lead's `status
 | `audit_log` | Admin action history |
 | `admins` | Admin accounts with bcrypt-hashed passwords and RBAC roles |
 | `wa_delivery` | Per-`wamid` outbound delivery statuses (PRO-89), kept out of `messages` so status callbacks are never replayed into the AI context |
+
+### Where `quoted_price` comes from (PRO-55, PRO-292)
+
+`quoted_price` is the estimate the AI gave the customer in the pro phase, stored as digits only (`"250"`, `"300-450"`).
+
+* **Source.** The pro-phase prompt (`Prompts.PRO_BASE_SYSTEM`, STEP 3) hands the model the matched pro's price list: `prices_for_prompt`, written by WhatsApp onboarding, else `price_list`, written by the admin panel and the seeds (`workflow_service._build_pro_response`). The model picks the matching items, tells the customer the estimate comes from that pro's price list ("לפי המחירון של {pro_name}"), and returns the range in `extracted_data.quoted_price`. With no relevant item, or no list at all, it quotes nothing and leaves the field null.
+* **What the code checks.** `_clean_quoted_price` accepts only a number or a number range and drops anything else. It checks the shape, **not** that the figure is on the list. Grounding the number is the prompt's job.
+* **Where it shows.** The pro sees it in the approval request (`Pro.APPROVAL_PRICE_LINE`). The customer sees it again in the free-form `PRO_FOUND` as "הערכת מחיר לפי המחירון של איש המקצוע", or in the template's `price_estimate`.
+* **Where it is dropped.** It is removed when the wrong-trade check drops the pro (PRO-215).
+* **The 250 in the first staging chat.** It was the visit fee (`ביקור: 250₪`) that `scripts/prepare_staging_e2e.py` seeds as the handset pro's price list, not a default or a figure the model made up.
 
 ### Redis Keys
 

@@ -101,6 +101,24 @@ async def has_consent(chat_id: str) -> bool | None:
     return record.get("accepted", False)
 
 
+async def consent_accepted_within(chat_id: str, seconds: int) -> bool:
+    """Did this chat accept consent in the last `seconds`? (PRO-292)
+
+    The consent request opens with "שלום וברוכים הבאים לפרולי", and it is never
+    logged to `messages`, so the model cannot see it. The pipeline asks this to
+    tell the dispatcher the customer has already been welcomed.
+    """
+    record = await consent_collection.find_one({"chat_id": chat_id})
+    if not record or not record.get("accepted"):
+        return False
+    stamp = record.get("timestamp")
+    if not isinstance(stamp, datetime):
+        return False
+    if stamp.tzinfo is None:  # Mongo returns naive UTC
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - stamp).total_seconds() <= seconds
+
+
 async def export_user_data(chat_id: str) -> dict:
     """Export all data associated with a chat_id (right-to-access)."""
     phone = strip_suffix(chat_id)

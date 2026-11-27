@@ -27,6 +27,12 @@ Re-recording against live Gemini::
 
 That switch also stops ``tests/conftest.py`` stubbing out ``google.genai``, so the
 real SDK loads. New responses are merged into the fixture file on the way out.
+
+Record mode refuses to write junk (PRO-292). It prints which key it uses
+(``GEMINI_API_KEY …last4``) and stops at once on a placeholder key. It raises
+``RecordingFailed`` rather than saving the engine's own fallback (the overload
+message, a media notice) as a model reply. The tests of the missing-fixture
+path are skipped, since recording would turn their input into a fixture.
 """
 
 from __future__ import annotations
@@ -45,6 +51,55 @@ RECORD_ENV = "PROLI_E2E_RECORD"
 
 def recording_enabled() -> bool:
     return bool(os.getenv(RECORD_ENV))
+
+
+class RecordingFailed(RuntimeError):
+    """Raised in record mode when what came back is not the model's own answer."""
+
+
+# PRO-292: a key that cannot reach Gemini makes every live call fail, and the
+# engine then returns its canned overload reply, which a recorder that does not
+# check saves as if the model had said it. The web-session setup writes
+# "web-session-not-a-real-key"; the others are the usual stand-ins.
+_PLACEHOLDER_KEY_MARKERS = ("not-a-real", "placeholder", "dummy", "fake", "changeme")
+_MIN_KEY_LENGTH = 30  # a Gemini API key is 39 characters
+
+
+def live_key_label() -> str:
+    """`GEMINI_API_KEY …abcd`, or raise if the key is a placeholder.
+
+    Names the variable and only its last four characters, so a re-record log
+    says which key it used without printing it.
+    """
+    from app.core.config import settings
+
+    secret = settings.GEMINI_API_KEY.get_secret_value().strip()
+    lowered = secret.lower()
+    if len(secret) < _MIN_KEY_LENGTH or any(
+        marker in lowered for marker in _PLACEHOLDER_KEY_MARKERS
+    ):
+        raise RecordingFailed(
+            f"{RECORD_ENV}=1 needs a real GEMINI_API_KEY; the one loaded "
+            f"(…{secret[-4:]}, {len(secret)} characters) is a placeholder. "
+            "Nothing was recorded."
+        )
+    return f"GEMINI_API_KEY …{secret[-4:]}"
+
+
+def canned_reply_in(reply_text: str) -> str | None:
+    """The engine's own fallback text in a reply, if that is what it is.
+
+    `AIEngine.analyze_conversation` answers with these when the models failed
+    or never saw the file, so none of them is a recording of the model.
+    """
+    from app.core.messages import Messages
+
+    if Messages.Errors.AI_OVERLOAD in (reply_text or ""):
+        return "AI_OVERLOAD"
+    for name in ("MEDIA_UPLOAD_FAILED", "MEDIA_UPLOAD_FAILED_TEXT_ONLY"):
+        if (reply_text or "").strip() == getattr(Messages.Errors, name):
+            return name
+    return None
 
 
 # Persona is derived from the source prompts rather than hardcoded, so a prompt
@@ -131,6 +186,7 @@ class ReplayAIEngine:
         self._scripted_intents: list[bool] = []
         self.calls: list[dict] = []
         self._recorded_this_run: dict = {"responses": {}, "intents": {}}
+        self._key_checked = False
 
     # -- scripting ----------------------------------------------------------
     def script(self, *responses: AIResponse) -> None:
@@ -205,6 +261,7 @@ class ReplayAIEngine:
         if recording_enabled():
             from app.services.ai_engine_service import AIEngine
 
+            self._check_live_key()
             value = await AIEngine().detect_service_intent(text)
             self._recorded_this_run["intents"][key] = value
             self._fixtures["intents"][key] = value
@@ -219,6 +276,13 @@ class ReplayAIEngine:
         return bool(self._fixtures["intents"][key])
 
     # -- recording ----------------------------------------------------------
+    def _check_live_key(self) -> None:
+        """Once per engine: refuse a placeholder key, and say which key is used."""
+        if self._key_checked:
+            return
+        print(f"[ai_replay] recording with {live_key_label()}")
+        self._key_checked = True
+
     async def _record(
         self,
         key,
@@ -232,6 +296,7 @@ class ReplayAIEngine:
     ):
         from app.services.ai_engine_service import AIEngine
 
+        self._check_live_key()
         live = await AIEngine().analyze_conversation(
             history=history,
             user_text=user_text,
@@ -242,6 +307,14 @@ class ReplayAIEngine:
             media_url=media_url,
             pro_id=pro_id,
         )
+        canned = canned_reply_in(live.reply_to_user)
+        if canned:
+            # The live call failed and the engine answered for the model. Saving
+            # that would overwrite a real recording with the outage message.
+            raise RecordingFailed(
+                f"live Gemini call for {key!r} returned the engine's {canned} "
+                "fallback, not a model reply; nothing was saved for this key."
+            )
         payload = response_to_dict(live)
         self._recorded_this_run["responses"][key] = payload
         self._fixtures["responses"][key] = payload
