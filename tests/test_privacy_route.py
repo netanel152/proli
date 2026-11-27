@@ -78,6 +78,22 @@ async def test_get_privacy_body_contains_contact_mailto_link():
 
 
 @pytest.mark.asyncio
+async def test_get_privacy_body_names_the_operator_next_to_the_contact_line():
+    """Amendment 13 to the Privacy Protection Law: the notice names the database
+    controller and how to reach them. The name sits in the Contact section of both
+    language parts, before the mailto line. It must stay in step with
+    app/static/terms.html, which names the same operator."""
+    resp = await _get_privacy()
+
+    for name, heading in (("נתנאל אקנין", "יצירת קשר"), ("Netanel Aknin", "Contact")):
+        section = re.search(
+            rf"<h2>{heading}</h2>(.*?)(?=<!--|</section>|</main>)", resp.text, re.DOTALL
+        ).group(1)
+        assert name in section, heading
+        assert section.index(name) < section.index('href="mailto:info@proli.me"')
+
+
+@pytest.mark.asyncio
 async def test_get_privacy_page_is_self_contained_no_external_resources():
     """No <link>/<script>/<img> may point at an external http(s) resource —
     Meta's reviewer must never see a broken page because a CDN was down.

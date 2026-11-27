@@ -106,13 +106,85 @@ async def test_published_terms_page(monkeypatch, approved_text):
     assert 'href="/privacy"' in resp.text
 
 
-@pytest.mark.parametrize("heading", ["לבעלי מקצוע", "ללקוחות"])
+@pytest.mark.parametrize("heading", ["לבעלי מקצוע", "ללקוחות", "לכל המשתמשים"])
 def test_each_section_is_under_400_words(heading):
     section = re.search(
         rf"<h2>{heading}</h2>(.*?)(?=<h2>|</main>)", legal_links.TERMS_HTML, re.DOTALL
     ).group(1)
 
     assert len(re.sub(r"<[^>]+>", " ", section).split()) < 400
+
+
+# --- The operator's details, filled in; only the draft banner is left ---
+
+
+def _terms_text() -> str:
+    """The page as a reader sees it: tags stripped, whitespace collapsed."""
+    return " ".join(re.sub(r"<[^>]+>", " ", legal_links.TERMS_HTML).split())
+
+
+def test_no_placeholder_is_left_so_only_the_banner_holds_the_draft():
+    """Deleting the banner is the whole approval step: nothing else may block it."""
+    assert "[להשלים" not in legal_links.TERMS_HTML
+    assert 'class="draft" data-terms-draft' in legal_links.TERMS_HTML
+
+
+def test_terms_name_the_operator_and_how_to_reach_them():
+    text = _terms_text()
+
+    assert "נתנאל אקנין" in text
+    assert 'href="mailto:info@proli.me"' in legal_links.TERMS_HTML
+    assert "תל אביב-יפו" in text
+    assert "הדין הישראלי" in text
+
+
+def test_terms_state_an_effective_date_in_the_house_format():
+    assert re.search(
+        r"בתוקף מתאריך \d{1,2} ב[א-ת]+ 20\d\d", _terms_text()
+    ), "the 'effective from' line must carry a real date"
+
+
+def test_terms_carry_no_business_number_or_postal_address():
+    """There is no registered business yet; the clauses are removed, not blanked."""
+    text = _terms_text()
+
+    for gone in ('ח"פ', "עוסק", "כתובת למשלוח דואר"):
+        assert gone not in text
+
+
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "אנחנו לא שירות חירום",
+        "לבני 18 ומעלה",
+        "נכתבות על ידי בינה מלאכותית",
+        "איננו אחראים לעבודה עצמה",
+    ],
+)
+def test_terms_carry_the_four_pilot_clauses(clause):
+    assert clause in _terms_text()
+
+
+def test_terms_follow_the_copy_style_guide():
+    """docs/COPY_STYLE_GUIDE.md: no em dash, no emoji, no slashed gender form, and
+    the 'we' voice, never Proli speaking about itself in the third person."""
+    text = _terms_text()
+
+    assert "—" not in legal_links.TERMS_HTML
+    assert not re.search(r"[א-ת]/[א-ת]", text)
+    assert not re.search(r"[\U0001F000-\U0001FFFF☀-➿]", text)
+    assert "פרולי מתווכת" not in text
+    assert "פרולי שומרת" not in text
+
+
+@pytest.mark.asyncio
+async def test_published_terms_page_names_the_operator(monkeypatch, approved_text):
+    monkeypatch.setattr(settings, "TERMS_ENABLED", True)
+
+    resp = await _get_terms()
+
+    assert "נתנאל אקנין" in resp.text
+    assert "info@proli.me" in resp.text
 
 
 # --- The messages ---
