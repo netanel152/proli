@@ -692,10 +692,11 @@ def test_offer_buttons_name_the_lead():
     assert offer_buttons("pro_lost_lead", {"_id": lead_id}) == {}
 
 
-def test_only_the_three_flows_send_reply_buttons():
+def test_only_the_listed_flows_send_reply_buttons_or_lists():
     """CLAUDE.md: free-form reply buttons go out on the pro lead offers (offer,
-    nudge, pending-SOS alert), the consent request and the completion check,
-    and nowhere else until after launch. A new caller is added here on purpose."""
+    nudge, pending-SOS alert), the consent request, the completion check and
+    (PRO-105) the customer's yes/no prompts and reschedule list, and nowhere
+    else. A new caller is added here on purpose."""
     import pathlib
 
     root = pathlib.Path(__file__).resolve().parents[1]
@@ -703,14 +704,17 @@ def test_only_the_three_flows_send_reply_buttons():
     for folder in ("app/services", "app/api", "app/core", "admin_panel"):
         for path in (root / folder).rglob("*.py"):
             text = path.read_text(encoding="utf-8")
-            if "buttons=" in text or "offer_buttons(" in text:
+            if "buttons=" in text or "offer_buttons(" in text or "list_picker=" in text:
                 callers.add(path.relative_to(root).as_posix())
 
     assert callers == {
         "app/services/notification_service.py",  # offer, pending-SOS alert
         "app/services/workflow_service.py",  # first offer (_finalize_deal)
         "app/services/monitor_service.py",  # approval nudge
-        "app/services/dispatch_guards.py",  # consent request
-        "app/services/customer_flow.py",  # completion check
+        "app/services/dispatch_guards.py",  # consent request; PRO-105 prompts
+        # completion check; PRO-105: reschedule list, no-slots words
+        "app/services/customer_flow.py",
+        # PRO-105: cancel, loyalty and new-or-existing prompts and re-prompts
+        "app/services/conversation_pipeline.py",
         "admin_panel/core/utils.py",  # completion check from the panel
     }

@@ -57,6 +57,7 @@ from app.core.messages import Messages
 from app.core.phone import mask_chat_id, to_chat_id
 from app.core.prompts import Prompts
 from app.services.ai_engine_service import AIResponse, file_notice_in
+from app.services import customer_flow
 from app.services.dispatch_guards import DispatchContext, GuardDeps
 from app.services.lead_manager_service import (
     ADDRESS_PARTS,
@@ -431,8 +432,12 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 {"_id": booked_lead["_id"]},
                 {"$set": {"new_request_prompted": True}},
             )
+            # PRO-105: the ref the question's two buttons carry (see
+            # customer_flow.tap_is_stale).
+            prompt_ref = customer_flow.new_prompt_ref()
             await StateManager.set_metadata(
-                chat_id, {"booked_lead_id": str(booked_lead["_id"])}
+                chat_id,
+                {"booked_lead_id": str(booked_lead["_id"]), "prompt_ref": prompt_ref},
             )
             # PRO-193: bounded, like every other confirmation gate. Expiry
             # releases the customer to normal routing rather than trapping them
@@ -447,7 +452,12 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 issue=booked_lead.get("issue_type") or "העבודה",
                 appointment=booked_lead.get("appointment_time") or "בקרוב",
             )
-            await whatsapp.send_message(chat_id, prompt)
+            await whatsapp.send_message(
+                chat_id,
+                prompt,
+                buttons=customer_flow.NEW_OR_EXISTING_BUTTONS,
+                reply_ref=prompt_ref,
+            )
             await lead_manager.log_message(chat_id, "model", prompt)
             return
 
@@ -869,8 +879,11 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     {"_id": current_lead_id},
                     {"$set": {"loyalty_offered": True}},
                 )
+                # PRO-105: the ref the offer's two buttons carry.
+                prompt_ref = customer_flow.new_prompt_ref()
                 await StateManager.set_metadata(
-                    chat_id, {"past_pro_id": str(past_pro["_id"])}
+                    chat_id,
+                    {"past_pro_id": str(past_pro["_id"]), "prompt_ref": prompt_ref},
                 )
                 # PRO-119: bounded TTL — without one this inherited the 4h
                 # default and a customer whose reply we failed to parse
@@ -886,7 +899,12 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 await _send_file_notice(
                     dispatcher_response, chat_id, whatsapp, lead_manager
                 )
-                await whatsapp.send_message(chat_id, loyalty_msg)
+                await whatsapp.send_message(
+                    chat_id,
+                    loyalty_msg,
+                    buttons=customer_flow.LOYALTY_BUTTONS,
+                    reply_ref=prompt_ref,
+                )
                 await lead_manager.log_message(chat_id, "model", loyalty_msg)
                 return
 

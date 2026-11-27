@@ -13,7 +13,7 @@ StateManager is Redis-backed → replaced with a mock (test_pro_flow.py pattern)
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 from datetime import datetime, timezone
 from bson import ObjectId
 
@@ -243,7 +243,8 @@ async def test_slot_taken_meanwhile_sends_a_fresh_list(reschedule_env):
         ttl=WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS,
     )
     mock_state.set_metadata.assert_awaited_once_with(
-        "customer@c.us", {"reschedule_slots_context": {"1": str(free_slot_id)}}
+        "customer@c.us",
+        {"reschedule_slots_context": {"1": str(free_slot_id)}, "prompt_ref": ANY},
     )
     lead = await db.leads.find_one({"_id": lead_id})
     assert lead.get("rescheduled_count") is None
@@ -347,7 +348,8 @@ async def test_repeated_reschedule_phrase_resends_the_list(reschedule_env):
     assert Messages.Customer.RESCHEDULE_INVALID_CHOICE not in sent
     assert sent.startswith(Messages.Customer.RESCHEDULE_OFFER.split("{")[0])
     mock_state.set_metadata.assert_awaited_once_with(
-        "customer@c.us", {"reschedule_slots_context": {"1": str(free_slot_id)}}
+        "customer@c.us",
+        {"reschedule_slots_context": {"1": str(free_slot_id)}, "prompt_ref": ANY},
     )
     mock_state.clear_state.assert_not_called()
 

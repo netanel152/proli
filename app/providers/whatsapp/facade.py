@@ -36,6 +36,7 @@ from app.core.phone import mask_chat_id as _mask
 from app.core.redis_client import get_redis_client
 from app.providers.whatsapp import template_registry
 from app.providers.whatsapp.base import (
+    ListPicker,
     NormalizedMessage,
     ServiceWindowClosedError,
     TemplateNotRegisteredError,
@@ -217,6 +218,7 @@ class WhatsAppFacade:
         untemplated: str | None = None,
         buttons: Sequence[Any] | None = None,
         reply_ref: str | None = None,
+        list_picker: ListPicker | None = None,
     ):
         """Send ``text``. A business-initiated send also names its template.
 
@@ -231,6 +233,12 @@ class WhatsAppFacade:
         quick-reply payloads). Without ``buttons`` the send is exactly what it
         was before, and ``reply_ref`` is ignored.
 
+        ``list_picker`` (PRO-105) is the interactive list mirroring the numbered
+        options ``text`` already shows: an open window gets it where the
+        provider can send it, with ``reply_ref`` on every row id. It is for a
+        reply to the customer, so it takes neither ``buttons`` nor
+        ``template_key``; either with it is a programming error.
+
         ``untemplated`` marks a cross-party send that has no template **on
         purpose** and says why (PRO-232). To a closed window it is dropped
         quietly — logged at WARNING, ``None`` returned, no operator page and no
@@ -239,12 +247,18 @@ class WhatsAppFacade:
         so ``untemplated`` is ignored on it rather than dropping what could be
         delivered.
         """
+        if list_picker is not None and (buttons or template_key is not None):
+            raise ValueError("list_picker takes neither buttons nor template_key")
         if not await self._guard("message", chat_id):
             return None
         if template_key is None and await self._dropped_by_design(chat_id, untemplated):
             return None
         try:
-            if buttons and template_key is None:
+            if list_picker is not None:
+                result = await self._provider.send_list(
+                    chat_id, text, list_picker.with_reply_ref(reply_ref)
+                )
+            elif buttons and template_key is None:
                 result = await self._provider.send_buttons(
                     chat_id,
                     text,

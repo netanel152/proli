@@ -235,6 +235,22 @@ class RecordingProvider(WhatsAppProvider):
         }
         return self._rec._append("sendMessage", chat_id, text, payload)
 
+    async def send_list(self, chat_id: str, text: str, picker):
+        """PRO-105: a message opening a list is still a message, recorded as
+        ``sendMessage`` like ``send_buttons``; the list rides in the payload as
+        the opener, the section title and ``(id, title, description)`` rows,
+        each id already carrying its ``#<reply_ref>``."""
+        payload = {
+            "chatId": chat_id,
+            "message": text,
+            "list": {
+                "button": picker.button,
+                "section_title": picker.section_title,
+                "rows": [(r.id, r.title, r.description) for r in picker.rows],
+            },
+        }
+        return self._rec._append("sendMessage", chat_id, text, payload)
+
     async def send_interactive(self, chat_id: str, body: str, options: list[str]):
         payload = {"chatId": chat_id, "message": body, "options": list(options)}
         return self._rec._append("sendInteractive", chat_id, body, payload)

@@ -33,11 +33,12 @@ exercised, following the wf_mocks style in test_workflow_orchestrator.py.
 """
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 from bson import ObjectId
 from types import SimpleNamespace
 
 import app.services.workflow_service as workflow_service
+from app.services.customer_flow import LOYALTY_BUTTONS
 from app.services.workflow_service import process_incoming_message
 from app.services.ai_engine_service import AIResponse, ExtractedData
 from app.services.lead_manager_service import is_address_complete, compose_full_address
@@ -175,15 +176,20 @@ async def test_loyalty_offer_triggered_with_bounded_ttl(loyalty_mocks, mock_db):
     await process_incoming_message(chat_id, "עוד נזילה באותו מקום")
 
     mock_state.set_metadata.assert_awaited_with(
-        chat_id, {"past_pro_id": str(past_pro_id)}
+        chat_id, {"past_pro_id": str(past_pro_id), "prompt_ref": ANY}
     )
+    prompt_ref = mock_state.set_metadata.await_args.args[1]["prompt_ref"]
     mock_state.set_state.assert_awaited_with(
         chat_id,
         UserStates.AWAITING_LOYALTY_CONFIRMATION,
         ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
     )
+    # PRO-105: with the offer's two buttons, naming it by its prompt_ref.
     mock_wa.send_message.assert_any_call(
-        chat_id, Messages.Customer.LOYALTY_OFFER.format(pro_name="יוסי הצנרת")
+        chat_id,
+        Messages.Customer.LOYALTY_OFFER.format(pro_name="יוסי הצנרת"),
+        buttons=LOYALTY_BUTTONS,
+        reply_ref=prompt_ref,
     )
     updated = await db.leads.find_one({"_id": current_lead_id})
     assert updated["loyalty_offered"] is True
@@ -314,7 +320,10 @@ async def test_loyalty_ambiguous_reply_matching_both_sides_reprompts(loyalty_moc
     await process_incoming_message(chat_id, "כן אבל בעצם לא")
 
     mock_wa.send_message.assert_awaited_with(
-        chat_id, Messages.Customer.LOYALTY_REPROMPT
+        chat_id,
+        Messages.Customer.LOYALTY_REPROMPT,
+        buttons=LOYALTY_BUTTONS,
+        reply_ref=None,  # an offer armed with no prompt_ref (before PRO-105)
     )
     mock_state.clear_state.assert_not_awaited()
     for call in mock_state.set_state.call_args_list:
@@ -768,7 +777,10 @@ async def test_loyalty_two_unclear_replies_reprompts_then_falls_through(
     await process_incoming_message(chat_id, "אולי בהמשך")
 
     mock_wa.send_message.assert_awaited_with(
-        chat_id, Messages.Customer.LOYALTY_REPROMPT
+        chat_id,
+        Messages.Customer.LOYALTY_REPROMPT,
+        buttons=LOYALTY_BUTTONS,
+        reply_ref=None,  # an offer armed with no prompt_ref (before PRO-105)
     )
     mock_state.set_state.assert_awaited_with(
         chat_id,
@@ -1011,8 +1023,11 @@ async def test_loyalty_offer_picks_the_past_pro_whose_trade_fits(loyalty_mocks):
     await process_incoming_message(chat_id, "השקע בסלון הפסיק לעבוד")
 
     mock_wa.send_message.assert_any_call(
-        chat_id, Messages.Customer.LOYALTY_OFFER.format(pro_name="דני החשמלאי")
+        chat_id,
+        Messages.Customer.LOYALTY_OFFER.format(pro_name="דני החשמלאי"),
+        buttons=LOYALTY_BUTTONS,
+        reply_ref=ANY,
     )
     mock_state.set_metadata.assert_awaited_with(
-        chat_id, {"past_pro_id": str(electrician_id)}
+        chat_id, {"past_pro_id": str(electrician_id), "prompt_ref": ANY}
     )

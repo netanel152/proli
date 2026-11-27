@@ -6,6 +6,8 @@ Covers: reset, pro auto-detect, address collection, onboarding, deal finalizatio
 import pytest
 import pytest_asyncio
 from unittest.mock import ANY, AsyncMock, MagicMock
+
+from app.services.customer_flow import CANCEL_CONFIRM_BUTTONS
 from bson import ObjectId
 from app.core.constants import UserStates, LeadStatus, WorkerConstants, Actor
 from app.core.messages import Messages
@@ -443,8 +445,12 @@ async def test_customer_cancel_booked_lead_prompts_for_confirmation(
     assert meta_chat_id == chat_id
     assert meta_payload["cancel_confirm_lead_id"] == str(lead_id)
     assert "cancel_confirm_resume_state" in meta_payload
+    # PRO-105: with its 1/2 buttons, naming this prompt by its prompt_ref.
     mock_wa.send_message.assert_called_once_with(
-        chat_id, Messages.Customer.CANCEL_CONFIRM_PROMPT
+        chat_id,
+        Messages.Customer.CANCEL_CONFIRM_PROMPT,
+        buttons=CANCEL_CONFIRM_BUTTONS,
+        reply_ref=meta_payload["prompt_ref"],
     )
     # Pro never notified — no cancellation has actually happened
     pro_calls = [

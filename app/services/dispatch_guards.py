@@ -93,7 +93,9 @@ class DispatchContext:
     #: receipt + typing indicator reads it.
     message_id: Optional[str] = None
     #: PRO-104: the lead a tapped button named (its 24-hex id), when the reply
-    #: came from a lead offer's button. Only the pro's אשר/דחה reads it.
+    #: came from a lead offer's button; the pro's אשר/דחה reads it. PRO-105: on
+    #: a customer's tap it is the `prompt_ref` of the question tapped, read by
+    #: the cancel, reschedule, loyalty and new-or-existing guards.
     reply_ref: Optional[str] = None
 
     async def refresh_state(self, state_manager) -> Optional[str]:
@@ -881,6 +883,24 @@ async def guard_paused_for_human(ctx: DispatchContext, deps: GuardDeps):
     return HANDLED
 
 
+async def _answer_stale_tap(ctx: DispatchContext, deps: GuardDeps, meta: dict) -> bool:
+    """PRO-105: answer a tap on an older copy of the open prompt, and say so.
+
+    True when ``ctx`` is such a tap (``customer_flow.tap_is_stale``): it has been
+    answered `STALE_BUTTON_TAP` and the caller returns with the state and its
+    metadata untouched, so the prompt open now can still be answered. False for
+    a typed reply or a tap on the open prompt, which the caller reads as before.
+    """
+    if not customer_flow.tap_is_stale(ctx.reply_ref, meta):
+        return False
+    logger.info(
+        f"Tap from {mask_chat_id(ctx.chat_id)} answers an earlier prompt than the "
+        f"open {ctx.current_state}; nothing changed"
+    )
+    await deps.whatsapp.send_message(ctx.chat_id, Messages.Customer.STALE_BUTTON_TAP)
+    return True
+
+
 async def guard_cancel_confirmation(ctx: DispatchContext, deps: GuardDeps):
     """PRO-118: customer answering the "really cancel?" prompt for a BOOKED job.
 
@@ -895,6 +915,10 @@ async def guard_cancel_confirmation(ctx: DispatchContext, deps: GuardDeps):
     `customer_flow.withdraw_offered_request`, and anything else keeps it and puts
     AWAITING_PRO_APPROVAL back for what was left of it, so the PRO-56 SLA still
     sees a customer who is waiting.
+
+    PRO-105: the prompt carries two reply buttons (ids 1 and 2) naming it by
+    `prompt_ref`. A tap on an older prompt, whose "1" may mean another lead,
+    cancels nothing: it is answered `STALE_BUTTON_TAP` and this prompt stays open.
     """
     from app.services import workflow_service as wf
 
@@ -902,6 +926,8 @@ async def guard_cancel_confirmation(ctx: DispatchContext, deps: GuardDeps):
         return None
 
     meta = await deps.state_manager.get_metadata(ctx.chat_id) or {}
+    if await _answer_stale_tap(ctx, deps, meta):
+        return HANDLED
     cancel_lead_id = meta.get("cancel_confirm_lead_id")
     resume_state = meta.get("cancel_confirm_resume_state")
     await deps.state_manager.clear_state(ctx.chat_id)
@@ -957,12 +983,37 @@ async def guard_reschedule_selection(ctx: DispatchContext, deps: GuardDeps):
     list again), a listed number (claim it, or a fresh list if it was taken
     meanwhile) and anything else (re-prompt naming ``ביטול``). The state lives
     ``RESCHEDULE_PICK_TTL_SECONDS``, so it never holds the chat for long.
+
+    PRO-105: the list is also an interactive list whose rows carry its
+    `prompt_ref`, passed on as ``reply_ref``. Out of the state, a customer's tap
+    carrying any ref is answered `STALE_BUTTON_TAP_EXPIRED` here and goes no
+    further (see the branch for why this guard owns it).
     """
     from app.services import workflow_service as wf
 
     if ctx.current_state == UserStates.AWAITING_RESCHEDULE_TIME:
         await wf._handle_reschedule_selection(
-            ctx.chat_id, ctx.user_text or "", deps.whatsapp
+            ctx.chat_id, ctx.user_text or "", deps.whatsapp, **_reply_ref_kwarg(ctx)
+        )
+        return HANDLED
+    # PRO-105: a customer's tap that names a prompt (`prompt_ref`) when none of
+    # the states that read one is open: the list or question it came from has
+    # lapsed. Its digit must not reach a later reader of bare digits (the
+    # completion check's "1", the address gate), so it is answered here and
+    # changes nothing. The two states after this guard read their own refs.
+    # Pros and the admin are exempt: their offer taps name a lead, which pro
+    # routing further down reads.
+    if (
+        ctx.reply_ref
+        and not ctx.is_exempt
+        and ctx.current_state not in customer_flow.PROMPT_REF_STATES
+    ):
+        logger.info(
+            f"Tap from {mask_chat_id(ctx.chat_id)} answers a prompt no longer open "
+            f"(state {ctx.current_state}); nothing changed"
+        )
+        await deps.whatsapp.send_message(
+            ctx.chat_id, Messages.Customer.STALE_BUTTON_TAP_EXPIRED
         )
         return HANDLED
     return None
@@ -974,6 +1025,10 @@ async def guard_loyalty_confirmation(ctx: DispatchContext, deps: GuardDeps):
     Note the fall-through: a second unclear reply clears the state, refreshes
     `ctx.current_state`, and releases the message to normal routing (PRO-119) —
     the old handler re-prompted forever with no budget and no fall-through.
+
+    PRO-105: the offer and its re-prompt carry two reply buttons (1 and 2)
+    naming the offer by `prompt_ref`; a tap on an older one is answered
+    `STALE_BUTTON_TAP` and this offer stays open.
     """
     from app.services import workflow_service as wf
 
@@ -981,6 +1036,8 @@ async def guard_loyalty_confirmation(ctx: DispatchContext, deps: GuardDeps):
         return None
 
     meta = await deps.state_manager.get_metadata(ctx.chat_id) or {}
+    if await _answer_stale_tap(ctx, deps, meta):
+        return HANDLED
     past_pro_id = meta.get("past_pro_id")
     active_lead = await wf.leads_collection.find_one(
         {
@@ -1042,7 +1099,10 @@ async def guard_loyalty_confirmation(ctx: DispatchContext, deps: GuardDeps):
             ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS,
         )
         await deps.whatsapp.send_message(
-            ctx.chat_id, Messages.Customer.LOYALTY_REPROMPT
+            ctx.chat_id,
+            Messages.Customer.LOYALTY_REPROMPT,
+            buttons=customer_flow.LOYALTY_BUTTONS,
+            reply_ref=meta.get("prompt_ref"),
         )
         await wf.lead_manager.log_message(
             ctx.chat_id, "model", Messages.Customer.LOYALTY_REPROMPT
@@ -1062,12 +1122,19 @@ async def guard_new_or_existing(ctx: DispatchContext, deps: GuardDeps):
 
     (sent when they have a confirmed BOOKED job — see the Q3 gate in the
     pipeline below).
+
+    PRO-105: the question and its re-prompt carry two reply buttons (1 and 2)
+    naming it by `prompt_ref`; a tap on an older copy is answered
+    `STALE_BUTTON_TAP` and this question stays open.
     """
     from app.services import workflow_service as wf
 
     if ctx.current_state != UserStates.AWAITING_NEW_OR_EXISTING:
         return None
 
+    meta = await deps.state_manager.get_metadata(ctx.chat_id) or {}
+    if await _answer_stale_tap(ctx, deps, meta):
+        return HANDLED
     reply = (ctx.user_text or "").strip()
     if reply in ("1", "כן"):
         # New request: release the gate so the next message runs normal intake
@@ -1081,7 +1148,6 @@ async def guard_new_or_existing(ctx: DispatchContext, deps: GuardDeps):
     elif reply in ("2", "לא"):
         # About the existing job: hand off to the assigned pro and step the
         # bot back so the two can talk directly.
-        meta = await deps.state_manager.get_metadata(ctx.chat_id)
         booked_lead_id = meta.get("booked_lead_id")
         pro_name = "איש המקצוע"
         try:
@@ -1134,7 +1200,10 @@ async def guard_new_or_existing(ctx: DispatchContext, deps: GuardDeps):
         return HANDLED
     else:
         await deps.whatsapp.send_message(
-            ctx.chat_id, Messages.Customer.NEW_OR_EXISTING_REPROMPT
+            ctx.chat_id,
+            Messages.Customer.NEW_OR_EXISTING_REPROMPT,
+            buttons=customer_flow.NEW_OR_EXISTING_BUTTONS,
+            reply_ref=meta.get("prompt_ref"),
         )
         return HANDLED
 
@@ -1190,7 +1259,9 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
     # Reschedule keyword
     if not pro_id:
         await deps.whatsapp.send_message(
-            ctx.chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS
+            ctx.chat_id,
+            Messages.Customer.RESCHEDULE_NO_SLOTS,
+            buttons=customer_flow.NO_SLOTS_BUTTONS,
         )
         return HANDLED
 
@@ -1203,7 +1274,9 @@ async def guard_booked_cancel_reschedule(ctx: DispatchContext, deps: GuardDeps):
     )
     if not offered:
         await deps.whatsapp.send_message(
-            ctx.chat_id, Messages.Customer.RESCHEDULE_NO_SLOTS
+            ctx.chat_id,
+            Messages.Customer.RESCHEDULE_NO_SLOTS,
+            buttons=customer_flow.NO_SLOTS_BUTTONS,
         )
         return HANDLED
     logger.info(
@@ -1257,6 +1330,9 @@ async def _ask_cancel_confirmation(
             "cancel_confirm_resume_until",
         ):
             meta.pop(key, None)
+    # PRO-105: a fresh ref for this prompt, so a tap on an earlier "really
+    # cancel?" (about another lead, perhaps) is told apart from a tap on this one.
+    meta["prompt_ref"] = customer_flow.new_prompt_ref()
     await deps.state_manager.set_state(
         ctx.chat_id,
         UserStates.AWAITING_CANCEL_CONFIRMATION,
@@ -1270,6 +1346,8 @@ async def _ask_cancel_confirmation(
             if offered
             else Messages.Customer.CANCEL_CONFIRM_PROMPT
         ),
+        buttons=customer_flow.CANCEL_CONFIRM_BUTTONS,
+        reply_ref=meta["prompt_ref"],
     )
     logger.info(
         f"Customer {mask_chat_id(ctx.chat_id)} asked to cancel "
@@ -1377,8 +1455,9 @@ async def guard_pro_business_keyword_bypass(ctx: DispatchContext, deps: GuardDep
 
 
 def _reply_ref_kwarg(ctx: DispatchContext) -> dict:
-    """PRO-104: the lead a tapped offer button named, for the pro's אשר/דחה.
-    Empty for every other message, so their call is unchanged."""
+    """PRO-104: the lead a tapped offer button named, for the pro's אשר/דחה;
+    PRO-105: the prompt a customer's tapped list row named, for the reschedule
+    picker. Empty for every other message, so their call is unchanged."""
     return {"reply_ref": ctx.reply_ref} if ctx.reply_ref else {}
 
 
