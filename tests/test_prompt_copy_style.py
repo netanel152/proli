@@ -112,6 +112,40 @@ def test_example_utterances_follow_style_rules(prompt_name, examples):
             ), f"[{prompt_name}] retired fragment {fragment!r} in: {example!r}"
 
 
+def test_already_welcomed_note_follows_the_same_copy_rules():
+    """PRO-292: the note is appended to the dispatcher prompt after formatting, so
+    it is not in DISPATCHER_SYSTEM's own scan. Its quoted examples are copy the
+    model may repeat to a customer, so the same retired patterns stay out."""
+    note = Prompts.DISPATCHER_ALREADY_WELCOMED
+    examples = _extract_examples(note)
+    assert examples, "extraction found nothing, so the checks below are vacuous"
+
+    for text in (note, *examples):
+        assert not EMOJI_RE.search(text)
+        assert "—" not in text and "–" not in text
+        assert not SLASHED_GENDER_RE.search(text)
+        for fragment in RETIRED_FRAGMENTS:
+            assert fragment not in text, f"retired fragment {fragment!r}"
+    for example in examples:
+        assert not FIRST_PERSON_RE.search(example), f"first person in: {example!r}"
+
+
+def test_pro_phase_estimate_wording_names_whose_price_list_it_is():
+    """PRO-292 acceptance: the customer text says whose estimate it is."""
+    formatted = Prompts.PRO_BASE_SYSTEM.format(
+        base_system_prompt="BASE",
+        pro_name="דני",
+        price_list="PL",
+        social_proof_text="SP",
+        extracted_city="תל אביב",
+        extracted_issue="נזילה",
+        transcription="",
+        current_datetime="2026-01-01T10:00:00",
+    )
+
+    assert "לפי המחירון של דני" in formatted
+
+
 def test_dispatcher_system_formats_with_known_facts_placeholders_and_no_stray_braces():
     formatted = Prompts.DISPATCHER_SYSTEM.format(
         known_customer_name="none",
