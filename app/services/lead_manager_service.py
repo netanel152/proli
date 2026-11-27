@@ -8,6 +8,7 @@ from app.core.constants import LeadStatus, Actor
 from app.core.config import settings
 from app.core.lead_history import status_history_entry
 from app.core.messages import Messages
+from app.core.text_matching import contains_keyword
 from app.services.context_manager_service import ContextManager
 
 
@@ -131,24 +132,70 @@ def stated_in(parts: dict, text) -> dict:
     return {k: v for k, v in parts.items() if str(v) in (text or "")}
 
 
+def private_home_parts(text) -> dict:
+    """The floor/apartment values ``text`` settles without a number.
+
+    A private home ("בית פרטי", "וילה", "אין דירה", ...) has neither, so both
+    get the Fallbacks values; a ground floor in a building ("קומת קרקע") settles
+    only the floor. Nothing else is read, so an empty dict means the text said
+    neither.
+    """
+    keywords, fallbacks = Messages.Keywords, Messages.Fallbacks
+    if contains_keyword(
+        text, keywords.PRIVATE_HOME_PHRASES, keywords.GROUND_FLOOR_PHRASES
+    ):
+        return {
+            "floor": fallbacks.PRIVATE_HOME_FLOOR,
+            "apartment": fallbacks.PRIVATE_HOME_APARTMENT,
+        }
+    if contains_keyword(text, keywords.GROUND_FLOOR_PHRASES):
+        return {"floor": fallbacks.GROUND_FLOOR}
+    return {}
+
+
+def fill_private_home(parts: dict, text) -> dict:
+    """``parts`` with the floor/apartment ``text`` settles (``private_home_parts``)
+    filled in, only where ``parts`` has nothing. A number the customer gave is
+    never overwritten.
+
+    The model is told the same rule, but this is the backstop: without it a
+    customer whose home has no apartment number answers "בית פרטי", the gate
+    asks for the apartment again, and the loop never ends.
+    """
+    stated = private_home_parts(text)
+    return {
+        **parts,
+        **{f: v for f, v in stated.items() if not str(parts.get(f) or "").strip()},
+    }
+
+
+def _hebrew_list(items: list) -> str:
+    """ "א", "א וב", "א, ב וג": the conjunction ו is written onto the last item."""
+    if len(items) < 2:
+        return "".join(items)
+    return f"{', '.join(items[:-1])} ו{items[-1]}"
+
+
 def is_address_complete(extracted_data) -> tuple[bool, str]:
     """
     Pure check: does extracted_data carry street+street_number+city+floor+apartment?
     Returns (ok, reason). When ok is False, reason is a Hebrew-facing message
-    listing the missing fields — safe to send directly to the customer.
+    naming only the missing fields in one sentence (plus the private-home hint
+    when the apartment is one of them) — safe to send directly to the customer.
     """
     missing = [
-        label
-        for field, label in Messages.Customer.ADDRESS_FIELD_LABELS.items()
+        field
+        for field in Messages.Customer.ADDRESS_FIELD_LABELS
         if not (getattr(extracted_data, field, None) or "").strip()
     ]
     if missing:
-        return (
-            False,
-            Messages.Customer.ADDRESS_MISSING_PARTS.format(
-                missing_fields=", ".join(missing)
-            ),
+        labels = [Messages.Customer.ADDRESS_FIELD_LABELS[f] for f in missing]
+        reason = Messages.Customer.ADDRESS_MISSING_PARTS.format(
+            missing_fields=_hebrew_list(labels)
         )
+        if "apartment" in missing:
+            reason += Messages.Customer.ADDRESS_PRIVATE_HOME_HINT
+        return False, reason
     return True, ""
 
 

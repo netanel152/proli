@@ -434,10 +434,16 @@ class Messages:
         )
         # lead_manager_service's address gate: the sentence plus the field
         # vocabulary it lists (attribute name -> Hebrew label, in gate order).
+        # One sentence naming only what is still missing, the labels joined the
+        # way Hebrew joins a list ("קומה ומספר דירה"), never a checklist.
         ADDRESS_MISSING_PARTS = (
-            "כדי שאיש המקצוע יגיע בדיוק למקום, חסרים לנו עוד פרטים בכתובת: "
-            "{missing_fields}"
+            "כדי שאיש המקצוע יגיע בדיוק למקום, נשאר רק לקבל {missing_fields}."
         )
+        # Appended when the apartment is missing: a private home has none, and
+        # without this line the customer has no way out of the gate but to
+        # invent a number. "בית פרטי" is PRIVATE_HOME_PHRASES[0], read by
+        # lead_manager_service.fill_private_home.
+        ADDRESS_PRIVATE_HOME_HINT = "\nבבית פרטי אפשר פשוט לכתוב בית פרטי."
         ADDRESS_FIELD_LABELS = {
             "street": "רחוב",
             "street_number": "מספר בית",
@@ -651,6 +657,9 @@ class Messages:
         # caller checks for a floor or apartment first: "קומה -, דירה -" is a
         # line that says nothing while looking like information.
         EXTRA_INFO_LINE = "קומה {floor}, דירה {apartment}"
+        # The same line for a private home (apartment is
+        # Fallbacks.PRIVATE_HOME_APARTMENT): "קומה קרקע, דירה בית פרטי" reads wrong.
+        EXTRA_INFO_PRIVATE_HOME = "בית פרטי"
         # Header for the numbered media-links block appended to a lead offer.
         # Media is always sent as text links, never re-sent as files — see
         # notification_service.format_media_links for the policy.
@@ -1495,6 +1504,32 @@ class Messages:
             "no thanks",
             "nope",
         )
+        # A reply that settles floor and apartment with no number: a private
+        # home has neither. Whole-token matched (contains_keyword), the
+        # exclusions first, so "קומת קרקע" in a building is a ground floor and
+        # not a private home. "קוטג'" tokenizes to "קוטג". The first entry is
+        # what Customer.ADDRESS_PRIVATE_HOME_HINT tells the customer to type.
+        PRIVATE_HOME_PHRASES = [
+            "בית פרטי",
+            "צמוד קרקע",
+            "צמודת קרקע",
+            "קרקע",
+            "וילה",
+            "קוטג",
+            "אין קומה",
+            "אין דירה",
+            "אין מספר דירה",
+            "private house",
+        ]
+        GROUND_FLOOR_PHRASES = [
+            "קומת קרקע",
+            "בקומת קרקע",
+            "קומה קרקע",
+            "ground floor",
+        ]
+        # Precision: guard_politeness matches the WHOLE message
+        # against this list (normalized_text ==), never a substring, so "תודה,
+        # מתי הוא מגיע?" or "תודה, שכחתי לציין שזה קומה 3" reach the flow.
         THANKS_KEYWORDS = [
             "תודה",
             "תודה רבה",
@@ -1533,6 +1568,11 @@ class Messages:
         CITY_UNKNOWN = "עיר לא ידועה"
         ISSUE_UNKNOWN = "בעיה לא ידועה"
         PRO_NAME_MISSING = "ללא שם"
+        # What a private home stores for the two address parts it does not have,
+        # so the five-field gate passes (lead_manager_service.fill_private_home).
+        PRIVATE_HOME_FLOOR = "קרקע"
+        PRIVATE_HOME_APARTMENT = "בית פרטי"
+        GROUND_FLOOR = "קרקע"
         # Template variables cannot be empty, so an optional line in a free-form
         # message becomes a variable with a value that says "nothing here".
         PRICE_NOT_QUOTED = "לא ניתנה הערכה"

@@ -60,6 +60,7 @@ from app.services.ai_engine_service import AIResponse, file_notice_in
 from app.services.dispatch_guards import DispatchContext, GuardDeps
 from app.services.lead_manager_service import (
     ADDRESS_PARTS,
+    fill_private_home,
     parts_from_other_city,
     stated_in,
 )
@@ -772,6 +773,10 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 {"_id": current_lead_id},
                 {"$unset": {f: "" for f in ADDRESS_PARTS if f not in extracted_parts}},
             )
+        # A private home settles floor/apartment with no number ("בית פרטי").
+        extracted_parts = fill_private_home(
+            extracted_parts, f"{user_text or ''} {transcription or ''}"
+        )
         if extracted_parts:
             # The city they were given with, which parts_from_other_city reads.
             extracted_parts["address_city"] = ai_city or extracted_city
