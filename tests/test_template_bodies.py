@@ -246,15 +246,12 @@ def test_every_pause_message_states_the_real_pause_length(text):
 
 
 def test_both_channels_promise_the_customer_the_same_thing():
-    """The pro gets in touch soon to arrange the visit: worded differently in the
-    two channels since 2026-11-17, promising the same thing."""
-    assert Messages.Customer.PRO_FOUND.endswith(
-        "{pro_name} ייצור איתך קשר בקרוב לתיאום ההגעה."
-    )
-    assert Messages.Templates.PRO_FOUND.endswith(
-        "איש המקצוע יתקשר אליך בקרוב כדי לתאם הגעה."
-    )
-    assert "לתיאום ההגעה" in Messages.Pro.CONTACT_CARD_CLOSING
+    """The pro gets in touch soon to arrange the visit. Since PRO-245 the two
+    channels close on the same sentence, and the pro's card asks for it."""
+    closing = "איש המקצוע יתקשר אליך בקרוב כדי לתאם הגעה."
+    assert Messages.Customer.PRO_FOUND.endswith(closing)
+    assert Messages.Templates.PRO_FOUND.endswith(closing)
+    assert "כדי לתאם הגעה" in Messages.Pro.CONTACT_CARD_CLOSING
 
 
 def test_pro_found_ends_on_words_with_the_phone_as_the_last_variable():

@@ -74,7 +74,7 @@ async def test_nihul_with_no_stuck_leads_clears_state(
     )
 
     mock_state.clear_state.assert_awaited_once_with("admin@c.us")
-    assert "אין לידים תקועים" in _sent_text(mock_whatsapp)
+    assert Messages.Admin.NO_STUCK_LEADS in _sent_text(mock_whatsapp)
     mock_state.set_state.assert_not_called()
 
 
@@ -151,7 +151,7 @@ async def test_lead_selection_invalid_number_preserves_state(
         None,
     )
 
-    assert "לא חוקי" in _sent_text(mock_whatsapp)
+    assert Messages.Admin.INVALID_NUMBER in _sent_text(mock_whatsapp)
     mock_state.set_state.assert_not_called()
     mock_state.clear_state.assert_not_called()
 
@@ -621,7 +621,7 @@ async def test_pro_selection_invalid_preserves_state(
         None,
     )
 
-    assert "לא חוקי" in _sent_text(mock_whatsapp)
+    assert Messages.Admin.INVALID_NUMBER in _sent_text(mock_whatsapp)
     mock_state.clear_state.assert_not_called()
 
 
@@ -846,7 +846,7 @@ async def test_pro_selection_offer_send_succeeds_admin_gets_success_message(
         for c in mock_whatsapp.send_message.call_args_list
         if c.args[0] == "admin@c.us"
     ]
-    assert any("✅" in m and "הועבר" in m for m in admin_msgs)
+    assert any(static_prefix(Messages.Admin.ASSIGN_SUCCESS) in m for m in admin_msgs)
     assert not any(
         longest_static_chunk(Messages.Admin.ASSIGN_OFFER_FAILED) in m
         for m in admin_msgs
@@ -921,7 +921,9 @@ async def test_action_self_assign_lead_lookup_missing_after_write_distinct_messa
         for c in mock_whatsapp.send_message.call_args_list
         if c.args[0] == "admin@c.us"
     ]
-    assert any("הליד לא נמצא" in m for m in admin_msgs)
+    assert any(
+        static_prefix(Messages.Admin.ASSIGN_LEAD_LOOKUP_MISSED) in m for m in admin_msgs
+    )
     assert not any(
         longest_static_chunk(Messages.Admin.ASSIGN_OFFER_FAILED) in m
         for m in admin_msgs

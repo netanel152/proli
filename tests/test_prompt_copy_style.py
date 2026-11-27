@@ -1,9 +1,13 @@
 """PRO-169 — the AI prompt copy follows docs/COPY_STYLE_GUIDE.md.
 
 These pin the *mechanical* rules the guide states (gender-neutral phrasing,
-emoji placement, no bold markup, no Latin brand name inside Hebrew) over the
-example utterances baked into the prompts, so a future prompt edit that
-reintroduces a retired pattern fails here instead of shipping to a customer.
+no emoji, no em dash, no bold markup, the "אנחנו" voice, no Latin brand name
+inside Hebrew) over the example utterances baked into the prompts, so a future
+prompt edit that reintroduces a retired pattern fails here instead of shipping
+to a customer. PRO-245 brought them to the owner's 2026-11-17 rules: the
+examples used to open with one emoji and speak as "אני"; they now carry no
+emoji and speak as "אנחנו", and the pro phase speaks for פרולי, never as the
+professional.
 
 Extraction scope: only double-quoted strings that contain a Hebrew letter are
 treated as "examples" — this is deliberately narrow so it does not misfire on
@@ -13,9 +17,8 @@ prose. Two carve-outs matter:
   prose with a parenthetical Hebrew name, not a quoted example — it contains no
   `"..."` segment, so the quote-based extractor never sees it.
 - Everything from `*** STYLE` to the end of each prompt is the guide text
-  itself, which *names* retired patterns ("תשלח תמונה", "מעביר/מעבירה") as
-  negative examples and the accepted stand-ins ("תוכל/י", "את/ה") for an
-  unavoidable second-person verb. Those are guidance about copy, not copy
+  itself, which *names* retired patterns ("תשלח תמונה", "תוכל/י", "מתי נוח
+  שאגיע?") as negative examples. Those are guidance about copy, not copy
   themselves, so the STYLE region is sliced off before extraction.
 """
 
@@ -30,14 +33,23 @@ HEBREW_RE = re.compile(r"[֐-׿]")
 QUOTE_RE = re.compile(r'"([^"]+)"')
 EMOJI_RE = re.compile(r"[\U0001F300-\U0001FAFF☀-➿]")
 
-# Fragments that are retired because they were *wrong*, not merely avoided.
-# "תוכל/י", "את/ה", "נמצא/ת" and "מתאר/ת" are the guide's own sanctioned
-# inclusive fallback for a second-person verb that can't be phrased around
-# (§2 rule 2, and the STYLE block quotes them as accepted) — they must NOT be
-# in this denylist. What's actually retired: the AI guessing its own gender in
-# first person ("צריך/ה"), first-person present tense ("אני מעביר"), and
-# assuming the pro is male ("שהוא מאשר").
-RETIRED_FRAGMENTS = ("צריך/ה", "אני מעביר", "שהוא מאשר")
+# Fragments that are retired because they were *wrong*, not merely avoided:
+# the AI guessing its own gender in first person ("צריך/ה"), first-person
+# present tense ("אני מעביר"), assuming the pro is male ("שהוא מאשר"), and
+# (PRO-245) the AI speaking as the professional who arrives ("שאגיע", "אבוא",
+# "כאן {pro_name}"), the bug the first staging E2E chat showed.
+RETIRED_FRAGMENTS = (
+    "צריך/ה",
+    "אני מעביר",
+    "שהוא מאשר",
+    "שאגיע",
+    "אגיע",
+    "אבוא",
+    "כאן {pro_name}",
+)
+SLASHED_GENDER_RE = re.compile(r"[\u05d0-\u05ea]/[\u05d0-\u05ea]")
+# §1: first person singular, in the forms the examples used before PRO-245.
+FIRST_PERSON_RE = re.compile(r"(?<!\w)(אני|הבנתי|רשמתי|אטפל|אבדוק|אעדכן)(?!\w)")
 
 
 def _extract_examples(prompt_text: str) -> list[str]:
@@ -69,17 +81,19 @@ def test_dispatcher_first_line_is_not_treated_as_an_example():
 )
 def test_example_utterances_follow_style_rules(prompt_name, examples):
     for example in examples:
-        emojis = EMOJI_RE.findall(example)
+        # (a) no emoji at all (§4)
+        assert not EMOJI_RE.search(example), f"[{prompt_name}] emoji in: {example!r}"
 
-        # (a) at most one emoji
-        assert len(emojis) <= 1, f"[{prompt_name}] multiple emoji in: {example!r}"
+        # (b) no em dash (§1) and no slashed gender form (§2)
+        assert "—" not in example, f"[{prompt_name}] em dash in: {example!r}"
+        assert not SLASHED_GENDER_RE.search(
+            example
+        ), f"[{prompt_name}] slashed gender form in: {example!r}"
 
-        # (b) if present, the emoji is the first character of the first line
-        if emojis:
-            first_line = example.split("\n", 1)[0]
-            assert first_line and EMOJI_RE.match(
-                first_line[0]
-            ), f"[{prompt_name}] emoji not leading in: {example!r}"
+        # (f) the voice is "אנחנו" (§1)
+        assert not FIRST_PERSON_RE.search(
+            example
+        ), f"[{prompt_name}] first person singular in: {example!r}"
 
         # (c) no *bold* markup
         assert not re.search(
@@ -230,3 +244,30 @@ def test_generate_system_prompt_names_the_trades_only_when_given_them(admin_util
 
     assert trades_line(trades) in with_trades.splitlines()
     assert PROMPT_TRADES_MARKER not in without
+
+
+def test_generated_persona_follows_the_2026_11_17_rules(admin_utils):
+    """PRO-245: the stored persona is the first thing in the pro-phase prompt,
+    so the model copies its register. It carries no em dash, emoji or slashed
+    form, speaks for פרולי as "אנחנו", and never as the professional."""
+    prompt, _ = admin_utils.generate_system_prompt(
+        "אבי", "plumber", "תל אביב", "ביקור 200"
+    )
+    assert "—" not in prompt
+    assert not EMOJI_RE.search(prompt)
+    assert not SLASHED_GENDER_RE.search(prompt)
+    assert '"אנחנו"' in prompt
+    for fragment in ("אגיע", "אטפל", "הבנתי", "רשמתי"):
+        assert fragment not in prompt
+
+
+@pytest.mark.parametrize("prompt", [Prompts.DISPATCHER_SYSTEM, Prompts.PRO_BASE_SYSTEM])
+def test_prompts_ask_for_short_bubbles_without_echo_or_markdown(prompt):
+    """PRO-245: each reply one WhatsApp bubble, no echo of the customer's words,
+    the name written once, and no markdown the phone would show raw."""
+    assert "one to three short sentences" in prompt
+    assert "Do not repeat or paraphrase back" in prompt
+    assert "name at most once per message" in prompt
+    assert "no markdown headers" in prompt
+    assert "No emoji at all" in prompt
+    assert "—" not in prompt

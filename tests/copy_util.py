@@ -37,3 +37,49 @@ def longest_static_chunk(template: str, min_len: int = 4) -> str:
     if len(frag) < min_len:
         raise ValueError(f"no meaningful static chunk in {template!r}")
     return frag
+
+
+# PRO-245 §3: the two ways a free-form message asks for a keyword. A sentence
+# asks with the verb ("לאישור כתוב אשר", "אפשר לכתוב ביטול"); a pro command
+# list puts the keyword first on its line ("אשר - לקבל את העבודה"). A keyword
+# may be two words ("עדיין עובד"), so the caller passes the vocabulary and the
+# longest match wins.
+_WRITE_VERB = re.compile(r"(?<![\w])ל?כתוב ")
+_COMMAND_ROW = re.compile(r"^(\S+(?: \S+)?) - ", flags=re.M)
+
+
+def written_keywords(text: str, vocabulary) -> list[str]:
+    """Every keyword ``text`` asks to be written after "כתוב"/"לכתוב", in order.
+
+    Only words in ``vocabulary`` count. What else may follow the verb ("לכתוב
+    לנו", "לכתוב מה קרה") is free text, not a command, and is skipped here;
+    ``unread_after_write_verb`` lists it so a test can pin what is allowed.
+    """
+    words = sorted(vocabulary, key=len, reverse=True)
+    found = []
+    for m in _WRITE_VERB.finditer(text):
+        rest = text[m.end() :]
+        for word in words:
+            if rest.startswith(word) and not re.match(r"\w", rest[len(word) :]):
+                found.append(word)
+                break
+    return found
+
+
+def unread_after_write_verb(text: str, vocabulary) -> list[str]:
+    """The first word after each "כתוב"/"לכתוב" that is not a keyword."""
+    known = set(written_keywords(text, vocabulary))
+    out = []
+    for m in _WRITE_VERB.finditer(text):
+        rest = text[m.end() :]
+        if not any(
+            rest.startswith(w) and not re.match(r"\w", rest[len(w) :]) for w in known
+        ):
+            out.append(re.split(r"[\s,.:!?]", rest, maxsplit=1)[0])
+    return out
+
+
+def command_row_keyword(row: str) -> str | None:
+    """The keyword a pro command-list row (``"אשר - ..."``) starts with."""
+    m = _COMMAND_ROW.match(row)
+    return m.group(1) if m else None

@@ -407,9 +407,7 @@ async def test_stale_lead_is_reassigned_to_the_next_pro(world):
     world.recorder.assert_text_to(
         world.pro_chat(R.PRO_SECONDARY), Messages.Pro.NEW_LEAD_HEADER, "דיזנגוף 50"
     )
-    world.recorder.assert_text_to(
-        world.pro_chat(R.PRO_PRIMARY), "הועברה לאיש מקצוע אחר"
-    )
+    world.recorder.assert_text_to(world.pro_chat(R.PRO_PRIMARY), "עברה לאיש מקצוע אחר")
 
 
 @pytest.mark.asyncio

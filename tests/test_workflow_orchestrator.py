@@ -3,8 +3,6 @@ Tests for workflow_service.process_incoming_message routing branches.
 Covers: reset, pro auto-detect, address collection, onboarding, deal finalization.
 """
 
-import re
-
 import pytest
 import pytest_asyncio
 from unittest.mock import ANY, AsyncMock, MagicMock
@@ -13,6 +11,7 @@ from app.core.constants import UserStates, LeadStatus, WorkerConstants, Actor
 from app.core.messages import Messages
 from app.core.phone import mask_chat_id, to_chat_id
 from tests.copy_util import static_prefix
+from app.providers.whatsapp.template_registry import advertised_replies
 from app.services.workflow_service import (
     process_incoming_message,
     _strip_deal_marker,
@@ -2861,9 +2860,10 @@ def test_every_reminder_keyword_is_a_pro_business_keyword():
     hold. STILL_WORKING_COMMANDS was missing from PRO_BUSINESS_KEYWORDS until
     this fix: the finish keyword reached pro_flow while its sibling option was
     swallowed by the customer AI instead. Parses the *token* tokens straight
-    out of the message so a future reword of REMINDER re-checks itself instead
+    out of the message (template_registry's own reader) so a future reword of REMINDER re-checks itself instead
     of pinning today's literal wording."""
-    tokens = re.findall(r"\*(.+?)\*", Messages.Pro.REMINDER)
+    # PRO-245: the reminder asks in a sentence ("כתוב סיימתי"), no bold.
+    tokens = advertised_replies(Messages.Pro.REMINDER)
     assert (
         tokens
     ), f"Messages.Pro.REMINDER has no *token* to check: {Messages.Pro.REMINDER!r}"

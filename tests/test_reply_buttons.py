@@ -645,16 +645,24 @@ def test_the_consent_buttons_are_the_words_the_gate_accepts():
     accept, decline = CONSENT_BUTTONS
     assert accept.payload in Messages.Consent.ACCEPT_KEYWORDS
     assert decline.payload in Messages.Consent.DECLINE_KEYWORDS
-    # The request advertises both words, so a tap offers nothing typing could not.
-    assert f"*{accept.payload}*" in Messages.Consent.REQUEST
-    assert f"*{decline.payload}*" in Messages.Consent.REQUEST
+    # The request advertises both words, so a tap offers nothing typing could
+    # not. PRO-245: asked for in the sentence ("אפשר לכתוב כן"), not in bold.
+    from tests.copy_util import written_keywords
+
+    assert written_keywords(
+        Messages.Consent.REQUEST, {accept.payload, decline.payload}
+    ) == [accept.payload, decline.payload]
     assert all(len(b.label) <= 20 for b in CONSENT_BUTTONS)
 
 
 def test_the_completion_buttons_are_the_digits_its_handler_reads():
     buttons = template_registry.buttons_for("completion_check")
     assert [b.payload for b in buttons] == ["1", "2", "3"]
-    assert all(f"*{b.payload}*" in Messages.Customer.COMPLETION_CHECK for b in buttons)
+    # PRO-245: the free-form check now uses the `1 - text` lines its template
+    # uses, which the registry's own reader parses.
+    assert template_registry.advertised_replies(Messages.Customer.COMPLETION_CHECK) == [
+        b.payload for b in buttons
+    ]
     assert all(len(b.label) <= 20 for b in buttons)
 
 

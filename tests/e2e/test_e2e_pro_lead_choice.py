@@ -18,7 +18,8 @@ from tests.e2e import reserved_numbers as R
 from tests.e2e.ai_replay import reply
 
 APPROVE_WORD = Messages.Keywords.APPROVE_COMMANDS[0]
-APPROVE_TOKEN = f"*{APPROVE_WORD}*"
+# PRO-245: offers ask in a sentence ("לאישור כתוב אשר"), no bold.
+APPROVE_TOKEN = f"כתוב {APPROVE_WORD}"
 REJECT_WORD = Messages.Keywords.REJECT_COMMANDS[0]
 FINISH_WORD = Messages.Keywords.FINISH_COMMANDS[0]
 STILL_WORKING_WORD = "עדיין עובד"
