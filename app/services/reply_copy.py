@@ -49,7 +49,7 @@ def _strip_emoji(text: str) -> str:
 
 
 _RANGE_RE = re.compile(
-    r"(\d[\d:.,]*)[ \t]*[–—][ \t]*(\d[\d:.,]*)(?=([ \t]*₪)?)", flags=re.M
+    r"(\d(?:[\d:.,]*\d)?)[ \t]*[–—][ \t]*(\d(?:[\d:.,]*\d)?)(?=([ \t]*₪)?)", flags=re.M
 )
 
 

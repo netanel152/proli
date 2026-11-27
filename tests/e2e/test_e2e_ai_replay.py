@@ -242,6 +242,12 @@ class _OverloadedEngine:
     async def analyze_conversation(self, **_kwargs):
         return reply(Messages.Errors.AI_OVERLOAD)
 
+    async def detect_service_intent(self, text, raise_errors=False):
+        # Like the real one: an outage is False unless the caller asks to see it.
+        if raise_errors:
+            raise RuntimeError("network down")
+        return False
+
 
 @pytest.fixture
 def recording(monkeypatch):
@@ -278,6 +284,25 @@ async def test_record_mode_raises_instead_of_saving_the_overload_reply(
     assert not any(
         "a question nobody has recorded" in key for key in load_fixtures()["responses"]
     )
+
+
+@pytest.mark.asyncio
+async def test_record_mode_raises_instead_of_saving_a_failed_intent_call_as_false(
+    monkeypatch, recording
+):
+    monkeypatch.setattr(settings, "GEMINI_API_KEY", SecretStr(REALISTIC_KEY))
+    before = FIXTURE_PATH.read_bytes()
+    text = "an intent nobody has recorded"
+    engine = ReplayAIEngine()
+
+    with pytest.raises(RecordingFailed) as exc:
+        await engine.detect_service_intent(text)
+    engine.flush_recording()
+
+    assert isinstance(exc.value.__cause__, RuntimeError), "the outage is the cause"
+    assert recording == [], "nothing may be written to the fixture store"
+    assert FIXTURE_PATH.read_bytes() == before
+    assert text not in load_fixtures()["intents"]
 
 
 @pytest.mark.asyncio

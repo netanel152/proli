@@ -11,7 +11,9 @@ only what they do not look at: the cleaned text on both send sites and the
 "already welcomed" note on the dispatcher prompt.
 """
 
+import re
 from datetime import timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -36,17 +38,31 @@ def _recorded_replies():
         yield key, entry.get("reply_to_user", ""), name
 
 
-def test_every_recorded_reply_is_clean_once_the_pipeline_has_cleaned_it():
-    replies = list(_recorded_replies())
-    assert replies, "nothing recorded, so this would pass vacuously"
+def _repeats_the_name(text: str, name: str | None) -> bool:
+    return bool(name) and bool(
+        re.search(rf"{re.escape(name)}[\s,]*{re.escape(name)}", text)
+    )
 
-    offenders = {
-        key: found
-        for key, text, name in replies
-        if (found := copy_violations(clean_customer_reply(text, name)))
+
+def test_a_recorded_reply_that_breaks_no_rule_is_sent_unchanged():
+    """The cleaner shares its regexes with `copy_violations`, so "clean after
+    cleaning" proves nothing. What can fail is the other direction: a reply that
+    breaks no rule must come back byte for byte, or the cleaner is rewriting
+    good copy."""
+    already_clean = [
+        (key, text, name)
+        for key, text, name in _recorded_replies()
+        if not copy_violations(text) and not _repeats_the_name(text, name)
+    ]
+    assert already_clean, "nothing recorded is clean, so this would pass vacuously"
+
+    changed = {
+        key: clean_customer_reply(text, name)
+        for key, text, name in already_clean
+        if clean_customer_reply(text, name) != text
     }
 
-    assert offenders == {}
+    assert changed == {}
 
 
 @pytest.mark.xfail(
@@ -175,8 +191,6 @@ async def test_replaying_held_messages_after_accept_also_marks_the_customer_welc
 ):
     """The replay is the other way into the first dispatcher turn: the consent
     lookup alone saying "no" must not hide the note."""
-    from unittest.mock import AsyncMock
-
     monkeypatch.setattr(
         workflow_service, "consent_accepted_within", AsyncMock(return_value=False)
     )
@@ -188,3 +202,25 @@ async def test_replaying_held_messages_after_accept_also_marks_the_customer_welc
 
     assert len(prompts) == 1
     assert Prompts.DISPATCHER_ALREADY_WELCOMED in prompts[0]
+
+
+@pytest.mark.asyncio
+async def test_a_failing_consent_lookup_still_lets_the_dispatcher_answer(
+    world, monkeypatch
+):
+    """The note is a nicety: a Mongo error reading the consent record must not
+    cost the customer their answer."""
+    await world.grant_consent()
+    monkeypatch.setattr(
+        workflow_service,
+        "consent_accepted_within",
+        AsyncMock(side_effect=RuntimeError("mongo down")),
+    )
+    prompts = _capture_prompts(world)
+    world.ai.script(reply("איך קוראים לך?"))
+
+    await world.send("היי")
+
+    assert len(prompts) == 1, "the model was still asked"
+    assert Prompts.DISPATCHER_ALREADY_WELCOMED not in prompts[0]
+    world.recorder.assert_text_to(world.customer, "איך קוראים לך?")
