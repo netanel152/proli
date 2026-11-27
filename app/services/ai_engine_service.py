@@ -390,8 +390,14 @@ class AIEngine:
             )
         return None, last_error
 
-    async def detect_service_intent(self, text: str) -> bool:
+    async def detect_service_intent(
+        self, text: str, raise_errors: bool = False
+    ) -> bool:
         """Lightweight classifier: does this text describe a home-service need?
+
+        A failed call answers False, unless `raise_errors`: the E2E fixture
+        recorder passes it so an outage is never saved as the model's verdict
+        (PRO-292).
 
         Uses a single-shot low-token Gemini call at temperature=0.0.
         Returns False conservatively on any error so it never blocks a Pro from the help menu.
@@ -414,5 +420,7 @@ class AIEngine:
             result = (response.text or "").strip().lower()
             return "true" in result
         except Exception as e:
+            if raise_errors:
+                raise
             logger.warning(f"detect_service_intent failed: {e}")
             return False

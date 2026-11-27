@@ -474,7 +474,9 @@ class Messages:
         # --- PRO-166: migrated from call sites ---
         # Optional lines composed into PRO_FOUND (built in pro_flow.py).
         PROFESSION_LINE = "מקצוע: {label}\n"
-        QUOTED_PRICE_LINE = "\nהערכת המחיר שקיבלת: {quoted_price}₪\n"
+        # PRO-292: says whose estimate it is. The figure is the one the AI quoted
+        # from the pro's own price list (`quoted_price`, see docs/ARCHITECTURE.md).
+        QUOTED_PRICE_LINE = "\nהערכת מחיר לפי המחירון של איש המקצוע: {quoted_price}₪\n"
         PRO_RATING_LINE = "\nדירוג: {rating:.1f}\nמספר ביקורות: {review_count}"
         # workflow_service's AWAITING_NEW_OR_EXISTING re-prompt. §3: same menu
         # shape and same option wording as EXISTING_JOB_PROMPT, which is the

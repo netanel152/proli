@@ -54,6 +54,7 @@ from app.services.matching_service import issue_update
 from app.services.notification_service import send_sos_alert  # noqa: F401
 from app.services import notification_service
 from app.services.data_management_service import (  # noqa: F401
+    consent_accepted_within,
     has_consent,
     record_consent,
 )

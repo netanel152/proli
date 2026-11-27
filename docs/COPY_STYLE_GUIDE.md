@@ -36,6 +36,11 @@ prompts to the 2026-11-17 rules.
 - The AI replies in the same voice. Once a pro is matched, פרולי coordinates the job
   *for* the pro and never speaks *as* the pro: the pro is the one who arrives.
 - Plain everyday Hebrew, not formal or translated phrasing.
+- The prompts ask for this voice, but code enforces the mechanical part: `clean_customer_reply`
+  (`app/services/reply_copy.py`, PRO-292) is the last pass on every model reply to a customer.
+  It removes emoji, turns an em or en dash into a comma (a number or time range keeps "-"),
+  rewrites first-person arrival (`אגיע`/`אבוא`) to "איש המקצוע יגיע/יבוא", and collapses a
+  customer name written twice in a row.
 
 Old → new, from the PRO-245 pass:
 

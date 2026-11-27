@@ -161,6 +161,18 @@ async def test_detect_service_intent_error_returns_false(ai_engine):
 
 
 @pytest.mark.asyncio
+async def test_detect_service_intent_raise_errors_propagates_the_failure(ai_engine):
+    """PRO-292: the fixture recorder asks to see an outage instead of a False it
+    would save as the model's verdict. The default (above) stays fail-quiet."""
+    ai_engine.client.aio.models.generate_content = AsyncMock(
+        side_effect=Exception("Network error")
+    )
+
+    with pytest.raises(Exception, match="Network error"):
+        await ai_engine.detect_service_intent("יש לי בעיה עם הברז", raise_errors=True)
+
+
+@pytest.mark.asyncio
 async def test_detect_service_intent_short_text_shortcircuits(ai_engine):
     """Very short text -> returns False without calling Gemini."""
     ai_engine.client.aio.models.generate_content = AsyncMock()

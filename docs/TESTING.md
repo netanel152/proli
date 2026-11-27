@@ -328,7 +328,7 @@ numbers implicated in PRO-72.
 
 | Substituted | Why | Where |
 |---|---|---|
-| Gemini | CI must be free, offline and byte-identical between runs | recorded fixtures in `ai_replay.py`; re-record with `PROLI_E2E_RECORD=1` |
+| Gemini | CI must be free, offline and byte-identical between runs | recorded fixtures in `ai_replay.py`; re-record with `PROLI_E2E_RECORD=1` (the recorder prints `GEMINI_API_KEY …last4`, refuses a placeholder key with `RecordingFailed`, refuses to save the engine's canned fallback (AI_OVERLOAD, media notices) or a failed intent call, and skips the two missing-fixture tests in record mode; the current fixtures predate the PRO-245 prompts, and the strict-xfail raw scan in `test_e2e_reply_copy.py` turns into a failure once they are re-recorded) |
 | Media upload/analysis | same, plus no live API key in CI | fixtures in `world.py`; real media is verified by hand in `docs/PILOT_E2E_CHECKLIST.md` |
 | Google geocoding | paid external API | `fake_resolve_city_to_coords`, which resolves the same static cities production does so routing still takes the `$geoNear` path |
 | `$geoNear` | mongomock does not implement it | `geo_shim.py` emulates only that operator, so the real 10→20→30 km stepping and load balancing still execute |

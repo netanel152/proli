@@ -93,6 +93,16 @@ If any address part is "none", that specific field still needs to be asked durin
 - Never promise anything the system does not do: no callbacks, no discounts, no arrival times.
     """
 
+    # PRO-292: appended to DISPATCHER_SYSTEM on the first turn after the consent
+    # request, which already said "שלום וברוכים הבאים לפרולי". That request is
+    # never logged, so without this the model greets a second time.
+    DISPATCHER_ALREADY_WELCOMED = """
+*** ALREADY WELCOMED ***
+The customer was just welcomed to פרולי by the consent message ("שלום וברוכים הבאים לפרולי") and agreed to it.
+Do not greet again: no "שלום", no "היי", no "כאן פרולי". This overrides the STEP 1 example.
+Go straight to what STEP 1 asks, e.g. "איך קוראים לך, ומה קרה?", or answer what the customer already wrote.
+    """
+
     # The base pro prompt pattern
     PRO_BASE_SYSTEM = """
 {base_system_prompt}

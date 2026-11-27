@@ -66,6 +66,7 @@ from app.services.lead_manager_service import (
     parts_from_other_city,
     stated_in,
 )
+from app.services.reply_copy import clean_customer_reply
 from app.services.matching_service import (
     customer_phones,
     issue_update,
@@ -134,6 +135,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     _inbound_log_text = wf._inbound_log_text
     _strip_deal_marker = wf._strip_deal_marker
     _clean_quoted_price = wf._clean_quoted_price
+    consent_accepted_within = wf.consent_accepted_within
 
     # --- prologue: the turn's facts, read back off the context ---------------
     # The guards mutate these on the way past — the rate limiter resolves
@@ -571,7 +573,13 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         emergency_expedite = bool(
             can_finalize and active_lead.get("is_emergency") and not is_deal
         )
-        cleaned_reply = _strip_deal_marker(pro_response_obj.reply_to_user)
+        # PRO-292: the copy rules the prompt states, enforced on what is sent.
+        cleaned_reply = clean_customer_reply(
+            _strip_deal_marker(pro_response_obj.reply_to_user),
+            getattr(pro_response_obj.extracted_data, "customer_name", None),
+            active_lead.get("customer_name"),
+            chat_id=chat_id,
+        )
         if emergency_expedite:
             logger.info(
                 f"🚑 Suppressing mid-intake reply for {mask_chat_id(chat_id)} — the "
@@ -654,13 +662,29 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         known_floor=sticky["floor"],
         known_apartment=sticky["apartment"],
     )
-
     if not is_exempt and not await SecurityService.check_and_increment_daily_ai_cap(
         chat_id, WorkerConstants.DAILY_AI_CALL_CAP
     ):
         logger.warning(f"⛔ Daily AI cap reached for {mask_chat_id(chat_id)}")
         await whatsapp.send_message(chat_id, Messages.Errors.DAILY_AI_CAP_REACHED)
         return
+    # PRO-292: the consent request already said hello, and it is not in the
+    # history the model sees, so only the first model turn after it can repeat
+    # it. "Recent" borrows the consent hold's window: held messages are replayed
+    # within it, so an accept older than that is not this conversation's start.
+    if not any(m.get("role") == "model" for m in history or []):
+        try:
+            welcomed = ctx.replayed_held_messages or await consent_accepted_within(
+                chat_id, WorkerConstants.CONSENT_HOLD_TTL_SECONDS
+            )
+        except Exception as e:
+            # A cosmetic hint never costs the customer their turn.
+            logger.warning(
+                f"Consent recency check failed for {mask_chat_id(chat_id)}: {e}"
+            )
+            welcomed = False
+        if welcomed:
+            dispatcher_prompt += Prompts.DISPATCHER_ALREADY_WELCOMED
     try:
         dispatcher_response: AIResponse = await ai.analyze_conversation(
             history=dispatcher_history,
@@ -1113,7 +1137,13 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     emergency_expedite = bool(best_pro and lead_is_emergency and not is_deal)
 
     # Send Message to User — cleaned copy, marker must never leak to the customer.
-    cleaned_reply = _strip_deal_marker(final_response.reply_to_user)
+    # PRO-292: the copy rules the prompt states, enforced on what is sent.
+    cleaned_reply = clean_customer_reply(
+        _strip_deal_marker(final_response.reply_to_user),
+        getattr(final_response.extracted_data, "customer_name", None),
+        extracted_name,
+        chat_id=chat_id,
+    )
     if emergency_expedite:
         logger.info(
             f"🚑 Suppressing mid-intake reply for {mask_chat_id(chat_id)} — emergency "
