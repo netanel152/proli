@@ -49,6 +49,11 @@ database record but no phone.
   assigns to "a different pro"; in (b) the lead is "offered to the next pro"). Give it a
   number nobody is holding. Its messages go **unobserved**: confirm what it was sent from the
   lead in the admin panel and the worker log, not from a screen, and say so in the notes.
+- **Re-running on staging:** the `🧪 Prepare staging E2E data` workflow (`docs/SCRIPTS.md`) resets
+  both chats **and Phone 1's consent record**, so scenario 1 (new customer, consent request with
+  its privacy and terms links) can be run again on the same handset. Its dry run says whether a
+  consent row exists, and warns when Phone 1's number also belongs to a pro profile: such a number
+  can be routed as a pro instead of as a new customer, so use a number that is not a pro.
 - **Scenario 10 (self-signup) needs an unregistered number**, and Phone 1 is the only one.
   Run it **last**, from Phone 1, after a reset (`התחלה`) — once approved, that number is a pro
   and can no longer play C.
