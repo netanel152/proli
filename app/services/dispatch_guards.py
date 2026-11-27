@@ -1535,6 +1535,10 @@ async def guard_awaiting_address(ctx: DispatchContext, deps: GuardDeps):
         **{f: new_parts.get(f) or stored_parts[f] for f in wf.ADDRESS_PARTS},
         "city": ed.city or lead_facts.get("city"),
     }
+    # A private home ("בית פרטי", "וילה", "אין דירה") completes floor and
+    # apartment with no number, so the gate below cannot loop on a home that
+    # has neither. Only empty fields are filled.
+    merged = wf.fill_private_home(merged, ctx.user_text)
     logger.info(
         f"🔍 AWAITING_ADDRESS re-extraction for {mask_chat_id(ctx.chat_id)}: "
         f"new_from_ai={[k for k, v in merged.items() if v and not lead_facts.get(k)]}, "

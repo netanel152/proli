@@ -8,6 +8,7 @@ from app.services.lead_manager_service import (  # noqa: F401 — the guards rea
     LeadManager,
     is_address_complete,
     compose_full_address,
+    fill_private_home,
     parts_from_other_city,
     stated_in,
 )

@@ -60,6 +60,8 @@ from app.services.ai_engine_service import AIResponse, file_notice_in
 from app.services.dispatch_guards import DispatchContext, GuardDeps
 from app.services.lead_manager_service import (
     ADDRESS_PARTS,
+    apply_private_home,
+    fill_private_home,
     parts_from_other_city,
     stated_in,
 )
@@ -526,6 +528,13 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 media_url=ai_media_url,
                 media_lost=ctx.file_lost,
             )
+            # A private home ("בית פרטי") fills an empty floor/apartment the
+            # model left null, never one the lead already has a number for.
+            apply_private_home(
+                pro_response_obj,
+                user_text,
+                {f: active_lead.get(f) for f in ("floor", "apartment")},
+            )
         except Exception as e:
             logger.error(f"Pro response failed for {mask_chat_id(chat_id)}: {e}")
             await whatsapp.send_message(chat_id, Messages.Errors.AI_OVERLOAD)
@@ -755,6 +764,9 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
     # אביב") had the parts dropped and got asked for them again — including
     # immediately after accepting the loyalty offer, which can only dispatch
     # when the parts are on the lead.
+    # What the lead holds for floor/apartment after this block: the private-home
+    # backstop below and on the pro response never writes over a number in it.
+    known_unit = {f: lead_facts.get(f) for f in ("floor", "apartment")}
     if current_lead_id:
         extracted_parts = {
             field: getattr(dispatcher_response.extracted_data, field, None)
@@ -765,6 +777,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         # the stored ones, and of this turn's it keeps only those the customer
         # wrote now: the model re-reads the old street from the history.
         if parts_from_other_city(lead_facts, ai_city):
+            known_unit = {}
             extracted_parts = stated_in(
                 extracted_parts, f"{user_text or ''} {transcription or ''}"
             )
@@ -772,6 +785,13 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                 {"_id": current_lead_id},
                 {"$unset": {f: "" for f in ADDRESS_PARTS if f not in extracted_parts}},
             )
+        # A private home settles floor/apartment with no number ("בית פרטי").
+        extracted_parts = fill_private_home(
+            extracted_parts, f"{user_text or ''} {transcription or ''}", known_unit
+        )
+        known_unit.update(
+            {f: extracted_parts[f] for f in known_unit if extracted_parts.get(f)}
+        )
         if extracted_parts:
             # The city they were given with, which parts_from_other_city reads.
             extracted_parts["address_city"] = ai_city or extracted_city
@@ -980,6 +1000,11 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
                     media_mime=media_mime,
                     media_url=ai_media_url,
                     media_lost=ctx.file_lost,
+                )
+                apply_private_home(
+                    pro_response_obj,
+                    f"{user_text or ''} {transcription or ''}",
+                    known_unit,
                 )
             except Exception as e:
                 logger.error(

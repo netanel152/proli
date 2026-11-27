@@ -122,6 +122,11 @@ def format_lead_extra_info(lead: dict) -> str:
     PRO-59: no longer rendered into either lead *offer* — the exact unit is
     part of what approval buys. Called from pro_flow._handle_approve.
     """
+    if lead.get("apartment") == Messages.Fallbacks.PRIVATE_HOME_APARTMENT:
+        floor = lead.get("floor")
+        if floor and floor != Messages.Fallbacks.PRIVATE_HOME_FLOOR:
+            return Messages.Pro.EXTRA_INFO_PRIVATE_HOME_FLOOR.format(floor=floor)
+        return Messages.Pro.EXTRA_INFO_PRIVATE_HOME
     return Messages.Pro.EXTRA_INFO_LINE.format(
         floor=lead.get("floor") or "-", apartment=lead.get("apartment") or "-"
     )
