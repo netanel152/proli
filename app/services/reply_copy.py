@@ -22,28 +22,53 @@ from __future__ import annotations
 import re
 
 from app.core.logger import logger
+from app.core.phone import mask_chat_id
 
 # Pictographs, dingbats and the emoji modifiers: variation selector 16, the
 # zero-width joiner and the keycap combiner. The ranges match
 # `tests/test_copy_rules.py`, which pins the catalog; ₪ (U+20AA) is outside them.
 EMOJI_RE = re.compile("[" "\U0001f000-\U0001faff" "⌀-⏿" "☀-➿" "⬀-⯿" "️" "‍" "⃣" "]")
+# The modifiers alone: removed outright, where a pictograph becomes a space so
+# "תודה🙏רבה" does not come out as one word.
+_EMOJI_JOINERS_RE = re.compile("[\ufe0f\u200d\u20e3]")
 
 DASH_RE = re.compile("[–—]")
 
-# פרולי never arrives; the professional does. "אני אגיע", "שאגיע", "ואבוא"...
-# Group 1 is a joined prefix (ו, ש, כש), group 2 the verb.
-_ARRIVAL_RE = re.compile(r"(?<!\w)(ו|ש|כש)?(?:אני\s+)?(אגיע|אבוא)(?!\w)")
+# פרולי never arrives; the professional does. "אני אגיע", "שאגיע", "ואבוא",
+# "אני לא אגיע", "וכשאגיע"... Group 1 is a joined prefix (ו, ש, כש, וכש),
+# group 2 an adverb that stays with the verb, group 3 the verb.
+_ARRIVAL_RE = re.compile(
+    r"(?<!\w)(ו?כש|ו|ש)?(?:אני\s+)?(?:(לא|כבר|מיד|גם|תמיד)\s+)?(אגיע|אבוא)(?!\w)"
+)
 _THIRD_PERSON = {"אגיע": "יגיע", "אבוא": "יבוא"}
 _PROFESSIONAL = "איש המקצוע"
 
 
 def _strip_emoji(text: str) -> str:
-    return EMOJI_RE.sub("", text)
+    return EMOJI_RE.sub(" ", _EMOJI_JOINERS_RE.sub("", text))
+
+
+_RANGE_RE = re.compile(
+    r"(\d[\d:.,]*)[ \t]*[–—][ \t]*(\d[\d:.,]*)(?=([ \t]*₪)?)", flags=re.M
+)
+
+
+def _range(match: re.Match) -> str:
+    """'A-B' when the two numbers read as one range, else the match unchanged."""
+    first, second, shekel = match.group(1), match.group(2), match.group(3)
+    both_times = ":" in first and ":" in second
+    neither_time = ":" not in first and ":" not in second
+    rest = match.string[match.end() :]
+    ends_here = not rest.strip() or rest.lstrip(" \t")[:1] in "\n.,;!?)"
+    if both_times or (neither_time and (shekel or ends_here)):
+        return f"{first}-{second}"
+    return match.group(0)
 
 
 def _replace_dashes(text: str) -> str:
-    # A range between two numbers keeps a plain hyphen: "300–450" → "300-450".
-    text = re.sub(r"(\d)[ \t]*[–—][ \t]*(\d)", r"\1-\2", text)
+    # A range between two numbers keeps a plain hyphen: "300–450 ₪" → "300-450 ₪",
+    # "10:00–12:00" → "10:00-12:00". "18:00 — 2 חדרים" is not a range.
+    text = _RANGE_RE.sub(_range, text)
     # A dash opening or closing a line carries nothing a comma would.
     text = re.sub(r"^[ \t]*[–—][ \t]*", "", text, flags=re.M)
     text = re.sub(r"[ \t]*[–—][ \t]*$", "", text, flags=re.M)
@@ -54,19 +79,26 @@ def _replace_dashes(text: str) -> str:
 
 def _third_person_arrival(text: str) -> str:
     def _sub(match: re.Match) -> str:
-        prefix = match.group(1) or ""
-        return f"{prefix}{_PROFESSIONAL} {_THIRD_PERSON[match.group(2)]}"
+        prefix, adverb, verb = match.group(1) or "", match.group(2), match.group(3)
+        middle = f" {adverb}" if adverb else ""
+        return f"{prefix}{_PROFESSIONAL}{middle} {_THIRD_PERSON[verb]}"
 
     return _ARRIVAL_RE.sub(_sub, text)
 
 
 def _collapse_repeated_name(text: str, name: str) -> str:
-    """'נתקסנתקס' or 'דנה, דנה' → the name once."""
+    """'נתקסנתקס' or 'דנה, דנה' → the name once. Whole words only."""
     name = (name or "").strip()
     if len(name) < 2:
         return text
-    escaped = re.escape(name)
-    return re.sub(rf"{escaped}(?:[\s,]*{escaped})+(?!\w)", name, text)
+    n = re.escape(name)
+    # "דנה, דנה", "שי שי": a separated repeat, whatever the name's length.
+    text = re.sub(rf"(?<!\w){n}(?:[\s,]+{n})+(?!\w)", name, text)
+    # "נתקסנתקס": glued only from three letters up, since a short name doubled
+    # is often a real word ("שי" → "שישי", "גל" → "גלגל").
+    if len(name) >= 3:
+        text = re.sub(rf"(?<!\w){n}(?:{n})+(?!\w)", name, text)
+    return text
 
 
 def _tidy(text: str) -> str:
@@ -79,11 +111,14 @@ def _tidy(text: str) -> str:
     return text.strip()
 
 
-def clean_customer_reply(text: str, *customer_names: str | None) -> str:
+def clean_customer_reply(
+    text: str, *customer_names: str | None, chat_id: str | None = None
+) -> str:
     """The reply the customer gets: `text` with the four fixes above applied.
 
     `customer_names` are the names the conversation knows (this turn's
     extraction, the stored lead); each is collapsed where it repeats.
+    `chat_id` only ties the log line to a conversation, masked.
     """
     if not isinstance(text, str):
         return text
@@ -107,7 +142,10 @@ def clean_customer_reply(text: str, *customer_names: str | None) -> str:
     if fixed:
         # Which rules, never the text: the reply carries the customer's name
         # and address. A rising count says the model has drifted from the prompt.
-        logger.info(f"✂️ Model reply cleaned before sending: {sorted(set(fixed))}")
+        where = f" for {mask_chat_id(chat_id)}" if chat_id else ""
+        logger.info(
+            f"✂️ Model reply cleaned before sending{where}: {sorted(set(fixed))}"
+        )
     return cleaned
 
 

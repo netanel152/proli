@@ -578,6 +578,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
             _strip_deal_marker(pro_response_obj.reply_to_user),
             getattr(pro_response_obj.extracted_data, "customer_name", None),
             active_lead.get("customer_name"),
+            chat_id=chat_id,
         )
         if emergency_expedite:
             logger.info(
@@ -661,22 +662,29 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         known_floor=sticky["floor"],
         known_apartment=sticky["apartment"],
     )
-    # PRO-292: the consent request already said hello, and it is not in the
-    # history the model sees. Only the first model turn after it can repeat it.
-    if not any(m.get("role") == "model" for m in history or []) and (
-        ctx.replayed_held_messages
-        or await consent_accepted_within(
-            chat_id, WorkerConstants.CONSENT_HOLD_TTL_SECONDS
-        )
-    ):
-        dispatcher_prompt += Prompts.DISPATCHER_ALREADY_WELCOMED
-
     if not is_exempt and not await SecurityService.check_and_increment_daily_ai_cap(
         chat_id, WorkerConstants.DAILY_AI_CALL_CAP
     ):
         logger.warning(f"⛔ Daily AI cap reached for {mask_chat_id(chat_id)}")
         await whatsapp.send_message(chat_id, Messages.Errors.DAILY_AI_CAP_REACHED)
         return
+    # PRO-292: the consent request already said hello, and it is not in the
+    # history the model sees, so only the first model turn after it can repeat
+    # it. "Recent" borrows the consent hold's window: held messages are replayed
+    # within it, so an accept older than that is not this conversation's start.
+    if not any(m.get("role") == "model" for m in history or []):
+        try:
+            welcomed = ctx.replayed_held_messages or await consent_accepted_within(
+                chat_id, WorkerConstants.CONSENT_HOLD_TTL_SECONDS
+            )
+        except Exception as e:
+            # A cosmetic hint never costs the customer their turn.
+            logger.warning(
+                f"Consent recency check failed for {mask_chat_id(chat_id)}: {e}"
+            )
+            welcomed = False
+        if welcomed:
+            dispatcher_prompt += Prompts.DISPATCHER_ALREADY_WELCOMED
     try:
         dispatcher_response: AIResponse = await ai.analyze_conversation(
             history=dispatcher_history,
@@ -1134,6 +1142,7 @@ async def run_customer_pipeline(ctx: DispatchContext, deps: GuardDeps) -> None:
         _strip_deal_marker(final_response.reply_to_user),
         getattr(final_response.extracted_data, "customer_name", None),
         extracted_name,
+        chat_id=chat_id,
     )
     if emergency_expedite:
         logger.info(

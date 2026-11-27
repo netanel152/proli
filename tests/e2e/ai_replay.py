@@ -262,7 +262,13 @@ class ReplayAIEngine:
             from app.services.ai_engine_service import AIEngine
 
             self._check_live_key()
-            value = await AIEngine().detect_service_intent(text)
+            try:
+                value = await AIEngine().detect_service_intent(text, raise_errors=True)
+            except Exception as e:
+                raise RecordingFailed(
+                    f"live detect_service_intent call for {key!r} failed "
+                    f"({type(e).__name__}); nothing was saved for this key."
+                ) from e
             self._recorded_this_run["intents"][key] = value
             self._fixtures["intents"][key] = value
             return value
