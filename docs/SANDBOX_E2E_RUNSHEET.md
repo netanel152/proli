@@ -33,7 +33,8 @@ checklist requires it (a registered pro's number must exist as a pro in staging)
 | D5 | Spare — closed-window drill / pro self-signup (scenario 10) | ...____ | ☐ | ☐ unregistered |
 
 > **Preparing the staging data:** the `🧪 Prepare staging E2E data` workflow (run from `dev`;
-> `scripts/prepare_staging_e2e.py`, see `docs/SCRIPTS.md`) resets D1's and D2's chats and seeds
+> `scripts/prepare_staging_e2e.py`, see `docs/SCRIPTS.md`) resets D1's and D2's chats (and D1's
+> consent, so scenario 1 starts at first contact again) and seeds
 > D2 as an approved pro with slots and consent, plus one extra approved pro with **no handset**
 > (a reserved, unreachable number). That extra pro is **not D3**: an offer reassigned to it
 > cannot be delivered. D3 as a real reassignment target still has to be seeded or approved

@@ -11,6 +11,11 @@ What it does, for one customer handset and one pro handset:
    leads held by the E2E pros, and the Redis FSM state, held pre-consent
    messages, chat context and rate-limit / daily-AI-cap counters for both
    numbers. The 24h service-window tracker is left alone: it mirrors Meta.
+   The customer's consent row is removed too (PRO-297), so the handset is back
+   at first contact and the consent request, with its policy links, shows again.
+   `delete_user_data` is not used for that: it also clears the service-window
+   tracker and deletes rows this script does not own. A pro profile that holds
+   the customer's number is never touched, only reported.
 2. Seeds the pro handset as an approved, active pro in the given city and
    trade, with a calendar for the next 7 days.
 3. Seeds one extra approved pro with the same city and trade and **no
@@ -275,6 +280,22 @@ async def batch_pro_ids() -> list:
     ]
 
 
+def _consent_filter(phone: str) -> dict:
+    return {"chat_id": {"$in": [phone, _chat_id(phone)]}}
+
+
+async def foreign_pro_profiles(phone: str) -> int:
+    """Pro profiles on this number that are not part of this batch. A reset
+    never touches them, but a number that is also a pro can be routed as one."""
+    return await users_collection.count_documents(
+        {
+            **_phone_filter(phone),
+            "role": "professional",
+            "seed_batch": {"$ne": E2E_BATCH},
+        }
+    )
+
+
 def _lead_filter(chat_ids: list[str], pro_ids: list) -> dict:
     return {"$or": [{"chat_id": {"$in": chat_ids}}, {"pro_id": {"$in": pro_ids}}]}
 
@@ -389,6 +410,26 @@ async def run(
         f"{await slots_collection.count_documents({'pro_id': {'$in': old_pro_ids}})}"
     )
     out(f"   earlier E2E pros removed: {len(old_pro_ids)}")
+    customer_consent = await consent_collection.count_documents(
+        _consent_filter(customer)
+    )
+    out(
+        f"   customer consent: {customer_consent} "
+        + (
+            "(removed on --apply, so the consent request shows again)"
+            if customer_consent
+            else "(none on file: the consent request already shows)"
+        )
+    )
+    customer_pro_profiles = await foreign_pro_profiles(customer)
+    if customer_pro_profiles:
+        out(
+            f"⚠️  The customer number {mask_chat_id(customer)} also belongs to "
+            f"{customer_pro_profiles} pro profile(s) in this database. The reset "
+            "does not touch it, and a number that is a pro can be routed as one "
+            "instead of as a new customer, so scenario 1 may not start at first "
+            "contact. Use a number that is not a pro."
+        )
     if holders[pro] == "pending":
         out(f"   unapproved registration on {mask_chat_id(pro)} removed")
     for chat_id in chat_ids:
@@ -433,6 +474,9 @@ async def run(
                 {**_phone_filter(phone), "pending_approval": True}
             )
         await consent_collection.delete_many({"seed_batch": E2E_BATCH})
+        # The customer handset goes back to first contact (PRO-297). The pro's
+        # consent is written again below, after this reset.
+        await consent_collection.delete_many(_consent_filter(customer))
         for chat_id in chat_ids:
             await StateManager.clear_state(chat_id)
             await ContextManager.clear_context(chat_id)
@@ -471,7 +515,7 @@ async def run(
 
     # Trust nothing that swallows errors: StateManager, ContextManager and the
     # slot insert all turn a failure into a log line or a count.
-    problems = await verify_written(chat_ids, pro)
+    problems = await verify_written(chat_ids, pro, customer_phone=customer)
     if problems:
         out("")
         for line in problems:
@@ -489,8 +533,8 @@ async def run(
         f"{await slots_collection.count_documents({'pro_id': {'$in': await batch_pro_ids()}})}"
     )
     out(
-        "   The customer's consent record was left as it was: a number that "
-        "already accepted skips the consent request."
+        "   The customer's consent record was removed: the first message from "
+        "that handset gets the consent request again."
     )
     return EXIT_OK
 
@@ -532,9 +576,17 @@ async def clear_throttles(chat_id: str) -> None:
         await redis.delete(*keys)
 
 
-async def verify_written(chat_ids: list[str], pro_phone: str) -> list[str]:
+async def verify_written(
+    chat_ids: list[str], pro_phone: str, *, customer_phone: str | None = None
+) -> list[str]:
     """Read back what an apply claims, from the raw stores. Empty means it holds."""
     problems = []
+    if customer_phone and await consent_collection.count_documents(
+        _consent_filter(customer_phone)
+    ):
+        problems.append(
+            f"a consent record for {mask_chat_id(customer_phone)} is still there."
+        )
     redis = await get_redis_client()
     for chat_id in chat_ids:
         held = await redis.exists(

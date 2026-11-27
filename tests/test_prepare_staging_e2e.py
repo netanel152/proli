@@ -208,6 +208,7 @@ async def _handset_and_extra(db):
 async def test_a_refused_target_reads_and_writes_nothing(world):
     db = world["db"]
     await db.leads.insert_one({"chat_id": f"{CUSTOMER}@c.us", "status": "new"})
+    await db.consent.insert_one({"chat_id": f"{CUSTOMER}@c.us", "accepted": True})
 
     code, text = await _go(world, db_names=("proli_db", "proli_db"))
 
@@ -215,6 +216,7 @@ async def test_a_refused_target_reads_and_writes_nothing(world):
     assert "Refusing" in text
     assert await db.leads.count_documents({}) == 1
     assert await db.users.count_documents({}) == 0
+    assert await db.consent.count_documents({}) == 1
 
 
 @pytest.mark.asyncio
@@ -306,15 +308,97 @@ async def test_apply_resets_both_chats(world):
     assert await StateManager.get_state(other_chat) == UserStates.AWAITING_ADDRESS
 
 
+@pytest.mark.parametrize(
+    "stored",
+    [[f"{CUSTOMER}@c.us"], [CUSTOMER], [CUSTOMER, f"{CUSTOMER}@c.us"]],
+    ids=["chat_id_form", "bare_phone", "both_forms"],
+)
 @pytest.mark.asyncio
-async def test_apply_leaves_the_customers_consent_alone(world):
+async def test_apply_removes_the_customers_consent_and_keeps_the_pros(world, stored):
+    """PRO-297: the customer handset goes back to first contact, so its consent
+    row is deleted under either stored form; a third chat's row is not the
+    script's to touch, and the pro's consent is written after the reset."""
     db = world["db"]
-    await db.consent.insert_one({"chat_id": f"{CUSTOMER}@c.us", "accepted": True})
+    other_chat = "97250" + "9999999@c.us"
+    await db.consent.insert_many(
+        [{"chat_id": chat_id, "accepted": True} for chat_id in stored]
+        + [{"chat_id": other_chat, "accepted": True}]
+    )
 
-    await _go(world)
+    code, _ = await _go(world)
 
-    assert await db.consent.count_documents({"chat_id": f"{CUSTOMER}@c.us"}) == 1
-    assert await db.consent.count_documents({"chat_id": f"{PRO}@c.us"}) == 1
+    assert code == prep.EXIT_OK
+    assert await db.consent.count_documents(prep._consent_filter(CUSTOMER)) == 0
+    assert await db.consent.count_documents({"chat_id": other_chat}) == 1
+    pro_consent = await db.consent.find_one({"chat_id": f"{PRO}@c.us"})
+    assert pro_consent["accepted"] is True
+    assert pro_consent["seed_batch"] == prep.E2E_BATCH
+
+
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        (1, "customer consent: 1"),
+        (0, "none on file"),
+    ],
+    ids=["on_file", "none_on_file"],
+)
+@pytest.mark.asyncio
+async def test_a_dry_run_reports_the_customers_consent_and_keeps_it(
+    world, rows, expected
+):
+    db = world["db"]
+    if rows:
+        await db.consent.insert_one({"chat_id": f"{CUSTOMER}@c.us", "accepted": True})
+
+    code, text = await _go(world, apply=False)
+
+    assert code == prep.EXIT_OK
+    assert expected in text
+    assert await db.consent.count_documents({}) == rows
+
+
+@pytest.mark.parametrize("apply", [False, True], ids=["dry_run", "apply"])
+@pytest.mark.asyncio
+async def test_a_pro_profile_on_the_customers_number_is_warned_about_and_untouched(
+    world, apply
+):
+    db = world["db"]
+    await db.users.insert_one(
+        {
+            "phone_number": f"{CUSTOMER}@c.us",
+            "role": "professional",
+            "business_name": "real pro",
+            "is_active": True,
+            "pending_approval": False,
+        }
+    )
+    before = await db.users.find_one({"phone_number": f"{CUSTOMER}@c.us"})
+
+    code, text = await _go(world, apply=apply)
+
+    assert code == prep.EXIT_OK
+    assert "also belongs to 1 pro profile(s)" in text
+    assert CUSTOMER not in text
+    assert await db.users.find_one({"_id": before["_id"]}) == before
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [None, {"role": "customer"}],
+    ids=["no_user", "customer_role_user"],
+)
+@pytest.mark.asyncio
+async def test_no_pro_profile_warning_when_the_customer_number_is_not_a_pro(
+    world, existing
+):
+    if existing:
+        await world["db"].users.insert_one({"phone_number": CUSTOMER, **existing})
+
+    code, text = await _go(world, apply=False)
+
+    assert code == prep.EXIT_OK
+    assert "also belongs to" not in text
 
 
 @pytest.mark.asyncio
@@ -664,6 +748,36 @@ async def test_a_redis_clear_that_is_swallowed_does_not_report_success(
 
     assert code == prep.EXIT_INCOMPLETE
     assert "Redis still holds chat state" in text
+    assert "✅" not in text
+
+
+@pytest.mark.asyncio
+async def test_a_swallowed_customer_consent_delete_does_not_report_success(
+    world, monkeypatch
+):
+    """The read-back catches a customer consent row the delete left behind."""
+
+    class _SwallowsCustomerDelete:
+        def __init__(self, real):
+            self._real = real
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+        async def delete_many(self, flt, *args, **kwargs):
+            if flt == prep._consent_filter(CUSTOMER):
+                return None
+            return await self._real.delete_many(flt, *args, **kwargs)
+
+    db = world["db"]
+    monkeypatch.setattr(prep, "consent_collection", _SwallowsCustomerDelete(db.consent))
+    await db.consent.insert_one({"chat_id": f"{CUSTOMER}@c.us", "accepted": True})
+
+    code, text = await _go(world)
+
+    assert code == prep.EXIT_INCOMPLETE
+    assert "a consent record for" in text and "is still there" in text
+    assert CUSTOMER not in text
     assert "✅" not in text
 
 
