@@ -46,6 +46,12 @@ def contains_keyword(text, keywords, exclude_phrases=()) -> bool:
     return False
 
 
+def is_whole_reply(text, phrases) -> bool:
+    """True iff ``text``'s word tokens are exactly one of ``phrases``' — the
+    whole message, punctuation and case aside ("קרקע." matches "קרקע")."""
+    return bool(text) and _tokens(text) in {_tokens(p) for p in phrases}
+
+
 # Hebrew clitics that attach directly to a noun with no space: ו־ ה־ ב־ ל־ מ־
 # ש־ כ־. Up to four stack ("וכשההצפה" = ו+כ+ש+ה+הצפה), so a token is retried
 # with 0-4 leading clitics removed. Every stem is at least four letters, so

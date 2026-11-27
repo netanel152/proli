@@ -924,7 +924,7 @@ async def _build_pro_response(
         current_datetime=datetime.now(_IL_TZ).strftime("%Y-%m-%d %H:%M (%A)"),
     )
 
-    response = await ai.analyze_conversation(
+    return await ai.analyze_conversation(
         history=history,
         user_text=user_text or "",
         custom_system_prompt=full_system_prompt,
@@ -935,21 +935,6 @@ async def _build_pro_response(
         require_json=True,
         pro_id=str(best_pro["_id"]),
     )
-    _apply_private_home(response, f"{user_text or ''} {transcription or ''}")
-    return response
-
-
-def _apply_private_home(response, text) -> None:
-    """Fill an empty floor/apartment the customer's words settle ("בית פרטי")
-    on the model's extraction, so `_finalize_deal`'s gate sees what was said
-    even when the model left the two fields null (`fill_private_home`)."""
-    ed = getattr(response, "extracted_data", None)
-    if ed is None:
-        return
-    current = {f: getattr(ed, f, None) for f in ("floor", "apartment")}
-    for field, value in fill_private_home(current, text).items():
-        if value != current[field]:
-            setattr(ed, field, value)
 
 
 async def _deal_claim(lead: "dict | None", best_pro: dict) -> "dict | None":

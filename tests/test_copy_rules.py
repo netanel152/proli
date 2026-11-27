@@ -172,7 +172,7 @@ _VOCABULARY = (
 )
 
 # Free text that may follow "כתוב"/"לכתוב" without being a command.
-_FREE_TEXT_AFTER_WRITE = {"לנו", "כאן", "אותן", "עיר", "מה", "את"}
+_FREE_TEXT_AFTER_WRITE = {"לנו", "כאן", "אותן", "עיר", "רחוב", "מה", "את"}
 
 
 @pytest.mark.parametrize("name,text", CATALOG, ids=[n for n, _ in CATALOG])

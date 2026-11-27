@@ -33,6 +33,7 @@ from app.services.dispatch_guards import (
     guard_politeness,
 )
 from app.services.lead_manager_service import (
+    apply_private_home,
     fill_private_home,
     is_address_complete,
     private_home_parts,
@@ -44,15 +45,21 @@ F = Messages.Fallbacks
 LABELS = Messages.Customer.ADDRESS_FIELD_LABELS
 PRIVATE_HOME = {"floor": F.PRIVATE_HOME_FLOOR, "apartment": F.PRIVATE_HOME_APARTMENT}
 
-# The replies the task names, plus the hint's own keyword.
+# The replies the task names, plus phrasings with a ב־ prefix (contains_keyword
+# strips no clitics, so these are listed) and the hint's own keyword.
 PRIVATE_HOME_REPLIES = [
     "בית פרטי",
     "קרקע",
+    "קרקע.",
+    "פרטי",
     "צמוד קרקע",
     "וילה",
     "אין קומה",
     "אין דירה",
     "זה בית פרטי, אין קומה",
+    "אני גר בבית פרטי",
+    "זה בוילה",
+    "בקוטג' ליד הים",
 ]
 
 
@@ -87,6 +94,15 @@ def test_ground_floor_in_a_building_settles_only_the_floor(text):
         "קומה 3 דירה 12",
         "יש לי דירה",  # "דירה" alone is not "אין דירה"
         "קרקעית הכיור נסדקה",  # whole-token: not "קרקע"
+        # Bare "קרקע"/"פרטי" count only as the whole reply.
+        "קרקע, דירה 2",
+        "יש קרקע רטובה ליד הבית",
+        "השם הפרטי שלי דני",
+        # Negated, or a building: never a private home.
+        "זה לא בית פרטי, זה בניין",
+        "לא וילה",
+        "לא בבית פרטי",
+        "בבניין, אין דירה כזאת",
         "",
         None,
     ],
@@ -106,6 +122,16 @@ def test_fill_private_home_never_overwrites_a_given_number():
         "apartment": "4",
         "floor": F.GROUND_FLOOR,
     }
+
+
+def test_fill_private_home_never_overwrites_what_the_lead_stores():
+    """F3: the pipeline sees one turn's extraction; the lead's stored number wins."""
+    assert fill_private_home({}, "בית פרטי", {"floor": "3", "apartment": "12"}) == {}
+    assert fill_private_home({}, "בית פרטי", {"floor": "3"}) == {
+        "apartment": F.PRIVATE_HOME_APARTMENT
+    }
+    # A private home already stored does not block filling the same values.
+    assert fill_private_home({}, "וילה", PRIVATE_HOME) == PRIVATE_HOME
 
 
 def test_fill_private_home_without_a_phrase_is_identity():
@@ -141,13 +167,20 @@ def test_missing_fields_are_joined_as_a_hebrew_list():
     )
 
 
-def test_private_home_hint_only_when_the_apartment_is_missing():
-    _, floor_only = is_address_complete(
-        _parts(street="הרצל", street_number="15", city="רמת גן", apartment="4")
+@pytest.mark.parametrize(
+    "given",
+    [{"apartment": "4"}, {"floor": "2"}],
+)
+def test_private_home_hint_only_when_floor_and_apartment_are_both_missing(given):
+    """A customer who gave one of the two lives in a building; the hint would
+    invite "קומה 2" + "בית פרטי"."""
+    _, reason = is_address_complete(
+        _parts(street="הרצל", street_number="15", city="רמת גן", **given)
     )
-    assert Messages.Customer.ADDRESS_PRIVATE_HOME_HINT not in floor_only
-    assert floor_only == Messages.Customer.ADDRESS_MISSING_PARTS.format(
-        missing_fields=LABELS["floor"]
+    assert Messages.Customer.ADDRESS_PRIVATE_HOME_HINT not in reason
+    (missing,) = {"floor", "apartment"} - set(given)
+    assert reason == Messages.Customer.ADDRESS_MISSING_PARTS.format(
+        missing_fields=LABELS[missing]
     )
 
 
@@ -169,6 +202,10 @@ def test_pro_card_says_private_home_instead_of_floor_and_apartment():
     assert format_lead_extra_info(
         {"floor": "3", "apartment": "12"}
     ) == Messages.Pro.EXTRA_INFO_LINE.format(floor="3", apartment="12")
+    # A floor the customer gave is not dropped from the card.
+    assert format_lead_extra_info(
+        {"floor": "2", "apartment": F.PRIVATE_HOME_APARTMENT}
+    ) == Messages.Pro.EXTRA_INFO_PRIVATE_HOME_FLOOR.format(floor="2")
 
 
 @pytest.mark.parametrize("prompt", ["DISPATCHER_SYSTEM", "PRO_BASE_SYSTEM"])
@@ -178,19 +215,47 @@ def test_prompts_give_the_model_the_same_private_home_values(prompt):
     assert f'apartment = "{F.PRIVATE_HOME_APARTMENT}"' in text
 
 
+def test_the_model_offers_the_same_private_home_hint_as_the_gate():
+    hint = Messages.Customer.ADDRESS_PRIVATE_HOME_HINT.strip()
+    assert f'"{hint}"' in Prompts.PRO_BASE_SYSTEM
+
+
+def _response(**ed):
+    return SimpleNamespace(extracted_data=SimpleNamespace(**ed))
+
+
 def test_pro_response_backstop_fills_empty_floor_and_apartment():
-    response = SimpleNamespace(
-        extracted_data=SimpleNamespace(floor=None, apartment="", street="הרצל")
-    )
-    workflow_service._apply_private_home(response, "בית פרטי None")
+    response = _response(floor=None, apartment="", street="הרצל")
+    apply_private_home(response, "בית פרטי None")
     assert response.extracted_data.floor == F.PRIVATE_HOME_FLOOR
     assert response.extracted_data.apartment == F.PRIVATE_HOME_APARTMENT
 
-    given = SimpleNamespace(extracted_data=SimpleNamespace(floor="1", apartment="2"))
-    workflow_service._apply_private_home(given, "וילה")
+    given = _response(floor="1", apartment="2")
+    apply_private_home(given, "וילה")
     assert (given.extracted_data.floor, given.extracted_data.apartment) == ("1", "2")
 
-    workflow_service._apply_private_home(SimpleNamespace(), "וילה")  # no crash
+    apply_private_home(SimpleNamespace(), "וילה")  # no crash
+
+
+def test_pro_response_backstop_never_writes_over_the_leads_numbers():
+    response = _response(floor=None, apartment=None)
+    apply_private_home(
+        response, "מחר ב-10, בית פרטי", {"floor": "3", "apartment": "12"}
+    )
+    assert (response.extracted_data.floor, response.extracted_data.apartment) == (
+        None,
+        None,
+    )
+
+
+def test_pro_response_backstop_carries_a_private_home_from_an_earlier_turn():
+    """F5: "בית פרטי" on one turn, "מחר ב-10" closing the deal on the next."""
+    response = _response(floor=None, apartment=None)
+    apply_private_home(response, "מחר ב-10", PRIVATE_HOME)
+    assert (
+        response.extracted_data.floor,
+        response.extracted_data.apartment,
+    ) == (F.PRIVATE_HOME_FLOOR, F.PRIVATE_HOME_APARTMENT)
 
 
 # --------------------------------------------------------------------------
@@ -315,10 +380,23 @@ async def test_ground_floor_in_a_building_still_asks_for_the_apartment(turn, moc
         Messages.Customer.ADDRESS_MISSING_PARTS.format(
             missing_fields=LABELS["apartment"]
         )
-        + Messages.Customer.ADDRESS_PRIVATE_HOME_HINT
     ]
     lead = await mock_db.leads.find_one({"_id": lead_id})
     assert lead["floor"] == F.GROUND_FLOOR and not lead.get("apartment")
+    assert await StateManager.get_state(chat_id) == UserStates.AWAITING_ADDRESS
+
+
+@pytest.mark.asyncio
+async def test_a_denied_private_home_does_not_pass_the_gate(turn, mock_db):
+    """F1: "לא בית פרטי" is a building with no apartment number yet."""
+    chat_id, lead_id = await _awaiting_address(
+        mock_db, street="הרצל", street_number="15", address_city="רמת גן"
+    )
+
+    sent = await turn(chat_id, "זה לא בית פרטי")
+
+    assert Messages.Customer.ADDRESS_SAVED not in sent
+    assert not (await mock_db.leads.find_one({"_id": lead_id})).get("apartment")
     assert await StateManager.get_state(chat_id) == UserStates.AWAITING_ADDRESS
 
 
@@ -406,3 +484,61 @@ async def test_thanks_with_a_floor_reaches_the_address_guard(turn, mock_db):
 
     assert Messages.Customer.YOU_ARE_WELCOME not in sent
     assert await StateManager.get_state(chat_id) == UserStates.AWAITING_ADDRESS
+
+
+@pytest.mark.asyncio
+async def test_pipeline_never_writes_a_private_home_over_stored_numbers(
+    turn, mock_db, monkeypatch
+):
+    """F3 through the pipeline's PRO-119 parts persistence: the turn's own
+    extraction has no floor/apartment, the lead does, and the lead keeps them."""
+    monkeypatch.setattr(
+        workflow_service, "determine_best_pro", AsyncMock(return_value=None)
+    )
+    chat_id = f"{ObjectId()}@c.us"
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "issue_type": "נזילה",
+            "city": "רמת גן",
+            "address_city": "רמת גן",
+            "floor": "3",
+            "apartment": "12",
+        }
+    )
+
+    await turn(chat_id, "ואגב, זה בית פרטי")
+
+    lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert (lead["floor"], lead["apartment"]) == ("3", "12")
+
+
+@pytest.mark.asyncio
+async def test_pipeline_stores_a_private_home_the_model_missed(
+    turn, mock_db, monkeypatch
+):
+    monkeypatch.setattr(
+        workflow_service, "determine_best_pro", AsyncMock(return_value=None)
+    )
+    chat_id = f"{ObjectId()}@c.us"
+    lead_id = ObjectId()
+    await mock_db.leads.insert_one(
+        {
+            "_id": lead_id,
+            "chat_id": chat_id,
+            "status": LeadStatus.CONTACTED,
+            "issue_type": "נזילה",
+            "city": "רמת גן",
+        }
+    )
+
+    await turn(chat_id, "הרצל 15 רמת גן, בית פרטי")
+
+    lead = await mock_db.leads.find_one({"_id": lead_id})
+    assert (lead["floor"], lead["apartment"]) == (
+        F.PRIVATE_HOME_FLOOR,
+        F.PRIVATE_HOME_APARTMENT,
+    )
