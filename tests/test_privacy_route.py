@@ -5,6 +5,7 @@ No auth, no DB, no Redis — a plain httpx.ASGITransport client is enough (see
 tests/test_meta_webhook_route.py for the pattern used elsewhere in this repo).
 """
 
+import calendar
 import re
 
 import httpx
@@ -91,6 +92,36 @@ async def test_get_privacy_body_names_the_operator_next_to_the_contact_line():
         ).group(1)
         assert name in section, heading
         assert section.index(name) < section.index('href="mailto:info@proli.me"')
+
+
+@pytest.mark.asyncio
+async def test_get_privacy_body_uses_the_statutory_term_for_the_controller():
+    resp = await _get_privacy()
+
+    assert "בעל השליטה במאגר המידע: נתנאל אקנין" in resp.text
+    assert "ובעל מאגר המידע" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_get_privacy_last_updated_date_agrees_in_both_languages():
+    """The two parts are one policy: bumping one date and not the other is a bug."""
+    months = {
+        "ינואר": 1, "פברואר": 2, "מרץ": 3, "אפריל": 4, "מאי": 5, "יוני": 6,
+        "יולי": 7, "אוגוסט": 8, "ספטמבר": 9, "אוקטובר": 10, "נובמבר": 11,
+        "דצמבר": 12,
+    }  # fmt: skip
+    english = {name: i for i, name in enumerate(calendar.month_name) if name}
+    resp = await _get_privacy()
+
+    he = re.search(r"עדכון אחרון: (\d{1,2}) ב(\S+) (\d{4})", resp.text)
+    en = re.search(r"Last updated: (\w+) (\d{1,2}), (\d{4})", resp.text)
+
+    assert he and en
+    assert (int(he[3]), months[he[2]], int(he[1])) == (
+        int(en[3]),
+        english[en[1]],
+        int(en[2]),
+    )
 
 
 @pytest.mark.asyncio
