@@ -760,6 +760,41 @@ async def guard_emergency_hoist(ctx: DispatchContext, deps: GuardDeps):
     return None
 
 
+def _is_prompt_ref_tap(ctx: DispatchContext) -> bool:
+    """PRO-105: True when this message is a tap on a customer prompt's button
+    or list row: its ref was minted by `customer_flow.new_prompt_ref`.
+
+    A pro offer's ref (PRO-104) is a lead id and never has that shape. Telling
+    them apart by the ref rather than by the sender keeps the protection on for
+    a pro or the admin writing as a customer, and keeps a pro's offer tap away
+    from the customer stale-tap answers whatever state they are in.
+    """
+    return customer_flow.is_prompt_ref(ctx.reply_ref)
+
+
+async def _answer_lapsed_tap(ctx: DispatchContext, deps: GuardDeps) -> bool:
+    """PRO-105: answer a customer prompt tap when no state that reads one is open.
+
+    The list or question it came from has lapsed (or was replaced by a state of
+    another kind). Its digit must not reach a later reader of bare digits (the
+    PRO-56 reassign reply, the completion check's "1", the address gate), so it
+    is answered `STALE_BUTTON_TAP_EXPIRED` and changes nothing. True when
+    answered; the caller returns `HANDLED`.
+    """
+    if ctx.current_state in customer_flow.PROMPT_REF_STATES:
+        return False
+    if not _is_prompt_ref_tap(ctx):
+        return False
+    logger.info(
+        f"Tap from {mask_chat_id(ctx.chat_id)} answers a prompt no longer open "
+        f"(state {ctx.current_state}); nothing changed"
+    )
+    await deps.whatsapp.send_message(
+        ctx.chat_id, Messages.Customer.STALE_BUTTON_TAP_EXPIRED
+    )
+    return True
+
+
 async def guard_pro_approval_soft_hold(ctx: DispatchContext, deps: GuardDeps):
     """Soft Hold — customer is waiting for pro approval.
 
@@ -777,6 +812,12 @@ async def guard_pro_approval_soft_hold(ctx: DispatchContext, deps: GuardDeps):
 
     if ctx.current_state != UserStates.AWAITING_PRO_APPROVAL:
         return None
+
+    # PRO-105: a tap on a lapsed customer prompt (the "really cancel?" this
+    # wait came back from, a loyalty offer) is not a reply to the reassign
+    # offer below, which has no buttons; its "1" must not reassign the lead.
+    if await _answer_lapsed_tap(ctx, deps):
+        return HANDLED
 
     # PRO-56: if the pro stayed silent and we offered the customer a
     # reassignment, handle their 1/2 reply before the generic soft-hold.
@@ -889,9 +930,14 @@ async def _answer_stale_tap(ctx: DispatchContext, deps: GuardDeps, meta: dict) -
     True when ``ctx`` is such a tap (``customer_flow.tap_is_stale``): it has been
     answered `STALE_BUTTON_TAP` and the caller returns with the state and its
     metadata untouched, so the prompt open now can still be answered. False for
-    a typed reply or a tap on the open prompt, which the caller reads as before.
+    a typed reply, a tap on the open prompt, or a pro's offer tap (its ref
+    names a lead), which the caller reads as before.
     """
     if not customer_flow.tap_is_stale(ctx.reply_ref, meta):
+        return False
+    # A pro's offer tap (its ref names a lead) is not an answer to this
+    # customer prompt at all: it is read as its words, as before PRO-105.
+    if not _is_prompt_ref_tap(ctx):
         return False
     logger.info(
         f"Tap from {mask_chat_id(ctx.chat_id)} answers an earlier prompt than the "
@@ -985,9 +1031,9 @@ async def guard_reschedule_selection(ctx: DispatchContext, deps: GuardDeps):
     ``RESCHEDULE_PICK_TTL_SECONDS``, so it never holds the chat for long.
 
     PRO-105: the list is also an interactive list whose rows carry its
-    `prompt_ref`, passed on as ``reply_ref``. Out of the state, a customer's tap
-    carrying any ref is answered `STALE_BUTTON_TAP_EXPIRED` here and goes no
-    further (see the branch for why this guard owns it).
+    `prompt_ref`, passed on as ``reply_ref``. Out of the state, a customer
+    prompt's tap (a ref naming no lead) is answered `STALE_BUTTON_TAP_EXPIRED`
+    here and goes no further; the soft hold above does the same first.
     """
     from app.services import workflow_service as wf
 
@@ -996,25 +1042,9 @@ async def guard_reschedule_selection(ctx: DispatchContext, deps: GuardDeps):
             ctx.chat_id, ctx.user_text or "", deps.whatsapp, **_reply_ref_kwarg(ctx)
         )
         return HANDLED
-    # PRO-105: a customer's tap that names a prompt (`prompt_ref`) when none of
-    # the states that read one is open: the list or question it came from has
-    # lapsed. Its digit must not reach a later reader of bare digits (the
-    # completion check's "1", the address gate), so it is answered here and
-    # changes nothing. The two states after this guard read their own refs.
-    # Pros and the admin are exempt: their offer taps name a lead, which pro
-    # routing further down reads.
-    if (
-        ctx.reply_ref
-        and not ctx.is_exempt
-        and ctx.current_state not in customer_flow.PROMPT_REF_STATES
-    ):
-        logger.info(
-            f"Tap from {mask_chat_id(ctx.chat_id)} answers a prompt no longer open "
-            f"(state {ctx.current_state}); nothing changed"
-        )
-        await deps.whatsapp.send_message(
-            ctx.chat_id, Messages.Customer.STALE_BUTTON_TAP_EXPIRED
-        )
+    # PRO-105: a customer prompt's tap when no state that reads its ref is open
+    # (the two after this guard read their own). See `_answer_lapsed_tap`.
+    if await _answer_lapsed_tap(ctx, deps):
         return HANDLED
     return None
 
@@ -1332,13 +1362,15 @@ async def _ask_cancel_confirmation(
             meta.pop(key, None)
     # PRO-105: a fresh ref for this prompt, so a tap on an earlier "really
     # cancel?" (about another lead, perhaps) is told apart from a tap on this one.
+    # Metadata first: a state open over the previous prompt's ref would answer
+    # every tap on this one as stale.
     meta["prompt_ref"] = customer_flow.new_prompt_ref()
+    await deps.state_manager.set_metadata(ctx.chat_id, meta)
     await deps.state_manager.set_state(
         ctx.chat_id,
         UserStates.AWAITING_CANCEL_CONFIRMATION,
         ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS,
     )
-    await deps.state_manager.set_metadata(ctx.chat_id, meta)
     await deps.whatsapp.send_message(
         ctx.chat_id,
         (

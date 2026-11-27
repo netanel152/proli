@@ -31,6 +31,9 @@ from tests.copy_util import static_prefix
 from tests.e2e import reserved_numbers as R
 
 CANCEL_WORD = Messages.Keywords.CANCEL_KEYWORDS[3]  # "ביטול"
+# The ref of a prompt sent before the open one: customer_flow.new_prompt_ref's
+# shape, but not the stored one.
+OLDER_PROMPT_REF = "00000000" + "f" * 16
 RESCHEDULE_PHRASE = "אני צריך מועד אחר"
 
 
@@ -325,7 +328,7 @@ async def test_the_request_still_with_the_pro_gets_the_same_buttons(world):
 # Loyalty: "check with your previous pro?"
 # ===========================================================================
 
-LOYALTY_REF = "0123456789abcdef01234567"
+LOYALTY_REF = "000000000123456789abcdef"
 
 
 async def _loyalty_offer_open(world):
@@ -386,7 +389,7 @@ async def test_a_loyalty_no_tap_declines_as_typing_does(world, how):
 async def test_a_tap_on_an_earlier_loyalty_offer_changes_nothing(world):
     await _loyalty_offer_open(world)
 
-    await _tap(world, f"1#{'f' * 24}")
+    await _tap(world, f"1#{OLDER_PROMPT_REF}")
 
     world.recorder.assert_text_to(world.customer, Messages.Customer.STALE_BUTTON_TAP)
     assert (await world.lead())["status"] == LeadStatus.CONTACTED
@@ -410,7 +413,7 @@ async def test_the_loyalty_reprompt_carries_the_offers_buttons(world):
 # "A new request, or about the existing job?"
 # ===========================================================================
 
-NEW_OR_EXISTING_REF = "fedcba9876543210fedcba98"
+NEW_OR_EXISTING_REF = "00000000fedcba9876543210"
 
 
 async def _new_or_existing_open(world):
@@ -464,7 +467,7 @@ async def test_an_existing_job_tap_hands_off_as_typing_does(world, how):
 async def test_a_tap_on_an_earlier_new_or_existing_question_changes_nothing(world):
     await _new_or_existing_open(world)
 
-    await _tap(world, f"2#{'a' * 24}")
+    await _tap(world, f"2#{OLDER_PROMPT_REF}")
 
     world.recorder.assert_text_to(world.customer, Messages.Customer.STALE_BUTTON_TAP)
     await world.assert_state(UserStates.AWAITING_NEW_OR_EXISTING)
@@ -508,3 +511,101 @@ async def test_a_pros_offer_tap_still_reaches_the_pro_flow(world):
     assert (await world.lead_by_id(lead["_id"]))["status"] == LeadStatus.BOOKED
     for send in world.recorder.to(world.pro_chat(R.PRO_PRIMARY)):
         assert Messages.Customer.STALE_BUTTON_TAP_EXPIRED not in send.body
+
+
+# ===========================================================================
+# Lapsed prompts never answer a later question (flow-tracer review)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_a_lapsed_cancel_tap_while_waiting_is_not_a_reassign_answer(world):
+    """The customer kept the request ("לא, להשאיר אותה"), the pro stayed silent
+    and the SLA offered a reassignment. A later tap on that prompt's "כן, לבטל"
+    must not be read as "1 - find another pro"."""
+    from app.services.monitor_service import check_pro_approval_sla
+
+    await world.standard_cast()
+    world.set_business_hours(True)
+    pro = world.pros[R.PRO_PRIMARY]
+    lead = await world.awaiting_approval_job(pro)
+    world.recorder.clear()
+    await _say(world, CANCEL_WORD)
+    prompt = world.recorder.assert_text_to(
+        world.customer, Messages.Customer.CANCEL_REQUEST_CONFIRM_PROMPT
+    )
+    ref = _ref_of(prompt)
+    await _tap(world, f"2#{ref}")  # keep it
+    await world.assert_state(UserStates.AWAITING_PRO_APPROVAL)
+    await world.age(
+        lead["_id"],
+        WorkerConstants.APPROVAL_REASSIGN_OFFER_MINUTES + 1,
+        "pro_notified_at",
+    )
+    await check_pro_approval_sla()
+    assert (await world.lead_by_id(lead["_id"]))["reassign_offered"] is True
+    world.recorder.clear()
+
+    await _tap(world, f"1#{ref}")
+
+    world.recorder.assert_text_to(
+        world.customer, Messages.Customer.STALE_BUTTON_TAP_EXPIRED
+    )
+    after = await world.lead_by_id(lead["_id"])
+    assert after["status"] == LeadStatus.NEW
+    assert after["pro_id"] == pro["_id"]
+    await world.assert_state(UserStates.AWAITING_PRO_APPROVAL)
+
+    # Typing "1" is the reassign answer, exactly as before.
+    await _say(world, "1")
+    assert (await world.lead_by_id(lead["_id"]))["pro_id"] != pro["_id"]
+
+
+@pytest.mark.asyncio
+async def test_a_pro_writing_as_a_customer_is_protected_too(world):
+    """A pro booked a job for themselves. Their lapsed "כן, לבטל" tap must not
+    reach the completion check's "1" just because they are a pro: the ref
+    names a prompt, not a lead, whoever sends it."""
+    await world.standard_cast()
+    me = world.pro_chat(R.PRO_PRIMARY)
+    lead = await world.booked_job(world.pros[R.PRO_SECONDARY], chat_id=me)
+    await _with_completion_check(world, lead)
+    await world.set_state(UserStates.CUSTOMER_MODE, chat_id=me)
+    world.recorder.clear()
+    await world.deliver(CANCEL_WORD, chat_id=me, id_message="wamid.menus-pro-1")
+    prompt = world.recorder.assert_text_to(me, Messages.Customer.CANCEL_CONFIRM_PROMPT)
+    ref = _ref_of(prompt)
+    await world.expire_state(chat_id=me)
+    world.recorder.clear()
+
+    await world.tap(f"1#{ref}", chat_id=me, id_message="wamid.menus-pro-2")
+
+    world.recorder.assert_text_to(me, Messages.Customer.STALE_BUTTON_TAP_EXPIRED)
+    after = await world.lead_by_id(lead["_id"])
+    assert after["status"] == LeadStatus.BOOKED
+    assert not after.get("completed_at")
+
+
+@pytest.mark.asyncio
+async def test_a_pros_offer_tap_during_their_own_cancel_prompt_is_not_stale(world):
+    """A pro in their own customer "really cancel?" prompt taps אשר on an offer:
+    that ref names a lead, so it is not answered as a stale customer tap."""
+    await world.standard_cast()
+    me = world.pro_chat(R.PRO_PRIMARY)
+    await world.booked_job(world.pros[R.PRO_SECONDARY], chat_id=me)
+    offer = await world.awaiting_approval_job(world.pros[R.PRO_PRIMARY])
+    await world.set_state(UserStates.CUSTOMER_MODE, chat_id=me)
+    await world.deliver(CANCEL_WORD, chat_id=me, id_message="wamid.menus-pro-3")
+    await world.assert_state(UserStates.AWAITING_CANCEL_CONFIRMATION, chat_id=me)
+    world.recorder.clear()
+
+    await world.tap(
+        template_registry.with_reply_ref(
+            Messages.Keywords.APPROVE_COMMANDS[0], str(offer["_id"])
+        ),
+        chat_id=me,
+        id_message="wamid.menus-pro-4",
+    )
+
+    for send in world.recorder.to(me):
+        assert Messages.Customer.STALE_BUTTON_TAP not in send.body

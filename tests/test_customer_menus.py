@@ -514,6 +514,20 @@ def test_new_prompt_refs_are_unique_24_hex():
     assert len(refs) == 50
     for ref in refs:
         assert template_registry.split_reply_ref(f"1#{ref}") == ("1", ref)
+        assert customer_flow.is_prompt_ref(ref)
+
+
+def test_no_lead_id_reads_as_a_prompt_ref():
+    """A pro offer's ref is a lead's ObjectId; its leading bytes are a real
+    timestamp, never the prompt prefix, so it is never taken for a customer
+    prompt's tap."""
+    from bson import ObjectId
+
+    assert not customer_flow.is_prompt_ref(str(ObjectId()))
+    assert not customer_flow.is_prompt_ref(REF)
+    assert not customer_flow.is_prompt_ref(None)
+    assert not customer_flow.is_prompt_ref("")
+    assert customer_flow.is_prompt_ref(customer_flow.new_prompt_ref().upper())
 
 
 def test_the_states_that_read_a_ref_are_the_four_customer_prompts():

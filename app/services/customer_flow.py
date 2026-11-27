@@ -26,6 +26,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 import pytz
 import re
+import secrets
 
 from app.core.datetime_utils import IL_TZ as _IL_TZ, stored_utc_to_il
 from app.providers.whatsapp.base import ListPicker, ListRow
@@ -85,10 +86,22 @@ PROMPT_REF_STATES = frozenset(
 )
 
 
+#: Every customer `prompt_ref` starts with this. As the leading 4 bytes of an
+#: ObjectId it is a 1970 timestamp, so no lead id (which a pro offer's ref
+#: always is, PRO-104) can ever have it: a tap's ref says by its shape alone
+#: whether it answers a customer prompt, with no lookup and whoever sent it.
+PROMPT_REF_PREFIX = "00000000"
+
+
 def new_prompt_ref() -> str:
     """A fresh 24-hex reference for one prompt, the shape `split_reply_ref`
-    reads back off a tap."""
-    return str(ObjectId())
+    reads back off a tap: `PROMPT_REF_PREFIX` and 16 random hex digits."""
+    return PROMPT_REF_PREFIX + secrets.token_hex(8)
+
+
+def is_prompt_ref(reply_ref: str | None) -> bool:
+    """True for a ref minted by `new_prompt_ref`, False for a lead's id or none."""
+    return bool(reply_ref) and reply_ref.lower().startswith(PROMPT_REF_PREFIX)
 
 
 def tap_is_stale(reply_ref: str | None, meta: dict | None) -> bool:
@@ -1283,15 +1296,17 @@ async def offer_reschedule_slots(
     # PRO-105: the same list as an interactive list, one row per numbered line.
     # The ref is new for every list, so a row of an earlier one (whose number
     # may name another slot now) is told apart from a row of this one.
+    # Metadata first: a state open over the previous list's mapping and ref
+    # would book the wrong slot for a typed digit and refuse every tap.
     prompt_ref = new_prompt_ref()
+    await state_manager.set_metadata(
+        chat_id,
+        {"reschedule_slots_context": slots_context, "prompt_ref": prompt_ref},
+    )
     await state_manager.set_state(
         chat_id,
         UserStates.AWAITING_RESCHEDULE_TIME,
         ttl=WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS,
-    )
-    await state_manager.set_metadata(
-        chat_id,
-        {"reschedule_slots_context": slots_context, "prompt_ref": prompt_ref},
     )
     await whatsapp.send_message(
         chat_id,
