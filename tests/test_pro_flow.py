@@ -12,7 +12,7 @@ from bson import ObjectId
 from datetime import datetime, timedelta, timezone
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
-from tests.copy_util import longest_static_chunk, static_prefix
+from tests.copy_util import command_row_keyword, longest_static_chunk, static_prefix
 from app.services.pro_flow import handle_pro_text_command, _handle_search
 import app.services.pro_flow
 
@@ -1130,7 +1130,7 @@ async def test_active_jobs_list(pro_setup, mock_wa, mock_lm):
     result = await handle_pro_text_command(
         "972500000000@c.us", "עבודות", mock_wa, mock_lm
     )
-    assert "עבודות פעילות" in result
+    assert Messages.Pro.ACTIVE_JOBS_HEADER.strip() in result
     assert "נזילה" in result
 
 
@@ -1233,7 +1233,7 @@ async def test_unknown_command_returns_dashboard(
     result = await handle_pro_text_command(
         "972500000000@c.us", "שלום", mock_wa, mock_lm
     )
-    assert f"*סטטוס:* {Messages.Pro.STATUS_AVAILABLE}" in result
+    assert f"סטטוס: {Messages.Pro.STATUS_AVAILABLE}" in result
     assert "יוסי אינסטלציה" in result
 
 
@@ -2530,8 +2530,8 @@ def test_every_cmd_keyword_has_a_dispatcher_list():
     """PRO-168 §7 regression guard for the original 'עדיין עובד' defect:
     `Pro.REMINDER` advertised a keyword that matched no `Messages.Keywords`
     list, so replying with it silently fell through to the dashboard. This
-    walks every `*keyword*` token in every canonical `Messages.Pro.CMD_*` row
-    — what both `HELP_MENU` and the dashboard are built from — and asserts
+    walks the keyword each canonical `Messages.Pro.CMD_*` row
+    row starts with — what both `HELP_MENU` and the dashboard are built from — and asserts
     each one is matched by some keyword list `handle_pro_text_command`
     actually dispatches on (`pro_flow._PRO_COMMAND_LISTS`)."""
     cmd_names = [name for name in dir(Messages.Pro) if name.startswith("CMD_")]
@@ -2543,9 +2543,9 @@ def test_every_cmd_keyword_has_a_dispatcher_list():
 
     for name in cmd_names:
         row = getattr(Messages.Pro, name)
-        tokens = re.findall(r"\*(.+?)\*", row)
-        assert tokens, f"Messages.Pro.{name} has no *keyword* token: {row!r}"
-        keyword = tokens[0]
+        # PRO-245: a row is "<keyword> - <what it does>", no bold.
+        keyword = command_row_keyword(row)
+        assert keyword, f"Messages.Pro.{name} does not start with a keyword: {row!r}"
         assert keyword in dispatched, (
             f"Messages.Pro.{name} advertises {keyword!r} but no entry in any "
             f"pro_flow._PRO_COMMAND_LISTS list matches it — a pro replying "

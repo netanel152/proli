@@ -99,8 +99,7 @@ async def test_a_recorded_response_drives_a_real_flow(world):
 
     await world.send("יש לי נזילה מתחת לכיור בתל אביב")
 
-    first = world.recorder.assert_text_to(world.customer, "איך קוראים לך")
-    assert first.body.startswith("👋"), "one emoji, leading (COPY_STYLE_GUIDE §4)"
+    world.recorder.assert_text_to(world.customer, "איך קוראים לך")
     lead = await world.lead()
     # The city-only turn opens a CONTACTED shell with no pro yet, whose
     # issue_type is the placeholder default — what must not be there is the

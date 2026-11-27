@@ -26,33 +26,59 @@ Input classes
 
 | state | keyword | free | offtopic | wrong | emoji | silence | interrupt | race |
 |---|---|---|---|---|---|---|---|---|
-| `idle` | "🛠️ אני העוזר החכם של פרולי." | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | silent | N/A[race] |
-| `awaiting_consent` | → idle, "אפשר להתחיל" | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | "👋 שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "🙏 הבנתי, לא נשמור את תוכן ההודעות שלך. אם תשנה/י את דעתך — פשוט לשלוח הודעה." | N/A[race] |
+| `idle` | "כאן פרולי. אנחנו מוצאים לך את איש המקצוע שמתאים לתקלה, כמו אינסטלטור, חשמלאי או מנעולן." | "מאתר איש מקצוע" | "בעלי מקצוע" | "קיבלתי את התמונה" | "במה אפשר לעזור" | N/A[resting] | silent | N/A[race] |
+| `awaiting_consent` | → idle, "אפשר להתחיל" | "שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | "שלום וברוכים הבאים לפרולי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "הבנו, לא נשמור את תוכן ההודעות שלך. אם משנים את הדעה, אפשר פשוט לשלוח לנו הודעה." | N/A[race] |
 | `customer_mode` | "מה הכתובת" | "מאיפה בדיוק" | "במה אפשר לעזור" | "ראיתי את התמונה" | "לעזור" | N/A[ttl-class] | → pro_mode | N/A[race] |
-| `awaiting_address` | → awaiting_pro_approval, "הכתובת עודכנה בהצלחה" | "מספר דירה" | "כדי שאיש המקצוע יגיע למקום המדויק נשאר רק להשלים לכתובת:" | "לא הצלחתי לזהות את הכתובת" | "לא הצלחתי לזהות את הכתובת" | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
-| `awaiting_pro_approval` | → awaiting_pro_approval, "⏳ מתנצל על ההמתנה — אני מאתר עבורך איש מקצוע זמין יותר כעת." | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | TTL ≤ 3600s | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
-| `paused_for_human` | silent | silent | N/A[same-reprompt] | silent | N/A[same-reprompt] | TTL ≤ 900s | "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
-| `awaiting_reschedule_time` | → idle, "המועד שונה בהצלחה" | "אנא לבחור מספר תור מהרשימה, או לכתוב ביטול כדי להשאיר את המועד הנוכחי." | N/A[same-reprompt] | "אנא לבחור מספר תור מהרשימה, או לכתוב ביטול כדי להשאיר את המועד הנוכחי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "המועד נשאר כפי שהיה" | N/A[race] |
-| `awaiting_loyalty_confirmation` | → awaiting_pro_approval, "עם הפרטים, ואעדכן אותך ברגע שיאשר" | → idle, "אחפש עבורך את איש המקצוע הפנוי" | N/A[same-reprompt] | "לא בטוח שהבנתי" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
-| `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "🙂 לא בטוח שהבנתי. זו פנייה חדשה?" | N/A[same-reprompt] | "🙂 לא בטוח שהבנתי. זו פנייה חדשה?" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
-| `awaiting_cancel_confirmation` | → idle, "ביטלתי את העבודה" | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | → idle, "העבודה נשארת כמתוכנן" | N/A[same-reprompt] | TTL ≤ 300s | → paused_for_human, "✅ קיבלתי, מעביר אותך לנציג/ה אנושי/ת." | N/A[race] |
-| `pro_mode` | "*מה אפשר לעשות עכשיו:*" | "*מה אפשר לעשות עכשיו:*" | N/A[same-reprompt] | N/A[pro-text-only] | "*מה אפשר לעשות עכשיו:*" | N/A[ttl-class] | "*מה אפשר לעשות עכשיו:*" | N/A[race] |
-| `awaiting_intent_confirmation` | → customer_mode, "עברת למצב לקוח" | "🤔 לא הבנתי. לעבור למצב לקוח?" | N/A[same-reprompt] | N/A[pro-text-only] | "🤔 לא הבנתי. לעבור למצב לקוח?" | N/A[ttl-class] | → idle, "ממשיכים כרגיל" | N/A[race] |
-| `pro_selecting_job_to_finish` | → pro_awaiting_final_price, "✅ עודכן שהעבודה הסתיימה. תודה!" | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
-| `pro_selecting_job_to_cancel` | → idle, "✅ העבודה בוטלה. הלקוח עודכן." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
-| `pro_selecting_job_to_approve` | → idle, "✅ העבודה אושרה! שלחתי ללקוח את הפרטים שלך." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
-| `pro_selecting_job_to_reject` | → idle, "העבודה נדחתה. הפנייה הועברה לאיש מקצוע אחר." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
-| `pro_selecting_job_to_pause` | → idle, "⏸️ הבוט הושהה בשיחה הזו, ואפשר לדבר ישירות עם" | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
-| `pro_selecting_job_to_resume` | → idle, "✅ הבוט חזר לפעולה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[pro-text-only] | "אנא לבחור מספר מהרשימה, או לכתוב *ביטול* ליציאה." | N/A[ttl-class] | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
-| `pro_awaiting_final_price` | → idle, "💰 נרשם:" | → idle, "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל." | → idle, "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל." | N/A[pro-text-only] | → idle, "לא זוהה סכום — דילגתי על רישום המחיר. ממשיכים כרגיל." | TTL ≤ 600s | → idle, "☕ *הסטטוס שלך שונה ל'בהפסקה'.*" | N/A[race] |
-| `onboarding_name` | → onboarding_type, "סוג המקצוע" | → onboarding_type, "סוג המקצוע" | "שם העסק חייב להיות באורך 2 עד 100 תווים. אפשר לנסות שוב:" | N/A[pro-text-only] | "שם העסק חייב להיות באורך 2 עד 100 תווים. אפשר לנסות שוב:" | N/A[ttl-class] | → idle, "ההרשמה בוטלה" | N/A[race] |
-| `onboarding_type` | → onboarding_areas, "👍 באילו *ערים או אזורים* אתה עובד?" | → onboarding_areas, "👍 באילו *ערים או אזורים* אתה עובד?" | "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע (אינסטלטור, חשמלאי וכו')." | N/A[pro-text-only] | "לא הבנתי. אפשר לשלוח מספר בין *1* ל-*7*, או שם מקצוע (אינסטלטור, חשמלאי וכו')." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
-| `onboarding_areas` | → onboarding_prices, "המחירים" | → onboarding_prices, "המחירים" | "לא זיהיתי ערים" | N/A[pro-text-only] | → onboarding_prices, "המחירים" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
-| `onboarding_prices` | → onboarding_confirm, "סיכום הפרופיל שלך" | → onboarding_confirm, "סיכום הפרופיל שלך" | N/A[same-reprompt] | N/A[pro-text-only] | → onboarding_confirm, "סיכום הפרופיל שלך" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
-| `onboarding_confirm` | → idle, "הפרופיל שלך נשלח לאישור" | "*אשר* — לשליחה" | N/A[same-reprompt] | N/A[pro-text-only] | "*אשר* — לשליחה" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
-| `admin_selecting_lead` | → admin_selecting_action, "למי להעביר" | "מספר לא חוקי" | N/A[same-reprompt] | N/A[admin-menu] | "מספר לא חוקי" | N/A[ttl-class] | → idle, "בוטל" | N/A[race] |
-| `admin_selecting_action` | → admin_selecting_pro, "אנשי מקצוע פנויים" | "אפשרות לא חוקית" | N/A[same-reprompt] | N/A[admin-menu] | "אפשרות לא חוקית" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
-| `admin_selecting_pro` | → idle, "הליד הועבר" | "מספר לא חוקי" | N/A[same-reprompt] | N/A[admin-menu] | "מספר לא חוקי" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `awaiting_address` | → awaiting_pro_approval, "הכתובת עודכנה." | "מספר דירה" | "כדי שאיש המקצוע יגיע בדיוק למקום, חסרים לנו עוד פרטים בכתובת:" | "לא הצלחנו לזהות את הכתובת." | "לא הצלחנו לזהות את הכתובת." | TTL ≤ 14400s | → idle, "הבקשה בוטלה" | N/A[race] |
+| `awaiting_pro_approval` | → awaiting_pro_approval, "סליחה על העיכוב. אנחנו מחפשים לך איש מקצוע אחר ונעדכן אותך כאן." | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | "אצל איש המקצוע לאישור" | N/A[same-reprompt] | TTL ≤ 3600s | → paused_for_human, "קיבלנו, והעברנו את השיחה למענה אנושי.
+בינתיים המענה האוטומטי בשיחה הזו מושהה." | N/A[race] |
+| `paused_for_human` | silent | silent | N/A[same-reprompt] | silent | N/A[same-reprompt] | TTL ≤ 900s | "קיבלנו, והעברנו את השיחה למענה אנושי.
+בינתיים המענה האוטומטי בשיחה הזו מושהה." | N/A[race] |
+| `awaiting_reschedule_time` | → idle, "המועד עודכן, ועדכנו את איש המקצוע.
+המועד החדש:" | "המספר הזה לא ברשימה. אפשר לענות במספר מהרשימה, או לכתוב ביטול כדי להשאיר את המועד הנוכחי." | N/A[same-reprompt] | "המספר הזה לא ברשימה. אפשר לענות במספר מהרשימה, או לכתוב ביטול כדי להשאיר את המועד הנוכחי." | N/A[same-reprompt] | N/A[ttl-class] | → idle, "בסדר, המועד נשאר כמו שהיה." | N/A[race] |
+| `awaiting_loyalty_confirmation` | → awaiting_pro_approval, "עם הפרטים, ונעדכן אותך ברגע שיאשר." | → idle, "בסדר גמור, נחפש לך את איש המקצוע הפנוי שהכי מתאים." | N/A[same-reprompt] | "לא בטוחים שהבנו. לבדוק מול איש המקצוע הקודם?" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "קיבלנו, והעברנו את השיחה למענה אנושי.
+בינתיים המענה האוטומטי בשיחה הזו מושהה." | N/A[race] |
+| `awaiting_new_or_existing` | → idle, "הבעיה החדשה" | "לא בטוחים שהבנו. זו פנייה חדשה? אפשר לענות במספר:" | N/A[same-reprompt] | "לא בטוחים שהבנו. זו פנייה חדשה? אפשר לענות במספר:" | N/A[same-reprompt] | N/A[ttl-class] | → paused_for_human, "קיבלנו, והעברנו את השיחה למענה אנושי.
+בינתיים המענה האוטומטי בשיחה הזו מושהה." | N/A[race] |
+| `awaiting_cancel_confirmation` | → idle, "ביטלנו את העבודה, ועדכנו את איש המקצוע." | → idle, "בסדר, העבודה נשארת כמו שתוכננה." | N/A[same-reprompt] | → idle, "בסדר, העבודה נשארת כמו שתוכננה." | N/A[same-reprompt] | TTL ≤ 300s | → paused_for_human, "קיבלנו, והעברנו את השיחה למענה אנושי.
+בינתיים המענה האוטומטי בשיחה הזו מושהה." | N/A[race] |
+| `pro_mode` | "מה אפשר לעשות עכשיו:" | "מה אפשר לעשות עכשיו:" | N/A[same-reprompt] | N/A[pro-text-only] | "מה אפשר לעשות עכשיו:" | N/A[ttl-class] | "מה אפשר לעשות עכשיו:" | N/A[race] |
+| `awaiting_intent_confirmation` | → customer_mode, "עברת למצב לקוח" | "לא הבנו. לעבור למצב לקוח?" | N/A[same-reprompt] | N/A[pro-text-only] | "לא הבנו. לעבור למצב לקוח?" | N/A[ttl-class] | → idle, "ממשיכים כרגיל" | N/A[race] |
+| `pro_selecting_job_to_finish` | → pro_awaiting_final_price, "עודכן שהעבודה הסתיימה. תודה!" | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[pro-text-only] | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | → idle, "עברת למצב הפסקה." | N/A[race] |
+| `pro_selecting_job_to_cancel` | → idle, "העבודה בוטלה, ועדכנו את הלקוח." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[pro-text-only] | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | → idle, "עברת למצב הפסקה." | N/A[race] |
+| `pro_selecting_job_to_approve` | → idle, "העבודה אושרה! שלחנו ללקוח את הפרטים שלך." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[pro-text-only] | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | → idle, "עברת למצב הפסקה." | N/A[race] |
+| `pro_selecting_job_to_reject` | → idle, "העבודה נדחתה, והפנייה עברה לאיש מקצוע אחר." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[pro-text-only] | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | → idle, "עברת למצב הפסקה." | N/A[race] |
+| `pro_selecting_job_to_pause` | → idle, "השהינו את המענה האוטומטי בשיחה הזו, ואפשר לדבר ישירות עם" | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[pro-text-only] | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | → idle, "עברת למצב הפסקה." | N/A[race] |
+| `pro_selecting_job_to_resume` | → idle, "המענה האוטומטי חזר לפעול." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[pro-text-only] | "שלח מספר מהרשימה, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | → idle, "עברת למצב הפסקה." | N/A[race] |
+| `pro_awaiting_final_price` | → idle, "תודה! רשמנו את הסכום:" | → idle, "לא זיהינו סכום, אז לא רשמנו מחיר. ממשיכים כרגיל." | → idle, "לא זיהינו סכום, אז לא רשמנו מחיר. ממשיכים כרגיל." | N/A[pro-text-only] | → idle, "לא זיהינו סכום, אז לא רשמנו מחיר. ממשיכים כרגיל." | TTL ≤ 600s | → idle, "עברת למצב הפסקה." | N/A[race] |
+| `onboarding_name` | → onboarding_type, "מעולה! מה המקצוע שלך? אפשר לענות במספר:" | → onboarding_type, "מעולה! מה המקצוע שלך? אפשר לענות במספר:" | "שם העסק צריך להיות באורך של 2 עד 100 תווים. נסה שוב:" | N/A[pro-text-only] | "שם העסק צריך להיות באורך של 2 עד 100 תווים. נסה שוב:" | N/A[ttl-class] | → idle, "ההרשמה בוטלה" | N/A[race] |
+| `onboarding_type` | → onboarding_areas, "באילו ערים או אזורים אתה עובד?" | → onboarding_areas, "באילו ערים או אזורים אתה עובד?" | "לא הבנו. אפשר לשלוח מספר מ-1 עד 7, או את שם המקצוע, למשל אינסטלטור או חשמלאי." | N/A[pro-text-only] | "לא הבנו. אפשר לשלוח מספר מ-1 עד 7, או את שם המקצוע, למשל אינסטלטור או חשמלאי." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `onboarding_areas` | → onboarding_prices, "המחירים" | → onboarding_prices, "המחירים" | "לא זיהינו ערים. אפשר לשלוח רשימה של ערים, מופרדות בפסיקים:" | N/A[pro-text-only] | → onboarding_prices, "המחירים" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `onboarding_prices` | → onboarding_confirm, "זה הסיכום של הפרופיל שלך:" | → onboarding_confirm, "זה הסיכום של הפרופיל שלך:" | N/A[same-reprompt] | N/A[pro-text-only] | → onboarding_confirm, "זה הסיכום של הפרופיל שלך:" | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `onboarding_confirm` | → idle, "תודה! שלחנו את הפרופיל שלך לצוות שלנו." | "לשליחה כתוב אשר, ולביטול ההרשמה כתוב ביטול." | N/A[same-reprompt] | N/A[pro-text-only] | "לשליחה כתוב אשר, ולביטול ההרשמה כתוב ביטול." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `admin_selecting_lead` | → admin_selecting_action, "למי להעביר" | "המספר הזה לא ברשימה. נסה שוב, או כתוב ביטול כדי לצאת." | N/A[same-reprompt] | N/A[admin-menu] | "המספר הזה לא ברשימה. נסה שוב, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | → idle, "בוטל" | N/A[race] |
+| `admin_selecting_action` | → admin_selecting_pro, "אנשי מקצוע פנויים" | "האפשרות הזו לא קיימת. אפשר לענות 1 או 2." | N/A[same-reprompt] | N/A[admin-menu] | "האפשרות הזו לא קיימת. אפשר לענות 1 או 2." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+| `admin_selecting_pro` | → idle, "הליד הועבר" | "המספר הזה לא ברשימה. נסה שוב, או כתוב ביטול כדי לצאת." | N/A[same-reprompt] | N/A[admin-menu] | "המספר הזה לא ברשימה. נסה שוב, או כתוב ביטול כדי לצאת." | N/A[ttl-class] | N/A[same-exit] | N/A[race] |
+
+N/A legend
+~~~~~~~~~~
+* ``admin-menu`` — The admin wizard is a text-only numeric menu.
+* ``pro-text-only`` — Pro-side commands are a text menu; a pro never sends the bot media.
+* ``race`` — State-independent. The per-chat Redis lock is taken before any state is read (workflow_service.py:219), so every state behaves identically; proven once in test_a_second_message_mid_flight_is_deferred_not_dropped.
+* ``resting`` — IDLE is the resting state — there is nothing to expire.
+* ``same-exit`` — A reset keyword exits through one handler per wizard, not one per step. Kept on the wizard's first step; see _COLLAPSED.
+* ``same-reprompt`` — This row answers free/offtopic/wrong/emoji with one identical re-prompt. Kept two cells covering the input paths that actually differ (AI text, and media or emoji); see _COLLAPSED.
+* ``ttl-class`` — A `silence` cell asserts a TTL bound on a state the arranger set, so it proves StateManager.set_state honours a TTL — not anything about this state or input class. Kept once per distinct TTL value; see _COLLAPSED.
+
+N/A legend
+~~~~~~~~~~
+* ``admin-menu`` — The admin wizard is a text-only numeric menu.
+* ``pro-text-only`` — Pro-side commands are a text menu; a pro never sends the bot media.
+* ``race`` — State-independent. The per-chat Redis lock is taken before any state is read (workflow_service.py:219), so every state behaves identically; proven once in test_a_second_message_mid_flight_is_deferred_not_dropped.
+* ``resting`` — IDLE is the resting state — there is nothing to expire.
+* ``same-exit`` — A reset keyword exits through one handler per wizard, not one per step. Kept on the wizard's first step; see _COLLAPSED.
+* ``same-reprompt`` — This row answers free/offtopic/wrong/emoji with one identical re-prompt. Kept two cells covering the input paths that actually differ (AI text, and media or emoji); see _COLLAPSED.
+* ``ttl-class`` — A `silence` cell asserts a TTL bound on a state the arranger set, so it proves StateManager.set_state honours a TTL — not anything about this state or input class. Kept once per distinct TTL value; see _COLLAPSED.
 
 N/A legend
 ~~~~~~~~~~
@@ -79,7 +105,7 @@ import pytest
 
 from app.core.constants import UserStates, WorkerConstants
 from app.core.messages import Messages
-from tests.copy_util import static_prefix
+from tests.copy_util import longest_static_chunk, static_prefix
 from tests.e2e import reserved_numbers as R
 from tests.e2e.ai_replay import reply
 
@@ -550,7 +576,7 @@ MATRIX: dict[str, dict] = {
                 )
             ],
             expect_state=UserStates.AWAITING_PRO_APPROVAL,  # PRO-227: the deal goes out
-            expect=("הכתובת עודכנה בהצלחה",),
+            expect=(Messages.Customer.ADDRESS_SAVED,),
         ),
         "free": Cell(
             send="אני גר בדיזנגוף חמישים, קומה שלוש",
@@ -573,9 +599,11 @@ MATRIX: dict[str, dict] = {
         "wrong": Cell(
             send="",
             media="image",
-            expect=("לא הצלחתי לזהות את הכתובת",),
+            expect=(Messages.Customer.ADDRESS_INVALID.split("\n")[0],),
         ),
-        "emoji": Cell(send="👍", expect=("לא הצלחתי לזהות את הכתובת",)),
+        "emoji": Cell(
+            send="👍", expect=(Messages.Customer.ADDRESS_INVALID.split("\n")[0],)
+        ),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
             send="בטל",
@@ -623,7 +651,9 @@ MATRIX: dict[str, dict] = {
     },
     UserStates.AWAITING_RESCHEDULE_TIME: {
         "keyword": Cell(
-            send="1", expect_state=UserStates.IDLE, expect=("המועד שונה בהצלחה",)
+            send="1",
+            expect_state=UserStates.IDLE,
+            expect=(static_prefix(Messages.Customer.RESCHEDULE_SUCCESS),),
         ),
         "free": Cell(
             send="הראשון מתאים לי",
@@ -644,7 +674,9 @@ MATRIX: dict[str, dict] = {
         ),
         "silence": Cell(max_ttl=WorkerConstants.RESCHEDULE_PICK_TTL_SECONDS),
         "interrupt": Cell(
-            send="בטל", expect_state=UserStates.IDLE, expect=("המועד נשאר כפי שהיה",)
+            send="בטל",
+            expect_state=UserStates.IDLE,
+            expect=(Messages.Customer.RESCHEDULE_CANCELLED,),
         ),
         "race": Cell(na=RACE_NA),
     },
@@ -661,18 +693,28 @@ MATRIX: dict[str, dict] = {
         "keyword": Cell(
             send="1",
             expect_state=UserStates.AWAITING_PRO_APPROVAL,
-            expect=("עם הפרטים, ואעדכן אותך ברגע שיאשר",),
+            expect=(
+                longest_static_chunk(Messages.Customer.LOYALTY_ACCEPTED_NOTIFYING),
+            ),
         ),
         # Natural-language decline (not the literal "2") — PRO-119's whole-token
         # NEGATIVE_KEYWORDS match, exercising the other half of the new parser.
         "free": Cell(
             send="לא תודה, תמצא לי מישהו אחר",
             expect_state=UserStates.IDLE,
-            expect=("אחפש עבורך את איש המקצוע הפנוי",),
+            expect=(Messages.Customer.LOYALTY_DECLINED,),
         ),
-        "offtopic": Cell(send="מה השעה?", expect=("לא בטוח שהבנתי",)),
-        "wrong": Cell(send="", media="image", expect=("לא בטוח שהבנתי",)),
-        "emoji": Cell(send="👍", expect=("לא בטוח שהבנתי",)),
+        "offtopic": Cell(
+            send="מה השעה?", expect=(Messages.Customer.LOYALTY_REPROMPT.split("\n")[0],)
+        ),
+        "wrong": Cell(
+            send="",
+            media="image",
+            expect=(Messages.Customer.LOYALTY_REPROMPT.split("\n")[0],),
+        ),
+        "emoji": Cell(
+            send="👍", expect=(Messages.Customer.LOYALTY_REPROMPT.split("\n")[0],)
+        ),
         "silence": Cell(max_ttl=WorkerConstants.LOYALTY_CONFIRM_TTL_SECONDS),
         "interrupt": Cell(
             send="נציג",
@@ -705,28 +747,28 @@ MATRIX: dict[str, dict] = {
         "keyword": Cell(
             send="1",
             expect_state=UserStates.IDLE,
-            expect=("ביטלתי את העבודה",),
+            expect=(Messages.Customer.CANCELLED_ACTIVE_LEAD,),
         ),
         "free": Cell(
             send="אולי בעצם עדיף שלא",
             expect_state=UserStates.IDLE,
-            expect=("העבודה נשארת כמתוכנן",),
+            expect=(Messages.Customer.CANCEL_ABORTED,),
         ),
         "offtopic": Cell(
             send="מה השעה?",
             expect_state=UserStates.IDLE,
-            expect=("העבודה נשארת כמתוכנן",),
+            expect=(Messages.Customer.CANCEL_ABORTED,),
         ),
         "wrong": Cell(
             send="",
             media="image",
             expect_state=UserStates.IDLE,
-            expect=("העבודה נשארת כמתוכנן",),
+            expect=(Messages.Customer.CANCEL_ABORTED,),
         ),
         "emoji": Cell(
             send="👍",
             expect_state=UserStates.IDLE,
-            expect=("העבודה נשארת כמתוכנן",),
+            expect=(Messages.Customer.CANCEL_ABORTED,),
         ),
         "silence": Cell(max_ttl=WorkerConstants.CANCEL_CONFIRM_TTL_SECONDS),
         # SOS is checked above this state's dispatch, same as the other
@@ -924,12 +966,12 @@ MATRIX: dict[str, dict] = {
         "keyword": Cell(
             send="שרברבות הצפון",
             expect_state=UserStates.ONBOARDING_TYPE,
-            expect=("סוג המקצוע",),
+            expect=(Messages.Onboarding.ASK_TYPE.split("\n")[0],),
         ),
         "free": Cell(
             send="קוראים לעסק שלי שרברבות הצפון",
             expect_state=UserStates.ONBOARDING_TYPE,
-            expect=("סוג המקצוע",),
+            expect=(Messages.Onboarding.ASK_TYPE.split("\n")[0],),
         ),
         "offtopic": Cell(send="א", expect=(Messages.Onboarding.NAME_LENGTH_ERROR,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
@@ -972,7 +1014,7 @@ MATRIX: dict[str, dict] = {
             expect_state=UserStates.ONBOARDING_PRICES,
             expect=("המחירים",),
         ),
-        "offtopic": Cell(send=",", expect=("לא זיהיתי ערים",)),
+        "offtopic": Cell(send=",", expect=(Messages.Onboarding.CITIES_PARSE_ERROR,)),
         "wrong": Cell(na=PRO_MEDIA_NA),
         "emoji": Cell(
             send="👍",
@@ -989,23 +1031,23 @@ MATRIX: dict[str, dict] = {
         "keyword": Cell(
             send="דלג",
             expect_state=UserStates.ONBOARDING_CONFIRM,
-            expect=("סיכום הפרופיל שלך",),
+            expect=(Messages.Onboarding.CONFIRM.split("\n")[0],),
         ),
         "free": Cell(
             send="תיקון נזילה 250, החלפת ברז 350",
             expect_state=UserStates.ONBOARDING_CONFIRM,
-            expect=("סיכום הפרופיל שלך",),
+            expect=(Messages.Onboarding.CONFIRM.split("\n")[0],),
         ),
         "offtopic": Cell(
             send="לא יודע עדיין",
             expect_state=UserStates.ONBOARDING_CONFIRM,
-            expect=("סיכום הפרופיל שלך",),
+            expect=(Messages.Onboarding.CONFIRM.split("\n")[0],),
         ),
         "wrong": Cell(na=PRO_MEDIA_NA),
         "emoji": Cell(
             send="👍",
             expect_state=UserStates.ONBOARDING_CONFIRM,
-            expect=("סיכום הפרופיל שלך",),
+            expect=(Messages.Onboarding.CONFIRM.split("\n")[0],),
         ),
         "silence": Cell(max_ttl=14400),
         "interrupt": Cell(
@@ -1017,7 +1059,7 @@ MATRIX: dict[str, dict] = {
         "keyword": Cell(
             send="אשר",
             expect_state=UserStates.IDLE,
-            expect=("הפרופיל שלך נשלח לאישור",),
+            expect=(Messages.Onboarding.SUCCESS.split("\n")[0],),
         ),
         "free": Cell(send="נראה לי בסדר", expect=(_CONFIRM_REPROMPT_LINE,)),
         "offtopic": Cell(send="מה זה?", expect=(_CONFIRM_REPROMPT_LINE,)),
@@ -1036,10 +1078,10 @@ MATRIX: dict[str, dict] = {
             expect_state=UserStates.ADMIN_SELECTING_ACTION,
             expect=("למי להעביר",),
         ),
-        "free": Cell(send="קח את הראשון", expect=("מספר לא חוקי",)),
-        "offtopic": Cell(send="מה קורה", expect=("מספר לא חוקי",)),
+        "free": Cell(send="קח את הראשון", expect=(Messages.Admin.INVALID_NUMBER,)),
+        "offtopic": Cell(send="מה קורה", expect=(Messages.Admin.INVALID_NUMBER,)),
         "wrong": Cell(na=ADMIN_MENU_NA),
-        "emoji": Cell(send="👍", expect=("מספר לא חוקי",)),
+        "emoji": Cell(send="👍", expect=(Messages.Admin.INVALID_NUMBER,)),
         "silence": Cell(max_ttl=900),
         "interrupt": Cell(send="בטל", expect_state=UserStates.IDLE, expect=("בוטל",)),
         "race": Cell(na=RACE_NA),
@@ -1050,20 +1092,20 @@ MATRIX: dict[str, dict] = {
             expect_state=UserStates.ADMIN_SELECTING_PRO,
             expect=("אנשי מקצוע פנויים",),
         ),
-        "free": Cell(send="תן לי רשימה", expect=("אפשרות לא חוקית",)),
-        "offtopic": Cell(send="מה קורה", expect=("אפשרות לא חוקית",)),
+        "free": Cell(send="תן לי רשימה", expect=(Messages.Admin.INVALID_OPTION,)),
+        "offtopic": Cell(send="מה קורה", expect=(Messages.Admin.INVALID_OPTION,)),
         "wrong": Cell(na=ADMIN_MENU_NA),
-        "emoji": Cell(send="👍", expect=("אפשרות לא חוקית",)),
+        "emoji": Cell(send="👍", expect=(Messages.Admin.INVALID_OPTION,)),
         "silence": Cell(max_ttl=900),
         "interrupt": Cell(send="בטל", expect_state=UserStates.IDLE, expect=("בוטל",)),
         "race": Cell(na=RACE_NA),
     },
     UserStates.ADMIN_SELECTING_PRO: {
         "keyword": Cell(send="1", expect_state=UserStates.IDLE, expect=("הליד הועבר",)),
-        "free": Cell(send="תן לראשון", expect=("מספר לא חוקי",)),
-        "offtopic": Cell(send="מה קורה", expect=("מספר לא חוקי",)),
+        "free": Cell(send="תן לראשון", expect=(Messages.Admin.INVALID_NUMBER,)),
+        "offtopic": Cell(send="מה קורה", expect=(Messages.Admin.INVALID_NUMBER,)),
         "wrong": Cell(na=ADMIN_MENU_NA),
-        "emoji": Cell(send="👍", expect=("מספר לא חוקי",)),
+        "emoji": Cell(send="👍", expect=(Messages.Admin.INVALID_NUMBER,)),
         "silence": Cell(max_ttl=900),
         "interrupt": Cell(send="בטל", expect_state=UserStates.IDLE, expect=("בוטל",)),
         "race": Cell(na=RACE_NA),

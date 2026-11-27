@@ -38,7 +38,7 @@ guide it points at; nothing here is a value to trust over them.
    `1 - text` lines under a lead-in ending `?`/`:` (§3); no emoji (§4); no `*bold*` (§5).
    Then Latin or numeric placeholders end-of-line or own-line (§6), no promise the code does
    not keep (§7), פרולי not Proli in Hebrew, no trailing whitespace (§8). The free-form
-   catalog still shows the older conventions until PRO-245; new copy follows the guide.
+   catalog follows them too since PRO-245, held by `tests/test_copy_rules.py`.
 3. **Prove every advertised reply has a handler.** For each digit or keyword the text
    offers, find the branch that consumes it (`Messages.Keywords.<LIST>` and its use in
    `app/services/customer_flow.py`, `pro_flow.py`, `admin_flow.py` or `dispatch_guards.py`).

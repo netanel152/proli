@@ -21,6 +21,7 @@ import app.services.customer_flow as customer_flow
 from app.services.customer_flow import handle_reschedule_selection
 from app.core.constants import LeadStatus, UserStates, WorkerConstants
 from app.core.messages import Messages
+from tests.copy_util import static_prefix
 
 
 @pytest.fixture
@@ -106,7 +107,7 @@ async def test_valid_pick_reschedules_and_notifies_pro(reschedule_env):
     # Customer success + pro notification both sent
     assert mock_wa.send_message.call_count == 2
     sent = _sent_text(mock_wa)
-    assert "שונה בהצלחה" in sent
+    assert static_prefix(Messages.Customer.RESCHEDULE_SUCCESS) in sent
 
 
 @pytest.mark.asyncio

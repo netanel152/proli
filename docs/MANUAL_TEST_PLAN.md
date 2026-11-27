@@ -73,7 +73,7 @@ redis-cli DEL "state:972523651414@c.us"
 |------|-----------|-------------|----------------------|--------|
 | 1 | 972523651414 | "שלום" | Consent request message (privacy policy) | State = AWAITING_CONSENT |
 | 2 | 972523651414 | "בלה בלה" | Consent request repeated | State still AWAITING_CONSENT |
-| 3 | 972523651414 | "כן" | "✅ תודה! אפשר להתחיל.", then the dispatcher answers "שלום" and "בלה בלה" without being asked again | State = IDLE, consent saved, those two messages now in `messages` |
+| 3 | 972523651414 | "כן" | "תודה! אפשר להתחיל.", then the dispatcher answers "שלום" and "בלה בלה" without being asked again | State = IDLE, consent saved, those two messages now in `messages` |
 
 **Redis check:** `redis-cli GET "state:972523651414@c.us"` → empty/idle. Before step 3, `redis-cli LRANGE "consent_hold:972523651414@c.us" 0 -1` shows the held messages and `db.messages` has none; answering "לא" instead must leave both empty.
 
@@ -103,7 +103,7 @@ redis-cli DEL "state:972523651414@c.us"
 |------|-----------|-------------|----------------------|--------|
 | 1 | 972523651414 | "היי יש לי נזילה בתל אביב" | AI response about the plumbing issue (acting as pro persona) | Worker log: Dispatcher extracts city=תל אביב, issue=נזילה |
 | 2 | - | - | Pro (972524828796) receives: "📢 הצעת עבודה חדשה" with address + issue | Check worker log: "Message sent to 972524828796@c.us" |
-| 3 | 972524828796 | "אשר" | Pro gets: "✅ העבודה אושרה!" | Lead status = BOOKED |
+| 3 | 972524828796 | "אשר" | Pro gets: "העבודה אושרה! שלחנו ללקוח את הפרטים שלך." | Lead status = BOOKED |
 | 4 | - | - | Customer (972523651414) gets: "🎉 נמצא איש מקצוע!" with pro details | Check worker log |
 
 **DB check:** `db.leads.findOne({chat_id: "972523651414@c.us"})` → status = "booked"
@@ -128,7 +128,7 @@ redis-cli DEL "state:972523651414@c.us"
 
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
-| 1 | 972524828796 | "סיימתי" | "✅ עודכן שהעבודה הסתיימה" | Lead status = COMPLETED |
+| 1 | 972524828796 | "סיימתי" | "עודכן שהעבודה הסתיימה. תודה!" | Lead status = COMPLETED |
 | 2 | - | - | Customer gets rating request (1-5) | waiting_for_rating = true |
 
 ---
@@ -396,9 +396,9 @@ After each test, verify in worker logs and database that the expected state chan
 
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
-| 1 | 972523651414 | "הצילו! יש לי פיצוץ מים בבית בתל אביב" | 1. EMERGENCY_ACK: "🚨 זיהיתי מצב חירום..." <br> 2. Dispatch expedites once a pro is matched — no `is_deal` required, the pro persona's mid-intake reply is suppressed on that turn (PRO-121) | Lead `is_emergency` = True |
-| 2 | - | - | Pro (972524828796) receives: "🚨 *קריאת חירום דחופה!*" | Address gate bypassed even without street/number |
-| 3 | 972524828796 | "אשר" | Pro gets: "✅ העבודה אושרה!" | Lead status = BOOKED |
+| 1 | 972523651414 | "הצילו! יש לי פיצוץ מים בבית בתל אביב" | 1. EMERGENCY_ACK: "סימנו את הפנייה כדחופה..." <br> 2. Dispatch expedites once a pro is matched — no `is_deal` required, the pro persona's mid-intake reply is suppressed on that turn (PRO-121) | Lead `is_emergency` = True |
+| 2 | - | - | Pro (972524828796) receives: "קריאת חירום דחופה!" | Address gate bypassed even without street/number |
+| 3 | 972524828796 | "אשר" | Pro gets: "העבודה אושרה! שלחנו ללקוח את הפרטים שלך." | Lead status = BOOKED |
 | 4 | - | - | Customer gets pro details | |
 
 ---
@@ -409,10 +409,10 @@ After each test, verify in worker logs and database that the expected state chan
 
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
-| 1 | 972524828796 | "הפסקה" | "☕ הסטטוס שלך שונה ל'בהפסקה'..." | User `is_active` = False |
-| 2 | 972524828796 | "תפריט" | Dashboard shows: "סטטוס: בהפסקה 🔴" | |
-| 3 | 972524828796 | "זמין" | "🚀 הסטטוס שלך שונה ל'זמין'..." | User `is_active` = True |
-| 4 | 972524828796 | "תפריט" | Dashboard shows: "סטטוס: זמין 🟢" | |
+| 1 | 972524828796 | "הפסקה" | "עברת למצב הפסקה." | User `is_active` = False |
+| 2 | 972524828796 | "תפריט" | Dashboard shows: "סטטוס: בהפסקה" | |
+| 3 | 972524828796 | "זמין" | "עברת למצב זמין." | User `is_active` = True |
+| 4 | 972524828796 | "תפריט" | Dashboard shows: "סטטוס: זמין" | |
 
 ---
 
@@ -423,7 +423,7 @@ After each test, verify in worker logs and database that the expected state chan
 | Step | From Phone | Send Message | Expected Bot Response | Verify |
 |------|-----------|-------------|----------------------|--------|
 | 1 | 972524828796 | "סיימתי" | "איזו עבודה סיימת?" + Numbered list of active jobs | State = PRO_SELECTING_JOB_TO_FINISH |
-| 2 | 972524828796 | "1" | "✅ עודכן שהעבודה הסתיימה" | Selected lead status = COMPLETED |
+| 2 | 972524828796 | "1" | "עודכן שהעבודה הסתיימה. תודה!" | Selected lead status = COMPLETED |
 | 3 | 972524828796 | "תפריט" | Dashboard active job count decreased | State back to PRO_MODE |
 
 ---

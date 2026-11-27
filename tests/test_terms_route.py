@@ -242,7 +242,8 @@ def test_consent_menu_survives_the_links(monkeypatch):
     text = legal_links.consent_request_text()
 
     assert text.startswith(Messages.Consent.REQUEST)
-    assert "*כן* — להמשיך\n*לא* — לביטול" in text
+    # The line asking for כן / לא survives, ahead of the appended links.
+    assert Messages.Consent.REQUEST.split("\n")[-1] in text
 
 
 @pytest.mark.parametrize(
@@ -274,7 +275,7 @@ def test_welcome_links_terms_and_still_ends_on_its_question(monkeypatch, approve
 
     text = legal_links.onboarding_welcome_text()
 
-    assert f"בהרשמה את/ה מאשר/ת את תנאי השימוש: {ORIGIN}/terms\n" in text
+    assert f"תנאי השימוש:\n{ORIGIN}/terms\n" in text
     assert text.endswith(Messages.Onboarding.WELCOME.split("\n")[-1])
     _assert_valid_message(text)
 
