@@ -134,11 +134,11 @@ class Messages:
         # while a newer question of the same kind is open, the second when none is.
         STALE_BUTTON_TAP = (
             "הכפתור הזה שייך להודעה קודמת, אז לא שינינו כלום.\n"
-            "אפשר לענות על ההודעה האחרונה."
+            "אפשר לענות על השאלה האחרונה ששלחנו."
         )
         STALE_BUTTON_TAP_EXPIRED = (
-            "הכפתור הזה שייך להודעה שכבר לא בתוקף, אז לא שינינו כלום.\n"
-            "אם עדיין צריך משהו, אפשר לכתוב לנו כאן."
+            "הבחירה הזו שייכת להודעה שכבר לא בתוקף, אז לא שינינו כלום.\n"
+            "אם עדיין רוצים לבטל, אפשר לכתוב ביטול. לכל דבר אחר אפשר לכתוב לנו כאן."
         )
         REQUEST_WITHDRAWN = (
             "הבקשה בוטלה, ועדכנו את איש המקצוע.\n"
@@ -204,9 +204,10 @@ class Messages:
         # characters, section title and row title at most 24, description 72.
         RESCHEDULE_LIST_BUTTON = "בחירת מועד"
         RESCHEDULE_LIST_SECTION = "זמנים פנויים"
-        # The row title is compact ("ה׳ 29.11 · 10:00") so it never reaches 24;
-        # the description under it spells the slot out.
-        RESCHEDULE_ROW_TITLE = "{day_letter} {date} · {time}"
+        # The row title is compact ("1. ה׳ 29.11 · 10:00", at most 19) so it
+        # never reaches 24, and opens with the number the text asks for; the
+        # description under it spells the slot out.
+        RESCHEDULE_ROW_TITLE = "{number}. {day_letter} {date} · {time}"
         RESCHEDULE_ROW_DESCRIPTION = "יום {weekday}, {date} בשעה {time}"
         # Monday first, as datetime.weekday() counts and Pro.WEEKDAY_NAMES lists.
         WEEKDAY_LETTERS = ("ב׳", "ג׳", "ד׳", "ה׳", "ו׳", "ש׳", "א׳")
@@ -220,7 +221,7 @@ class Messages:
         # PRO-105: RESCHEDULE_NO_SLOTS and RESCHEDULE_SLOT_TAKEN_NO_SLOTS offer
         # two words, ביטול and נציג; these buttons send exactly those words.
         CANCEL_JOB_BUTTON = "ביטול העבודה"
-        HUMAN_BUTTON = "נציג"
+        HUMAN_BUTTON = "תיאום עם נציג"
         HELP_INFO = (
             "כאן פרולי. אנחנו מוצאים לך את איש המקצוע שמתאים לתקלה, "
             "כמו אינסטלטור, חשמלאי או מנעולן.\n"
@@ -415,11 +416,11 @@ class Messages:
             "יש לך כבר עבודה מאושרת עם {pro_name}: {issue}, {appointment}\n"
             "זו פנייה חדשה? אפשר לענות במספר:\n"
             "1 - כן, בעיה חדשה\n"
-            "2 - זה לגבי העבודה הקיימת"
+            "2 - לגבי העבודה הקיימת"
         )
         # PRO-105: EXISTING_JOB_PROMPT and NEW_OR_EXISTING_REPROMPT go out with
-        # two reply buttons, ids 1 and 2. "זה לגבי העבודה הקיימת" is 21
-        # characters, one over Meta's 20, so its button drops the "זה".
+        # two reply buttons, ids 1 and 2, each label its line's own words (the
+        # line lost its "זה" so the label fits Meta's 20 characters).
         NEW_REQUEST_BUTTON = "כן, בעיה חדשה"
         EXISTING_JOB_BUTTON = "לגבי העבודה הקיימת"
         NEW_REQUEST_ACK = "בסדר גמור. מה הבעיה החדשה?"
@@ -481,7 +482,7 @@ class Messages:
         NEW_OR_EXISTING_REPROMPT = (
             "לא בטוחים שהבנו. זו פנייה חדשה? אפשר לענות במספר:\n"
             "1 - כן, בעיה חדשה\n"
-            "2 - זה לגבי העבודה הקיימת"
+            "2 - לגבי העבודה הקיימת"
         )
         # lead_manager_service's address gate: the sentence plus the field
         # vocabulary it lists (attribute name -> Hebrew label, in gate order).

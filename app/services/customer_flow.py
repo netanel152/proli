@@ -108,6 +108,7 @@ def _slot_row(number: str, start_il: datetime) -> ListRow:
     return ListRow(
         id=number,
         title=Messages.Customer.RESCHEDULE_ROW_TITLE.format(
+            number=number,
             day_letter=Messages.Customer.WEEKDAY_LETTERS[weekday],
             date=f"{start_il.day}.{start_il.month}",
             time=time,

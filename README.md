@@ -12,7 +12,7 @@
 
 ### WhatsApp Bot (Customer-facing)
 
-- **Bulletproof Text-Based Menus** — All interactions use simple numeric (e.g., "1", "2") or keyword (e.g., "אשר", "דחה") replies. Quick-reply buttons (a pro's offer, the consent request, the completion check) only mirror the keywords the text already advertises, so a tap and the typed reply reach the same handler.
+- **Bulletproof Text-Based Menus** — All interactions use simple numeric (e.g., "1", "2") or keyword (e.g., "אשר", "דחה") replies. Quick-reply buttons (a pro's offer, the consent request, the completion check, the customer's cancel/loyalty/existing-job prompts) and the reschedule slot list only mirror the keywords the text already advertises, so a tap and the typed reply reach the same handler.
 - **Customer Status Pull** — Customers send `סטטוס`, `status`, or `?` (exact) at any time to receive an instant, deterministic summary of their active lead. Zero AI cost, works in every state.
 - **Dynamic Pro Dashboard** — Professionals receive a real-time status overview (rating, active jobs, availability) when they access the menu or send unknown commands.
 - **Availability & Vacation Mode** — Pros can toggle their status ("זמין" / "הפסקה") to control lead flow directly from WhatsApp.

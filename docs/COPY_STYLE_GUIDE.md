@@ -75,7 +75,9 @@ The rule, in order of preference:
 Text menus are a hard product rule (see `CLAUDE.md`; nothing calls `send_interactive`):
 the text always says what to type. Reply buttons only mirror it: a template's quick-reply
 buttons (2026-11-14), and since PRO-104/PRO-105 the free-form reply buttons of the pro lead
-offers, the consent request and the completion check, whose ids are the advertised replies.
+offers, the consent request, the completion check and the customer's cancel, loyalty,
+new-or-existing and no-slots prompts, plus the reschedule slot list, whose ids are the
+advertised replies.
 A reply is asked for in one of two plain shapes, with no bold and no em dash:
 
 **A keyword, asked for in the sentence:**

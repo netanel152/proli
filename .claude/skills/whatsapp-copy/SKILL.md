@@ -47,7 +47,8 @@ guide it points at; nothing here is a value to trust over them.
    any value that can be empty goes through `Messages.Fallbacks` first.
 5. **Menus are text first.** Nothing may call `send_interactive` (CLAUDE.md, CRITICAL). A
    template's quick replies (PRO-230), and the free-form reply buttons of the PRO-104/PRO-105
-   flows (pro offers, consent, completion check), only mirror the replies the text advertises.
+   flows (pro offers, consent, completion check, the customer's cancel, loyalty, new-or-existing
+   and no-slots prompts) and the reschedule slot list, only mirror the replies the text advertises.
    A free-form button title is at most 20 characters. A template's buttons must equal the replies its body
    advertises (`template_registry.button_rule_violations`).
 

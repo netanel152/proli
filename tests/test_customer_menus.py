@@ -133,8 +133,9 @@ def _week_of_slots():
 
 @pytest.mark.parametrize("start", _week_of_slots(), ids=lambda d: d.strftime("%a-%d"))
 def test_a_slot_row_fits_meta_list_row_limits(start):
-    row = _slot_row("10", start)
-    assert row.id == "10"
+    row = _slot_row(str(RESCHEDULE_LIST_LIMIT), start)
+    assert row.id == str(RESCHEDULE_LIST_LIMIT)
+    assert row.title.startswith(f"{row.id}. ")
     assert 0 < len(row.title) <= ROW_TITLE
     assert 0 < len(row.description) <= ROW_DESCRIPTION
     # The row says the same instant the text line says.
@@ -144,7 +145,7 @@ def test_a_slot_row_fits_meta_list_row_limits(start):
 
 def test_a_slot_row_title_is_the_compact_form():
     row = _slot_row("1", datetime(2026, 11, 29, 10, 0))  # a Sunday
-    assert row.title == "א׳ 29.11 · 10:00"
+    assert row.title == "1. א׳ 29.11 · 10:00"
     assert row.description == "יום ראשון, 29/11/2026 בשעה 10:00"
 
 
